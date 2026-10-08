@@ -58,7 +58,7 @@ little_exif = "0.6.23"
 fast_image_resize = "5.1.0"
 imagesize = "0.13.0"
 tokio = { version = "1.50.0", features = ["full"] }
-reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "socks"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "socks", "blocking"] }
 opener = "0.7.2"
 arboard = "3.6.1"
 pinyin = "0.10.0"
@@ -81,18 +81,25 @@ libc = "0.2"
 hnsw_rs = "0.3.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 percent-encoding = "2.3.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["coreml"] }
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSScreen", "NSWorkspace"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSDictionary", "NSError", "NSString", "NSURL"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["directml"] }
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 clipboard-win = "5.4.1"
-windows = { version = "0.61.3", default-features = false, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+windows = { version = "0.61.3", default-features = false, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12"] }
 
 [features]
+# CUDA builds require a matching CUDA/cuDNN runtime; not bundled into default packages.
+ai-cuda = ["ort/cuda"]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

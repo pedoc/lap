@@ -175,18 +175,18 @@ brew install nasm pkg-config autoconf automake libtool cmake
 
 # Linux 系统依赖
 # sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-#   patchelf nasm clang pkg-config autoconf automake libtool cmake
+#   patchelf libdbus-1-dev nasm clang pkg-config autoconf automake libtool cmake
 
 # 克隆并编译
 git clone --recursive https://github.com/julyx10/lap.git
 cd lap
 git submodule update --init --recursive
 cargo install tauri-cli --version "^2.0.0" --locked
-./scripts/download_models.sh            # Windows: .\scripts\download_models.ps1
-./scripts/download_ffmpeg_sidecar.sh    # Windows: .\scripts\download_ffmpeg_sidecar.ps1
 cd src-vite && pnpm install && cd ..
 cargo tauri dev
 ```
+
+启动后，在 **设置 → AI 模型** 中下载、选择并配置模型；FFmpeg 在 **设置 → 网络** 中下载。在线模型需明确授权，并通过图文推理测试。模型系统的接口与扩展方式见 [开发说明](../docs/development/ai-models.md)。
 
 发行版软件包可以链接系统 libheif（1.17 或更新版本），而不使用内置的 libheif 和 libde265。构建时设置 `LAP_SYSTEM_LIBHEIF=1`。这样就无需 `third_party/libheif` 和 `third_party/libde265` 这两个子模块。HEVC 解码取决于系统 libheif 的编解码插件。
 

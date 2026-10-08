@@ -13,6 +13,7 @@
 use tauri::Manager;
 use tauri_plugin_aptabase::EventTracker;
 
+mod ai;
 mod t_ai;
 mod t_ai_png;
 mod t_apple_sidecar;
@@ -75,7 +76,7 @@ async fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(t_video::VideoManager::default())
-        .manage(t_ai::AiState(std::sync::Mutex::new(t_ai::AiEngine::new())))
+        .manage(t_ai::AiState(std::sync::Arc::new(std::sync::Mutex::new(t_ai::AiEngine::new()))))
         .manage(t_face::FaceState(std::sync::Arc::new(
             std::sync::Mutex::new(t_face::FaceEngine::new()),
         )))
@@ -125,6 +126,8 @@ async fn main() {
             // Create the database on startup
             if let Err(e) = t_sqlite::create_db() {
                 eprintln!("Failed to initialize database: {}", e);
+            } else if let Err(e) = ai::profiles::ensure_selected() {
+                eprintln!("Failed to initialize AI index profiles: {e}");
             }
 
             // Initialize video HTTP server for Linux
@@ -146,42 +149,8 @@ async fn main() {
                 });
             }
 
-            // Initialize AI Engine
-            let app_handle = _app.handle();
-            let ai_state = _app.state::<t_ai::AiState>();
-            let mut ai_engine = ai_state.0.lock().unwrap();
-            match ai_engine.load_models(app_handle) {
-                Ok(_) => println!("AI Engine started successfully"),
-                Err(e) => {
-                    eprintln!("Failed to start AI Engine: {}", e);
-                    #[cfg(target_os = "windows")]
-                    {
-                        let arch_key = if cfg!(target_arch = "aarch64") {
-                            r"HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\ARM64"
-                        } else {
-                            r"HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64"
-                        };
-                        let result = std::process::Command::new("reg")
-                            .args(["query", arch_key, "/v", "Installed"])
-                            .stdout(std::process::Stdio::null())
-                            .status();
-                        let installed = result.is_ok() && result.unwrap().success();
-                        if !installed {
-                            let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" };
-                            let url = format!("https://aka.ms/vs/17/release/vc_redist.{}.exe", arch);
-                            let _ = std::process::Command::new("powershell")
-                                .args(["-NoProfile", "-Command", &format!(
-                                    r#"$wsh = New-Object -ComObject Wscript.Shell; $wsh.Popup('Lap requires the Microsoft Visual C++ Redistributable.`n`nA download page will open in your browser.`nPlease install it, then restart Lap.', 0, 'Lap - Missing Dependency', 0x30); Start-Process '{}'"#,
-                                    url
-                                )])
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null())
-                                .status();
-                            std::process::exit(1);
-                        }
-                    }
-                }
-            }
+            // Model sessions are loaded lazily by blocking inference workers.
+            // Installing a model therefore does not require restarting the app.
 
             if !t_sqlite::is_database_corrupted() {
                 t_utils::start_folder_mtime_sync(_app.handle().clone());
@@ -420,11 +389,16 @@ async fn main() {
             t_cmds::get_app_resources_status,
             t_cmds::download_app_resources,
             // ai
+            ai::commands::get_ai_configuration,
+            ai::commands::save_ai_instance,
+            ai::commands::activate_ai_instance,
+            ai::commands::import_ai_model,
+            ai::commands::delete_ai_instance,
+            ai::commands::download_ai_model,
+            ai::commands::cancel_ai_model_download,
+            ai::commands::test_ai_instance,
+            ai::commands::refresh_ai_runtime,
             t_cmds::check_ai_status,
-            t_cmds::get_image_search_model_status,
-            t_cmds::set_image_search_model,
-            t_cmds::download_multilingual_image_search_model,
-            t_cmds::cancel_multilingual_image_search_model_download,
             t_cmds::generate_embedding,
             t_cmds::search_similar_images,
             // person (face recognition)

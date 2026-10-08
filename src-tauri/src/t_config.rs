@@ -582,7 +582,7 @@ fn parse_first_json_object<T: for<'de> Deserialize<'de>>(content: &str) -> Optio
     }
 }
 
-fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Config path has no parent directory".to_string())?;

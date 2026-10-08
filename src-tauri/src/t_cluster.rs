@@ -1,4 +1,3 @@
-use crate::t_common;
 use crate::t_sqlite::{Face, Person};
 use rand::seq::SliceRandom;
 use std::collections::HashMap;
@@ -88,7 +87,8 @@ where
     F: FnMut(ClusterProgress),
     C: Fn() -> bool,
 {
-    const K_NEIGHBORS: usize = t_common::K_NEIGHBORS;
+    let model = crate::ai::settings::active(crate::ai::types::Task::Face)?;
+    let k_neighbors = model.number("cluster_neighbors") as usize;
 
     // 1. Reset all existing assignments and delete persons
     Face::reset_all_assignments()?;
@@ -136,8 +136,8 @@ where
                         // Square weight to punish weak links further
                         let adjusted_weight = weight * weight;
 
-                        insert_top_k(&mut candidate_lists[i], (j, adjusted_weight), K_NEIGHBORS);
-                        insert_top_k(&mut candidate_lists[j], (i, adjusted_weight), K_NEIGHBORS);
+                        insert_top_k(&mut candidate_lists[i], (j, adjusted_weight), k_neighbors);
+                        insert_top_k(&mut candidate_lists[j], (i, adjusted_weight), k_neighbors);
                     }
                 }
                 pairs_done += 1;
@@ -179,7 +179,7 @@ where
     let mut labels: Vec<usize> = (0..n).collect();
     let mut order: Vec<usize> = (0..n).collect();
     let mut rng = rand::thread_rng();
-    let max_iterations = 20;
+    let max_iterations = model.number("cluster_iterations") as usize;
 
     for iter in 0..max_iterations {
         // Check for cancellation
@@ -249,10 +249,10 @@ where
     drop(order);
 
     // 7. Filter clusters
-    const MIN_SAMPLES: usize = t_common::MIN_SAMPLES;
+    let min_samples = model.number("cluster_min_samples") as usize;
     let valid_clusters: Vec<_> = cluster_map
         .into_iter()
-        .filter(|(_, face_indices)| face_indices.len() >= MIN_SAMPLES)
+        .filter(|(_, face_indices)| face_indices.len() >= min_samples)
         .collect();
 
     let total_clusters = valid_clusters.len();

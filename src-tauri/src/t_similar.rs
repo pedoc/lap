@@ -284,7 +284,10 @@ fn scan(
     collection_id: Option<i64>,
     file_ids: Option<Vec<i64>>,
 ) -> Result<(), String> {
+    let _library_guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
     let mut conn = get_db_conn()?;
+    let model = crate::ai::settings::active(crate::ai::types::Task::Semantic)?;
+    crate::ai::profiles::ensure(crate::ai::types::Task::Semantic, &model.profile())?;
     let vectors = load_vectors(&conn, resolve_scope(params, collection_id, file_ids)?)?;
     {
         let mut s = status.lock().unwrap();

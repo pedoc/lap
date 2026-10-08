@@ -389,6 +389,10 @@ onMounted(async () => {
   });
 });
 
+watch(() => JSON.stringify([config.settings.ai?.faceInstance, config.settings.ai?.faceProfile, config.settings.ai?.faceParameters]), () => {
+  if (isPersonMounted) void loadPersons(true, true);
+}, { deep: true });
+
 watch(() => config.settings.personSort, () => {
   loadPersons();
 });
@@ -551,14 +555,7 @@ async function clickIndexFaces() {
   
   isIndexing.value = true;
   try {
-    // Get cluster threshold from array using index
-    const face = config.settings.face;
-    const thresholdIndex = face?.clusterThresholdIndex ?? 2; // Default: Medium (index 2)
-    // Use getter for thresholds to ensure we get the latest values, even if state is old
-    const thresholds = config.faceClusterThresholds ?? [0.35, 0.45, 0.55, 0.65];
-    const clusterEpsilon = thresholds[thresholdIndex] ?? 0.55;
-    console.log('clusterEpsilon', clusterEpsilon);
-    await indexFaces(clusterEpsilon);
+    await indexFaces();
     await loadPersons();
     await checkFaceStats();
   } catch (e) {

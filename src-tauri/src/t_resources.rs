@@ -1,4 +1,4 @@
-use crate::{t_common, t_config, t_network};
+use crate::{t_config, t_network};
 use serde::Serialize;
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
@@ -6,35 +6,11 @@ use tokio::io::AsyncWriteExt;
 
 static DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-const MODEL_FILES: &[(&str, &str)] = &[
-    (
-        "https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/tokenizer.json",
-        t_common::AI_TOKENIZER,
-    ),
-    (
-        "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_quantized.onnx",
-        t_common::AI_TEXT_MODEL,
-    ),
-    (
-        "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_quantized.onnx",
-        t_common::AI_VISION_MODEL,
-    ),
-    (
-        "https://huggingface.co/deepghs/insightface/resolve/main/buffalo_s/det_500m.onnx?download=true",
-        t_common::DETECTION_MODEL,
-    ),
-    (
-        "https://huggingface.co/deepghs/insightface/resolve/main/buffalo_s/w600k_mbf.onnx?download=true",
-        t_common::EMBEDDING_MODEL,
-    ),
-];
 const FFMPEG_RELEASE: &str = "https://github.com/julyx10/lap-binaries/releases/download/ffmpeg-8.1";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceStatus {
-    pub models_ready: bool,
-    pub model_files: Vec<String>,
     pub ffmpeg_ready: bool,
     pub ffmpeg_files: Vec<String>,
 }
@@ -49,32 +25,6 @@ fn bundled_dir(app: &AppHandle, name: &str) -> Option<PathBuf> {
 
 fn has_payload(path: &std::path::Path) -> bool {
     fs::metadata(path).map(|metadata| metadata.is_file() && metadata.len() > 0).unwrap_or(false)
-}
-
-pub fn model_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let managed = app_resource_dir("models")?;
-    if MODEL_FILES
-        .iter()
-        .all(|(_, file)| has_payload(&managed.join(file)))
-    {
-        return Ok(managed);
-    }
-    #[cfg(debug_assertions)]
-    {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/models");
-        if MODEL_FILES.iter().all(|(_, file)| has_payload(&dev.join(file))) {
-            return Ok(dev);
-        }
-    }
-    if let Some(bundled) = bundled_dir(app, "models") {
-        if MODEL_FILES
-            .iter()
-            .all(|(_, file)| has_payload(&bundled.join(file)))
-        {
-            return Ok(bundled);
-        }
-    }
-    Ok(managed)
 }
 
 pub fn ffmpeg_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -110,12 +60,6 @@ fn ffmpeg_filenames() -> Result<[String; 2], String> {
 }
 
 pub fn status(app: &AppHandle) -> ResourceStatus {
-    let models = model_dir(app).ok();
-    let model_files = MODEL_FILES
-        .iter()
-        .filter(|(_, file)| models.as_ref().is_some_and(|dir| has_payload(&dir.join(file))))
-        .map(|(_, file)| (*file).to_string())
-        .collect::<Vec<_>>();
     let ffmpeg_files = ffmpeg_filenames()
         .ok()
         .map(|names| {
@@ -127,8 +71,6 @@ pub fn status(app: &AppHandle) -> ResourceStatus {
         })
         .unwrap_or_default();
     ResourceStatus {
-        models_ready: model_files.len() == MODEL_FILES.len(),
-        model_files,
         ffmpeg_ready: ffmpeg_filenames()
             .ok()
             .is_some_and(|names| ffmpeg_files.len() == names.len()),
@@ -211,25 +153,16 @@ async fn download_file(
 }
 
 pub async fn download(app: AppHandle, kind: String) -> Result<(), String> {
-    if kind != "models" && kind != "ffmpeg" {
+    if kind != "ffmpeg" {
         return Err("Unknown resource type".into());
     }
     let _guard = DOWNLOAD_LOCK.lock().await;
     let client = t_network::client()?;
     let mut downloads = Vec::new();
-    if kind == "models" {
-        let dir = app_resource_dir("models")?;
-        for (url, name) in MODEL_FILES {
-            if !has_payload(&dir.join(name)) {
-                downloads.push((url.to_string(), dir.join(name), (*name).to_string()));
-            }
-        }
-    } else {
-        let dir = app_resource_dir("ffmpeg")?;
-        for name in ffmpeg_filenames()? {
-            if !has_payload(&dir.join(&name)) {
-                downloads.push((format!("{FFMPEG_RELEASE}/{name}"), dir.join(&name), name));
-            }
+    let dir = app_resource_dir("ffmpeg")?;
+    for name in ffmpeg_filenames()? {
+        if !has_payload(&dir.join(&name)) {
+            downloads.push((format!("{FFMPEG_RELEASE}/{name}"), dir.join(&name), name));
         }
     }
     if downloads.is_empty() {

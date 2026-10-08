@@ -36,7 +36,7 @@ use tauri::{AppHandle, Emitter, State};
 
 // Scoped refreshes and RAW thumbnail requests can open several connections.
 // Keep their library stable until all reads and writes have completed.
-static FILE_REFRESH_LIBRARY_LOCK: RwLock<()> = RwLock::new(());
+pub(crate) static FILE_REFRESH_LIBRARY_LOCK: RwLock<()> = RwLock::new(());
 
 fn with_library_context<T>(
     lock: &RwLock<()>,
@@ -425,6 +425,10 @@ pub fn is_database_corrupted() -> bool {
 /// switch to a different library
 #[tauri::command]
 pub async fn switch_library(app_handle: tauri::AppHandle, id: String) -> Result<(), String> {
+    use tauri::Manager;
+    if *app_handle.state::<t_face::FaceIndexingStatus>().0.lock().map_err(|e|e.to_string())? {
+        return Err("Stop face indexing before switching libraries".into());
+    }
     // The blocking task reports whether the target library turned out to be corrupt, deciding from
     // create_db's returned error itself rather than re-reading the process-global flag afterwards
     // (which a concurrent switch could resolve against a different library).
@@ -434,7 +438,7 @@ pub async fn switch_library(app_handle: tauri::AppHandle, id: String) -> Result<
         t_utils::clear_album_accessibility();
         t_sqlite::clear_conn_pool();
         match t_sqlite::create_db() {
-            Ok(()) => Ok(false),
+            Ok(()) => { crate::ai::profiles::ensure_selected()?; Ok(false) },
             Err(e) if e == t_sqlite::DB_CORRUPTED_MSG => Ok(true),
             Err(e) => Err(e),
         }
@@ -2886,7 +2890,7 @@ pub async fn refresh_selected_file_info(library_id: String, file_id: i64) -> Res
                 AThumb::delete(file_id)?;
             }
             if content_changed {
-                AFile::update_column(file_id, "embeds", &Option::<Vec<u8>>::None)?;
+                crate::ai::profiles::invalidate_file(file_id)?;
             }
         }
         AFile::get_file_info(file_id)
@@ -3254,42 +3258,15 @@ pub fn check_ai_status(state: State<t_ai::AiState>) -> String {
     AFile::check_ai_status(&state)
 }
 
-#[tauri::command]
-pub fn get_image_search_model_status(
-    app_handle: AppHandle,
-    state: State<t_ai::AiState>,
-) -> t_ai::ImageSearchModelStatus {
-    let ai_engine = state.0.lock().unwrap();
-    ai_engine.model_status(&app_handle)
-}
-
-#[tauri::command]
-pub async fn set_image_search_model(
-    app_handle: AppHandle,
-    state: State<'_, t_ai::AiState>,
-    model: i64,
-) -> Result<t_ai::ImageSearchModelStatus, String> {
-    let mut ai_engine = state.0.lock().unwrap();
-    ai_engine.set_text_model(&app_handle, t_ai::ImageSearchTextModel::from_i64(model))?;
-    Ok(ai_engine.model_status(&app_handle))
-}
-
-#[tauri::command]
-pub async fn download_multilingual_image_search_model(app_handle: AppHandle) -> Result<(), String> {
-    t_ai::download_multilingual_text_model(app_handle).await
-}
-
-#[tauri::command]
-pub async fn cancel_multilingual_image_search_model_download(
-    app_handle: AppHandle,
-) -> Result<(), String> {
-    t_ai::cancel_multilingual_text_model_download(app_handle).await
-}
-
 /// generate embedding for a file
 #[tauri::command]
-pub fn generate_embedding(state: State<t_ai::AiState>, file_id: i64) -> Result<String, String> {
-    AFile::generate_embedding(&state, file_id)
+pub async fn generate_embedding(state: State<'_, t_ai::AiState>, file_id: i64) -> Result<String, String> {
+    let state = (*state).clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
+        AFile::generate_embedding_for_request(&state, file_id, true)
+    })
+        .await.map_err(|e|e.to_string())?
 }
 
 // search similar images
@@ -3298,7 +3275,12 @@ pub async fn search_similar_images(
     state: State<'_, t_ai::AiState>,
     params: ImageSearchParams,
 ) -> Result<Vec<AFile>, String> {
-    AFile::search_similar_images(&state, params)
+    let state = (*state).clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
+        AFile::search_similar_images(&state, params)
+    })
+        .await.map_err(|e|e.to_string())?
         .map_err(|e| format!("Error while searching similar images: {}", e))
 }
 
@@ -3383,6 +3365,7 @@ pub fn index_faces(
     progress_state: State<t_face::FaceIndexProgressState>,
     cluster_epsilon: Option<f32>,
 ) -> Result<(), String> {
+    let _configuration = FILE_REFRESH_LIBRARY_LOCK.try_read().map_err(|_| "AI configuration or library is changing; retry after it finishes")?;
     t_face::run_face_indexing(
         app_handle,
         (*state).clone(),

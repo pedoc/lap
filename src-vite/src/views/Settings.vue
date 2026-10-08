@@ -151,13 +151,6 @@
               <div class="text-xs text-base-content/50 mt-1">{{ $t('settings.network.resources_hint') }}</div>
             </div>
             <div class="flex items-center justify-between gap-3 text-sm">
-              <span>{{ $t('settings.network.ai_models') }}</span>
-              <span :class="appResources.modelsReady ? 'text-success' : 'text-warning'">{{ appResources.modelsReady ? $t('settings.network.ready') : $t('settings.network.missing') }}</span>
-            </div>
-            <button class="btn btn-outline btn-sm self-end" :disabled="!!downloadingResource || appResources.modelsReady" @click="downloadResources('models')">
-              {{ downloadingResource === 'models' ? `${$t('settings.network.downloading')} ${appResourcesProgress}%` : $t('settings.network.download_models') }}
-            </button>
-            <div class="flex items-center justify-between gap-3 text-sm">
               <span>{{ $t('settings.network.ffmpeg') }}</span>
               <span :class="appResources.ffmpegReady ? 'text-success' : 'text-warning'">{{ appResources.ffmpegReady ? $t('settings.network.ready') : $t('settings.network.missing') }}</span>
             </div>
@@ -387,115 +380,8 @@
         </div>
 
         <!-- Search Tab -->
-        <div v-else-if="config.settings.tabIndex === SETTINGS_TAB.IMAGE_SEARCH" class="flex flex-col overflow-hidden space-y-2">
-
-          <!-- image search -->
-          <div class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
-            <div class="flex items-center gap-2 text-base-content/30">
-              <span class="font-bold uppercase text-[10px] tracking-widest">{{ $t('settings.image_search.search_image') }}</span>
-            </div>
-            <div class="flex items-start justify-between gap-4 px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
-              <div class="min-w-0 flex flex-col gap-0.5 text-sm leading-5">
-                <div>{{ $t('settings.image_search.search_model') }}</div>
-                <div class="text-xs text-base-content/30">
-                  {{ imageSearchModelHint }}
-                </div>
-              </div>
-              <select
-                class="select select-bordered select-sm min-w-36 shrink-0"
-                :value="config.settings.imageSearch.model"
-                :disabled="isDownloadingMultilingualModel"
-                @change="onImageSearchModelChange"
-              >
-                <option
-                  v-for="option in imageSearchModelOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </div>
-            <div v-if="isDownloadingMultilingualModel" class="px-1 pt-1 space-y-1">
-              <div class="flex items-center justify-between text-xs text-base-content/30">
-                <span>{{ $t('settings.image_search.downloading_multilingual_model') }}</span>
-                <span>{{ multilingualModelDownloadSizeText }}</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <progress
-                  class="progress progress-primary h-1.5 flex-1"
-                  :value="multilingualModelDownloadProgress"
-                  max="100"
-                ></progress>
-                <button
-                  class="btn btn-ghost btn-xs h-6 min-h-0 w-6 p-0 text-base-content/30 hover:text-base-content"
-                  :title="$t('msgbox.cancel')"
-                  :aria-label="$t('msgbox.cancel')"
-                  @click="cancelMultilingualModelDownload"
-                >
-                  <IconClose class="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-            <div class="flex items-center justify-between px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
-              <div class="flex flex-col gap-0.5 text-sm leading-5">
-                <div>{{ $t('settings.image_search.similarity') }}</div>
-                <div class="text-xs text-base-content/30">{{ $t('settings.image_search.similarity_hint') }}</div>
-              </div>
-              <select class="select select-bordered select-sm min-w-32" v-model="config.settings.imageSearch.thresholdIndex">
-                <option v-for="(option, index) in similarityOptions" :key="index" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- similar photos -->
-          <div class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
-            <div class="flex items-center gap-2 text-base-content/30">
-              <span class="font-bold uppercase text-[10px] tracking-widest">{{ $t('settings.similar_photos.title') }}</span>
-            </div>
-            <div class="flex items-center justify-between gap-4 px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
-              <div class="min-w-0 flex flex-col gap-0.5 text-sm leading-5">
-                <div>{{ $t('settings.similar_photos.grouping_strictness') }}</div>
-                <div class="text-xs text-base-content/30">{{ $t('settings.similar_photos.grouping_strictness_hint') }}</div>
-              </div>
-              <select class="select select-bordered select-sm min-w-32 shrink-0" v-model="similarPhotoGroupingThresholdIndex">
-                <option v-for="(option, index) in similarPhotoGroupingOptions" :key="index" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- face recognition -->
-          <div class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
-            <div class="flex items-center gap-2 text-base-content/30">
-              <span class="font-bold uppercase text-[10px] tracking-widest">{{ $t('settings.face_recognition.title') }}</span>
-            </div>
-            <div class="flex items-center justify-between px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
-              <div class="flex flex-col gap-0.5 text-sm leading-5">
-                <div class="flex items-center">
-                  <div>{{ $t('settings.face_recognition.enable') }}</div>
-                  <span class="ml-2 px-1.5 h-5 inline-flex items-center rounded-box text-[10px] font-semibold tracking-[0.08em] text-warning border border-warning/30 bg-warning/10 cursor-default">
-                    BETA
-                  </span>
-                </div>
-                <div class="text-xs text-base-content/30">{{ $t('settings.face_recognition.beta_hint') }}</div>
-              </div>
-              <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="config.settings.face.enabled" />
-            </div>
-            <div v-if="config.settings.face.enabled" class="flex items-center justify-between px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
-              <div class="flex flex-col gap-0.5 text-sm leading-5">
-                <div class="flex items-center">
-                  <div>{{ $t('settings.face_recognition.similarity') }}</div>
-                  <span class="ml-2 px-1.5 h-5 inline-flex items-center rounded-box text-[10px] font-semibold tracking-[0.08em] text-warning border border-warning/30 bg-warning/10 cursor-default">
-                    BETA
-                  </span>
-                </div>
-                <div class="text-xs text-base-content/30">{{ $t('settings.face_recognition.cluster_threshold_hint') }}</div>
-              </div>
-                <select class="select select-bordered select-sm min-w-32" v-model="config.settings.face.clusterThresholdIndex" :disabled="!config.settings.face.enabled">
-                  <option v-for="(option, index) in faceClusterOptions" :key="index" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-          </div>
+        <div v-else-if="config.settings.tabIndex === SETTINGS_TAB.IMAGE_SEARCH">
+          <AiModelSettings />
         </div>
 
         <!-- Advanced Tab -->
@@ -723,11 +609,6 @@ import {
   resetDbStorageDir,
   isFaceIndexing,
   isUsingCustomDbStorage,
-  getImageSearchModelStatus,
-  setImageSearchModel,
-  downloadMultilingualImageSearchModel,
-  cancelMultilingualImageSearchModelDownload,
-  listenImageSearchModelDownloadProgress,
   getNetworkProxy,
   setNetworkProxy,
   testNetworkProxy,
@@ -740,6 +621,7 @@ import { getShortcutLabels, ShortcutActionId, ShortcutPlatform } from '@/common/
 import { useToast } from '@/common/toast';
 import { IconClose, IconRestore } from '@/common/icons';
 
+import AiModelSettings from '@/components/AiModelSettings.vue';
 import TitleBar from '@/components/TitleBar.vue';
 import SettingsAbout from '@/components/SettingsAbout.vue';
 import MessageBox from '@/components/MessageBox.vue';
@@ -758,7 +640,7 @@ const settingsTabs = [
   { id: SETTINGS_TAB.GRID, label: 'settings.grid.title' },
   { id: SETTINGS_TAB.IMAGE_VIEW, label: 'settings.image_view.title' },
   { id: SETTINGS_TAB.RAW, label: 'settings.raw.title' },
-  { id: SETTINGS_TAB.IMAGE_SEARCH, label: 'settings.image_search.title' },
+  { id: SETTINGS_TAB.IMAGE_SEARCH, label: 'settings.ai_models.title' },
   { id: SETTINGS_TAB.ADVANCED, label: 'settings.advanced.title' },
   { id: SETTINGS_TAB.SHORTCUTS, label: 'settings.shortcuts.title' },
   { id: SETTINGS_TAB.ABOUT, label: 'settings.about.title' },
@@ -779,23 +661,16 @@ const showChangeDbStorageDialog = ref(false);
 const showResetDbStorageDialog = ref(false);
 const showBackupDialog = ref(false);
 const showRestoreDialog = ref(false);
-const isDownloadingMultilingualModel = ref(false);
 const networkProxyUrl = ref('');
 const proxyEnabled = ref(false);
 const isSavingProxy = ref(false);
 const isTestingProxy = ref(false);
-const appResources = ref({ modelsReady: false, ffmpegReady: false });
+const appResources = ref({ ffmpegReady: false });
 const downloadingResource = ref('');
 const appResourcesProgress = ref(0);
 let unlistenAppResourcesProgress: (() => void) | null = null;
-const isCancelingMultilingualModelDownload = ref(false);
-const multilingualModelDownloadProgress = ref(0);
-const multilingualModelDownloadedBytes = ref(0);
-const multilingualModelTotalBytes = ref(0);
-const isMultilingualModelAvailable = ref(false);
 const tiandituTokenInput = ref(String(config.settings.tiandituToken || ''));
 const tiandituTokenStatus = ref<'idle' | 'saved' | 'empty'>('idle');
-let unlistenImageSearchModelDownloadProgress: (() => void) | null = null;
 
 const onRestoreDone = () => {
   showRestoreDialog.value = false;
@@ -1056,73 +931,6 @@ const filmStripViewPreviewPositionOptions = computed(() => {
   return options.map((label, i) => ({ label, value: i }));
 });
 
-// Define the similarity options
-const similarityOptions = computed(() => {
-  const options = localeMsg.value.settings.image_search.similarity_options;
-  // Use getter to retrieve thresholds
-  const values = config.imageSearchThresholds ?? [0.32, 0.29, 0.26, 0.255];
-  // Map index dummy as the value since v-model is thresholdIndex
-  return values.map((val, i) => ({ label: options[i], value: i }));
-});
-
-const similarPhotoGroupingThresholdIndex = computed({
-  get: () => config.settings.similarPhotos?.groupingThresholdIndex ?? 1,
-  set: (value) => {
-    if (!config.settings.similarPhotos) config.settings.similarPhotos = { groupingThresholdIndex: 1 };
-    config.settings.similarPhotos.groupingThresholdIndex = Number(value);
-  },
-});
-
-const similarPhotoGroupingOptions = computed(() => {
-  const options = localeMsg.value.settings.similar_photos.grouping_strictness_options;
-  const values = config.similarPhotoGroupingThresholds ?? [0.97, 0.93, 0.9, 0.85];
-  return values.map((value, index) => ({ label: options[index], value: index }));
-});
-
-const imageSearchModelOptions = computed(() => {
-  const options = localeMsg.value.settings.image_search.search_model_options || ['Default', 'Multilingual model'];
-  return options.map((label: string, i: number) => ({ label, value: i }));
-});
-
-const imageSearchModelHint = computed(() => {
-  return Number(config.settings.imageSearch.model || 0) === 1
-    ? localeMsg.value.settings.image_search.multilingual_model_hint
-    : localeMsg.value.settings.image_search.default_model_hint;
-});
-
-const multilingualModelDownloadSizeText = computed(() => {
-  const downloaded = multilingualModelDownloadedBytes.value;
-  const total = multilingualModelTotalBytes.value;
-  if (total > 0) {
-    return `${formatFileSize(downloaded)} / ${formatFileSize(total)}`;
-  }
-  return formatFileSize(downloaded);
-});
-
-const syncImageSearchModelStatus = async () => {
-  const status = await getImageSearchModelStatus();
-  if (!status) return;
-
-  isMultilingualModelAvailable.value = Boolean(status.multilingualAvailable);
-  if (Number(config.settings.imageSearch.model || 0) === 1 && !isMultilingualModelAvailable.value) {
-    return;
-  }
-
-  try {
-    await setImageSearchModel(config.settings.imageSearch.model || 0);
-  } catch (error) {
-    console.error('Failed to activate image search model:', error);
-  }
-};
-
-// Define the face cluster threshold options
-const faceClusterOptions = computed(() => {
-  const options = localeMsg.value.settings.face_recognition?.cluster_threshold_options || 
-    ['Very High', 'High', 'Medium', 'Low'];
-  // Map index as value since v-model is clusterThresholdIndex
-  return options.map((label: string, i: number) => ({ label, value: i }));
-});
-
 type ShortcutDisplayItem = {
   actionId: ShortcutActionId;
   labelKey: string;
@@ -1307,98 +1115,6 @@ function splitMacShortcutLabel(label: string): string[] {
   return keys;
 }
 
-const onImageSearchModelChange = async (event: Event) => {
-  const select = event.target as HTMLSelectElement;
-  const nextModel = Number(select.value || 0);
-  const previousModel = Number(config.settings.imageSearch.model || 0);
-
-  if (nextModel !== 1) {
-    try {
-      await setImageSearchModel(nextModel);
-      config.settings.imageSearch.model = nextModel;
-    } catch (error) {
-      select.value = String(previousModel);
-      toast.error(error?.message || String(error));
-    }
-    return;
-  }
-
-  if (isMultilingualModelAvailable.value) {
-    try {
-      await setImageSearchModel(nextModel);
-      config.settings.imageSearch.model = nextModel;
-    } catch (error) {
-      select.value = String(previousModel);
-      toast.error(error?.message || String(error));
-    }
-    return;
-  }
-
-  select.value = String(previousModel);
-  const shouldDownload = await ask(
-    localeMsg.value.settings.image_search.multilingual_model_download_message,
-    {
-      title: localeMsg.value.settings.image_search.multilingual_model_download_title,
-      kind: 'info',
-      okLabel: localeMsg.value.settings.image_search.download,
-      cancelLabel: localeMsg.value.msgbox?.cancel || 'Cancel',
-    },
-  );
-
-  if (!shouldDownload) {
-    return;
-  }
-
-  await startMultilingualModelDownload(previousModel);
-};
-
-const startMultilingualModelDownload = async (previousModel: number) => {
-  if (isDownloadingMultilingualModel.value) return;
-
-  isDownloadingMultilingualModel.value = true;
-  isCancelingMultilingualModelDownload.value = false;
-  multilingualModelDownloadProgress.value = 0;
-  multilingualModelDownloadedBytes.value = 0;
-  multilingualModelTotalBytes.value = 0;
-
-  try {
-    await downloadMultilingualImageSearchModel();
-    isDownloadingMultilingualModel.value = false;
-    isMultilingualModelAvailable.value = true;
-    await setImageSearchModel(1);
-    config.settings.imageSearch.model = 1;
-    multilingualModelDownloadProgress.value = 100;
-    if (multilingualModelTotalBytes.value > 0) {
-      multilingualModelDownloadedBytes.value = multilingualModelTotalBytes.value;
-    }
-  } catch (error) {
-    if (isCancelingMultilingualModelDownload.value || String(error).includes('Download canceled')) {
-      isCancelingMultilingualModelDownload.value = false;
-      isDownloadingMultilingualModel.value = false;
-      config.settings.imageSearch.model = previousModel;
-      multilingualModelDownloadProgress.value = 0;
-      multilingualModelDownloadedBytes.value = 0;
-      multilingualModelTotalBytes.value = 0;
-      return;
-    }
-    isDownloadingMultilingualModel.value = false;
-    config.settings.imageSearch.model = previousModel;
-    const errorMessage = typeof error === 'string' ? error : error?.message;
-    toast.error(errorMessage || localeMsg.value.settings.image_search.multilingual_model_download_failed);
-  }
-};
-
-const cancelMultilingualModelDownload = async () => {
-  if (!isDownloadingMultilingualModel.value) return;
-
-  isCancelingMultilingualModelDownload.value = true;
-  isDownloadingMultilingualModel.value = false;
-  multilingualModelDownloadProgress.value = 0;
-  multilingualModelDownloadedBytes.value = 0;
-  multilingualModelTotalBytes.value = 0;
-  await cancelMultilingualImageSearchModelDownload();
-};
-
 async function saveNetworkProxy() {
   isSavingProxy.value = true;
   try {
@@ -1456,16 +1172,6 @@ onMounted(async () => {
   if (!settingsTabs.some(tab => tab.id === config.settings.tabIndex)) {
     config.settings.tabIndex = SETTINGS_TAB.GENERAL;
   }
-  if (typeof config.settings.imageSearch.model !== 'number') {
-    config.settings.imageSearch.model = 0;
-  }
-  unlistenImageSearchModelDownloadProgress = await listenImageSearchModelDownloadProgress((event: any) => {
-    const progress = Number(event?.payload?.progress ?? 0);
-    multilingualModelDownloadProgress.value = Math.max(0, Math.min(100, progress));
-    multilingualModelDownloadedBytes.value = Math.max(0, Number(event?.payload?.downloadedBytes ?? 0));
-    multilingualModelTotalBytes.value = Math.max(0, Number(event?.payload?.totalBytes ?? 0));
-  });
-  await syncImageSearchModelStatus();
   applyWindowScale(Number(config.settings.scale || 1));
   dbStorageDir.value = (await getDbStorageDir()) || '';
   hasCustomDbStorage.value = await isUsingCustomDbStorage();
@@ -1487,13 +1193,6 @@ onUnmounted(() => {
   if (unlistenCloseRequested) {
     unlistenCloseRequested();
     unlistenCloseRequested = null;
-  }
-  if (isDownloadingMultilingualModel.value) {
-    void cancelMultilingualImageSearchModelDownload();
-  }
-  if (unlistenImageSearchModelDownloadProgress) {
-    unlistenImageSearchModelDownloadProgress();
-    unlistenImageSearchModelDownloadProgress = null;
   }
   if (unlistenAppResourcesProgress) {
     unlistenAppResourcesProgress();
@@ -1628,22 +1327,13 @@ watch(() => config.settings.loopVideo, (newValue) => {
 });
 
 // image search settings
-watch(() => config.settings.imageSearch.model, (newValue) => {
-  emit('settings-imageSearchModel-changed', newValue);
-});
 watch(() => config.settings.imageSearch.thresholdIndex, (newValue) => {
   emit('settings-imageSearchThresholdIndex-changed', newValue);
-});
-watch(similarPhotoGroupingThresholdIndex, (newValue) => {
-  emit('settings-similarPhotoGroupingThresholdIndex-changed', newValue);
 });
 
 // face settings
 watch(() => config.settings.face.enabled, (newValue) => {
   emit('settings-faceEnabled-changed', newValue);
-});
-watch(() => config.settings.face.clusterThresholdIndex, (newValue) => {
-  emit('settings-faceClusterThresholdIndex-changed', newValue);
 });
 
 // Handle keyboard shortcuts

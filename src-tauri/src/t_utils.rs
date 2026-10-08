@@ -2902,6 +2902,7 @@ fn should_process_synced_file(file: &AFile, file_type: i64, threshold: i64) -> b
         return true;
     }
     matches!(file_type, 1 | 3) && !file.has_embedding.unwrap_or(false)
+        && crate::ai::settings::background_indexing_enabled()
 }
 
 fn schedule_synced_file_processing(app_handle: tauri::AppHandle, task: SyncedFileTask) {
@@ -2953,7 +2954,7 @@ fn schedule_synced_file_processing(app_handle: tauri::AppHandle, task: SyncedFil
             }),
         );
 
-        if !matches!(task.file_type, 1 | 3) {
+        if !matches!(task.file_type, 1 | 3) || !crate::ai::settings::background_indexing_enabled() {
             return;
         }
 
@@ -3819,7 +3820,7 @@ fn index_single_file(
                             _ => false,
                         };
                         let fully_indexed = match ftype {
-                            1 | 3 => search_ready_immediately,
+                            1 | 3 => thumbnail_ready && (has_embedding || !crate::ai::settings::background_indexing_enabled()),
                             2 => processed_immediately,
                             _ => false,
                         };
@@ -3946,7 +3947,7 @@ async fn process_thumbnail_task(
         });
     }
 
-    if !matches!(task.file_type, 1 | 3) {
+    if !matches!(task.file_type, 1 | 3) || !crate::ai::settings::background_indexing_enabled() {
         return Ok(true);
     }
 

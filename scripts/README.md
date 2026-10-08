@@ -1,6 +1,6 @@
 # Build asset download helpers (legacy)
 
-Packaged application builds no longer run these scripts or include the downloaded assets. Lap now detects and downloads its AI/face models and FFmpeg/FFprobe from **Settings → Network** into the user's app data directory. Configure a proxy there if network access requires one.
+Packaged application builds no longer run these scripts or include the downloaded assets. Lap manages versioned AI models in **Settings → AI models** and FFmpeg/FFprobe in **Settings → Network**. Configure a proxy in Network if required. See [AI model system](../docs/development/ai-models.md) for manifests and adapters.
 
 The scripts remain available for local development or manual testing:
 
@@ -10,7 +10,7 @@ Utility scripts for the Lap project.
 
 ## 1. download_models
 
-Downloads AI model files (CLIP + InsightFace) to `src-tauri/resources/models/` for development builds. Already downloaded files are skipped automatically.
+Downloads AI model files (CLIP + InsightFace) to `src-tauri/resources/models/` for legacy manual inspection only; current development builds use the model catalog. Already downloaded files are skipped automatically.
 
 ### Usage
 
@@ -36,7 +36,7 @@ Downloads AI model files (CLIP + InsightFace) to `src-tauri/resources/models/` f
 
 ## 2. download_ffmpeg_sidecar
 
-Downloads FFmpeg and FFprobe sidecar binaries for the current platform into `src-tauri/resources/ffmpeg/` for local development. Packaged builds download these assets on demand instead.
+Downloads FFmpeg and FFprobe sidecar binaries for the current platform into `src-tauri/resources/ffmpeg/` for legacy manual inspection. Current builds download these assets on demand instead.
 
 ### Usage
 

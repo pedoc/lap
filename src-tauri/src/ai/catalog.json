@@ -1,0 +1,235 @@
+[
+  {
+    "id": "clip-b32",
+    "version": "d15189d7028b43f1d3e65039190477f6af591c2a",
+    "name": "CLIP ViT-B/32 (INT8)",
+    "task": "semantic",
+    "adapter": "clip_onnx",
+    "embeddingSpace": "clip-vit-b32",
+    "dimension": 512,
+    "languages": [
+      "en"
+    ],
+    "license": "MIT",
+    "description": "Local image/text retrieval. Small quantized CLIP pair.",
+    "defaults": {},
+    "files": [
+      {
+        "role": "vision",
+        "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/onnx/vision_model_quantized.onnx",
+        "sha256": "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
+        "size": 89117001
+      },
+      {
+        "role": "text",
+        "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/onnx/text_model_quantized.onnx",
+        "sha256": "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a",
+        "size": 64504507
+      },
+      {
+        "role": "tokenizer",
+        "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/tokenizer.json",
+        "sha256": "f7f3b7af117d467b58374797691a6438d3e6b9e9cef800dfd5dced7f697a90cd",
+        "size": 2224119
+      }
+    ]
+  },
+  {
+    "id": "clip-b32-multilingual",
+    "version": "5bd22dbf-2559494e",
+    "name": "CLIP ViT-B/32 multilingual",
+    "task": "semantic",
+    "adapter": "clip_onnx",
+    "embeddingSpace": "clip-vit-b32",
+    "dimension": 512,
+    "languages": [
+      "*"
+    ],
+    "license": "MIT",
+    "description": "Multilingual text encoder paired with the same CLIP image space.",
+    "defaults": {},
+    "files": [
+      {
+        "role": "vision",
+        "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/onnx/vision_model_quantized.onnx",
+        "sha256": "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
+        "size": 89117001
+      },
+      {
+        "role": "text",
+        "url": "https://github.com/julyx10/lap-binaries/releases/download/models/text_model.onnx",
+        "sha256": "5bd22dbfc18be10318d51db3512a700fbbe54a2954eb1385e4a58cbe1bb6f48e",
+        "size": 540652152
+      },
+      {
+        "role": "tokenizer",
+        "url": "https://github.com/julyx10/lap-binaries/releases/download/models/tokenizer.json",
+        "sha256": "2559494e39f3b9db569650f75dd5cee79571a63950be9f4d52bafb453fe6e793",
+        "size": 2919615
+      }
+    ]
+  },
+  {
+    "id": "buffalo-s",
+    "version": "4e1f33d3fe0e50a0945f3a53ab94ae8977ae7ddb",
+    "name": "InsightFace Buffalo-S",
+    "task": "face",
+    "adapter": "scrfd_arcface_onnx",
+    "embeddingSpace": "insightface-w600k-mbf-512",
+    "dimension": 512,
+    "languages": [],
+    "license": "InsightFace pretrained weights: non-commercial research; review upstream license",
+    "description": "SCRFD detector and face encoder. CPU / supported GPU; five-point face alignment. Lightweight MobileFaceNet.",
+    "defaults": {
+      "threads": 4
+    },
+    "files": [
+      {
+        "role": "detector",
+        "url": "https://huggingface.co/deepghs/insightface/resolve/4e1f33d3fe0e50a0945f3a53ab94ae8977ae7ddb/buffalo_s/det_500m.onnx",
+        "sha256": "5e4447f50245bbd7966bd6c0fa52938c61474a04ec7def48753668a9d8b4ea3a",
+        "size": 2524817
+      },
+      {
+        "role": "embedding",
+        "url": "https://huggingface.co/deepghs/insightface/resolve/4e1f33d3fe0e50a0945f3a53ab94ae8977ae7ddb/buffalo_s/w600k_mbf.onnx",
+        "sha256": "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f",
+        "size": 13616099
+      }
+    ]
+  },
+  {
+    "id": "buffalo-l",
+    "version": "4e1f33d3fe0e50a0945f3a53ab94ae8977ae7ddb",
+    "name": "InsightFace Buffalo-L",
+    "task": "face",
+    "adapter": "scrfd_arcface_onnx",
+    "embeddingSpace": "insightface-w600k-r50-512",
+    "dimension": 512,
+    "languages": [],
+    "license": "InsightFace pretrained weights: non-commercial research; review upstream license",
+    "description": "SCRFD detector and face encoder. CPU / supported GPU; five-point face alignment. Larger ResNet50 encoder; higher resource use.",
+    "defaults": {
+      "threads": 4
+    },
+    "files": [
+      {
+        "role": "detector",
+        "url": "https://huggingface.co/deepghs/insightface/resolve/4e1f33d3fe0e50a0945f3a53ab94ae8977ae7ddb/buffalo_l/det_10g.onnx",
+        "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+        "size": 16923827
+      },
+      {
+        "role": "embedding",
+        "url": "https://huggingface.co/deepghs/insightface/resolve/4e1f33d3fe0e50a0945f3a53ab94ae8977ae7ddb/buffalo_l/w600k_r50.onnx",
+        "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+        "size": 174383860
+      }
+    ]
+  },
+  {
+    "id": "jina-clip-v2",
+    "version": "api-v1",
+    "name": "Jina CLIP v2 API",
+    "task": "semantic",
+    "adapter": "jina_embeddings",
+    "embeddingSpace": "jina-clip-v2",
+    "dimension": 1024,
+    "languages": [
+      "*"
+    ],
+    "license": "Third-party service terms",
+    "description": "Online multimodal embeddings. Sends selected text/images to the configured service. Requires explicit cloud consent and API key.",
+    "defaults": {
+      "semantic_threshold": 0.3
+    },
+    "files": []
+  },
+  {
+    "id": "buffalo-m",
+    "version": "4bc641c61f3f485da2fda8620ef2706e7508c5aa",
+    "name": "InsightFace Buffalo-M",
+    "task": "face",
+    "adapter": "scrfd_arcface_onnx",
+    "embeddingSpace": "insightface-w600k-r50-512",
+    "dimension": 512,
+    "languages": [],
+    "license": "InsightFace pretrained weights: non-commercial research; review upstream license",
+    "description": "Balanced option: SCRFD 2.5G detection with the same ResNet50 recognizer as Buffalo-L. Smaller detector; recognition quality depends on the photos and settings.",
+    "defaults": {
+      "threads": 4
+    },
+    "files": [
+      {
+        "role": "detector",
+        "url": "https://huggingface.co/WePrompt/buffalo_m/resolve/4bc641c61f3f485da2fda8620ef2706e7508c5aa/det_2.5g.onnx",
+        "sha256": "041f73f47371333d1d17a6fee6c8ab4e6aecabefe398ff32cca4e2d5eaee0af9",
+        "size": 3292009
+      },
+      {
+        "role": "embedding",
+        "url": "https://huggingface.co/deepghs/insightface/resolve/4e1f33d3fe0e50a0945f3a53ab94ae8977ae7ddb/buffalo_l/w600k_r50.onnx",
+        "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+        "size": 174383860
+      }
+    ]
+  },
+  {
+    "id": "antelope-v2",
+    "version": "51ca7e153bccebdbae224779e23c9c243e2fec85",
+    "name": "InsightFace AntelopeV2 (R100)",
+    "task": "face",
+    "adapter": "scrfd_arcface_onnx",
+    "embeddingSpace": "insightface-glintr100-512",
+    "dimension": 512,
+    "languages": [],
+    "license": "InsightFace pretrained weights: non-commercial research; review upstream license",
+    "description": "Higher-capacity Glint360K ResNet100 recognizer with SCRFD 10G. Requires more RAM/VRAM; not guaranteed better for every photo collection.",
+    "defaults": {
+      "threads": 4
+    },
+    "files": [
+      {
+        "role": "detector",
+        "url": "https://huggingface.co/immich-app/antelopev2/resolve/51ca7e153bccebdbae224779e23c9c243e2fec85/detection/model.onnx",
+        "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+        "size": 16923827
+      },
+      {
+        "role": "embedding",
+        "url": "https://huggingface.co/immich-app/antelopev2/resolve/51ca7e153bccebdbae224779e23c9c243e2fec85/recognition/model.onnx",
+        "sha256": "4ab1d6435d639628a6f3e5008dd4f929edf4c4124b1a7169e1048f9fef534cdf",
+        "size": 260665334
+      }
+    ]
+  },
+  {
+    "id": "auraface-v1",
+    "version": "af6d057c9b0ec4071d4c49c80e3539258798b609",
+    "name": "AuraFace v1 (R100)",
+    "task": "face",
+    "adapter": "scrfd_arcface_onnx",
+    "embeddingSpace": "auraface-v1-r100-512",
+    "dimension": 512,
+    "languages": [],
+    "license": "Recognition model card: Apache-2.0. SCRFD detector is shared with InsightFace; review detector/upstream licensing separately.",
+    "description": "Alternative ResNet100 recognizer from fal. Model card reports commercial/public training sources and Apache-2.0 recognition weights. Test on your own photos; demographic performance may vary.",
+    "defaults": {
+      "threads": 4
+    },
+    "files": [
+      {
+        "role": "detector",
+        "url": "https://huggingface.co/fal/AuraFace-v1/resolve/af6d057c9b0ec4071d4c49c80e3539258798b609/scrfd_10g_bnkps.onnx",
+        "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+        "size": 16923827
+      },
+      {
+        "role": "embedding",
+        "url": "https://huggingface.co/fal/AuraFace-v1/resolve/af6d057c9b0ec4071d4c49c80e3539258798b609/glintr100.onnx",
+        "sha256": "a7933ea5330113b01c9b60351d8f4c33003f145d8470ac5f0e52ee2effe25c60",
+        "size": 260694151
+      }
+    ]
+  }
+]

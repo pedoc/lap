@@ -1,6 +1,6 @@
 # Privacy
 
-Last updated: May 2, 2026
+Last updated: October 8, 2026
 
 ## Overview
 
@@ -38,6 +38,9 @@ Lap may access the network in limited cases where the feature requires it. Based
 - Downloading application updates from GitHub releases when you choose to install an update
 - Opening external links such as the project website or GitHub repository in your browser
 - Fetching map tiles from OpenStreetMap tile servers when viewing a photo's GPS location on the map
+- Downloading checksum-verified model artifacts from configured model sources
+- Testing a configured proxy against Google's connectivity endpoint
+- Calling an optional AI provider explicitly enabled by you
 
 ## Anonymous Usage Statistics
 
@@ -54,7 +57,15 @@ Each event carries only the Lap version, device platform, and operating system. 
 
 These events are strictly anonymous. They contain no user identifiers, session IDs, or device fingerprints. Aptabase does not use cookies or tracking pixels, and events are not correlated across sessions.
 
-**Lap does not and will never send** your photos, videos, folder paths, filenames, search queries, tags, ratings, comments, EXIF data, embeddings, face clusters, thumbnails, previews, database contents, or any other library data.
+**Anonymous analytics never send** photos, videos, folder paths, filenames, search queries, tags, ratings, comments, EXIF data, embeddings, face clusters, thumbnails, previews, database contents, or any other library data.
+
+## Optional AI Providers
+
+Local ONNX models remain the default. Selecting an online model requires explicit permission to send images and text to its configured provider. Automatic online library indexing requires a separate opt-in because it can upload many images and incur API charges. Local failures never automatically fall back to an online provider.
+
+The current online embedding adapter sends search text or a JPEG image resized to at most 1024 pixels on each side. Re-encoding strips embedded image metadata; original filenames, paths, and the original file are not included. The provider can nevertheless see image contents and your network address. Its retention and privacy terms apply. Online inference tests send sample text and a synthetic image and may also incur charges.
+
+API keys are stored in the operating system credential store, not in JSON configuration or library database backups. A missing/unavailable credential store is an error; Lap does not fall back to plaintext storage. Configured remote model revisions are part of the index identity; if a provider changes its model, update the revision and rebuild the derived index.
 
 ## Data Storage
 

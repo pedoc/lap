@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, State};
+use tauri::Emitter;
 use tokio::sync::Semaphore;
 use walkdir::WalkDir;
 
@@ -3756,12 +3756,9 @@ impl AFile {
                             let _ = AThumb::delete(file_id);
                             // remove embeds data
                             if modified {
-                                let conn = open_conn()?;
-                                let _ = conn.execute(
-                                    "UPDATE afiles SET embeds = NULL WHERE id = ?1",
-                                    params![file_id],
-                                );
+                                crate::ai::profiles::invalidate_file(file_id)?;
                                 updated_file.has_embedding = Some(false);
+                                updated_file.has_faces = Some(0);
                             }
                         }
                         return Ok((updated_file, 2));
@@ -6363,7 +6360,7 @@ impl AFile {
     // --- AI Logic ---
 
     /// check ai status
-    pub fn check_ai_status(state: &State<t_ai::AiState>) -> String {
+    pub fn check_ai_status(state: &t_ai::AiState) -> String {
         let engine = state.0.lock().unwrap();
         if engine.is_loaded() {
             "AI Models Loaded".to_string()
@@ -6374,9 +6371,11 @@ impl AFile {
 
     /// get query embedding from search text or similar image id
     pub fn get_query_embedding(
-        state: &State<t_ai::AiState>,
+        state: &t_ai::AiState,
         params: &ImageSearchParams,
     ) -> Result<Option<Vec<f32>>, String> {
+        let model = crate::ai::settings::active(crate::ai::types::Task::Semantic)?;
+        crate::ai::profiles::ensure(crate::ai::types::Task::Semantic, &model.profile())?;
         if !params.search_text.is_empty() {
             let mut engine = state.0.lock().unwrap();
             Ok(Some(engine.encode_text(&params.search_text)?))
@@ -6384,7 +6383,7 @@ impl AFile {
             match Self::get_embedding_by_id(file_id) {
                 Ok(emb) => Ok(Some(emb)),
                 Err(_) => {
-                    Self::generate_embedding(state, file_id)?;
+                    Self::generate_embedding_for_request(state, file_id, true)?;
                     Ok(Some(Self::get_embedding_by_id(file_id)?))
                 }
             }
@@ -6394,10 +6393,21 @@ impl AFile {
     }
 
     /// generate embedding for a file
-    pub fn generate_embedding(
-        state: &State<t_ai::AiState>,
-        file_id: i64,
+    pub fn generate_embedding(state: &t_ai::AiState, file_id: i64) -> Result<String, String> {
+        let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
+        Self::generate_embedding_for_request(state, file_id, false)
+    }
+    pub fn generate_embedding_for_request(
+        state: &t_ai::AiState, file_id: i64, manual: bool,
     ) -> Result<String, String> {
+        let library_id = crate::t_config::current_library_id()?;
+        let model = crate::ai::settings::active(crate::ai::types::Task::Semantic)?;
+        if model.definition.adapter == crate::ai::types::Adapter::JinaEmbeddings && !manual && !model.instance.allow_background_upload {
+            return Err("Automatic online indexing is disabled for this instance".into());
+        }
+        let profile = model.profile();
+        crate::ai::profiles::ensure(crate::ai::types::Task::Semantic, &profile)?;
+        let original_conn = open_conn()?;
         // 1. Fetch file info to get path
         let file_opt = Self::get_file_info(file_id).map_err(|e| e.to_string())?;
         let file = file_opt.ok_or("File not found")?;
@@ -6462,28 +6472,9 @@ impl AFile {
         }?;
 
         // 5. Save to DB
-        let _ =
-            Self::update_embedding(file_id, embedding).map_err(|e| format!("DB Error: {}", e))?;
+        crate::ai::profiles::store_vector(&original_conn, &library_id, &profile, file_id, &embedding, (file.modified_at, file.size))?;
 
         Ok("Embedding generated and saved".to_string())
-    }
-
-    /// Update embedding for a file
-    pub fn update_embedding(file_id: i64, embedding: Vec<f32>) -> Result<usize, String> {
-        // Convert Vec<f32> to Vec<u8>
-        let mut bytes = Vec::with_capacity(embedding.len() * 4);
-        for val in embedding {
-            bytes.extend_from_slice(&val.to_le_bytes());
-        }
-
-        let conn = open_conn()?;
-        let result = conn
-            .execute(
-                "UPDATE afiles SET embeds = ?1 WHERE id = ?2",
-                params![bytes, file_id],
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(result)
     }
 
     pub fn get_embedding_by_id(file_id: i64) -> Result<Vec<f32>, String> {
@@ -6508,7 +6499,7 @@ impl AFile {
 
     /// search similar images
     pub fn search_similar_images(
-        state: &State<t_ai::AiState>,
+        state: &t_ai::AiState,
         params: ImageSearchParams,
     ) -> Result<Vec<Self>, String> {
         // 1. Determine Target Embedding
@@ -8863,6 +8854,24 @@ pub struct Face {
 }
 
 impl Face {
+    /// Commit one source image atomically: partial inserts never mark it scanned.
+    pub fn save_scanned_with_conn(conn: &Connection, file_id: i64, records: &[(String, Vec<f32>)], expected: Option<(Option<i64>, i64)>) -> Result<usize, String> {
+        conn.execute_batch("BEGIN IMMEDIATE").map_err(|e|e.to_string())?;
+        let result = (|| {
+            if let Some(expected)=expected {
+                let actual=conn.query_row("SELECT modified_at,size FROM afiles WHERE id=?1",[file_id],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,i64>(1)?))).optional().map_err(|e|e.to_string())?;
+                if actual!=Some(expected){return Err("Source image changed during face inference; result discarded".into());}
+            }
+            conn.execute("DELETE FROM faces WHERE file_id=?1", [file_id]).map_err(|e|e.to_string())?;
+            for (bbox, embedding) in records { Self::add_with_conn(conn, file_id, bbox, embedding)?; }
+            Self::mark_scanned_with_conn(conn, file_id, if records.is_empty() {2} else {1})?;
+            Ok(records.len())
+        })();
+        match result {
+            Ok(count) => { conn.execute_batch("COMMIT").map_err(|e|e.to_string())?; Ok(count) },
+            Err(error) => { let _=conn.execute_batch("ROLLBACK"); Err(error) },
+        }
+    }
     /// Add a new face using an existing connection (avoids repeated open_conn during batch indexing)
     pub fn add_with_conn(
         conn: &Connection,
@@ -9018,11 +9027,11 @@ impl Face {
 
     /// Get all image file IDs that haven't been processed for faces yet
     /// Returns: Vec<(id, file_path, width, height)>
-    pub fn get_unprocessed_image_files() -> Result<Vec<(i64, String, i64, i64)>, String> {
+    pub fn get_unprocessed_image_files() -> Result<Vec<(i64, String, i64, i64, Option<i64>, i64)>, String> {
         let conn = open_conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT a.id, f.path || '/' || a.name as file_path, a.width, a.height
+                "SELECT a.id, f.path || '/' || a.name as file_path, a.width, a.height, a.modified_at, a.size
                  FROM afiles a 
                  JOIN afolders f ON a.folder_id = f.id
                  WHERE a.file_type = 1 
@@ -9034,7 +9043,7 @@ impl Face {
 
         let files = stmt
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
@@ -10416,5 +10425,31 @@ mod raw_display_cache_tests {
         assert_ne!(key(RawPreviewMode::Embedded, 1), key(RawPreviewMode::Rendered, 1));
         assert_eq!(key(RawPreviewMode::Embedded, 0), key(RawPreviewMode::Embedded, 1));
         assert_ne!(key(RawPreviewMode::Embedded, 6), key(RawPreviewMode::Embedded, 1));
+    }
+}
+
+#[cfg(test)] mod ai_detection_commit_tests {
+    use super::*;
+    #[test] fn stale_face_results_are_not_written_to_changed_images() {
+        let c=Connection::open_in_memory().unwrap();c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,has_faces INTEGER,modified_at INTEGER,size INTEGER); CREATE TABLE faces(id INTEGER,file_id INTEGER,bbox TEXT,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,0,20,100);").unwrap();
+        let records=vec![("bbox".into(),vec![1.,2.])];
+        assert!(Face::save_scanned_with_conn(&c,1,&records,Some((Some(10),100))).is_err());
+        assert_eq!(c.query_row("SELECT has_faces FROM afiles",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        Face::save_scanned_with_conn(&c,1,&records,Some((Some(20),100))).unwrap();
+        assert_eq!(c.query_row("SELECT count(*) FROM faces",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test] fn face_results_and_scan_state_commit_together() {
+        let c=Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,has_faces INTEGER,name TEXT); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,bbox TEXT UNIQUE,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,0,'original.jpg');").unwrap();
+        let duplicate=vec![("same".to_string(),vec![1.,2.]),("same".to_string(),vec![1.,2.])];
+        assert!(Face::save_scanned_with_conn(&c,1,&duplicate,None).is_err());
+        assert_eq!(c.query_row("SELECT count(*) FROM faces",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(c.query_row("SELECT has_faces FROM afiles",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        Face::save_scanned_with_conn(&c,1,&duplicate[..1],None).unwrap();
+        assert_eq!(c.query_row("SELECT has_faces FROM afiles",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        Face::save_scanned_with_conn(&c,1,&[],None).unwrap();
+        assert_eq!(c.query_row("SELECT count(*) FROM faces",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let (name,status):(String,i64)=c.query_row("SELECT name,has_faces FROM afiles",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(name,"original.jpg");assert_eq!(status,2);
     }
 }

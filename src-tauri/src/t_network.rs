@@ -43,3 +43,13 @@ pub fn configure(proxy_url: Option<String>) -> Result<(), String> {
 pub fn configured_proxy() -> Result<Option<String>, String> {
     Ok(crate::t_config::load_app_config()?.network_proxy_url)
 }
+
+// Constructed only inside blocking inference workers, never on a Tokio worker.
+pub fn blocking_client(timeout: u64, endpoint: &str) -> Result<reqwest::blocking::Client, String> {
+    let proxy = PROXY_URL.read().map_err(|e| e.to_string())?.clone();
+    let mut builder = reqwest::blocking::Client::builder().connect_timeout(std::time::Duration::from_secs(30)).timeout(std::time::Duration::from_secs(timeout));
+    let loopback = reqwest::Url::parse(endpoint).ok().is_some_and(|url| matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")));
+    if loopback { builder = builder.no_proxy(); }
+    else if let Some(url) = proxy { builder = builder.proxy(Proxy::all(url).map_err(|_| "Invalid proxy configuration")?); }
+    builder.build().map_err(|e| e.without_url().to_string())
+}

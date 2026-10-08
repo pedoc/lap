@@ -3625,7 +3625,10 @@ const similarPhotoGroupingThreshold = computed(() => {
 });
 const similarViewVersion = ref(0);
 const similarScanKey = ref('');
-watch([dedupScanKey, similarPhotoGroupingThreshold], ([key, threshold]) => {
+watch(() => JSON.stringify([config.settings.ai?.semanticInstance, config.settings.ai?.semanticParameters, config.settings.ai?.semanticLanguages]), () => {
+  if (currentQuerySource.value === 'search') void updateContent(true);
+}, { deep: true });
+watch([dedupScanKey, similarPhotoGroupingThreshold, () => config.settings.ai?.semanticProfile], ([key, threshold]) => {
   similarScanKey.value = key
     ? `${key}|threshold:${threshold}|similar-view:${++similarViewVersion.value}`
     : '';
@@ -7516,7 +7519,7 @@ async function getUnifiedSearchFileList(searchText: string, requestId: number) {
   };
   imageSearchError.value = false;
   const isDefaultModelUnsupportedLanguage =
-    Number(config.settings.imageSearch.model || 0) === 0
+    (config.settings.ai?.semanticLanguages?.length === 1 && config.settings.ai.semanticLanguages[0] === 'en')
     && hasNonLatinLetters(searchText);
   imageSearchLanguageUnsupported.value = isDefaultModelUnsupportedLanguage;
   isLoading.value = true;

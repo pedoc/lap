@@ -11,6 +11,7 @@ import router from '@/common/router'
 import App from '@/App.vue'
 import { useConfigStore } from '@/stores/configStore'
 import '@/assets/app.css'
+import { applyAiConfiguration } from '@/common/aiModels'
 
 // I18n
 import en from '@/locales/en.json'
@@ -40,6 +41,17 @@ const config = useConfigStore() // Use the config store
 const currentWindowLabel = getCurrentWebviewWindow().label
 const isMainWindow = currentWindowLabel === 'main'
 const isSettingsWindow = currentWindowLabel === 'settings'
+let aiRefreshRequest = 0
+async function refreshAiConfiguration() {
+  const request = ++aiRefreshRequest
+  try {
+    const view = await invoke('get_ai_configuration')
+    if (request === aiRefreshRequest) applyAiConfiguration(config, view)
+  } catch (error) { console.error('Failed to load AI configuration:', error) }
+}
+void refreshAiConfiguration()
+listen('ai-configuration-changed', () => { void refreshAiConfiguration() })
+listen('library-switched', () => { void refreshAiConfiguration() })
 
 // Fetch the OS locale once so "follow system" date/time formatting has a value.
 void getOsLocale().then((loc) => config.setSystemLocale(loc)).catch(() => {})
@@ -213,14 +225,8 @@ if (isMainWindow) {
   listen('settings-imageSearchThresholdIndex-changed', (event) => {
     config.setImageSearchThresholdIndex(event.payload)
   })
-  listen('settings-imageSearchModel-changed', (event) => {
-    config.setImageSearchModel(event.payload)
-  })
   listen('settings-similarPhotoGroupingThresholdIndex-changed', (event) => {
     config.setSimilarPhotoGroupingThresholdIndex(event.payload)
-  })
-  listen('settings-faceClusterThresholdIndex-changed', (event) => {
-    config.setFaceClusterThresholdIndex(event.payload)
   })
   listen('settings-faceEnabled-changed', (event) => {
     config.setFaceEnabled(event.payload)

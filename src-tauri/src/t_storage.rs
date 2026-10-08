@@ -124,6 +124,16 @@ pub fn get_current_db_path() -> Result<String, String> {
 }
 
 fn checkpoint_db(path: &Path) -> Result<(), String> {
+    // Windows maps a file-as-parent to "not found" in try_exists. Distinguish
+    // malformed paths from genuinely absent databases before treating them as safe.
+    let mut ancestor=path.parent();
+    while let Some(parent)=ancestor {
+        if parent.try_exists().map_err(|e|format!("Failed to inspect database parent '{}': {e}",parent.display()))? {
+            if !parent.is_dir(){return Err(format!("Database parent is not a directory: {}",parent.display()));}
+            break;
+        }
+        ancestor=parent.parent();
+    }
     if !path
         .try_exists()
         .map_err(|e| format!("Failed to inspect database '{}': {}", path.display(), e))?

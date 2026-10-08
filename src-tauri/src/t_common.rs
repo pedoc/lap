@@ -50,24 +50,3 @@ pub const VIDEOS: &[&str] = &[
 // pub const AUDIOS: &[&str] = &[
 //     "mp3", "wav", "flac", "aac", "m4a", "ogg", "wma", "mp2", "mp1", "ape", "alac", "wavpack",
 // ];
-
-// AI search
-pub const AI_TEXT_MODEL: &str = "text_model.onnx";
-pub const AI_VISION_MODEL: &str = "vision_model.onnx";
-pub const AI_TOKENIZER: &str = "tokenizer.json";
-
-// Face Recognition Constants
-
-// models
-pub const DETECTION_MODEL: &str = "det_500m.onnx"; // RetinaFace
-pub const EMBEDDING_MODEL: &str = "w600k_mbf.onnx"; // MobileFaceNet
-
-// Quality thresholds - Recommended Values
-pub const MIN_CONFIDENCE: f32 = 0.65; // 0.6-0.7 is standard. 0.65 balances precision/recall.
-// pub const MIN_FACE_RATIO: f32 = 0.0; // Disabled. Rely on absolute pixel size instead (better for high-res photos).
-// pub const MIN_FACE_SIZE: f32 = 90.0; // 80-112px is minimum for good recognition. 90.0 is a safe high-quality baseline.
-pub const MIN_BLUR_SCORE: f32 = 200.0; // Standard Laplacian variance threshold. Below 100 is usually blurry.
-
-// Clustering Constants
-pub const K_NEIGHBORS: usize = 80; // Prune edges to Top-K (K-NN)
-pub const MIN_SAMPLES: usize = 1; // Minimum samples per cluster

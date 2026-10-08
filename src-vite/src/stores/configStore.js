@@ -171,8 +171,8 @@ export const useConfigStore = defineStore('configStore', {
       },
 
       // image search settings
+      ai: { semanticParameters: {}, faceParameters: {}, semanticLanguages: ['en'] },
       imageSearch: {
-        model: 0,                  // 0: default English-only model, 1: multilingual model
         thresholdIndex: 2,         // image search threshold index (default is Standard)
       },
 
@@ -185,7 +185,6 @@ export const useConfigStore = defineStore('configStore', {
       face: {
         enabled: false, // enable face recognition in image search
         // Cluster threshold index: 0=Very High, 1=High, 2=Medium, 3=Low
-        clusterThresholdIndex: 2, // Default: Medium
       },
     },
   }),
@@ -197,21 +196,26 @@ export const useConfigStore = defineStore('configStore', {
       return group?.apps?.find((app) => app.id === group.defaultId) || group?.apps?.[0] || null;
     },
     // Image search threshold values: [Strict, Focused, Standard, Broad]
-    imageSearchThresholds: () => [0.32, 0.29, 0.26, 0.255],
+    imageSearchThresholds: (state) => {
+      const base = Number(state.settings.ai?.semanticParameters?.semantic_threshold ?? 0.26);
+      return [Math.min(1, base + 0.06), Math.min(1, base + 0.03), base, Math.max(0, base - 0.005)];
+    },
 
     // Fixed threshold for image-to-image "Find related photos" search.
-    similarImageSearchThreshold: () => 0.7,
+    similarImageSearchThreshold: (state) => Number(state.settings.ai?.semanticParameters?.related_threshold ?? 0.7),
 
     // Fixed default threshold for Smart Tags.
-    smartTagSearchThreshold: () => 0.25,
+    smartTagSearchThreshold: (state) => Number(state.settings.ai?.semanticParameters?.smart_tag_threshold ?? 0.25),
 
     // Similar photo grouping thresholds
     // [Very strict, Strict, Moderate, Relaxed]
-    similarPhotoGroupingThresholds: () => [0.97, 0.93, 0.9, 0.85],
+    similarPhotoGroupingThresholds: (state) => {
+      const base = Number(state.settings.ai?.semanticParameters?.grouping_threshold ?? 0.93);
+      return [Math.min(1, base + 0.04), base, Math.max(0, base - 0.03), Math.max(0, base - 0.08)];
+    },
     
     // Cluster threshold values: cosine distance (lower = stricter, higher = looser)
     // [Very High, High, Medium, Low]
-    faceClusterThresholds: () => [0.35, 0.45, 0.55, 0.65],
 
   },
 
@@ -369,9 +373,6 @@ export const useConfigStore = defineStore('configStore', {
     //   this.settings.showComment = showComment;
     // },
     // image search settings
-    setImageSearchModel(imageSearchModel) {
-      this.settings.imageSearch.model = imageSearchModel;
-    },
     setImageSearchThresholdIndex(imageSearchThresholdIndex) {
       this.settings.imageSearch.thresholdIndex = imageSearchThresholdIndex;
     },
@@ -383,16 +384,9 @@ export const useConfigStore = defineStore('configStore', {
     // face recognition settings
     setFaceEnabled(enabled) {
       if (!this.settings.face) {
-        this.settings.face = { enabled, clusterThresholdIndex: 2 };
+        this.settings.face = { enabled };
       } else {
         this.settings.face.enabled = enabled;
-      }
-    },
-    setFaceClusterThresholdIndex(index) {
-      if (!this.settings.face) {
-        this.settings.face = { enabled: true, clusterThresholdIndex: index };
-      } else {
-        this.settings.face.clusterThresholdIndex = index;
       }
     },
 

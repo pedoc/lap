@@ -166,18 +166,18 @@ brew install nasm pkg-config autoconf automake libtool cmake
 
 # Linux system deps
 # sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-#   patchelf nasm clang pkg-config autoconf automake libtool cmake
+#   patchelf libdbus-1-dev nasm clang pkg-config autoconf automake libtool cmake
 
 # Clone and build
 git clone --recursive https://github.com/julyx10/lap.git
 cd lap
 git submodule update --init --recursive
 cargo install tauri-cli --version "^2.0.0" --locked
-./scripts/download_models.sh            # Windows: .\scripts\download_models.ps1
-./scripts/download_ffmpeg_sidecar.sh    # Windows: .\scripts\download_ffmpeg_sidecar.ps1
 cd src-vite && pnpm install && cd ..
 cargo tauri dev
 ```
+
+After launch, download and configure models in **Settings → AI models** and FFmpeg in **Settings → Network**. Online models require explicit consent and an image/text inference test. See the [AI model developer guide](docs/development/ai-models.md).
 
 Distribution packages can link against the system libheif (1.17 or newer) instead of the bundled libheif and libde265. Set `LAP_SYSTEM_LIBHEIF=1` for the build. The submodules `third_party/libheif` and `third_party/libde265` are then not needed. HEVC decoding depends on the codec plugins of the system libheif.
 
