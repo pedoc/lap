@@ -1,3 +1,9 @@
 [mcp_servers.codegraph]
 command = "codegraph"
 args = ["serve", "--mcp"]
+
+[mcp_servers.context7]
+type = "http"
+url = "https://mcp.context7.com/mcp"
+# Only reference the environment variable; never put an actual API key here.
+env_http_headers = { "CONTEXT7_API_KEY" = "CONTEXT7_API_KEY" }
