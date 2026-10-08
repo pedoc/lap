@@ -112,20 +112,6 @@ jobs:
         working-directory: src-vite
         run: pnpm install --frozen-lockfile
 
-      - name: Cache AI Models
-        id: cache-ai-models
-        uses: actions/cache@v4
-        with:
-          path: src-tauri/resources/models
-          key: ${{ runner.os }}-models-${{ hashFiles('scripts/download_models.sh', 'scripts/download_models.ps1') }}
-
-      - name: Download AI Models (Windows)
-        if: steps.cache-ai-models.outputs.cache-hit != 'true'
-        shell: pwsh
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: .\scripts\download_models.ps1
-
       - name: Force app frontend build command (Windows CI only)
         shell: pwsh
         run: |
@@ -156,10 +142,6 @@ jobs:
           if (Test-Path $bundleDir) {
             Remove-Item -Recurse -Force $bundleDir
           }
-
-      - name: Download FFmpeg Sidecars (Windows)
-        shell: pwsh
-        run: .\scripts\download_ffmpeg_sidecar.ps1 -Arch ${{ matrix.arch }}
 
       - name: Install pinned Tauri CLI
         run: npm install -g @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }}

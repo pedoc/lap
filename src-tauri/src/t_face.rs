@@ -12,7 +12,7 @@ use ort::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 // cancellation token for face indexing
 #[derive(Clone)]
@@ -85,10 +85,7 @@ impl FaceEngine {
         }
 
         // Resolve paths
-        let resource_dir = app
-            .path()
-            .resolve("models", tauri::path::BaseDirectory::Resource)
-            .map_err(|e| format!("Failed to resolve resource path: {}", e))?;
+        let resource_dir = crate::t_resources::model_dir(app)?;
 
         let detection_model_path = resource_dir.join(t_common::DETECTION_MODEL);
         let embedding_model_path = resource_dir.join(t_common::EMBEDDING_MODEL);

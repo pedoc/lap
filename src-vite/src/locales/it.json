@@ -1701,6 +1701,27 @@
         "failed_check": "Impossibile controllare gli aggiornamenti",
         "failed_install": "Impossibile installare l'aggiornamento"
       }
+    },
+    "network": {
+      "title": "Network",
+      "proxy_title": "Network proxy",
+      "proxy_hint": "Use this proxy for app network requests, including downloads and online features. Supported URL schemes: http, https, socks5.",
+      "proxy_enabled": "Enable proxy",
+      "save_proxy": "Apply",
+      "proxy_saved": "Proxy settings saved.",
+      "resources_title": "Optional downloads",
+      "resources_hint": "Missing models or FFmpeg components can be downloaded here. They are stored in the app data folder, not in the install package.",
+      "ai_models": "AI and face recognition models",
+      "ffmpeg": "FFmpeg and FFprobe",
+      "ready": "Installed",
+      "missing": "Not installed",
+      "downloading": "Downloading",
+      "download_models": "Download models",
+      "download_ffmpeg": "Download FFmpeg",
+      "download_complete": "Download completed.",
+      "test_proxy": "Test proxy",
+      "testing_proxy": "Testing proxy…",
+      "proxy_test_success": "Google is reachable through the proxy."
     }
   }
 }

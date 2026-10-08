@@ -1701,6 +1701,27 @@
         "failed_check": "無法檢查更新",
         "failed_install": "無法安裝更新"
       }
+    },
+    "network": {
+      "title": "網路",
+      "proxy_title": "網路代理",
+      "proxy_hint": "為應用程式的網路請求啟用代理，包括資源下載與線上功能。支援 http、https、socks5 協定。",
+      "proxy_enabled": "啟用代理",
+      "save_proxy": "套用",
+      "proxy_saved": "代理設定已儲存。",
+      "resources_title": "選用資源下載",
+      "resources_hint": "缺少模型或 FFmpeg 元件時，可在此下載。資源會存放於應用程式資料目錄，不會打包進安裝程式。",
+      "ai_models": "AI 與人臉辨識模型",
+      "ffmpeg": "FFmpeg 與 FFprobe",
+      "ready": "已安裝",
+      "missing": "未安裝",
+      "downloading": "正在下載",
+      "download_models": "下載模型",
+      "download_ffmpeg": "下載 FFmpeg",
+      "download_complete": "下載完成。",
+      "test_proxy": "測試代理",
+      "testing_proxy": "正在測試代理…",
+      "proxy_test_success": "已透過代理成功連線至 Google。"
     }
   }
 }

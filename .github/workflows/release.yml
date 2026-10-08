@@ -114,27 +114,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-cargo-
 
-      - name: Download FFmpeg Sidecars
-        shell: bash
-        run: bash scripts/download_ffmpeg_sidecar.sh ${{ matrix.platform }} ${{ matrix.arch }}
-
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
         working-directory: src-vite
-
-      - name: Cache AI Models
-        id: cache-ai-models
-        uses: actions/cache@v4
-        with:
-          path: src-tauri/resources/models
-          key: ${{ runner.os }}-models-${{ hashFiles('scripts/download_models.sh', 'scripts/download_models.ps1') }}
-
-      - name: Download AI Models
-        if: steps.cache-ai-models.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: bash scripts/download_models.sh
 
       - name: Clear cached Linux bundle artifacts
         if: startsWith(matrix.target, 'x86_64-unknown-linux') || startsWith(matrix.target, 'aarch64-unknown-linux')

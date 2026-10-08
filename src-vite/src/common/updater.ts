@@ -1,7 +1,7 @@
 import { computed, ref, type Ref } from 'vue';
 import { check, type Update, type DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { openExternalUrl } from '@/common/api';
+import { getNetworkProxy, openExternalUrl } from '@/common/api';
 import { useToast, type ToastPlacement } from '@/common/toast';
 
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
@@ -146,8 +146,9 @@ export function useAppUpdater(localeMsg: Ref<any>, options: AppUpdaterOptions = 
   async function checkWithTimeout() {
     let timeoutId: number | null = null;
     try {
+      const proxy = await getNetworkProxy().catch(() => null);
       return await Promise.race([
-        check(),
+        check(proxy ? { proxy } : undefined),
         new Promise<never>((_, reject) => {
           timeoutId = window.setTimeout(() => {
             reject(new Error('Update check timed out after 8 seconds'));

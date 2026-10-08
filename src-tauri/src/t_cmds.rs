@@ -1937,7 +1937,9 @@ async fn import_url_inner(
     folder_id: i64,
     folder_path: String,
 ) -> Result<Option<AFile>, String> {
-    let response = reqwest::get(url)
+    let response = crate::t_network::client()?
+        .get(url)
+        .send()
         .await
         .map_err(|e| format!("Failed to download image: {}", e))?;
 
@@ -3202,6 +3204,46 @@ pub fn get_storage_file_info() -> Result<t_utils::FileInfo, String> {
         Ok(info) => Ok(info),
         Err(e) => Err(format!("Failed to get the database file size: {}", e)),
     }
+}
+
+#[tauri::command]
+pub fn get_network_proxy() -> Result<Option<String>, String> {
+    crate::t_network::configured_proxy()
+}
+
+#[tauri::command]
+pub fn set_network_proxy(proxy_url: Option<String>) -> Result<(), String> {
+    crate::t_network::configure(proxy_url)
+}
+
+#[tauri::command]
+pub async fn test_network_proxy(proxy_url: String) -> Result<u16, String> {
+    let proxy_url = proxy_url.trim();
+    if proxy_url.is_empty() {
+        return Err("Enter a proxy URL before testing".to_string());
+    }
+    let client = crate::t_network::client_with_proxy(Some(proxy_url))?;
+    let response = client
+        .get("https://www.google.com/generate_204")
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach Google through this proxy: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Google proxy test returned HTTP {status}"));
+    }
+    Ok(status.as_u16())
+}
+
+#[tauri::command]
+pub fn get_app_resources_status(app_handle: AppHandle) -> crate::t_resources::ResourceStatus {
+    crate::t_resources::status(&app_handle)
+}
+
+#[tauri::command]
+pub async fn download_app_resources(app_handle: AppHandle, kind: String) -> Result<(), String> {
+    crate::t_resources::download(app_handle, kind).await
 }
 
 // image search

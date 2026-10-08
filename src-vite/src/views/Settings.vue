@@ -127,6 +127,46 @@
         </div>
 
         <!-- Grid Tab -->
+        <div v-else-if="config.settings.tabIndex === SETTINGS_TAB.NETWORK" class="flex flex-col space-y-2">
+          <div class="rounded-box p-3 space-y-3 bg-base-300/30 border border-base-content/5 shadow-sm">
+            <div class="text-sm font-semibold">{{ $t('settings.network.proxy_title') }}</div>
+            <div class="text-xs text-base-content/50">{{ $t('settings.network.proxy_hint') }}</div>
+            <label class="flex items-center gap-2 text-sm">
+              <input v-model="proxyEnabled" type="checkbox" class="toggle toggle-primary toggle-sm" />
+              {{ $t('settings.network.proxy_enabled') }}
+            </label>
+            <input v-model="networkProxyUrl" class="input input-bordered input-sm w-full" :disabled="!proxyEnabled" placeholder="http://127.0.0.1:7890" />
+            <div class="flex justify-end gap-2">
+              <button class="btn btn-outline btn-sm" :disabled="!proxyEnabled || !networkProxyUrl.trim() || isTestingProxy" @click="testNetworkProxyNow">
+                {{ isTestingProxy ? $t('settings.network.testing_proxy') : $t('settings.network.test_proxy') }}
+              </button>
+              <button class="btn btn-primary btn-sm" :disabled="isSavingProxy || (proxyEnabled && !networkProxyUrl.trim())" @click="saveNetworkProxy">
+                {{ $t('settings.network.save_proxy') }}
+              </button>
+            </div>
+          </div>
+          <div class="rounded-box p-3 space-y-3 bg-base-300/30 border border-base-content/5 shadow-sm">
+            <div>
+              <div class="text-sm font-semibold">{{ $t('settings.network.resources_title') }}</div>
+              <div class="text-xs text-base-content/50 mt-1">{{ $t('settings.network.resources_hint') }}</div>
+            </div>
+            <div class="flex items-center justify-between gap-3 text-sm">
+              <span>{{ $t('settings.network.ai_models') }}</span>
+              <span :class="appResources.modelsReady ? 'text-success' : 'text-warning'">{{ appResources.modelsReady ? $t('settings.network.ready') : $t('settings.network.missing') }}</span>
+            </div>
+            <button class="btn btn-outline btn-sm self-end" :disabled="!!downloadingResource || appResources.modelsReady" @click="downloadResources('models')">
+              {{ downloadingResource === 'models' ? `${$t('settings.network.downloading')} ${appResourcesProgress}%` : $t('settings.network.download_models') }}
+            </button>
+            <div class="flex items-center justify-between gap-3 text-sm">
+              <span>{{ $t('settings.network.ffmpeg') }}</span>
+              <span :class="appResources.ffmpegReady ? 'text-success' : 'text-warning'">{{ appResources.ffmpegReady ? $t('settings.network.ready') : $t('settings.network.missing') }}</span>
+            </div>
+            <button class="btn btn-outline btn-sm self-end" :disabled="!!downloadingResource || appResources.ffmpegReady" @click="downloadResources('ffmpeg')">
+              {{ downloadingResource === 'ffmpeg' ? `${$t('settings.network.downloading')} ${appResourcesProgress}%` : $t('settings.network.download_ffmpeg') }}
+            </button>
+          </div>
+        </div>
+
         <div v-else-if="config.settings.tabIndex === SETTINGS_TAB.GRID" class="flex flex-col space-y-2">
 
           <!-- grid view -->
@@ -688,6 +728,12 @@ import {
   downloadMultilingualImageSearchModel,
   cancelMultilingualImageSearchModelDownload,
   listenImageSearchModelDownloadProgress,
+  getNetworkProxy,
+  setNetworkProxy,
+  testNetworkProxy,
+  getAppResourcesStatus,
+  downloadAppResources,
+  listenAppResourcesDownloadProgress,
 } from '@/common/api';
 import { formatFileSize, isLinux, isMac, setTheme, SCALE_VALUES } from '@/common/utils';
 import { getShortcutLabels, ShortcutActionId, ShortcutPlatform } from '@/common/shortcuts';
@@ -708,6 +754,7 @@ const toast = useToast();
 const shortcutPlatform: ShortcutPlatform = isMac ? 'mac' : (isLinux ? 'linux' : 'windows');
 const settingsTabs = [
   { id: SETTINGS_TAB.GENERAL, label: 'settings.general.title' },
+  { id: SETTINGS_TAB.NETWORK, label: 'settings.network.title' },
   { id: SETTINGS_TAB.GRID, label: 'settings.grid.title' },
   { id: SETTINGS_TAB.IMAGE_VIEW, label: 'settings.image_view.title' },
   { id: SETTINGS_TAB.RAW, label: 'settings.raw.title' },
@@ -733,6 +780,14 @@ const showResetDbStorageDialog = ref(false);
 const showBackupDialog = ref(false);
 const showRestoreDialog = ref(false);
 const isDownloadingMultilingualModel = ref(false);
+const networkProxyUrl = ref('');
+const proxyEnabled = ref(false);
+const isSavingProxy = ref(false);
+const isTestingProxy = ref(false);
+const appResources = ref({ modelsReady: false, ffmpegReady: false });
+const downloadingResource = ref('');
+const appResourcesProgress = ref(0);
+let unlistenAppResourcesProgress: (() => void) | null = null;
 const isCancelingMultilingualModelDownload = ref(false);
 const multilingualModelDownloadProgress = ref(0);
 const multilingualModelDownloadedBytes = ref(0);
@@ -1344,8 +1399,60 @@ const cancelMultilingualModelDownload = async () => {
   await cancelMultilingualImageSearchModelDownload();
 };
 
+async function saveNetworkProxy() {
+  isSavingProxy.value = true;
+  try {
+    await setNetworkProxy(proxyEnabled.value ? networkProxyUrl.value.trim() : null);
+    toast.success(localeMsg.value.settings.network.proxy_saved);
+  } catch (error) {
+    toast.error(error?.message || String(error));
+  } finally {
+    isSavingProxy.value = false;
+  }
+}
+
+async function testNetworkProxyNow() {
+  if (!proxyEnabled.value || !networkProxyUrl.value.trim() || isTestingProxy.value) return;
+  isTestingProxy.value = true;
+  try {
+    const status = await testNetworkProxy(networkProxyUrl.value.trim());
+    toast.success(`${localeMsg.value.settings.network.proxy_test_success} (HTTP ${status})`);
+  } catch (error) {
+    toast.error(error?.message || String(error));
+  } finally {
+    isTestingProxy.value = false;
+  }
+}
+
+async function downloadResources(kind: 'models' | 'ffmpeg') {
+  if (downloadingResource.value) return;
+  downloadingResource.value = kind;
+  appResourcesProgress.value = 0;
+  try {
+    await downloadAppResources(kind);
+    appResources.value = await getAppResourcesStatus();
+    toast.success(localeMsg.value.settings.network.download_complete);
+  } catch (error) {
+    toast.error(error?.message || String(error));
+  } finally {
+    downloadingResource.value = '';
+    appResourcesProgress.value = 0;
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('keydown', handleKeyDown);
+  try {
+    const savedProxy = await getNetworkProxy();
+    networkProxyUrl.value = savedProxy || '';
+    proxyEnabled.value = !!savedProxy;
+    appResources.value = await getAppResourcesStatus();
+    unlistenAppResourcesProgress = await listenAppResourcesDownloadProgress((event: any) => {
+      appResourcesProgress.value = Math.max(0, Math.min(100, Number(event?.payload?.progress || 0)));
+    });
+  } catch (error) {
+    console.error('Failed to load network/resource settings:', error);
+  }
   if (!settingsTabs.some(tab => tab.id === config.settings.tabIndex)) {
     config.settings.tabIndex = SETTINGS_TAB.GENERAL;
   }
@@ -1387,6 +1494,10 @@ onUnmounted(() => {
   if (unlistenImageSearchModelDownloadProgress) {
     unlistenImageSearchModelDownloadProgress();
     unlistenImageSearchModelDownloadProgress = null;
+  }
+  if (unlistenAppResourcesProgress) {
+    unlistenAppResourcesProgress();
+    unlistenAppResourcesProgress = null;
   }
   document.documentElement.style.fontSize = '';
   window.removeEventListener('keydown', handleKeyDown);

@@ -32,6 +32,8 @@ mod t_jxl;
 mod t_lens;
 mod t_libraw;
 mod t_raw_display;
+mod t_network;
+mod t_resources;
 mod t_menu;
 mod t_migration;
 mod t_montage;
@@ -100,8 +102,11 @@ async fn main() {
         .manage(t_dedup::DedupState::default())
         .manage(t_similar::SimilarState::default())
         .setup(|_app| {
-            t_video::init_ffmpeg_path(&_app.handle());
             t_config::set_app_identifier(&_app.config().identifier);
+            if let Ok(config) = t_config::load_app_config() {
+                t_network::initialize(config.network_proxy_url);
+            }
+            t_video::init_ffmpeg_path(&_app.handle());
             t_menu::install_app_menu(&_app.handle())?;
 
             #[cfg(not(target_os = "macos"))]
@@ -409,6 +414,11 @@ async fn main() {
             t_cmds::get_package_info,
             t_cmds::get_build_time,
             t_cmds::get_storage_file_info,
+            t_cmds::get_network_proxy,
+            t_cmds::set_network_proxy,
+            t_cmds::test_network_proxy,
+            t_cmds::get_app_resources_status,
+            t_cmds::download_app_resources,
             // ai
             t_cmds::check_ai_status,
             t_cmds::get_image_search_model_status,

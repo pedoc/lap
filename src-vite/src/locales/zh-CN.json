@@ -1701,6 +1701,27 @@
         "failed_check": "检查更新失败",
         "failed_install": "安装更新失败"
       }
+    },
+    "network": {
+      "title": "网络",
+      "proxy_title": "网络代理",
+      "proxy_hint": "为应用的网络请求启用代理，包括资源下载和在线功能。支持 http、https、socks5 协议。",
+      "proxy_enabled": "启用代理",
+      "save_proxy": "应用",
+      "proxy_saved": "代理设置已保存。",
+      "resources_title": "可选资源下载",
+      "resources_hint": "缺少模型或 FFmpeg 组件时，可在此下载。资源会存放在应用数据目录，不会打包进安装程序。",
+      "ai_models": "AI 与人脸识别模型",
+      "ffmpeg": "FFmpeg 与 FFprobe",
+      "ready": "已安装",
+      "missing": "未安装",
+      "downloading": "正在下载",
+      "download_models": "下载模型",
+      "download_ffmpeg": "下载 FFmpeg",
+      "download_complete": "下载完成。",
+      "test_proxy": "测试代理",
+      "testing_proxy": "正在测试代理…",
+      "proxy_test_success": "通过代理成功访问 Google。"
     }
   }
 }

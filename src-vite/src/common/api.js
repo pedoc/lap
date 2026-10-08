@@ -85,6 +85,26 @@ export async function resetDbStorageDir() {
   }
 }
 
+// Network proxy and downloadable app resources
+export async function getNetworkProxy() {
+  return await invoke('get_network_proxy');
+}
+export async function setNetworkProxy(proxyUrl) {
+  return await invoke('set_network_proxy', { proxyUrl: proxyUrl || null });
+}
+export async function testNetworkProxy(proxyUrl) {
+  return await invoke('test_network_proxy', { proxyUrl });
+}
+export async function getAppResourcesStatus() {
+  return await invoke('get_app_resources_status');
+}
+export async function downloadAppResources(kind) {
+  return await invoke('download_app_resources', { kind });
+}
+export async function listenAppResourcesDownloadProgress(callback) {
+  return await listen('app_resources_download_progress', callback);
+}
+
 // backup / restore
 
 export async function getDbStorageInfo() {

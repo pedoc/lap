@@ -1,10 +1,16 @@
+# Build asset download helpers (legacy)
+
+Packaged application builds no longer run these scripts or include the downloaded assets. Lap now detects and downloads its AI/face models and FFmpeg/FFprobe from **Settings → Network** into the user's app data directory. Configure a proxy there if network access requires one.
+
+The scripts remain available for local development or manual testing:
+
 # Scripts
 
 Utility scripts for the Lap project.
 
 ## 1. download_models
 
-Downloads AI model files (CLIP + InsightFace) required for the app to `src-tauri/resources/models/`. Already downloaded files are skipped automatically.
+Downloads AI model files (CLIP + InsightFace) to `src-tauri/resources/models/` for development builds. Already downloaded files are skipped automatically.
 
 ### Usage
 
@@ -30,7 +36,7 @@ Downloads AI model files (CLIP + InsightFace) required for the app to `src-tauri
 
 ## 2. download_ffmpeg_sidecar
 
-Downloads FFmpeg and FFprobe sidecar binaries for the current platform into `src-tauri/resources/ffmpeg/`. This ensures the packaged app can include the sidecar binaries with releases built from source.
+Downloads FFmpeg and FFprobe sidecar binaries for the current platform into `src-tauri/resources/ffmpeg/` for local development. Packaged builds download these assets on demand instead.
 
 ### Usage
 
@@ -53,3 +59,4 @@ Downloads FFmpeg and FFprobe sidecar binaries for the current platform into `src
 | Linux x86_64 | `ffmpeg-x86_64-unknown-linux-gnu`, `ffprobe-x86_64-unknown-linux-gnu` |
 | Linux aarch64 | `ffmpeg-aarch64-unknown-linux-gnu`, `ffprobe-aarch64-unknown-linux-gnu` |
 | Windows x86_64 | `ffmpeg-x86_64-pc-windows-msvc.exe`, `ffprobe-x86_64-pc-windows-msvc.exe` |
+| Windows ARM64 | `ffmpeg-aarch64-pc-windows-msvc.exe`, `ffprobe-aarch64-pc-windows-msvc.exe` |

@@ -22,7 +22,7 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 
@@ -42,7 +42,6 @@ const MULTILINGUAL_CHECKSUMS_URL: &str =
     "https://github.com/julyx10/lap-binaries/releases/download/models/sha256sums.txt";
 const MULTILINGUAL_RELEASE_API_URL: &str =
     "https://api.github.com/repos/julyx10/lap-binaries/releases/tags/models";
-const MULTILINGUAL_MODEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 static MULTILINGUAL_MODEL_DOWNLOAD_ID: AtomicU64 = AtomicU64::new(0);
 static MULTILINGUAL_MODEL_INSTALLING: AtomicBool = AtomicBool::new(false);
 
@@ -211,18 +210,7 @@ impl AiEngine {
     }
 
     fn resource_model_dir(app: &AppHandle) -> Result<PathBuf, String> {
-        #[cfg(debug_assertions)]
-        {
-            let manifest_dir = env!("CARGO_MANIFEST_DIR");
-            let dev_path = std::path::PathBuf::from(manifest_dir).join("resources/models");
-            if dev_path.exists() {
-                return Ok(dev_path);
-            }
-        }
-
-        app.path()
-            .resolve("models", tauri::path::BaseDirectory::Resource)
-            .map_err(|e| format!("Failed to resolve resource path: {}", e))
+        crate::t_resources::model_dir(app)
     }
 
     fn multilingual_model_dir(_app: &AppHandle) -> Result<PathBuf, String> {
@@ -651,10 +639,7 @@ pub async fn download_multilingual_text_model(app: AppHandle) -> Result<(), Stri
             "tokenizer",
         ),
     ];
-    let client = reqwest::Client::builder()
-        .connect_timeout(MULTILINGUAL_MODEL_CONNECT_TIMEOUT)
-        .build()
-        .map_err(|e| format!("Failed to create download client: {}", e))?;
+    let client = crate::t_network::client()?;
     let expected_total = get_download_total_size(&client, &files).await;
     let checksums = client
         .get(MULTILINGUAL_CHECKSUMS_URL)

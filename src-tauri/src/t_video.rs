@@ -44,20 +44,9 @@ fn thumbnail_ffmpeg_threads() -> usize {
 }
 
 pub fn init_ffmpeg_path(app: &AppHandle) {
-    // 1. In development, prioritize the source directory
-    #[cfg(debug_assertions)]
-    {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let dev_path = PathBuf::from(manifest_dir).join("resources").join("ffmpeg");
-        if dev_path.exists() {
-            let _ = SIDE_CAR_DIR.set(dev_path);
-            return;
-        }
-    }
-
-    // 2. Production: use resource_dir
-    if let Ok(res_dir) = app.path().resource_dir() {
-        let _ = SIDE_CAR_DIR.set(res_dir.join("ffmpeg"));
+    match crate::t_resources::ffmpeg_dir(app) {
+        Ok(path) => { let _ = SIDE_CAR_DIR.set(path); }
+        Err(error) => eprintln!("Could not resolve FFmpeg resource directory: {error}"),
     }
 }
 
@@ -156,6 +145,10 @@ fn ffprobe_sidecar_name() -> &'static str {
 }
 
 fn find_sidecar(name: &str) -> Option<PathBuf> {
+    if let Ok(dir) = crate::t_config::get_app_data_dir() {
+        let managed = dir.join("resources").join("ffmpeg").join(name);
+        if managed.is_file() { return Some(managed); }
+    }
     SIDE_CAR_DIR.get().and_then(|dir| {
         let path = dir.join(name);
         if path.exists() { Some(path) } else { None }
