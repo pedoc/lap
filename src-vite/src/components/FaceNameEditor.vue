@@ -8,11 +8,15 @@
     <div v-if="editing" ref="panel" data-face-editor role="dialog" :aria-label="t('face_editor.title')" class="fixed z-[1000] pointer-events-auto rounded-box border border-base-content/20 bg-base-100 text-base-content p-3 shadow-2xl overflow-auto space-y-2 text-sm"
       :style="position" @pointerdown.stop @mousedown.stop @touchstart.stop @click.stop @dblclick.stop @contextmenu.stop @wheel.stop @keydown.stop="editorKey">
       <div class="font-semibold">{{ t('face_editor.title') }}</div>
+      <p class="text-xs opacity-70">{{ t(face.review_state === 'confirmed' ? 'face_editor.manual_status' : face.review_state === 'unassigned' ? 'face_editor.unassigned_status' : 'face_editor.automatic_status') }}</p>
       <label class="block text-xs">{{ t('face_editor.operation') }}
         <select v-model="mode" class="select select-bordered select-sm w-full mt-1" :disabled="saving" @change="modeChanged">
           <option v-if="snapshot?.expectedPersonId != null" value="rename">{{ t('face_editor.rename') }}</option>
           <option value="assign_existing">{{ t('face_editor.assign_existing') }}</option>
           <option value="assign_new">{{ t('face_editor.assign_new') }}</option>
+          <option v-if="snapshot?.expectedPersonId != null" value="confirm">{{ t('face_editor.confirm') }}</option>
+          <option value="ignore">{{ t('face_editor.ignore') }}</option>
+          <option value="not_face">{{ t('face_editor.not_face') }}</option>
           <option v-if="snapshot?.expectedPersonId != null" value="unassign">{{ t('face_editor.unassign') }}</option>
         </select>
       </label>
@@ -32,7 +36,7 @@
           <p v-if="!searching && !people.length" class="text-xs opacity-60">{{ t('face_editor.no_results') }}</p>
         </div>
       </template>
-      <p v-else class="text-xs">{{ t('face_editor.unassign_hint') }}</p>
+      <p v-else class="text-xs">{{ t(mode === 'confirm' ? 'face_editor.confirm_hint' : ['ignore', 'not_face'].includes(mode) ? 'face_editor.ignore_hint' : 'face_editor.unassign_hint') }}</p>
       <p v-if="error" role="alert" class="text-error text-xs whitespace-pre-wrap">{{ error }}</p>
       <div class="flex justify-end gap-2">
         <button type="button" class="btn btn-sm" :disabled="saving" @click="cancel">{{ t('face_editor.cancel') }}</button>
@@ -60,7 +64,7 @@ const targetPersonId = ref<number | null>(null), people = ref<any[]>([]), snapsh
 const position = ref<any>({});
 let generation = 0, searchRequest = 0, searchTimer: ReturnType<typeof setTimeout> | null = null;
 const inputHandler = `FaceNameEditor:${props.face.id}:${Math.random().toString(36).slice(2)}`;
-const canSave = computed(() => currentContext() && (mode.value === 'unassign' || (mode.value === 'assign_existing' ? targetPersonId.value != null : name.value.trim().length > 0)));
+const canSave = computed(() => currentContext() && (['unassign','confirm','ignore','not_face'].includes(mode.value) || (mode.value === 'assign_existing' ? targetPersonId.value != null : name.value.trim().length > 0)));
 function currentContext() {
   return editing.value && snapshot.value?.libraryId === libConfig._libraryId && snapshot.value?.profile === config.settings.ai?.faceProfile && snapshot.value?.faceId === props.face.id;
 }
@@ -102,9 +106,9 @@ async function searchPeople() {
   const request = ++searchRequest, epoch = generation;
   searching.value = true;
   try {
-    const result: any = await invoke('get_persons_page', { request: { sort: 0, offset: 0, limit: 50, search: search.value.trim(), refreshSummary: null }, libraryId: snapshot.value.libraryId });
+    const result: any = await invoke('get_face_people', { search: search.value.trim(), libraryId: snapshot.value.libraryId });
     if (request !== searchRequest || epoch !== generation || !currentContext()) return;
-    people.value = result.persons || [];
+    people.value = result || [];
   } catch (e: any) { if (epoch === generation && request === searchRequest) error.value = e?.message || String(e); }
   finally { if (request === searchRequest && epoch === generation) searching.value = false; }
 }

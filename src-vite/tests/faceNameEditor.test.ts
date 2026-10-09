@@ -14,13 +14,13 @@ function harness({ assigned = true, failure = '' } = {}) {
   const config = { settings: { ai: { faceProfile: 'profile-a' } } };
   const face = { id: 11, file_id: 5, person_id: assigned ? 7 : null, person_name: assigned ? 'Alice' : null };
   const ui = { pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const index = handlers.indexOf(id); if (index >= 0) handlers.splice(index, 1); } };
-  const api = runInNewContext(`${code}\n;({ openEditor, save, cancel, closeEditor, submitKey, editing, saving, name, mode, error, targetPersonId, anchor, panel, snapshot });`, {
+  const api = runInNewContext(`${code}\n;({ openEditor, save, cancel, closeEditor, submitKey, editing, saving, name, mode, error, targetPersonId, anchor, panel, snapshot, searchPeople });`, {
     ref: (value: any) => ({ value }), computed: (getter: () => any) => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: (fn: () => void) => mounts.push(fn), onBeforeUnmount: (fn: () => void) => unmounts.push(fn), nextTick: async () => {},
     defineProps: () => ({ face, label: '1 · Alice', color: '#047857' }),
     useI18n: () => ({ t: (key: string) => key }), useUIStore: () => ui,
     libConfig, config, faceEditorPosition,
-    invoke: async (command: string, args: any) => { calls.push(JSON.parse(JSON.stringify({ command, args }))); if (failure) throw new Error(failure); return {}; },
+    invoke: async (command: string, args: any) => { calls.push(JSON.parse(JSON.stringify({ command, args }))); if (failure) throw new Error(failure); return command === 'get_face_people' ? [] : {}; },
     document: { addEventListener: () => {}, removeEventListener: () => {} },
     window: { innerWidth: 1000, innerHeight: 700, addEventListener: () => {}, removeEventListener: () => {} },
     setTimeout, clearTimeout,
@@ -72,4 +72,15 @@ test('disposing an open editor releases the image keyboard/input lock', async ()
 test('labels are clickable and the editor blocks photo drag, double click, context menu and wheel bubbling', () => {
   assert.match(source, /@pointerdown.stop @mousedown.stop/); assert.match(source, /@keydown.stop/);
   assert.match(source, /@dblclick.stop/); assert.match(source, /@wheel.stop/); assert.match(source, /<Teleport to="body">/);
+});
+
+test('assignment search includes durable identities rather than relying on visible sidebar faces', async () => {
+  const h = harness(); await h.api.openEditor(); h.api.mode.value = 'assign_existing'; await h.api.searchPeople();
+  assert.equal(h.calls[0].command, 'get_face_people');
+  assert.deepEqual(h.calls[0].args, { libraryId: 'library-a', search: '' });
+});
+test('one-way ignore actions are exposed only alongside the recovery workspace', () => {
+  const person = readFileSync(new URL('../src/components/Person.vue', import.meta.url), 'utf8');
+  assert.match(source, /value="ignore"/); assert.match(source, /value="not_face"/);
+  assert.match(person, /<FaceReview v-if="showFaceReview"/);
 });

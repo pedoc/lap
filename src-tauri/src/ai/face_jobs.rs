@@ -127,6 +127,7 @@ pub fn replace_scanned(
     image: &SourceImage,
     records: &[(String, Vec<f32>)],
 ) -> Result<usize, String> {
+    super::face_annotations::import_existing(conn)?;
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| e.to_string())?;
     let result = (|| {
@@ -143,24 +144,41 @@ pub fn replace_scanned(
         }
         let old = {
             let mut statement = conn
-                .prepare("SELECT id,bbox FROM faces WHERE file_id=?1 ORDER BY id")
+                .prepare("SELECT id,bbox,annotation_id FROM faces WHERE file_id=?1 ORDER BY id")
                 .map_err(|e| e.to_string())?;
             statement
                 .query_map([image.id], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
                 })
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?
         };
+        let annotations = super::face_annotations::active_for_file(conn, image.id)?;
         let mut retained = HashSet::new();
         for (bbox, vector) in records {
             let new: crate::t_face::FaceBox =
                 serde_json::from_str(bbox).map_err(|_| "Invalid face bounding box")?;
+            if annotations.iter().any(|annotation| {
+                ["ignored", "not_face"].contains(&annotation.kind.as_str())
+                    && overlap(
+                        &new,
+                        &super::face_annotations::pixel_box(annotation, image.width, image.height),
+                    ) >= 0.5
+            }) {
+                continue;
+            }
             let matched = old
                 .iter()
-                .filter(|(id, _)| !retained.contains(id))
-                .filter_map(|(id, text)| {
+                .filter(|(id, _, annotation)| {
+                    !retained.contains(id)
+                        && annotation.is_none_or(|id| annotations.iter().any(|a| a.id == id))
+                })
+                .filter_map(|(id, text, _)| {
                     let old: crate::t_face::FaceBox = serde_json::from_str(text).ok()?;
                     let score = overlap(&old, &new);
                     (score >= 0.5).then_some((*id, score))
@@ -181,8 +199,15 @@ pub fn replace_scanned(
                 crate::t_sqlite::Face::add_with_conn(conn, image.id, bbox, vector)?;
             }
         }
-        for (id, _) in old {
-            if !retained.contains(&id) {
+        for (id, _, annotation) in old {
+            if !retained.contains(&id)
+                && !annotation.is_some_and(|id| {
+                    annotations.iter().any(|annotation| {
+                        annotation.id == id
+                            && ["confirmed", "unassigned"].contains(&annotation.kind.as_str())
+                    })
+                })
+            {
                 conn.execute(
                     "UPDATE persons SET cover_face_id=NULL,thumbnail=NULL WHERE cover_face_id=?1",
                     [id],
@@ -192,12 +217,22 @@ pub fn replace_scanned(
                     .map_err(|e| e.to_string())?;
             }
         }
+        for annotation in &annotations {
+            conn.execute(
+                "UPDATE faces SET person_id=?1 WHERE annotation_id=?2",
+                params![annotation.person_id, annotation.id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        super::face_annotations::restore_file(conn, image.id)?;
+        // Count visible stored regions, not suppressed predictions; retained manual regions count too.
+        let count: i64=conn.query_row("SELECT COUNT(*) FROM faces f LEFT JOIN face_annotations n ON n.id=f.annotation_id WHERE f.file_id=?1 AND (n.kind IS NULL OR n.kind IN ('confirmed','unassigned'))",[image.id],|row|row.get(0)).map_err(|e|e.to_string())?;
         crate::t_sqlite::Face::mark_scanned_with_conn(
             conn,
             image.id,
-            if records.is_empty() { 2 } else { 1 },
+            if count == 0 { 2 } else { 1 },
         )?;
-        Ok(records.len())
+        Ok(count as usize)
     })();
     match result {
         Ok(count) => {
@@ -221,6 +256,40 @@ mod tests {
     fn bbox(x: f32) -> String {
         serde_json::json!({"x":x,"y":0,"width":20,"height":20,"confidence":1,"landmarks":null})
             .to_string()
+    }
+    #[test]
+    fn suppressed_predictions_and_retained_manual_regions_have_correct_stored_counts() {
+        let c = db();
+        c.execute(
+            "INSERT INTO faces VALUES(11,1,?1,X'01020304',7,0)",
+            [bbox(0.)],
+        )
+        .unwrap();
+        super::super::face_annotations::import_existing(&c).unwrap();
+        let source = selected_images(&c, &FaceScope::new(Some(vec![1]), true).unwrap())
+            .unwrap()
+            .0
+            .remove(0);
+        assert_eq!(replace_scanned(&c, &source, &[]).unwrap(), 1);
+        assert_eq!(
+            c.query_row("SELECT has_faces FROM afiles WHERE id=1", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        c.execute("UPDATE faces SET person_id=NULL WHERE id=11", [])
+            .unwrap();
+        super::super::face_annotations::capture_face(&c, 11, "not_face").unwrap();
+        assert_eq!(
+            replace_scanned(&c, &source, &[(bbox(0.), vec![1., 0.])]).unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row("SELECT has_faces FROM afiles WHERE id=1", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
     }
     #[test]
     fn empty_invalid_or_unbounded_selection_never_becomes_library_scan() {
@@ -335,6 +404,81 @@ mod tests {
     #[test]
     fn malformed_images_do_not_become_successful_empty_detections() {
         assert!(decode_image(b"invalid image").is_err());
+    }
+
+    #[test]
+    fn detector_miss_does_not_erase_a_confirmed_manual_face() {
+        let c = db();
+        c.execute(
+            "INSERT INTO faces VALUES(11,1,?1,X'01020304',7,0)",
+            [bbox(0.)],
+        )
+        .unwrap();
+        let source = selected_images(&c, &FaceScope::new(Some(vec![1]), true).unwrap())
+            .unwrap()
+            .0
+            .remove(0);
+        replace_scanned(&c, &source, &[]).unwrap();
+        assert_eq!(
+            c.query_row("SELECT person_id FROM faces WHERE id=11", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM face_annotations", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn a_new_model_fills_vectors_without_losing_confirmed_identity() {
+        let c = db();
+        c.execute(
+            "INSERT INTO faces VALUES(11,1,?1,X'01020304',7,0)",
+            [bbox(0.)],
+        )
+        .unwrap();
+        super::super::face_annotations::reset_model_results(&c).unwrap();
+        let source = selected_images(&c, &FaceScope::new(Some(vec![1]), true).unwrap())
+            .unwrap()
+            .0
+            .remove(0);
+        replace_scanned(&c, &source, &[(bbox(0.), vec![1., 0.])]).unwrap();
+        let (person, vector) = c
+            .query_row(
+                "SELECT person_id,embedding FROM faces WHERE file_id=1",
+                [],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(person, 7);
+        assert_eq!(vector.len(), 8);
+    }
+    #[test]
+    fn manual_unassignment_is_not_overwritten_by_re_detection() {
+        let c = db();
+        c.execute(
+            "INSERT INTO faces VALUES(11,1,?1,X'01020304',7,0)",
+            [bbox(0.)],
+        )
+        .unwrap();
+        super::super::face_annotations::import_existing(&c).unwrap();
+        c.execute("UPDATE faces SET person_id=NULL WHERE id=11", [])
+            .unwrap();
+        super::super::face_annotations::capture_face(&c, 11, "unassigned").unwrap();
+        let source = selected_images(&c, &FaceScope::new(Some(vec![1]), true).unwrap())
+            .unwrap()
+            .0
+            .remove(0);
+        replace_scanned(&c, &source, &[(bbox(0.), vec![1., 0.])]).unwrap();
+        assert!(
+            c.query_row("SELECT person_id FROM faces WHERE id=11", [], |r| r
+                .get::<_, Option<i64>>(0))
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     #[ignore = "Requires checksum-pinned Buffalo-L and public face-fixture.png"]

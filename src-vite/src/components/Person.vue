@@ -80,6 +80,11 @@
       </div>
     </div>
 
+    <div class="px-2 mb-2 shrink-0">
+      <button type="button" class="btn btn-sm w-full" :disabled="isIndexing" @click="showFaceReview = true">{{ $t('face_review.title') }}</button>
+    </div>
+    <FaceReview v-if="showFaceReview" @cancel="showFaceReview = false" />
+
     <!-- Person List -->
     <div
       v-if="allPersons.length > 0"
@@ -224,6 +229,7 @@ import {
 
 import ContextMenu from '@/components/ContextMenu.vue';
 import MessageBox from '@/components/MessageBox.vue';
+import FaceReview from '@/components/FaceReview.vue';
 import SortMenuButton from '@/components/SortMenuButton.vue';
 
 const props = defineProps({
@@ -240,6 +246,7 @@ const { locale, messages } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
 
 // persons
+const showFaceReview = ref(false);
 const allPersons = ref<any[]>([]);
 const selectedPerson = ref<any>(null);
 const isRenamingPerson = ref(false);

@@ -4,7 +4,7 @@
 
 The first stage replaces fixed model paths, numeric model selection, and global AI tuning with model definitions, per-model configuration, registered capability adapters, and global task selection. Incremental face grouping and streaming result UI are deliberately subsequent stages. CPU and HTTP remain supported. Windows DirectML and macOS CoreML hardware acceleration are implemented; CUDA is an opt-in build feature. See [regression checklist](ai-regression-matrix.md).
 
-This early-development build does not migrate old AI results. Each library has one active derived index per task. Switching an incompatible profile discards only its AI vectors or face/person results. Original media, folders, ratings, tags, and comments are not deleted. This is not an archive of multiple model indexes. Model selection is global, but derived data remains isolated by library. Activation checks the current library immediately; other libraries are checked against the global model when opened. There is no automatic fallback to the default model on library switching.
+This early-development build does not migrate old AI results. Each library has one active derived index per task. Switching an incompatible profile discards automatic model vectors/results, while preserving human people and model-independent face annotations. Original media, folders, ratings, tags, and comments are not deleted. This is not an archive of multiple model indexes. Model selection is global, but derived data remains isolated by library. Activation checks the current library immediately; other libraries are checked against the global model when opened. There is no automatic fallback to the default model on library switching.
 
 ## Modules
 
@@ -77,3 +77,10 @@ Logical DirectML adapter IDs are retained in a collapsed diagnostics section and
 Image context menus and the selection toolbar support detection and explicit re-detection of selected indexed images. RAW images are included; mixed video selections and empty scopes are rejected rather than expanded into a library scan. Ordinary detection reuses cached results. Explicit re-detection is transactional and retains IDs/assignments for overlapping faces; decoder/inference failures do not erase previous data.
 
 High-resolution sources/previews are oriented before inference. Per-image face-data events update all visible face boxes, including unassigned faces. Grouping preserves existing people as fixed anchors and only assigns unassigned faces within the requested scope; it no longer deletes all named people. Thumbnails are refreshed only for touched people. See [comparison and roadmap](face-features.md) for the manual-correction and incremental-person-list work still outstanding.
+
+## Durable human face annotations
+
+`face_annotations.rs` owns normalized human regions, assignment provenance and source-version matching. Human people/names survive model changes and automatic-index resets. Confirmed manual regions are restored without fabricated embeddings; the selected model fills compatible embeddings after detection. Explicit unassignments are excluded from automatic grouping. Changed source files retain annotations for review but do not receive old labels automatically. Existing named groups are imported once conservatively because the old schema had no provenance.
+
+
+`face_review.rs` exposes paginated library-wide suggestions, unassigned faces, confirmations, ignored/non-face regions and changed-source history. Batch review uses one transaction and validates exact observation/source snapshots. Recovery recreates a durable unassigned region without old model vectors; stale source annotations are read-only. Assignment search includes manual people with no active faces. Cached crops are bounded to three concurrent frontend requests. This does not yet implement person merging, manual drawing, persistent jobs or streaming clustering.

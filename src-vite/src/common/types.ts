@@ -88,8 +88,10 @@ export interface BBox {
 export interface RawFace {
     id: number;
     file_id: number;
-    person_id: number;
-    person_name?: string;
+    person_id: number | null;
+    person_name?: string | null;
+    annotation_id?: number | null;
+    review_state?: string;
     bbox: string; // JSON string
     created_at?: number;
     modified_at?: number;

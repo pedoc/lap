@@ -219,7 +219,7 @@ pub fn run_face_indexing(
         };
 
         for source in files {
-            let (file_id,file_path,width,height,modified_at,size)=(source.id,source.path.clone(),source.width,source.height,source.modified_at,source.size);
+            let (file_id,file_path,width,height,size)=(source.id,source.path.clone(),source.width,source.height,source.size);
             if *cancel_token.lock().unwrap() || crate::t_config::current_library_id().ok().as_deref() != Some(library_id.as_str()) {
                 cancelled = true;
                 break;
@@ -262,9 +262,7 @@ pub fn run_face_indexing(
 
                     let records=faces.into_iter().map(|face| serde_json::to_string(&face.bbox).map(|bbox|(bbox,face.embedding))).collect::<Result<Vec<_>,_>>();
                     let Ok(records)=records else { failed+=1; continue; };
-                    let committed=if scope.force {
-                        crate::ai::face_jobs::replace_scanned(&db_conn,&source,&records)
-                    } else { t_sqlite::Face::save_scanned_with_conn(&db_conn,file_id,&records,Some((modified_at,size))) };
+                    let committed=crate::ai::face_jobs::replace_scanned(&db_conn,&source,&records);
                     match committed {
                         Ok(count) => { total_faces+=count; let _=emit("face-data-changed",serde_json::json!({"file_id":file_id})); },
                         Err(error) => { failed+=1; eprintln!("Failed to commit face results for {file_id}: {error}"); },

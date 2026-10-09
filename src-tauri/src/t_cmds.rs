@@ -3476,6 +3476,95 @@ pub async fn edit_face_name(app_handle: AppHandle, request: crate::ai::face_name
     }).await.map_err(|e|e.to_string())?
 }
 
+/// Review is library-scoped and includes ignored annotations even after changing models.
+#[tauri::command]
+pub async fn get_face_review_page(
+    request: crate::ai::face_review::PageRequest,
+) -> Result<crate::ai::face_review::ReviewPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK
+            .try_read()
+            .map_err(|_| "Library is changing; refresh the workspace")?;
+        if t_config::current_library_id()? != request.library_id {
+            return Err("Library changed; reopen face review".into());
+        }
+        let conn = t_sqlite::open_conn()?;
+        crate::ai::face_review::page(&conn, &request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn review_faces(
+    app_handle: AppHandle,
+    request: crate::ai::face_review::ActionRequest,
+) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK
+            .try_write()
+            .map_err(|_| "Finish or stop inference before reviewing faces")?;
+        if t_config::current_library_id()? != request.library_id {
+            return Err("Library changed; reopen face review".into());
+        }
+        if crate::ai::settings::active(crate::ai::types::Task::Face)?.profile() != request.profile {
+            return Err("Face model changed; refresh the workspace".into());
+        }
+        let conn = t_sqlite::open_conn()?;
+        let count = crate::ai::face_review::apply(&conn, &request)?;
+        for person in request
+            .items
+            .iter()
+            .filter_map(|item| item.person_id)
+            .collect::<HashSet<_>>()
+        {
+            let _ = Person::update_thumbnail(person);
+        }
+        let payload =
+            serde_json::json!({"library_id":request.library_id,"file_id":null,"mode":"review"});
+        let _ = app_handle.emit("face-data-changed", payload.clone());
+        let _ = app_handle.emit("face-person-changed", payload);
+        Ok(count)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn get_face_review_thumbnail(
+    library_id: String,
+    item: crate::ai::face_review::ReviewItem,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK
+            .try_read()
+            .map_err(|_| "Library is changing")?;
+        if t_config::current_library_id()? != library_id {
+            return Err("Library changed".into());
+        }
+        let conn = t_sqlite::open_conn()?;
+        crate::ai::face_review::thumbnail(&conn, &item)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn get_face_people(
+    library_id: String,
+    search: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK
+            .try_read()
+            .map_err(|_| "Library is changing")?;
+        if t_config::current_library_id()? != library_id {
+            return Err("Library changed".into());
+        }
+        let conn = t_sqlite::open_conn()?;
+        crate::ai::face_review::people(&conn, &search)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// delete a person
 #[tauri::command]
 pub fn delete_person(person_id: i64) -> Result<usize, String> {

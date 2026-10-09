@@ -36,10 +36,7 @@ pub fn ensure_on(conn: &Connection, task: Task, fingerprint: &str) -> Result<boo
                 }
             }
             Task::Face => {
-                conn.execute_batch(
-                    "DELETE FROM faces; DELETE FROM persons; UPDATE afiles SET has_faces=0;",
-                )
-                .map_err(|e| e.to_string())?;
+                super::face_annotations::reset_model_results(conn)?;
             }
         }
         conn.execute("INSERT INTO ai_index_profiles(task,fingerprint) VALUES(?1,?2) ON CONFLICT(task) DO UPDATE SET fingerprint=excluded.fingerprint",params![task.key(),fingerprint]).map_err(|e|e.to_string())?;
@@ -61,7 +58,7 @@ mod tests {
     use super::*;
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,embeds BLOB,has_faces INTEGER,name TEXT); CREATE TABLE faces(id INTEGER); CREATE TABLE persons(id INTEGER); INSERT INTO afiles VALUES(1,X'01020304',1,'original.jpg'); INSERT INTO faces VALUES(1); INSERT INTO persons VALUES(1);").unwrap();
+        c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,embeds BLOB,has_faces INTEGER,name TEXT,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,bbox TEXT,embedding BLOB,person_id INTEGER,created_at INTEGER); CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,cover_face_id INTEGER,thumbnail BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,X'01020304',1,'original.jpg',100,100,10,100); INSERT INTO faces VALUES(1,1,NULL,NULL,1,0); INSERT INTO persons VALUES(1,NULL,NULL,NULL,0);").unwrap();
         c
     }
     #[test]
@@ -83,6 +80,40 @@ mod tests {
             c.query_row("SELECT count(*) FROM faces", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
             1
+        );
+    }
+
+    #[test]
+    fn incompatible_face_profiles_preserve_manual_names_and_only_invalidate_vectors() {
+        let c = db();
+        c.execute("UPDATE persons SET name='Alice'", []).unwrap();
+        let bbox=serde_json::json!({"x":10,"y":10,"width":30,"height":30,"confidence":1,"landmarks":null}).to_string();
+        c.execute("UPDATE faces SET bbox=?1,embedding=X'01020304'", [bbox])
+            .unwrap();
+        ensure_on(&c, Task::Face, "model-a").unwrap();
+        ensure_on(&c, Task::Face, "model-b").unwrap();
+        assert_eq!(
+            c.query_row("SELECT name FROM persons", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "Alice"
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT count(*) FROM faces WHERE embedding IS NULL AND person_id=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT fingerprint FROM ai_index_profiles WHERE task='face'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "model-b"
         );
     }
     #[test]
@@ -155,6 +186,7 @@ pub fn ensure_selected() -> Result<(), String> {
 pub fn invalidate_file(file_id: i64) -> Result<(), String> {
     let _lock = PROFILE_LOCK.lock().map_err(|e| e.to_string())?;
     let conn = crate::t_sqlite::open_conn()?;
+    super::face_annotations::import_existing(&conn)?;
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| e.to_string())?;
     let result = (|| {

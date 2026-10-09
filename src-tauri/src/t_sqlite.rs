@@ -8768,19 +8768,7 @@ impl Person {
     /// Delete a person (faces will have person_id set to NULL)
     pub fn delete(person_id: i64) -> Result<usize, String> {
         let conn = open_conn()?;
-
-        // First, unlink all faces from this person
-        conn.execute(
-            "UPDATE faces SET person_id = NULL WHERE person_id = ?1",
-            params![person_id],
-        )
-        .map_err(|e| e.to_string())?;
-
-        // Then delete the person
-        let result = conn
-            .execute("DELETE FROM persons WHERE id = ?1", params![person_id])
-            .map_err(|e| e.to_string())?;
-        Ok(result)
+        crate::ai::face_names::delete_person(&conn, person_id)
     }
 
     /// Create a new person (usually from face clustering)
@@ -8810,11 +8798,14 @@ pub struct Face {
     pub embedding: Option<Vec<u8>>, // 512-dimensional float32 embedding as bytes
     pub person_id: Option<i64>,
     pub person_name: Option<String>,
+    pub annotation_id: Option<i64>,
+    pub review_state: String,
     pub created_at: i64,
 }
 
 impl Face {
     /// Commit one source image atomically: partial inserts never mark it scanned.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn save_scanned_with_conn(conn: &Connection, file_id: i64, records: &[(String, Vec<f32>)], expected: Option<(Option<i64>, i64)>) -> Result<usize, String> {
         conn.execute_batch("BEGIN IMMEDIATE").map_err(|e|e.to_string())?;
         let result = (|| {
@@ -8871,38 +8862,12 @@ impl Face {
         Ok(count > 0)
     }
 
-    /// Reset all face data: delete all faces and persons
+    /// Reset automatic observations/vectors while preserving durable human annotations
     pub fn reset_all() -> Result<(), String> {
-        let conn = open_conn()?;
-
-        // Use a transaction
-        conn.execute("BEGIN TRANSACTION", params![])
-            .map_err(|e| e.to_string())?;
-
-        if let Err(e) = conn.execute("DELETE FROM faces", params![]) {
-            let _ = conn.execute("ROLLBACK", params![]);
-            return Err(e.to_string());
-        }
-
-        if let Err(e) = conn.execute("DELETE FROM persons", params![]) {
-            let _ = conn.execute("ROLLBACK", params![]);
-            return Err(e.to_string());
-        }
-
-        // Reset has_faces flag in afiles
-        if let Err(e) = conn.execute("UPDATE afiles SET has_faces = 0", params![]) {
-            let _ = conn.execute("ROLLBACK", params![]);
-            return Err(e.to_string());
-        }
-
-        // Vacuum to reclaim space (optional, but good for reset)
-        // Note: VACUUM cannot be run inside a transaction in some SQLite versions/modes,
-        // but here we just commit first.
-
-        conn.execute("COMMIT", params![])
-            .map_err(|e| e.to_string())?;
-
-        Ok(())
+        let conn=open_conn()?;
+        conn.execute_batch("BEGIN IMMEDIATE").map_err(|e|e.to_string())?;
+        let result=crate::ai::face_annotations::reset_model_results(&conn);
+        match result {Ok(())=>{conn.execute_batch("COMMIT").map_err(|e|e.to_string())?;Ok(())},Err(error)=>{let _=conn.execute_batch("ROLLBACK");Err(error)}}
     }
 
     /// Get faces for a specific file
@@ -8910,10 +8875,12 @@ impl Face {
         let conn = open_conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT f.id, f.file_id, f.bbox, f.embedding, f.person_id, f.created_at, p.name 
+                "SELECT f.id, f.file_id, f.bbox, f.embedding, f.person_id, f.created_at, p.name, f.annotation_id, COALESCE(n.kind,CASE WHEN f.person_id IS NULL THEN 'unknown' ELSE 'suggested' END)
                  FROM faces f
                  LEFT JOIN persons p ON f.person_id = p.id
-                 WHERE f.file_id = ?1",
+                 LEFT JOIN face_annotations n ON n.id=f.annotation_id
+                 JOIN afiles a ON a.id=f.file_id
+                 WHERE f.file_id = ?1 AND (n.id IS NULL OR (n.kind IN ('confirmed','unassigned') AND n.source_modified_at IS a.modified_at AND n.source_size=a.size))",
             )
             .map_err(|e| e.to_string())?;
 
@@ -8927,6 +8894,8 @@ impl Face {
                     person_id: row.get(4)?,
                     created_at: row.get(5)?,
                     person_name: row.get(6)?,
+                    annotation_id: row.get(7)?,
+                    review_state: row.get(8)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -8941,7 +8910,7 @@ impl Face {
     pub fn get_all_for_clustering() -> Result<Vec<(i64, i64, Option<Vec<u8>>, Option<i64>)>, String> {
         let conn = open_conn()?;
         let mut stmt = conn
-            .prepare("SELECT id, file_id, embedding, person_id FROM faces")
+            .prepare("SELECT f.id,f.file_id,f.embedding,f.person_id FROM faces f JOIN afiles a ON a.id=f.file_id LEFT JOIN face_annotations n ON n.id=f.annotation_id WHERE n.id IS NULL OR (n.kind='confirmed' AND n.source_modified_at IS a.modified_at AND n.source_size=a.size)")
             .map_err(|e| e.to_string())?;
 
         let faces = stmt
@@ -9015,7 +8984,7 @@ impl Face {
 
         let faces: i64 = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM faces f JOIN afiles a ON a.id = f.file_id JOIN afolders b ON b.id = a.folder_id WHERE {}", visible_file_conditions.trim_start_matches(" AND ")),
+                &format!("SELECT COUNT(*) FROM faces f JOIN afiles a ON a.id = f.file_id JOIN afolders b ON b.id = a.folder_id LEFT JOIN face_annotations n ON n.id=f.annotation_id WHERE (n.id IS NULL OR (n.kind IN ('confirmed','unassigned') AND n.source_modified_at IS a.modified_at AND n.source_size=a.size)) AND {}", visible_file_conditions.trim_start_matches(" AND ")),
                 [],
                 |row| row.get(0),
             )
@@ -9989,6 +9958,7 @@ fn create_db_internal() -> Result<(), String> {
 
     // Run schema migrations after base tables are ensured.
     crate::t_migration::check_and_migrate(&conn)?;
+    crate::ai::face_annotations::import_existing(&conn)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_content_identifier ON afiles(content_identifier)",
         [],

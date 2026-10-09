@@ -751,7 +751,7 @@
     },
     "person": {
       "index_faces": "Index faces",
-      "reset_index": "Reset index",
+      "reset_index": "Reset automatic face results",
       "unnamed": "Unnamed person",
       "search": "Search people"
     },
@@ -800,8 +800,8 @@
       "file_name_invalid": "Name cannot contain the following characters: \\ / : * ? \" < > |."
     },
     "reset_faces": {
-      "title": "Reset index",
-      "content": "Are you sure you want to delete ALL face data? This cannot be undone.",
+      "title": "Reset automatic face results",
+      "content": "Clear automatic detections and grouping for a new scan? Human names, confirmed regions and explicit unassignments are preserved. Original images are not modified.",
       "ok": "Reset"
     },
     "clear_search_history": {
@@ -1763,7 +1763,7 @@
       "saved": "AI configuration saved",
       "test_cloud_warning": "This test sends sample text and a synthetic image to the configured service. API charges may apply. Continue?",
       "test_success": "Inference passed",
-      "reset_warning": "Use this model globally? Incompatible AI results in the current library will be cleared, including faces and person groups when applicable. Other libraries are checked when opened. Original photos and videos are not modified.",
+      "reset_warning": "Use this model globally? Incompatible automatic AI results will be rebuilt. Human-confirmed people, names and face annotations are preserved; regions whose source files changed require review. Original media files are not modified.",
       "delete_confirm": "Remove this inactive custom model and its configuration? Downloaded model files will not be deleted.",
       "parameters": {
         "threads": "CPU threads per model session",
@@ -1797,7 +1797,7 @@
         "embedding_std": "Face encoder pixel standard deviation",
         "detector_adaptive_size": "Legacy adaptive detector size (CPU)"
       },
-      "rebuild_confirm": "These changes discard the active derived AI index (including face/person groups if applicable). Original media files are not modified. Continue?",
+      "rebuild_confirm": "Rebuild the affected automatic AI index? Human-confirmed face labels and people are preserved. Original media files are not modified.",
       "contract_verified": "Saved model configuration: inference contract verified",
       "contract_untested": "Saved model configuration: not tested. Online models must pass the image/text inference test before use.",
       "gpu_hint": "Auto tries available acceleration then CPU, with a reported reason. Explicit GPU selections never silently switch to CPU. Some operators, preprocessing and clustering may still run on CPU. Inference tests show real operator placement.",
@@ -1852,6 +1852,50 @@
     "unassign_hint": "The detected face box is retained and shown as unnamed. The existing person and other faces are not deleted.",
     "cancel": "Cancel",
     "save": "Save",
-    "saving": "Saving…"
+    "saving": "Saving…",
+    "manual_status": "Human-confirmed label",
+    "unassigned_status": "Explicitly unassigned",
+    "automatic_status": "Automatic result",
+    "confirm": "Confirm this face's current person",
+    "ignore": "Ignore this face",
+    "not_face": "This region is not a face",
+    "confirm_hint": "Save this region and person as a human-confirmed annotation, preserved across model changes.",
+    "ignore_hint": "Hide this region from recognition, including re-detection or model changes. Restore it in People → Face review → Ignored / Not faces."
+  },
+  "face_review": {
+    "title": "Face review",
+    "scope": "All faces in the current library, independent of the selected album or person. Human confirmations are stored separately from automatic suggestions.",
+    "filters": "Review categories",
+    "suggested": "Suggestions",
+    "unknown": "Unassigned",
+    "confirmed": "Confirmed",
+    "ignored": "Ignored / Not faces",
+    "stale": "Changed sources",
+    "refresh": "Refresh",
+    "stale_hint": "These annotations belong to a changed source file and will not be applied to its new content. Detect and annotate the current image again; the original human record is retained.",
+    "restore_hint": "Restored regions become unassigned. Old identities and model vectors are not restored automatically; you can assign a person again.",
+    "select_page": "Select page",
+    "selected": "{count} faces selected",
+    "action_confirm": "Confirm person",
+    "action_reject": "Reject assignment",
+    "action_ignore": "Ignore face",
+    "action_not_face": "Mark as not a face",
+    "action_restore": "Restore face",
+    "confirm_action": "Apply \"{action}\" to {count} selected faces? Rejected assignments stay unassigned during automatic clustering. Ignored/non-face regions can be restored from their category.",
+    "loading": "Loading faces…",
+    "empty": "No faces in this category.",
+    "no_preview": "No cached preview",
+    "select_face": "Select face",
+    "state_suggested": "Automatic suggestion, not confirmed",
+    "state_unknown": "Not grouped yet",
+    "state_unassigned": "Manually unassigned",
+    "state_confirmed": "Human confirmed",
+    "state_ignored": "Ignored",
+    "state_not_face": "Not a face",
+    "state_stale": "Source changed",
+    "image_id": "Image #{id}",
+    "total": "{count} faces",
+    "previous": "Previous",
+    "next": "Next"
   }
 }

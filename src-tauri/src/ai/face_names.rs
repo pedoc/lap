@@ -9,6 +9,9 @@ pub enum EditMode {
     AssignExisting,
     AssignNew,
     Unassign,
+    Confirm,
+    Ignore,
+    NotFace,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -47,12 +50,12 @@ fn unique_name(conn: &Connection, name: &str, except: Option<i64>) -> Result<(),
     }
     Ok(())
 }
-pub fn rename_person(conn: &Connection, person_id: i64, name: &str) -> Result<usize, String> {
+fn rename_in_transaction(conn: &Connection, person_id: i64, name: &str) -> Result<usize, String> {
     let name = valid_name(name)?;
     unique_name(conn, name, Some(person_id))?;
     let affected = conn
         .execute(
-            "UPDATE persons SET name=?1 WHERE id=?2",
+            "UPDATE persons SET name=?1,manual=1 WHERE id=?2",
             params![name, person_id],
         )
         .map_err(|e| e.to_string())?;
@@ -61,86 +64,165 @@ pub fn rename_person(conn: &Connection, person_id: i64, name: &str) -> Result<us
     }
     Ok(affected)
 }
+pub fn rename_person(conn: &Connection, person_id: i64, name: &str) -> Result<usize, String> {
+    super::face_annotations::import_existing(conn)?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| e.to_string())?;
+    let result = (|| {
+        let count = rename_in_transaction(conn, person_id, name)?;
+        let face = conn
+            .query_row(
+                "SELECT id FROM faces WHERE person_id=?1 ORDER BY id LIMIT 1",
+                [person_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(face) = face {
+            super::face_annotations::capture_face(conn, face, "confirmed")?;
+        }
+        Ok(count)
+    })();
+    match result {
+        Ok(count) => {
+            conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+            Ok(count)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
 pub fn edit(conn: &Connection, request: &FaceNameRequest) -> Result<FaceNameChange, String> {
     if request.face_id <= 0 || request.file_id <= 0 {
         return Err("Invalid face or image ID".into());
     }
+    super::face_annotations::import_existing(conn)?;
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| e.to_string())?;
-    let result = (|| {
-        let current=conn.query_row("SELECT f.person_id,p.name FROM faces f LEFT JOIN persons p ON p.id=f.person_id WHERE f.id=?1 AND f.file_id=?2",params![request.face_id,request.file_id],|row|Ok((row.get::<_,Option<i64>>(0)?,row.get::<_,Option<String>>(1)?))).optional().map_err(|e|e.to_string())?.ok_or("Face no longer exists in this image; reload the face labels")?;
-        if current.0 != request.expected_person_id || current.1 != request.expected_name {
-            return Err(
-                "This face's person or name changed while editing; reopen the editor".into(),
-            );
-        }
-        let (person_id, name) = match request.mode {
-            EditMode::Rename => {
-                let person = current
-                    .0
-                    .ok_or("An unassigned face must be assigned to a person before renaming")?;
-                let name = valid_name(request.name.as_deref().unwrap_or(""))?;
-                rename_person(conn, person, name)?;
-                (Some(person), Some(name.to_string()))
-            }
-            EditMode::AssignExisting => {
-                let target = request
-                    .target_person_id
-                    .filter(|id| *id > 0)
-                    .ok_or("Choose an existing person")?;
-                let name = conn
-                    .query_row("SELECT name FROM persons WHERE id=?1", [target], |row| {
-                        row.get::<_, Option<String>>(0)
-                    })
-                    .optional()
-                    .map_err(|e| e.to_string())?
-                    .ok_or("Target person no longer exists")?;
-                (Some(target), name)
-            }
-            EditMode::AssignNew => {
-                let name = valid_name(request.name.as_deref().unwrap_or(""))?;
-                unique_name(conn, name, None)?;
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|duration| duration.as_secs() as i64)
-                    .unwrap_or(0);
-                conn.execute(
-                    "INSERT INTO persons(name,created_at,cover_face_id) VALUES(?1,?2,?3)",
-                    params![name, now, request.face_id],
-                )
-                .map_err(|e| e.to_string())?;
-                (Some(conn.last_insert_rowid()), Some(name.to_string()))
-            }
-            EditMode::Unassign => (None, None),
-        };
-        if request.mode != EditMode::Rename {
-            conn.execute(
-                "UPDATE faces SET person_id=?1 WHERE id=?2 AND file_id=?3",
-                params![person_id, request.face_id, request.file_id],
-            )
-            .map_err(|e| e.to_string())?;
-            if current.0 != person_id {
-                if let Some(previous) = current.0 {
-                    conn.execute("UPDATE persons SET cover_face_id=NULL,thumbnail=NULL WHERE id=?1 AND cover_face_id=?2",params![previous,request.face_id]).map_err(|e|e.to_string())?;
-                }
-                if let Some(person) = person_id {
-                    conn.execute("UPDATE persons SET cover_face_id=COALESCE(cover_face_id,?2),thumbnail=NULL WHERE id=?1",params![person,request.face_id]).map_err(|e|e.to_string())?;
-                }
-            }
-        }
-        Ok(FaceNameChange {
-            face_id: request.face_id,
-            file_id: request.file_id,
-            person_id,
-            previous_person_id: current.0,
-            name,
-            mode: request.mode,
-        })
-    })();
+    let result = edit_in_transaction(conn, request);
     match result {
         Ok(change) => {
             conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
             Ok(change)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+pub(crate) fn edit_in_transaction(
+    conn: &Connection,
+    request: &FaceNameRequest,
+) -> Result<FaceNameChange, String> {
+    let current=conn.query_row("SELECT f.person_id,p.name FROM faces f LEFT JOIN persons p ON p.id=f.person_id LEFT JOIN face_annotations n ON n.id=f.annotation_id JOIN afiles a ON a.id=f.file_id WHERE f.id=?1 AND f.file_id=?2 AND (n.id IS NULL OR (n.kind IN ('confirmed','unassigned') AND n.source_modified_at IS a.modified_at AND n.source_size=a.size))",params![request.face_id,request.file_id],|row|Ok((row.get::<_,Option<i64>>(0)?,row.get::<_,Option<String>>(1)?))).optional().map_err(|e|e.to_string())?.ok_or("Face no longer exists in this image; reload the face labels")?;
+    if current.0 != request.expected_person_id || current.1 != request.expected_name {
+        return Err("This face's person or name changed while editing; reopen the editor".into());
+    }
+    let (person_id, name) = match request.mode {
+        EditMode::Rename => {
+            let person = current
+                .0
+                .ok_or("An unassigned face must be assigned to a person before renaming")?;
+            let name = valid_name(request.name.as_deref().unwrap_or(""))?;
+            rename_in_transaction(conn, person, name)?;
+            (Some(person), Some(name.to_string()))
+        }
+        EditMode::AssignExisting => {
+            let target = request
+                .target_person_id
+                .filter(|id| *id > 0)
+                .ok_or("Choose an existing person")?;
+            let name = conn
+                .query_row("SELECT name FROM persons WHERE id=?1", [target], |row| {
+                    row.get::<_, Option<String>>(0)
+                })
+                .optional()
+                .map_err(|e| e.to_string())?
+                .ok_or("Target person no longer exists")?;
+            (Some(target), name)
+        }
+        EditMode::AssignNew => {
+            let name = valid_name(request.name.as_deref().unwrap_or(""))?;
+            unique_name(conn, name, None)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or(0);
+            conn.execute(
+                "INSERT INTO persons(name,created_at,cover_face_id) VALUES(?1,?2,?3)",
+                params![name, now, request.face_id],
+            )
+            .map_err(|e| e.to_string())?;
+            (Some(conn.last_insert_rowid()), Some(name.to_string()))
+        }
+        EditMode::Unassign | EditMode::Ignore | EditMode::NotFace => (None, None),
+        EditMode::Confirm => {
+            let person = current
+                .0
+                .ok_or("Assign a person before confirming this face")?;
+            (Some(person), current.1.clone())
+        }
+    };
+    if request.mode != EditMode::Rename {
+        conn.execute(
+            "UPDATE faces SET person_id=?1 WHERE id=?2 AND file_id=?3",
+            params![person_id, request.face_id, request.file_id],
+        )
+        .map_err(|e| e.to_string())?;
+        if current.0 != person_id {
+            if let Some(previous) = current.0 {
+                conn.execute("UPDATE persons SET cover_face_id=NULL,thumbnail=NULL WHERE id=?1 AND cover_face_id=?2",params![previous,request.face_id]).map_err(|e|e.to_string())?;
+            }
+            if let Some(person) = person_id {
+                conn.execute("UPDATE persons SET cover_face_id=COALESCE(cover_face_id,?2),thumbnail=NULL WHERE id=?1",params![person,request.face_id]).map_err(|e|e.to_string())?;
+            }
+        }
+    }
+    super::face_annotations::capture_face(
+        conn,
+        request.face_id,
+        match request.mode {
+            EditMode::Ignore => "ignored",
+            EditMode::NotFace => "not_face",
+            _ if person_id.is_some() => "confirmed",
+            _ => "unassigned",
+        },
+    )?;
+    Ok(FaceNameChange {
+        face_id: request.face_id,
+        file_id: request.file_id,
+        person_id,
+        previous_person_id: current.0,
+        name,
+        mode: request.mode,
+    })
+}
+/// Explicit person deletion is one transaction, including durable annotation updates.
+pub fn delete_person(conn: &Connection, person_id: i64) -> Result<usize, String> {
+    super::face_annotations::import_existing(conn)?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| e.to_string())?;
+    let result = (|| {
+        conn.execute(
+            "UPDATE face_annotations SET person_id=NULL,kind='unassigned' WHERE person_id=?1",
+            [person_id],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE faces SET person_id=NULL WHERE person_id=?1",
+            [person_id],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM persons WHERE id=?1", [person_id])
+            .map_err(|e| e.to_string())
+    })();
+    match result {
+        Ok(count) => {
+            conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+            Ok(count)
         }
         Err(error) => {
             let _ = conn.execute_batch("ROLLBACK");
@@ -153,7 +235,9 @@ mod tests {
     use super::*;
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,created_at INTEGER,cover_face_id INTEGER,thumbnail BLOB); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER,bbox TEXT); INSERT INTO persons VALUES(7,'Alice',0,11,X'0102'),(8,'Bob',0,13,NULL); INSERT INTO faces VALUES(11,1,7,'box'),(12,2,7,'box'),(13,2,8,'box'),(14,1,NULL,'box');").unwrap();
+        conn.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER); INSERT INTO afiles VALUES(1,100,100,10,100),(2,100,100,10,100); CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,created_at INTEGER,cover_face_id INTEGER,thumbnail BLOB); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER,bbox TEXT); INSERT INTO persons VALUES(7,'Alice',0,11,X'0102'),(8,'Bob',0,13,NULL); INSERT INTO faces VALUES(11,1,7,'box'),(12,2,7,'box'),(13,2,8,'box'),(14,1,NULL,'box');").unwrap();
+        let bbox=serde_json::json!({"x":10,"y":10,"width":20,"height":20,"confidence":1,"landmarks":null}).to_string();
+        conn.execute("UPDATE faces SET bbox=?1", [bbox]).unwrap();
         conn
     }
     fn request(mode: EditMode) -> FaceNameRequest {

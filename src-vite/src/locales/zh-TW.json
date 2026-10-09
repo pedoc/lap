@@ -751,7 +751,7 @@
     },
     "person": {
       "index_faces": "建立人臉索引",
-      "reset_index": "重設索引",
+      "reset_index": "重設自動人臉結果",
       "unnamed": "未命名人物",
       "search": "搜尋人物"
     },
@@ -800,8 +800,8 @@
       "file_name_invalid": "名稱不可包含下列字元：\\ / : * ? \" < > |。"
     },
     "reset_faces": {
-      "title": "重設索引",
-      "content": "確定要刪除所有人臉資料嗎？此動作無法復原。",
+      "title": "重設自動人臉結果",
+      "content": "清除自動偵測與分組以重新掃描？人工姓名、已確認的區域和明確移除的歸屬會保留，不會修改原始圖片。",
       "ok": "重設"
     },
     "clear_search_history": {
@@ -1763,7 +1763,7 @@
       "saved": "AI 配置已保存",
       "test_cloud_warning": "此次测试将向配置的服务发送示例文字和一张合成图片，可能产生 API 费用。是否继续？",
       "test_success": "推理测试通过",
-      "reset_warning": "全域使用此模型？目前圖庫中不相容的 AI 衍生結果會被清除（如適用，包括人臉與人物分組），其他圖庫在開啟時檢查。不會修改原始照片或影片。",
+      "reset_warning": "全域使用此模型？不相容的自動 AI 結果會重建。人工確認的人物、姓名和人臉標註會保留；原始檔案變更的區域需要重新複核。不會修改原始媒體檔案。",
       "delete_confirm": "移除此未啟用的自訂模型及其設定？不會刪除已下載的模型檔案。",
       "parameters": {
         "threads": "每个模型会话的 CPU 线程数",
@@ -1797,7 +1797,7 @@
         "embedding_std": "人脸特征模型像素标准差",
         "detector_adaptive_size": "旧版自适应检测尺寸（CPU）"
       },
-      "rebuild_confirm": "此次修改会清除当前 AI 派生索引（如适用，包括人脸与人物分组），不会修改原始媒体文件。是否继续？",
+      "rebuild_confirm": "重建相應的自動 AI 索引？人工確認的人臉標籤和人物會保留，不會修改原始媒體檔案。",
       "contract_verified": "已儲存模型設定：推論契約已驗證",
       "contract_untested": "已儲存模型設定：尚未測試。線上模型須通過圖文推論測試才能使用。",
       "gpu_hint": "自动模式优先尝试可用加速，失败时显示原因并回退 CPU。明确选择 GPU 时不会静默替换为 CPU。部分算子、预处理和聚类仍可能使用 CPU；推理测试会显示真实算子分配。",
@@ -1852,6 +1852,50 @@
     "unassign_hint": "保留偵測框並顯示為未命名，不會刪除原人物或其他照片中的人臉。",
     "cancel": "取消",
     "save": "儲存",
-    "saving": "正在儲存…"
+    "saving": "正在儲存…",
+    "manual_status": "人工已確認標籤",
+    "unassigned_status": "人工移除的歸屬",
+    "automatic_status": "自動結果",
+    "confirm": "確認此人臉的目前人物",
+    "ignore": "忽略此人臉",
+    "not_face": "此區域不是人臉",
+    "confirm_hint": "將目前區域與人物儲存為人工確認標註，切換模型後仍然保留。",
+    "ignore_hint": "從識別中隱藏此區域，並在換模型或重新偵測時保留此決定。可在「人物 → 人臉複核 → 已忽略／非人臉」恢復。"
+  },
+  "face_review": {
+    "title": "人臉複核",
+    "scope": "目前圖庫的全部人臉，不限於目前相簿或所選人物。人工確認與自動建議分開儲存。",
+    "filters": "複核分類",
+    "suggested": "待確認",
+    "unknown": "未歸屬",
+    "confirmed": "已確認",
+    "ignored": "已忽略／非人臉",
+    "stale": "來源檔案已變更",
+    "refresh": "重新整理",
+    "stale_hint": "這些標註對應的來源檔案已變更，舊區域不會套用至新內容。請重新偵測目前圖片並重新標註；原人工記錄仍保留。",
+    "restore_hint": "恢復後進入「未歸屬」，不會直接恢復舊人物或舊模型向量；可重新指定人物。",
+    "select_page": "選取本頁",
+    "selected": "已選 {count} 張臉",
+    "action_confirm": "確認人物",
+    "action_reject": "拒絕歸屬",
+    "action_ignore": "忽略人臉",
+    "action_not_face": "標記非人臉",
+    "action_restore": "恢復人臉",
+    "confirm_action": "對所選 {count} 張臉執行「{action}」？拒絕歸屬後不會被自動分組重新覆蓋；已忽略／非人臉可在對應分類恢復。",
+    "loading": "正在載入人臉…",
+    "empty": "此分類暫無人臉。",
+    "no_preview": "暫無快取預覽",
+    "select_face": "選取人臉",
+    "state_suggested": "自動建議，尚未確認",
+    "state_unknown": "尚未分組",
+    "state_unassigned": "已人工移除歸屬",
+    "state_confirmed": "人工已確認",
+    "state_ignored": "已忽略",
+    "state_not_face": "已標記非人臉",
+    "state_stale": "來源檔案已變更",
+    "image_id": "圖片 #{id}",
+    "total": "共 {count} 張臉",
+    "previous": "上一頁",
+    "next": "下一頁"
   }
 }
