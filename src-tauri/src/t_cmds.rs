@@ -3364,8 +3364,15 @@ pub fn index_faces(
     status_state: State<t_face::FaceIndexingStatus>,
     progress_state: State<t_face::FaceIndexProgressState>,
     cluster_epsilon: Option<f32>,
+    file_ids: Option<Vec<i64>>,
+    force: Option<bool>,
+    library_id: Option<String>,
 ) -> Result<(), String> {
     let _configuration = FILE_REFRESH_LIBRARY_LOCK.try_read().map_err(|_| "AI configuration or library is changing; retry after it finishes")?;
+    if library_id.as_deref().is_some_and(|id| crate::t_config::current_library_id().ok().as_deref() != Some(id)) {
+        return Err("Library changed; reload the image selection".into());
+    }
+    let scope = crate::ai::face_jobs::FaceScope::new(file_ids, force.unwrap_or(false))?;
     t_face::run_face_indexing(
         app_handle,
         (*state).clone(),
@@ -3373,6 +3380,7 @@ pub fn index_faces(
         (*status_state).clone(),
         (*progress_state).clone(),
         cluster_epsilon,
+        scope,
     )
 }
 
@@ -3401,6 +3409,7 @@ pub fn cancel_face_index(state: State<t_face::FaceIndexCancellation>) -> Result<
 /// reset all faces (delete all faces and persons)
 #[tauri::command]
 pub fn reset_faces() -> Result<(), String> {
+    let _guard = FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_| "Stop running inference/library operations before changing face data")?;
     t_sqlite::Face::reset_all().map_err(|e| format!("Error while resetting faces: {}", e))
 }
 
@@ -3427,20 +3436,50 @@ pub fn get_persons(sort: i64) -> Result<Vec<Person>, String> {
 
 /// Get a page of persons with face counts.
 #[tauri::command]
-pub fn get_persons_page(request: PersonPageRequest) -> Result<PersonPage, String> {
+pub fn get_persons_page(request: PersonPageRequest, library_id: Option<String>) -> Result<PersonPage, String> {
+    let _guard=FILE_REFRESH_LIBRARY_LOCK.try_read().map_err(|_|"Library or AI configuration is changing; retry shortly")?;
+    if library_id.as_deref().is_some_and(|id|t_config::current_library_id().ok().as_deref()!=Some(id)) {return Err("Library changed; reload the people list".into());}
     Person::get_page(&request)
         .map_err(|e| format!("Error while getting persons page: {}", e))
 }
 
 /// rename a person
 #[tauri::command]
-pub fn rename_person(person_id: i64, name: String) -> Result<usize, String> {
-    Person::rename(person_id, &name).map_err(|e| format!("Error while renaming person: {}", e))
+pub fn rename_person(app_handle: AppHandle, person_id: i64, name: String, library_id: Option<String>) -> Result<usize, String> {
+    let _guard=FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_|"Finish or stop running inference before editing people")?;
+    let current=t_config::current_library_id()?;
+    if library_id.as_deref().is_some_and(|id|id!=current) {return Err("Library changed; reload the person".into());}
+    let conn=t_sqlite::open_conn()?;
+    let result=crate::ai::face_names::rename_person(&conn,person_id,&name)?;
+    let name=crate::ai::face_names::valid_name(&name)?;
+    let _=app_handle.emit("face-data-changed",serde_json::json!({"library_id":current,"file_id":null}));
+    let _=app_handle.emit("face-person-changed",serde_json::json!({"library_id":current,"personId":person_id,"name":name,"mode":"rename"}));
+    Ok(result)
+}
+#[tauri::command]
+pub async fn edit_face_name(app_handle: AppHandle, request: crate::ai::face_names::FaceNameRequest) -> Result<crate::ai::face_names::FaceNameChange, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard=FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_|"Finish or stop running inference before editing face labels")?;
+        if t_config::current_library_id()?!=request.library_id { return Err("Library changed; reopen the face editor".into()); }
+        if crate::ai::settings::active(crate::ai::types::Task::Face)?.profile()!=request.profile { return Err("Face model changed; reload the face labels".into()); }
+        let conn=t_sqlite::open_conn()?;
+        let result=crate::ai::face_names::edit(&conn,&request)?;
+        // Thumbnail generation is best-effort; a failed preview must not undo a committed name.
+        if result.mode!=crate::ai::face_names::EditMode::Rename {
+            for person in [result.previous_person_id,result.person_id].into_iter().flatten().collect::<HashSet<_>>() { let _=Person::update_thumbnail(person); }
+        }
+        let _=app_handle.emit("face-data-changed",serde_json::json!({"library_id":request.library_id,"file_id":null}));
+        let mut payload=serde_json::to_value(&result).map_err(|e|e.to_string())?;
+        payload["library_id"]=serde_json::json!(request.library_id);
+        let _=app_handle.emit("face-person-changed",payload);
+        Ok(result)
+    }).await.map_err(|e|e.to_string())?
 }
 
 /// delete a person
 #[tauri::command]
 pub fn delete_person(person_id: i64) -> Result<usize, String> {
+    let _guard = FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_| "Stop running inference/library operations before changing face data")?;
     Person::delete(person_id).map_err(|e| format!("Error while deleting person: {}", e))
 }
 

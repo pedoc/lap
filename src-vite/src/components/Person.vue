@@ -207,6 +207,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { listen } from '@tauri-apps/api/event';
+import { useToast } from '@/common/toast';
 import { config, libConfig } from '@/common/config';
 import { getPersonsPage, renamePerson, deletePerson, indexFaces, cancelFaceIndex, isFaceIndexing, listenFaceIndexProgress, listenFaceIndexFinished, listenClusterProgress, resetFaces, getFaceStats } from '@/common/api';
 import { SIDEBAR } from '@/common/constants';
@@ -286,6 +288,18 @@ const betaTooltipStyle = ref<Record<string, string>>({});
 let unlistenProgress: (() => void) | null = null;
 let unlistenFinished: (() => void) | null = null;
 let unlistenCluster: (() => void) | null = null;
+let unlistenPeople: (() => void) | null = null;
+const faceToast = useToast();
+onMounted(async () => {
+  const stop = await listen('face-person-changed', async (event: any) => {
+    if (!isPersonMounted || event.payload.library_id !== libConfig._libraryId) return;
+    const id = selectedPerson.value?.id;
+    await loadPersons(true, true);
+    if (isPersonMounted && event.payload.library_id === libConfig._libraryId && id != null && libConfig.person?.id === id) selectedPerson.value = allPersons.value.find(person => person.id === id) || null;
+    void checkFaceStats();
+  });
+  if (!isPersonMounted) stop(); else unlistenPeople = stop;
+});
 
 const sortedPersons = computed(() => allPersons.value);
 
@@ -362,7 +376,7 @@ onMounted(async () => {
   // Check if indexing is already running and restore progress
   const [isRunning, progress] = await isFaceIndexing();
   
-  if (isRunning) {
+  if (isRunning && (!progress?.library_id || progress.library_id === libConfig._libraryId)) {
     isIndexing.value = true;
     if (progress) {
       indexProgress.value = progress;
@@ -371,11 +385,13 @@ onMounted(async () => {
   
   // Set up event listeners for face indexing progress
   unlistenProgress = await listenFaceIndexProgress((event: any) => {
+    if (event.payload.library_id && event.payload.library_id !== libConfig._libraryId) return;
     isIndexing.value = true; // Show overlay when receiving progress events
     indexProgress.value = event.payload;
   });
   
   unlistenFinished = await listenFaceIndexFinished((event: any) => {
+    if (event.payload.library_id && event.payload.library_id !== libConfig._libraryId) return;
     isIndexing.value = false;
     indexProgress.value = { current: 0, total: 0, faces_found: 0, phase: 'indexing' };
     clusterProgress.value = { phase: '', current: 0, total: 0 };
@@ -385,12 +401,20 @@ onMounted(async () => {
   
   // Listen for detailed clustering progress
   unlistenCluster = await listenClusterProgress((event: any) => {
+    if (event.payload.library_id && event.payload.library_id !== libConfig._libraryId) return;
     clusterProgress.value = event.payload;
   });
 });
 
-watch(() => JSON.stringify([config.settings.ai?.faceInstance, config.settings.ai?.faceProfile, config.settings.ai?.faceParameters]), () => {
-  if (isPersonMounted) void loadPersons(true, true);
+watch(() => libConfig._libraryId, () => {
+  isIndexing.value = false;
+  if (isPersonMounted) { void loadPersons(true, true); void checkFaceStats(); }
+});
+watch(() => JSON.stringify([config.settings.ai?.faceModel, config.settings.ai?.faceProfile, config.settings.ai?.faceParameters]), () => {
+  if (isPersonMounted) {
+    void loadPersons(true, true);
+    void checkFaceStats();
+  }
 }, { deep: true });
 
 watch(() => config.settings.personSort, () => {
@@ -417,6 +441,7 @@ onUnmounted(() => {
   if (unlistenProgress) unlistenProgress();
   if (unlistenFinished) unlistenFinished();
   if (unlistenCluster) unlistenCluster();
+  unlistenPeople?.();
 });
 
 async function loadPersons(reset = true, validateSelectedPerson = false) {
@@ -504,11 +529,10 @@ async function handleRenamePerson() {
     return;
   }
 
-  const result = await renamePerson(selectedPerson.value.id, newName);
-  if (result) {
-    isRenamingPerson.value = false;
-    await loadPersons();
-  }
+  try {
+    const result = await renamePerson(selectedPerson.value.id, newName);
+    if (result) { isRenamingPerson.value = false; await loadPersons(); }
+  } catch (error: any) { faceToast.error(error?.message || String(error)); }
 }
 
 function cancelRenamePerson() {
@@ -597,8 +621,9 @@ async function onResetFacesConfirm() {
 }
 
 async function checkFaceStats() {
+  const libraryId = libConfig._libraryId;
   const stats = await getFaceStats();
-  if (stats) {
+  if (stats && isPersonMounted && libraryId === libConfig._libraryId) {
     incompleteCount.value = stats.unprocessed;
   }
 }

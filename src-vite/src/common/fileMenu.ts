@@ -100,6 +100,16 @@ export const useFileMenuItems = (
         disabled: unavailable || selectionCount < 2,
         action: createAction('create-montage'),
       },
+      {
+        label: translate('menu.file.detect_selected_faces'), icon: markRaw(IconPersonSearch),
+        disabled: unavailable || kind !== 'image' || selectionCount === 0,
+        action: createAction('detect-faces'),
+      },
+      {
+        label: translate('menu.file.redetect_selected_faces'), icon: markRaw(IconPersonSearch),
+        disabled: unavailable || kind !== 'image' || selectionCount === 0,
+        action: createAction('redetect-faces'),
+      },
       // A mixed image+video selection has no single external-app target, so
       // disable the entry rather than showing an empty app list.
       { ...externalAppMenu(externalAppKind), disabled: unavailable || kind === 'mixed' },
@@ -299,6 +309,19 @@ export const useFileMenuItems = (
         shortcut: shortcut('file.searchSimilar'),
         disabled: !isImage,
         action: createAction('search-similar')
+      },
+      {
+        label: translate('menu.file.detect_faces'), icon: markRaw(IconPersonSearch), disabled: !isImage,
+        action: createAction('detect-faces'),
+      },
+      {
+        label: translate('menu.file.redetect_faces'), icon: markRaw(IconPersonSearch), disabled: !isImage,
+        action: createAction('redetect-faces'),
+      },
+      {
+        label: translate(config.settings.face.showBoxes === false ? 'menu.file.show_face_boxes' : 'menu.file.hide_face_boxes'),
+        icon: markRaw(IconPersonSearch), disabled: !isImage,
+        action: createAction('toggle-face-boxes'),
       },
       {
         label: localeMsg.value.menu.file.find_person_images,

@@ -986,15 +986,26 @@ function navigateLocation() {
 // People recognized in this file (deduplicated by person id).
 const filePersons = ref<Array<{ id: number; name: string; thumbnail: string }>>([]);
 let filePersonsRequestSeq = 0;
+let facePeopleDisposed = false;
+let stopFacePeople: (() => void) | null = null;
+onMounted(async () => {
+  const stop = await listen('face-person-changed', (event: any) => {
+    if (!facePeopleDisposed && event.payload.library_id === libConfig._libraryId) void loadFilePersons(Number(props.fileInfo?.id || 0));
+  });
+  if (facePeopleDisposed) stop(); else stopFacePeople = stop;
+});
+onBeforeUnmount(() => { facePeopleDisposed = true; filePersonsRequestSeq++; stopFacePeople?.(); });
+
 
 async function loadFilePersons(fileId: number) {
+  const libraryId = libConfig._libraryId;
   const seq = ++filePersonsRequestSeq;
   if (!fileId || fileId <= 0) {
     if (seq === filePersonsRequestSeq) filePersons.value = [];
     return;
   }
   const faces = await getFacesForFile(fileId);
-  if (seq !== filePersonsRequestSeq) return;
+  if (facePeopleDisposed || libraryId !== libConfig._libraryId || seq !== filePersonsRequestSeq) return;
 
   // Dedupe persons by id, keeping the name from the face.
   const personsById = new Map<number, string>();
@@ -1017,7 +1028,7 @@ async function loadFilePersons(fileId: number) {
       return { id, name, thumbnail };
     }),
   );
-  if (seq !== filePersonsRequestSeq) return;
+  if (facePeopleDisposed || libraryId !== libConfig._libraryId || seq !== filePersonsRequestSeq) return;
   filePersons.value = persons;
 }
 

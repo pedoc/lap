@@ -8,7 +8,7 @@ fn create_semantic_backend(model: &ResolvedModel) -> Result<Box<dyn MultimodalEm
     match model.definition.adapter {
         Adapter::ClipOnnx => Ok(Box::new(clip::LocalClip::new(model)?)),
         Adapter::JinaEmbeddings => {
-            if !model.instance.allow_cloud {
+            if !model.configuration.allow_cloud {
                 return Err("Explicit consent is required before using an online model".into());
             }
             Ok(Box::new(super::remote::JinaEmbedder::new(model.clone())))
@@ -20,7 +20,7 @@ pub fn face_backend(model: &ResolvedModel) -> Result<Box<dyn FacePipeline>, Stri
     match model.definition.adapter {
         Adapter::ScrfdArcfaceOnnx => {
             let mut backend = scrfd::ScrfdArcFace::new();
-            backend.load_instance(model.clone())?;
+            backend.load_model(model.clone())?;
             Ok(Box::new(backend))
         }
         _ => Err("Adapter does not implement a face pipeline".into()),

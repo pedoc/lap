@@ -209,6 +209,9 @@
 </template>
 
 <script setup lang="ts">
+import { ask } from '@tauri-apps/plugin-dialog';
+import { faceSelectionIds } from '@/common/faceUi';
+import { indexFaces } from '@/common/api';
 
 import { isOriginalUnavailable, setAlbumAccessibility, resetFileAccessibility } from '@/common/availability';
 import { ref, watch, computed, onMounted, onUnmounted, reactive } from 'vue';
@@ -1440,10 +1443,26 @@ async function syncTagStates(fileStates: Array<{ file_id: number; has_tags: bool
   }
 }
 
+async function detectViewerFaces(force = false) {
+  const libraryId = libConfig._libraryId;
+  const target = getFileInfoByPane(getActiveFilePane());
+  try {
+    const ids = faceSelectionIds(target ? [target] : []);
+    if (isOriginalUnavailable(target)) throw new Error(t('face_actions.offline'));
+    if (force && !await ask(t('face_actions.redetect_confirm'), { kind: 'warning' })) return;
+    if (libraryId !== libConfig._libraryId) return;
+    config.setFaceEnabled(true); config.settings.face.showBoxes = true;
+    await indexFaces(ids, force, libraryId);
+    toast.info(t('face_actions.started', { count: ids.length }));
+  } catch (error: any) { toast.error(error?.message || String(error)); }
+}
 const handleItemAction = async (payload: { action: string }) => {
   const pane = getActiveFilePane();
 
   switch (payload.action) {
+    case 'detect-faces': await detectViewerFaces(); break;
+    case 'redetect-faces': await detectViewerFaces(true); break;
+    case 'toggle-face-boxes': config.setFaceEnabled(true); config.settings.face.showBoxes = config.settings.face.showBoxes === false; break;
     case 'favorite':
       await toggleFavorite(pane);
       break;

@@ -3,6 +3,9 @@ pub mod alignment;
 pub mod assets;
 pub mod capabilities;
 pub mod commands;
+pub mod face_jobs;
+pub mod face_names;
+pub mod hardware;
 pub mod profiles;
 pub mod remote;
 pub mod runtime;
@@ -16,7 +19,7 @@ mod smoke_tests {
     fn installed_catalog_models_infer_on_cpu() {
         use super::{
             capabilities::{FaceDetector, FaceEmbedder},
-            types::{ModelInstance, ResolvedModel, Task},
+            types::{ModelConfiguration, ResolvedModel, Task},
         };
         assert!(std::env::var_os("LAP_AI_TEST_MODEL_ROOT").is_some());
         for definition in super::settings::builtins()
@@ -25,10 +28,7 @@ mod smoke_tests {
         {
             let directory = super::assets::directory(&definition).unwrap();
             std::fs::write(directory.join("installed.json"), definition.digest()).unwrap();
-            let instance = ModelInstance {
-                id: definition.id.clone(),
-                name: definition.name.clone(),
-                model_id: definition.id.clone(),
+            let configuration = ModelConfiguration {
                 parameters: std::collections::BTreeMap::from([(
                     "device".into(),
                     serde_json::json!("cpu"),
@@ -40,7 +40,7 @@ mod smoke_tests {
                 allow_background_upload: false,
                 credential_revision: String::new(),
             };
-            let model = ResolvedModel::new(definition.clone(), instance).unwrap();
+            let model = ResolvedModel::new(definition.clone(), configuration).unwrap();
             match definition.task {
                 Task::Semantic => {
                     let mut adapter = crate::t_ai::build_embedder(&model).unwrap();
@@ -63,7 +63,7 @@ mod smoke_tests {
                 }
                 Task::Face => {
                     let mut adapter = crate::t_face::FaceEngine::new();
-                    adapter.load_instance(model).unwrap();
+                    adapter.load_model(model).unwrap();
                     let image = image::DynamicImage::new_rgb8(640, 640);
                     let faces = adapter.detect(&image).unwrap();
                     println!(
@@ -115,7 +115,7 @@ mod smoke_tests {
     fn gpu_models_execute_real_operators() {
         use super::{
             capabilities::FaceDetector,
-            types::{Adapter, ModelInstance, ResolvedModel, Task},
+            types::{Adapter, ModelConfiguration, ResolvedModel, Task},
         };
         let runtime = super::runtime::info();
         let provider = runtime
@@ -139,10 +139,7 @@ mod smoke_tests {
         {
             let directory = super::assets::directory(&definition).unwrap();
             std::fs::write(directory.join("installed.json"), definition.digest()).unwrap();
-            let instance = ModelInstance {
-                id: format!("gpu-test-{}", definition.id),
-                name: definition.name.clone(),
-                model_id: definition.id.clone(),
+            let configuration = ModelConfiguration {
                 parameters: std::collections::BTreeMap::from([(
                     "device".into(),
                     serde_json::json!(provider),
@@ -154,7 +151,7 @@ mod smoke_tests {
                 allow_background_upload: false,
                 credential_revision: String::new(),
             };
-            let model = ResolvedModel::new(definition.clone(), instance).unwrap();
+            let model = ResolvedModel::new(definition.clone(), configuration).unwrap();
             let result: Result<(), String> = super::runtime::with_profiling(|| {
                 match definition.task {
                     Task::Semantic => {
@@ -176,7 +173,7 @@ mod smoke_tests {
                     }
                     Task::Face => {
                         let mut backend = crate::t_face::FaceEngine::new();
-                        backend.load_instance(model.clone())?;
+                        backend.load_model(model.clone())?;
                         let fixture = root.join("face-fixture.png");
                         let (faces, _) = backend.process_image(&fixture.to_string_lossy())?;
                         assert!(!faces.is_empty());
@@ -214,7 +211,7 @@ mod smoke_tests {
                         .values
                         .insert("device".into(), serde_json::json!("auto"));
                     automatic
-                        .instance
+                        .configuration
                         .parameters
                         .insert("device".into(), serde_json::json!("auto"));
                     match definition.task {
@@ -227,7 +224,7 @@ mod smoke_tests {
                         }
                         Task::Face => {
                             let mut backend = crate::t_face::FaceEngine::new();
-                            backend.load_instance(automatic).unwrap();
+                            backend.load_model(automatic).unwrap();
                             assert!(
                                 !backend
                                     .detect(&image::open(root.join("face-fixture.png")).unwrap())
@@ -269,7 +266,7 @@ mod smoke_tests {
             .values
             .insert("embedding_std".into(), serde_json::json!(128.0));
         let mut backend = crate::t_face::FaceEngine::new();
-        backend.load_instance(model).unwrap();
+        backend.load_model(model).unwrap();
         let fixture = std::path::PathBuf::from(std::env::var_os("LAP_AI_TEST_MODEL_ROOT").unwrap())
             .join("face-fixture.png");
         let (faces, _) = backend.process_image(&fixture.to_string_lossy()).unwrap();
@@ -329,7 +326,7 @@ mod smoke_tests {
                     }
                     super::types::Task::Face => {
                         let mut backend = crate::t_face::FaceEngine::new();
-                        backend.load_instance(model.clone()).unwrap();
+                        backend.load_model(model.clone()).unwrap();
                         let (faces, _) = backend.process_image_from_bytes(&bytes).unwrap();
                         faces
                             .into_iter()

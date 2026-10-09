@@ -1,3 +1,5 @@
+import { libConfig as faceLibrary } from '@/common/config'
+import { useToast } from '@/common/toast'
 import { createApp } from 'vue'
 import { createI18n } from 'vue-i18n'
 import { createPinia } from 'pinia'
@@ -94,6 +96,28 @@ const i18n = createI18n({
     ko
   },
 })
+
+listen('face-person-changed', event => {
+  const change = event.payload || {}
+  if (change.library_id !== faceLibrary._libraryId) return
+  if (change.mode === 'rename' && faceLibrary.person?.id === change.personId) faceLibrary.person.name = change.name || null
+})
+
+// Face jobs are background operations; errors must not disappear outside the People panel.
+if (!isSettingsWindow) {
+  listen('face_index_finished', event => {
+    const result = event.payload || {}
+    if (result.library_id !== faceLibrary._libraryId) return
+    const toast = useToast()
+    if (result.error) toast.error(String(result.error))
+    else if (result.cancelled) toast.info(i18n.global.t('face_actions.cancelled'))
+    else {
+      const message = i18n.global.t('face_actions.finished', { faces: result.total_faces || 0, cached: result.cached || 0, failed: result.failed || 0 })
+      if (result.failed) toast.warning(message)
+      else toast.success(message)
+    }
+  })
+}
 
 // Set up global properties
 app.config.globalProperties.$invoke = invoke

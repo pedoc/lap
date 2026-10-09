@@ -2012,9 +2012,9 @@ export async function listenIndexFinished(callback) {
 }
 
 // index faces for all images in library
-export async function indexFaces() {
+export async function indexFaces(fileIds = null, force = false, libraryId = libConfig._libraryId) {
   try {
-    const result = await invoke('index_faces');
+    const result = await invoke('index_faces', { fileIds, force, libraryId });
     return result;
   } catch (error) {
     console.error('Failed to index faces:', error);
@@ -2092,9 +2092,9 @@ export async function getPersons(sort = 0) {
   return null;
 }
 
-export async function getPersonsPage(request) {
+export async function getPersonsPage(request, libraryId = null) {
   try {
-    return await invoke('get_persons_page', { request });
+    return await invoke('get_persons_page', { request, libraryId });
   } catch (error) {
     console.error('Failed to get persons page:', error);
   }
@@ -2102,14 +2102,8 @@ export async function getPersonsPage(request) {
 }
 
 // rename a person
-export async function renamePerson(personId, name) {
-  try {
-    const result = await invoke('rename_person', { personId, name });
-    return result;
-  } catch (error) {
-    console.error('Failed to rename person:', error);
-  }
-  return null;
+export async function renamePerson(personId, name, libraryId = libConfig._libraryId) {
+  return await invoke('rename_person', { personId, name, libraryId });
 }
 
 // delete a person (faces will have person_id set to null)

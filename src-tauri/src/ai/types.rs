@@ -66,10 +66,7 @@ pub struct ModelDefinition {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ModelInstance {
-    pub id: String,
-    pub name: String,
-    pub model_id: String,
+pub struct ModelConfiguration {
     #[serde(default)]
     pub parameters: BTreeMap<String, Value>,
     #[serde(default)]
@@ -352,26 +349,31 @@ fn validate_values(
 #[derive(Clone, Debug)]
 pub struct ResolvedModel {
     pub definition: ModelDefinition,
-    pub instance: ModelInstance,
+    pub configuration: ModelConfiguration,
     pub values: BTreeMap<String, Value>,
 }
 impl ResolvedModel {
-    pub fn new(definition: ModelDefinition, instance: ModelInstance) -> Result<Self, String> {
+    pub fn new(
+        definition: ModelDefinition,
+        configuration: ModelConfiguration,
+    ) -> Result<Self, String> {
         definition.validate()?;
-        if !safe_id(&instance.id)
-            || instance.name.trim().is_empty()
-            || instance.name.len() > 600
-            || instance.endpoint.len() > 4096
-            || instance.remote_model.len() > 256
-            || instance.remote_revision.len() > 256
-            || (!instance.credential_revision.is_empty() && !safe_id(&instance.credential_revision))
+        if configuration.endpoint.len() > 4096
+            || configuration.remote_model.len() > 256
+            || configuration.remote_revision.len() > 256
+            || (!configuration.credential_revision.is_empty()
+                && !safe_id(&configuration.credential_revision))
         {
-            return Err("Invalid model instance".into());
+            return Err("Invalid model configuration".into());
         }
-        validate_values(definition.task, definition.adapter, &instance.parameters)?;
+        validate_values(
+            definition.task,
+            definition.adapter,
+            &configuration.parameters,
+        )?;
         if definition.adapter == Adapter::JinaEmbeddings {
             let url =
-                reqwest::Url::parse(&instance.endpoint).map_err(|_| "Invalid API endpoint")?;
+                reqwest::Url::parse(&configuration.endpoint).map_err(|_| "Invalid API endpoint")?;
             let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
             if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
                 || !url.username().is_empty()
@@ -381,7 +383,8 @@ impl ResolvedModel {
             {
                 return Err("API endpoints require HTTPS (HTTP is permitted only for loopback), without embedded credentials/query parameters".into());
             }
-            if instance.remote_model.trim().is_empty() || instance.remote_revision.trim().is_empty()
+            if configuration.remote_model.trim().is_empty()
+                || configuration.remote_revision.trim().is_empty()
             {
                 return Err("Remote model and revision are required".into());
             }
@@ -391,10 +394,10 @@ impl ResolvedModel {
             .map(|p| (p.key, p.default))
             .collect::<BTreeMap<_, _>>();
         values.extend(definition.defaults.clone());
-        values.extend(instance.parameters.clone());
+        values.extend(configuration.parameters.clone());
         Ok(Self {
             definition,
-            instance,
+            configuration,
             values,
         })
     }
@@ -414,11 +417,11 @@ impl ResolvedModel {
             .filter(|f| self.definition.task == Task::Face || f.role == "vision")
             .map(|f| (&f.role, &f.sha256))
             .collect::<Vec<_>>();
-        let bytes=serde_json::to_vec(&json!({"schema":1,"adapter":self.definition.adapter,"adapterRevision":self.definition.adapter.revision(),"space":self.definition.embedding_space,"dimension":self.definition.dimension,"artifacts":artifacts,"values":values,"endpoint":self.instance.endpoint,"remoteModel":self.instance.remote_model,"remoteRevision":self.instance.remote_revision})).unwrap();
+        let bytes=serde_json::to_vec(&json!({"schema":1,"adapter":self.definition.adapter,"adapterRevision":self.definition.adapter.revision(),"space":self.definition.embedding_space,"dimension":self.definition.dimension,"artifacts":artifacts,"values":values,"endpoint":self.configuration.endpoint,"remoteModel":self.configuration.remote_model,"remoteRevision":self.configuration.remote_revision})).unwrap();
         blake3::hash(&bytes).to_hex().to_string()
     }
     pub fn contract_key(&self) -> String {
-        blake3::hash(&serde_json::to_vec(&json!({"definition":self.definition.digest(),"profile":self.profile(),"credentials":self.instance.credential_revision})).unwrap()).to_hex().to_string()
+        blake3::hash(&serde_json::to_vec(&json!({"definition":self.definition.digest(),"profile":self.profile(),"credentials":self.configuration.credential_revision})).unwrap()).to_hex().to_string()
     }
     pub fn session_key(&self) -> String {
         let values = parameters(self.definition.task, self.definition.adapter)
@@ -427,7 +430,7 @@ impl ResolvedModel {
             .map(|p| (p.key.clone(), self.values[&p.key].clone()))
             .collect::<BTreeMap<_, _>>();
         let remote = if self.definition.adapter == Adapter::JinaEmbeddings {
-            json!({"instance":self.instance.id,"endpoint":self.instance.endpoint,"model":self.instance.remote_model,"revision":self.instance.remote_revision,"consent":self.instance.allow_cloud,"credentials":self.instance.credential_revision})
+            json!({"modelId":self.definition.id,"endpoint":self.configuration.endpoint,"model":self.configuration.remote_model,"revision":self.configuration.remote_revision,"consent":self.configuration.allow_cloud,"credentials":self.configuration.credential_revision})
         } else {
             Value::Null
         };
@@ -450,10 +453,7 @@ mod tests {
             .into_iter()
             .find(|d| d.task == task)
             .unwrap();
-        let inst = ModelInstance {
-            id: "test".into(),
-            name: "Test".into(),
-            model_id: def.id.clone(),
+        let inst = ModelConfiguration {
             parameters: BTreeMap::new(),
             endpoint: String::new(),
             remote_model: String::new(),
@@ -500,7 +500,7 @@ mod tests {
         let config = crate::ai::settings::Configuration::default();
         let a = config.resolve("jina-clip-v2").unwrap();
         let mut b = a.clone();
-        b.instance.credential_revision = "new-key-revision".into();
+        b.configuration.credential_revision = "new-key-revision".into();
         assert_eq!(a.profile(), b.profile());
         assert_ne!(a.contract_key(), b.contract_key());
         assert_ne!(a.session_key(), b.session_key());
@@ -523,8 +523,10 @@ mod tests {
         a.definition.files[0].role = "../detector".into();
         assert!(a.definition.validate().is_err());
         let mut b = resolved(Task::Face);
-        b.instance.parameters.insert("unexpected".into(), json!(1));
-        assert!(ResolvedModel::new(b.definition, b.instance).is_err());
+        b.configuration
+            .parameters
+            .insert("unexpected".into(), json!(1));
+        assert!(ResolvedModel::new(b.definition, b.configuration).is_err());
     }
     #[test]
     fn aligned_multilingual_text_encoder_reuses_image_index() {
@@ -533,9 +535,7 @@ mod tests {
             .into_iter()
             .find(|d| d.id == "clip-b32-multilingual")
             .unwrap();
-        let mut instance = a.instance.clone();
-        instance.model_id = def.id.clone();
-        let b = ResolvedModel::new(def, instance).unwrap();
+        let b = ResolvedModel::new(def, a.configuration.clone()).unwrap();
         assert_eq!(a.profile(), b.profile());
         let mut different = b;
         different.definition.files[0].sha256 = "0".repeat(64);
@@ -544,9 +544,9 @@ mod tests {
     #[test]
     fn detector_size_requires_supported_step() {
         let mut a = resolved(Task::Face);
-        a.instance
+        a.configuration
             .parameters
             .insert("detector_size".into(), json!(641));
-        assert!(ResolvedModel::new(a.definition, a.instance).is_err());
+        assert!(ResolvedModel::new(a.definition, a.configuration).is_err());
     }
 }

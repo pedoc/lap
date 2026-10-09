@@ -23,6 +23,8 @@ pub struct FaceIndexProgress {
     pub total: usize,
     pub faces_found: usize,
     pub phase: String,
+    pub library_id: String,
+    pub scope: String,
 }
 
 #[derive(Clone)]
@@ -66,9 +68,9 @@ impl FaceEngine {
         let model = crate::ai::settings::active(crate::ai::types::Task::Face)?;
         crate::ai::profiles::ensure(crate::ai::types::Task::Face, &model.profile())?;
         if self.is_loaded() { return Ok(()); }
-        self.load_instance(model)
+        self.load_model(model)
     }
-    pub fn load_instance(&mut self, model: crate::ai::types::ResolvedModel) -> Result<(), String> {
+    pub fn load_model(&mut self, model: crate::ai::types::ResolvedModel) -> Result<(), String> {
         let backend = crate::ai::adapters::face_backend(&model)?;
         self.backend = Some(backend); self.model = Some(model); self.runtime_generation = crate::ai::runtime::generation(); Ok(())
     }
@@ -82,17 +84,18 @@ impl FaceEngine {
         if let Err(ref error)=result {
             let model=self.model.clone().ok_or("No face model loaded")?;
             if (crate::ai::runtime::is_auto(&model,"detector")||crate::ai::runtime::is_auto(&model,"embedding")) && crate::ai::runtime::used_acceleration(&model) {
-                crate::ai::runtime::force_cpu(&model,error);self.backend=None;self.load_instance(model)?;
+                crate::ai::runtime::force_cpu(&model,error);self.backend=None;self.load_model(model)?;
                 return self.backend.as_mut().ok_or("No face model loaded")?.process(image);
             }
         }result
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn process_image(&mut self,path:&str)->Result<(Vec<FaceData>,(u32,u32)),String> {
-        let image=image::open(path).map_err(|e|e.to_string())?;
-        self.process(&image)
+        let bytes=std::fs::read(path).map_err(|e|e.to_string())?;
+        self.process_image_from_bytes(&bytes)
     }
     pub fn process_image_from_bytes(&mut self,bytes:&[u8])->Result<(Vec<FaceData>,(u32,u32)),String> {
-        let image=image::load_from_memory(bytes).map_err(|e|e.to_string())?;
+        let image=crate::ai::face_jobs::decode_image(bytes)?;
         self.process(&image)
     }
 }
@@ -107,6 +110,7 @@ pub fn run_face_indexing(
     status_token_struct: FaceIndexingStatus,
     progress_token_struct: FaceIndexProgressState,
     cluster_epsilon: Option<f32>,
+    scope: crate::ai::face_jobs::FaceScope,
 ) -> Result<(), String> {
     let cancel_token = cancel_token_struct.0.clone();
     let status_token = status_token_struct.0.clone();
@@ -134,71 +138,46 @@ pub fn run_face_indexing(
         progress.total = 0;
         progress.faces_found = 0;
         progress.phase = "indexing".to_string();
+        progress.library_id = library_id.clone();
+        progress.scope = scope.key().into();
     }
 
     tauri::async_runtime::spawn_blocking(move || {
-        // 1. Initialization
-        let reset_status = || {
-            if let Ok(mut running) = status_token.lock() {
-                *running = false;
-            }
+        struct RunningGuard(Arc<Mutex<bool>>);
+        impl Drop for RunningGuard { fn drop(&mut self) { if let Ok(mut running)=self.0.lock(){*running=false;} } }
+        let _running = RunningGuard(status_token.clone());
+        let emit = |event: &str, mut payload: serde_json::Value| {
+            payload["library_id"] = serde_json::json!(library_id);
+            payload["scope"] = serde_json::json!(scope.key());
+            app_handle.emit(event, payload)
         };
+        // 1. Initialization
 
         let _library_guard = match crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read() {
             Ok(guard) => guard,
-            Err(_) => { reset_status(); return; }
+            Err(_) => {  return; }
         };
-        // Load models if not already loaded
-        {
-            let mut engine = face_state.0.lock().unwrap();
-            {
-                if let Err(e) = engine.load_models(&app_handle) {
-                    eprintln!("Failed to load face models: {}", e);
-                    let _ = app_handle.emit(
-                        "face_index_finished",
-                        serde_json::json!({
-                            "total_faces": 0,
-                            "total_persons": 0,
-                            "cancelled": false,
-                            "error": e.to_string()
-                        }),
-                    );
-                    reset_status();
-                    return;
-                }
-            }
+        if crate::t_config::current_library_id().ok().as_deref()!=Some(library_id.as_str()) || *cancel_token.lock().unwrap() {
+            let _=emit("face_index_finished",serde_json::json!({"cancelled":true,"total_faces":0,"total_persons":0}));return;
         }
-
-        // 2. Preparation (Get files and stats)
-        let (processed_count, existing_faces_count) = match t_sqlite::Face::get_stats() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to get stats: {}", e);
-                (0, 0)
+        let prepared=(|| -> Result<_,String> {
+            crate::ai::profiles::ensure(crate::ai::types::Task::Face,&model.profile())?;
+            let conn=t_sqlite::open_conn()?;
+            let (files,cached)=crate::ai::face_jobs::selected_images(&conn,&scope)?;
+            // A bad/offline selection is rejected before modifying any of its face records.
+            if scope.file_ids.is_some() && files.iter().any(|image|!std::path::Path::new(&image.path).is_file()) {
+                return Err("Selected images are unavailable; no images were processed".into());
             }
-        };
-
-        let files = match t_sqlite::Face::get_unprocessed_image_files() {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to get unprocessed files: {}", e);
-                let _ = app_handle.emit(
-                    "face_index_finished",
-                    serde_json::json!({
-                        "total_faces": 0,
-                        "total_persons": 0,
-                        "cancelled": false,
-                        "error": e
-                    }),
-                );
-                reset_status();
-                return;
-            }
-        };
-
-        let total_files = processed_count + files.len();
-        let mut total_faces = existing_faces_count;
-        let mut current = processed_count;
+            if !files.is_empty() { face_state.0.lock().map_err(|e|e.to_string())?.load_models(&app_handle)?; }
+            Ok((files,cached))
+        })();
+        let (files,cached)=match prepared { Ok(value)=>value,Err(error)=> {
+            let _=emit("face_index_finished",serde_json::json!({"total_faces":0,"total_persons":0,"cancelled":false,"error":error}));return;
+        }};
+        let total_files=files.len()+cached;
+        let mut total_faces=0;
+        let mut current=cached;
+        let mut failed=0usize;
 
         // Init progress
         {
@@ -209,7 +188,7 @@ pub fn run_face_indexing(
             progress.phase = "indexing".to_string();
         }
 
-        let _ = app_handle.emit(
+        let _ = emit(
             "face_index_progress",
             serde_json::json!({
                 "current": current,
@@ -225,7 +204,7 @@ pub fn run_face_indexing(
             Ok(conn) => conn,
             Err(e) => {
                 eprintln!("Failed to open DB connection for face indexing: {}", e);
-                let _ = app_handle.emit(
+                let _ = emit(
                     "face_index_finished",
                     serde_json::json!({
                         "total_faces": 0,
@@ -234,12 +213,13 @@ pub fn run_face_indexing(
                         "error": e
                     }),
                 );
-                reset_status();
+
                 return;
             }
         };
 
-        for (file_id, file_path, width, height, modified_at, size) in files {
+        for source in files {
+            let (file_id,file_path,width,height,modified_at,size)=(source.id,source.path.clone(),source.width,source.height,source.modified_at,source.size);
             if *cancel_token.lock().unwrap() || crate::t_config::current_library_id().ok().as_deref() != Some(library_id.as_str()) {
                 cancelled = true;
                 break;
@@ -249,22 +229,24 @@ pub fn run_face_indexing(
 
             let mut engine = face_state.0.lock().unwrap();
 
-            // Optimization: Try to use thumbnail first
-            // We need to know if we used a thumbnail to scale the bbox
-            let (process_result, used_thumb) = match t_sqlite::AThumb::fetch(file_id) {
-                Ok(Some(thumb)) if thumb.thumb_data.is_some() => {
-                    let thumb_bytes = thumb.thumb_data.as_ref().unwrap();
-                    match engine.process_image_from_bytes(thumb_bytes) {
-                        Ok(res) => (Ok(res), true),
-                        Err(_) => (engine.process_image(&file_path), false),
-                    }
-                }
-                _ => (engine.process_image(&file_path), false),
-            };
-
+            // Prefer the original/high-resolution preview: small thumbnails lose faces in group photos.
+            let before=std::fs::metadata(&file_path).ok().map(|m|(m.len(),m.modified().ok()));
+            let bytes=tauri::async_runtime::block_on(crate::t_image::get_file_image_bytes_cached(
+                &file_path,crate::t_raw_display::RawDisplayOptions::rendered_bright()));
+            let process_result=bytes.and_then(|bytes|engine.process_image_from_bytes(&bytes));
+            let after=std::fs::metadata(&file_path).ok().map(|m|(m.len(),m.modified().ok()));
+            drop(engine);
+            if before.is_none() || before!=after || before.as_ref().is_some_and(|s|s.0!=size as u64) {
+                failed+=1;
+                continue;
+            }
+            let used_thumb=true; // Scale any backend preview's coordinates to catalog dimensions.
             match process_result {
                 Ok((mut faces, (proc_w, proc_h))) => {
-                    // If we used a thumbnail, scale bbox to original size
+                    if proc_w==0 || proc_h==0 || faces.iter().any(|face| ![face.bbox.x,face.bbox.y,face.bbox.width,face.bbox.height,face.bbox.confidence].iter().all(|v|v.is_finite()) || face.bbox.width<=0. || face.bbox.height<=0.) {
+                        failed+=1; continue;
+                    }
+                    // Scale original/high-resolution preview coordinates to catalog dimensions.
                     if used_thumb {
                         let scale_x = width as f32 / proc_w as f32;
                         let scale_y = height as f32 / proc_h as f32;
@@ -278,46 +260,45 @@ pub fn run_face_indexing(
                         }
                     }
 
-                    let records=faces.into_iter().map(|face| (
-                        serde_json::to_string(&face.bbox).unwrap_or_default(), face.embedding
-                    )).collect::<Vec<_>>();
-                    match t_sqlite::Face::save_scanned_with_conn(&db_conn, file_id, &records, Some((modified_at,size))) {
-                        Ok(count) => total_faces += count,
-                        Err(error) => eprintln!("Failed to commit face results for {file_id}: {error}"),
+                    let records=faces.into_iter().map(|face| serde_json::to_string(&face.bbox).map(|bbox|(bbox,face.embedding))).collect::<Result<Vec<_>,_>>();
+                    let Ok(records)=records else { failed+=1; continue; };
+                    let committed=if scope.force {
+                        crate::ai::face_jobs::replace_scanned(&db_conn,&source,&records)
+                    } else { t_sqlite::Face::save_scanned_with_conn(&db_conn,file_id,&records,Some((modified_at,size))) };
+                    match committed {
+                        Ok(count) => { total_faces+=count; let _=emit("face-data-changed",serde_json::json!({"file_id":file_id})); },
+                        Err(error) => { failed+=1; eprintln!("Failed to commit face results for {file_id}: {error}"); },
                     }
                 }
                 Err(e) => {
                     eprintln!("Failed to process image {}: {}", file_path, e);
-                    // Do not retry files the decoder cannot read on every resume.
-                    // Status 2 means the image was processed without a face result.
-                    if let Err(mark_error) = t_sqlite::Face::save_scanned_with_conn(&db_conn, file_id, &[], Some((modified_at,size))) {
-                        eprintln!("Failed to mark unreadable file {} as skipped: {}", file_id, mark_error);
-                    }
+                    // Decode/inference failures must not erase previous faces or mark a failed image as face-free.
+                    failed+=1;
                 }
             }
 
-            // Periodic progress update (every 10 files or at end)
-            if current % 10 == 0 || current == total_files {
+            // Each committed image becomes visible immediately.
+            {
                 {
                     let mut progress = progress_token.lock().unwrap();
                     progress.current = current;
                     progress.faces_found = total_faces;
                 }
 
-                let _ = app_handle.emit(
+                let _ = emit(
                     "face_index_progress",
                     serde_json::json!({
                         "current": current,
                         "total": total_files,
                         "faces_found": total_faces,
-                        "phase": "indexing"
+                        "phase": "indexing", "failed":failed, "cached":cached
                     }),
                 );
             }
         }
 
         if cancelled {
-            let _ = app_handle.emit(
+            let _ = emit(
                 "face_index_finished",
                 serde_json::json!({
                     "total_faces": total_faces,
@@ -325,7 +306,7 @@ pub fn run_face_indexing(
                     "cancelled": true
                 }),
             );
-            reset_status();
+
             return;
         }
 
@@ -335,7 +316,7 @@ pub fn run_face_indexing(
             progress.phase = "clustering".to_string();
         }
 
-        let _ = app_handle.emit(
+        let _ = emit(
             "face_index_progress",
             serde_json::json!({
                 "current": total_files,
@@ -348,8 +329,9 @@ pub fn run_face_indexing(
         let cancel_token_cluster = cancel_token.clone();
         let total_persons = match t_cluster::cluster_faces(
             epsilon,
+            scope.file_ids.as_deref(),
             |progress| {
-                let _ = app_handle.emit(
+                let _ = emit(
                     "cluster_progress",
                     serde_json::json!({
                         "phase": progress.phase,
@@ -365,22 +347,23 @@ pub fn run_face_indexing(
         ) {
             Ok(count) => count,
             Err(e) => {
-                eprintln!("Clustering failed: {}", e);
-                0
+                let _=emit("face_index_finished",serde_json::json!({"total_faces":total_faces,"total_persons":0,"cancelled":false,"failed":failed,"cached":cached,"error":e}));
+                return;
             }
         };
         let cancelled_during_cluster = *cancel_token.lock().unwrap();
 
+        let _=emit("face-data-changed",serde_json::json!({"file_id":null}));
         // 5. Finished
-        let _ = app_handle.emit(
+        let _ = emit(
             "face_index_finished",
             serde_json::json!({
                 "total_faces": total_faces,
                 "total_persons": total_persons,
-                "cancelled": cancelled_during_cluster
+                "cancelled": cancelled_during_cluster, "failed":failed, "cached":cached
             }),
         );
-        reset_status();
+
     });
 
     Ok(())

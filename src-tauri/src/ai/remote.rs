@@ -4,43 +4,46 @@ use super::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
-pub fn credential(instance: &str, revision: &str) -> Result<keyring::Entry, String> {
+pub fn credential(model_id: &str, revision: &str) -> Result<keyring::Entry, String> {
     let service = if cfg!(debug_assertions) {
         "com.julyx10.lap.ai.debug"
     } else {
         "com.julyx10.lap.ai"
     };
-    keyring::Entry::new(service, &format!("{instance}:{revision}"))
+    keyring::Entry::new(service, &format!("{model_id}:{revision}"))
         .map_err(|_| "System credential store is unavailable".into())
 }
 pub struct JinaEmbedder {
     pub model: ResolvedModel,
-    load_key: fn(&super::types::ModelInstance) -> Result<String, String>,
+    load_key: fn(&ResolvedModel) -> Result<String, String>,
 }
 impl JinaEmbedder {
     pub fn new(model: ResolvedModel) -> Self {
         Self {
             model,
-            load_key: |instance| {
-                credential(&instance.id, &instance.credential_revision)?
-                    .get_password()
-                    .map_err(|_| {
-                        "API key is missing or the system credential store is unavailable".into()
-                    })
+            load_key: |model| {
+                credential(
+                    &model.definition.id,
+                    &model.configuration.credential_revision,
+                )?
+                .get_password()
+                .map_err(|_| {
+                    "API key is missing or the system credential store is unavailable".into()
+                })
             },
         }
     }
     fn request(&self, input: Value) -> Result<Vec<f32>, String> {
-        if !self.model.instance.allow_cloud {
+        if !self.model.configuration.allow_cloud {
             return Err("Sending images/text to this service has not been authorized".into());
         }
-        let key = (self.load_key)(&self.model.instance)?;
+        let key = (self.load_key)(&self.model)?;
         let client = crate::t_network::blocking_client(
             self.model.number("timeout_seconds") as u64,
-            &self.model.instance.endpoint,
+            &self.model.configuration.endpoint,
         )?;
-        let response=client.post(&self.model.instance.endpoint).bearer_auth(key).header("Content-Type","application/json")
-            .body(json!({"model":self.model.instance.remote_model,"input":[input],"dimensions":self.model.definition.dimension,"embedding_type":"float"}).to_string())
+        let response=client.post(&self.model.configuration.endpoint).bearer_auth(key).header("Content-Type","application/json")
+            .body(json!({"model":self.model.configuration.remote_model,"input":[input],"dimensions":self.model.definition.dimension,"embedding_type":"float"}).to_string())
             .send().map_err(|e|e.without_url().to_string())?;
         if !response.status().is_success() {
             return Err(format!(
@@ -157,10 +160,7 @@ mod tests {
             .find(|d| d.adapter == crate::ai::types::Adapter::JinaEmbeddings)
             .unwrap();
         definition.dimension = 2;
-        let instance = crate::ai::types::ModelInstance {
-            id: "fixture".into(),
-            name: "fixture".into(),
-            model_id: definition.id.clone(),
+        let configuration = crate::ai::types::ModelConfiguration {
             parameters: Default::default(),
             endpoint: format!("http://{address}/embeddings"),
             remote_model: "fixture".into(),
@@ -169,7 +169,7 @@ mod tests {
             allow_background_upload: false,
             credential_revision: String::new(),
         };
-        let model = ResolvedModel::new(definition, instance).unwrap();
+        let model = ResolvedModel::new(definition, configuration).unwrap();
         let mut backend = JinaEmbedder {
             model,
             load_key: |_| Ok("test-only".into()),

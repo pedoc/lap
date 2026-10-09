@@ -788,6 +788,8 @@ import ContextMenu from '@/components/ContextMenu.vue';
 import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFileDragActive, isReturningNativeFileDrag, startNativeFileDrag } from '@/common/nativeDrag';
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
 import { useFileMenuItems } from '@/common/fileMenu';
+import { faceSelectionIds } from '@/common/faceUi';
+import { indexFaces } from '@/common/api';
 import Welcome from '@/components/Welcome.vue';
 import MediaViewer from '@/components/MediaViewer.vue';
 import MessageBox from '@/components/MessageBox.vue';
@@ -3625,7 +3627,7 @@ const similarPhotoGroupingThreshold = computed(() => {
 });
 const similarViewVersion = ref(0);
 const similarScanKey = ref('');
-watch(() => JSON.stringify([config.settings.ai?.semanticInstance, config.settings.ai?.semanticParameters, config.settings.ai?.semanticLanguages]), () => {
+watch(() => JSON.stringify([config.settings.ai?.semanticModel, config.settings.ai?.semanticProfile, config.settings.ai?.semanticParameters, config.settings.ai?.semanticLanguages]), () => {
   if (currentQuerySource.value === 'search') void updateContent(true);
 }, { deep: true });
 watch([dedupScanKey, similarPhotoGroupingThreshold, () => config.settings.ai?.semanticProfile], ([key, threshold]) => {
@@ -4230,6 +4232,31 @@ async function clickSetDesktopWallpaper() {
   }
 }
 
+let peopleEditDisposed = false;
+let stopPeopleEdits: (() => void) | null = null;
+onMounted(async () => {
+  const stop = await listen('face-person-changed', (event: any) => {
+    if (!peopleEditDisposed && event.payload.library_id === libConfig._libraryId && (tempViewMode.value === 'person' || (config.main.sidebarIndex === SIDEBAR.PERSON && libConfig.activePane === 'main'))) void updateContent(true);
+  });
+  if (peopleEditDisposed) stop(); else stopPeopleEdits = stop;
+});
+onBeforeUnmount(() => { peopleEditDisposed = true; stopPeopleEdits?.(); });
+
+async function detectSelectedFaces(force = false) {
+  const libraryId = libConfig._libraryId;
+  try {
+    const files = selectMode.value ? await getActionableSelectedItemsForAction() : [fileList.value[selectedItemIndex.value]].filter(Boolean);
+    if (libraryId !== libConfig._libraryId) return;
+    const ids = faceSelectionIds(files);
+    if (files.some(isOriginalUnavailable)) throw new Error(t('face_actions.offline'));
+    if (force && !await ask(t('face_actions.redetect_confirm'), { kind: 'warning' })) return;
+    if (libraryId !== libConfig._libraryId) return;
+    config.setFaceEnabled(true);
+    config.settings.face.showBoxes = true;
+    await indexFaces(ids, force, libraryId);
+    toast.info(t('face_actions.started', { count: ids.length }));
+  } catch (error: any) { toast.error(error?.message || String(error)); }
+}
 function handleItemAction(payload: { action: string, index: number }) {
   if (isSlideShow.value) return;
 
@@ -4307,6 +4334,9 @@ function handleItemAction(payload: { action: string, index: number }) {
     'add-to-collection': clickAddToCollection,
     'comment': () => showCommentMsgbox.value = true,
     'search-similar': () => enterSimilarSearchMode(fileList.value[selectedItemIndex.value]),
+    'detect-faces': () => void detectSelectedFaces(),
+    'redetect-faces': () => void detectSelectedFaces(true),
+    'toggle-face-boxes': () => { config.setFaceEnabled(true); config.settings.face.showBoxes = config.settings.face.showBoxes === false; },
     'find-person': () => {
       if (!config.settings.face.enabled) return;
       enterPersonSearchMode(fileList.value[selectedItemIndex.value]);

@@ -21,6 +21,19 @@ pub fn directory(model: &ModelDefinition) -> Result<PathBuf, String> {
         .join(&model.id)
         .join(model.digest()))
 }
+/// Opening an empty directory does not mark a model as installed.
+pub fn prepare_directory(model: &ModelDefinition) -> Result<PathBuf, String> {
+    let path = directory(model)?;
+    prepare_directory_at(model, &path)?;
+    Ok(path)
+}
+fn prepare_directory_at(model: &ModelDefinition, path: &std::path::Path) -> Result<(), String> {
+    model.validate()?;
+    if model.adapter == Adapter::JinaEmbeddings {
+        return Err("Online API models do not have a local model directory".into());
+    }
+    std::fs::create_dir_all(path).map_err(|e| format!("Could not create model directory: {e}"))
+}
 pub fn artifact_path(model: &ModelDefinition, role: &str) -> Result<PathBuf, String> {
     if !model.files.iter().any(|f| f.role == role) {
         return Err(format!("Unknown artifact role: {role}"));
@@ -208,4 +221,47 @@ pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), Stri
         json!({"modelId":model.id,"progress":100,"received":received,"total":total}),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+    fn temp_path() -> PathBuf {
+        std::env::temp_dir().join(format!("lap-model-directory-test-{}", uuid::Uuid::new_v4()))
+    }
+    #[test]
+    fn missing_local_directory_is_created_without_an_installation_receipt() {
+        let model = crate::ai::settings::builtins()
+            .into_iter()
+            .find(|m| m.id == "buffalo-s")
+            .unwrap();
+        let path = temp_path();
+        assert!(!path.exists());
+        prepare_directory_at(&model, &path).unwrap();
+        assert!(path.is_dir());
+        assert!(!path.join("installed.json").exists());
+        prepare_directory_at(&model, &path).unwrap();
+        std::fs::remove_dir(path).unwrap();
+    }
+    #[test]
+    fn online_models_do_not_create_local_directories() {
+        let model = crate::ai::settings::builtins()
+            .into_iter()
+            .find(|m| m.adapter == Adapter::JinaEmbeddings)
+            .unwrap();
+        let path = temp_path();
+        assert!(prepare_directory_at(&model, &path).is_err());
+        assert!(!path.exists());
+    }
+    #[test]
+    fn invalid_model_definitions_do_not_create_directories() {
+        let mut model = crate::ai::settings::builtins()
+            .into_iter()
+            .find(|m| m.id == "buffalo-s")
+            .unwrap();
+        model.id = "../outside".into();
+        let path = temp_path();
+        assert!(prepare_directory_at(&model, &path).is_err());
+        assert!(!path.exists());
+    }
 }

@@ -23,7 +23,7 @@ impl ScrfdArcFace {
         }
     }
 
-    pub fn load_instance(&mut self, model: crate::ai::types::ResolvedModel) -> Result<(), String> {
+    pub fn load_model(&mut self, model: crate::ai::types::ResolvedModel) -> Result<(), String> {
         if model.definition.adapter != crate::ai::types::Adapter::ScrfdArcfaceOnnx {
             return Err("Adapter does not implement this face pipeline".into());
         }

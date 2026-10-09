@@ -15,13 +15,7 @@ use std::{
     },
 };
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GpuDevice {
-    pub id: i32,
-    pub name: String,
-    pub memory_bytes: u64,
-}
+use super::hardware::{GpuAdapter, GpuDevice};
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInfo {
@@ -34,6 +28,8 @@ pub struct ProviderInfo {
 pub struct RuntimeInfo {
     pub providers: Vec<ProviderInfo>,
     pub devices: Vec<GpuDevice>,
+    pub adapters: Vec<GpuAdapter>,
+    pub physical_detection_complete: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +63,7 @@ pub fn info() -> RuntimeInfo {
     if let Some(info) = state.as_ref() {
         return info.clone();
     }
-    let devices = gpu_devices();
+    let inventory = super::hardware::discover();
     let mut providers = vec![ProviderInfo {
         id: "cpu".into(),
         available: CPUExecutionProvider::default()
@@ -81,7 +77,7 @@ pub fn info() -> RuntimeInfo {
             ort::execution_providers::DirectMLExecutionProvider::default()
                 .is_available()
                 .unwrap_or(false)
-                && !devices.is_empty()
+                && !inventory.adapters.is_empty()
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -128,53 +124,14 @@ pub fn info() -> RuntimeInfo {
         }
     };
     providers.push(ProviderInfo{id:"cuda".into(),available:cuda,reason:if cfg!(feature="ai-cuda"){ "Requires compatible NVIDIA drivers, CUDA 12 and cuDNN libraries; tested when creating a session".into()}else{"CUDA is not built into this package; enable the ai-cuda build feature with matching runtime dependencies".into()}});
-    let info = RuntimeInfo { providers, devices };
+    let info = RuntimeInfo {
+        providers,
+        devices: inventory.devices,
+        adapters: inventory.adapters,
+        physical_detection_complete: inventory.physical_detection_complete,
+    };
     *state = Some(info.clone());
     info
-}
-#[cfg(target_os = "windows")]
-fn gpu_devices() -> Vec<GpuDevice> {
-    use windows::Win32::Graphics::{
-        Direct3D::D3D_FEATURE_LEVEL_11_0,
-        Direct3D12::{D3D12CreateDevice, ID3D12Device},
-        Dxgi::{CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1},
-    };
-    let mut devices = Vec::new();
-    unsafe {
-        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else {
-            return devices;
-        };
-        for id in 0..128 {
-            let Ok(adapter) = factory.EnumAdapters1(id) else {
-                break;
-            };
-            let Ok(desc) = adapter.GetDesc1() else {
-                continue;
-            };
-            if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
-                continue;
-            }
-            let mut device: Option<ID3D12Device> = None;
-            if D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device).is_err() {
-                continue;
-            }
-            let end = desc
-                .Description
-                .iter()
-                .position(|v| *v == 0)
-                .unwrap_or(desc.Description.len());
-            devices.push(GpuDevice {
-                id: id as i32,
-                name: String::from_utf16_lossy(&desc.Description[..end]),
-                memory_bytes: desc.DedicatedVideoMemory as u64,
-            });
-        }
-    }
-    devices
-}
-#[cfg(not(target_os = "windows"))]
-fn gpu_devices() -> Vec<GpuDevice> {
-    Vec::new()
 }
 pub fn reports(model: &ResolvedModel) -> Vec<SessionReport> {
     REPORTS
@@ -400,6 +357,42 @@ fn build(
         .commit_from_file(super::assets::artifact_path(&model.definition, role)?)
         .map_err(|e| format!("Cannot create {provider} session for {role}: {e}"))
 }
+fn directml_device(runtime: &RuntimeInfo, configured: i32) -> Option<i32> {
+    if configured < 0 {
+        // Prefer one representative per verified physical GPU. Raw
+        // adapters remain a fallback if the driver cannot identify hardware.
+        runtime
+            .devices
+            .iter()
+            .max_by(|a, b| {
+                a.memory_bytes
+                    .unwrap_or(0)
+                    .cmp(&b.memory_bytes.unwrap_or(0))
+                    .then_with(|| b.id.cmp(&a.id))
+            })
+            .map(|device| device.id)
+            .or_else(|| {
+                runtime
+                    .adapters
+                    .iter()
+                    .max_by(|a, b| {
+                        a.memory_bytes
+                            .cmp(&b.memory_bytes)
+                            .then_with(|| b.id.cmp(&a.id))
+                    })
+                    .map(|adapter| adapter.id)
+            })
+    } else {
+        // Explicit legacy DXGI aliases remain valid; never confuse
+        // a physical display ordinal with a provider's adapter ID.
+        runtime
+            .adapters
+            .iter()
+            .find(|adapter| adapter.id == configured)
+            .map(|adapter| adapter.id)
+    }
+}
+
 pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle, String> {
     let desired = requested(model, role);
     let runtime = info();
@@ -434,23 +427,15 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
         let configured = model.number("gpu_device_id") as i32;
         let device = match provider {
             "directml" => {
-                let found = if configured < 0 {
-                    runtime.devices.iter().max_by(|a, b| {
-                        a.memory_bytes
-                            .cmp(&b.memory_bytes)
-                            .then_with(|| b.id.cmp(&a.id))
-                    })
-                } else {
-                    runtime.devices.iter().find(|d| d.id == configured)
-                };
-                let Some(found) = found else {
+                let id = directml_device(&runtime, configured);
+                let Some(id) = id else {
                     if desired == "auto" {
                         failures.push("Requested DirectML adapter is unavailable".into());
                         continue;
                     }
                     return Err("Requested DirectML adapter is unavailable".into());
                 };
-                Some(found.id)
+                Some(id)
             }
             "cuda" => Some(configured.max(0)),
             _ => None,
@@ -505,6 +490,55 @@ mod tests {
             .insert("vision_device".into(), serde_json::json!("directml"));
         assert_eq!(requested(&model, "vision"), "directml");
         assert_eq!(requested(&model, "text"), "cpu");
+    }
+    fn logical_alias_fixture() -> RuntimeInfo {
+        RuntimeInfo {
+            providers: Vec::new(),
+            devices: vec![GpuDevice {
+                id: 0,
+                name: "GPU".into(),
+                memory_bytes: Some(4096),
+                physical_id: "physical-a".into(),
+                adapter_ids: vec![0, 1],
+            }],
+            adapters: vec![0, 1]
+                .into_iter()
+                .map(|id| GpuAdapter {
+                    id,
+                    name: "GPU".into(),
+                    memory_bytes: 4096,
+                    physical_ids: vec!["physical-a".into()],
+                })
+                .collect(),
+            physical_detection_complete: true,
+        }
+    }
+    #[test]
+    fn physical_grouping_keeps_explicit_provider_adapter_ids_valid() {
+        let runtime = logical_alias_fixture();
+        assert_eq!(directml_device(&runtime, -1), Some(0));
+        assert_eq!(directml_device(&runtime, 1), Some(1));
+        assert_eq!(directml_device(&runtime, 7), None);
+    }
+    #[test]
+    fn failed_physical_detection_does_not_disable_usable_logical_adapters() {
+        let mut runtime = logical_alias_fixture();
+        runtime.devices.clear();
+        runtime.physical_detection_complete = false;
+        assert_eq!(directml_device(&runtime, -1), Some(0));
+        assert_eq!(directml_device(&runtime, 1), Some(1));
+    }
+    #[test]
+    fn automatic_selection_uses_representative_ids_not_physical_display_ordinals() {
+        let mut runtime = logical_alias_fixture();
+        runtime.devices.push(GpuDevice {
+            id: 5,
+            name: "GPU".into(),
+            memory_bytes: Some(8192),
+            physical_id: "physical-b".into(),
+            adapter_ids: vec![5],
+        });
+        assert_eq!(directml_device(&runtime, -1), Some(5));
     }
     #[test]
     fn runtime_discovery_is_explicit() {

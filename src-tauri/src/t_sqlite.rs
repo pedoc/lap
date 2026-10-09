@@ -6402,7 +6402,7 @@ impl AFile {
     ) -> Result<String, String> {
         let library_id = crate::t_config::current_library_id()?;
         let model = crate::ai::settings::active(crate::ai::types::Task::Semantic)?;
-        if model.definition.adapter == crate::ai::types::Adapter::JinaEmbeddings && !manual && !model.instance.allow_background_upload {
+        if model.definition.adapter == crate::ai::types::Adapter::JinaEmbeddings && !manual && !model.configuration.allow_background_upload {
             return Err("Automatic online indexing is disabled for this instance".into());
         }
         let profile = model.profile();
@@ -8765,46 +8765,6 @@ impl Person {
         Ok(())
     }
 
-    /// Update thumbnails for all persons (called after clustering)
-    pub fn update_all_thumbnails() -> Result<(), String> {
-        let conn = open_conn()?;
-
-        // Get all person IDs and their cover_face_ids
-        let mut stmt = conn
-            .prepare("SELECT id, cover_face_id FROM persons")
-            .map_err(|e| e.to_string())?;
-
-        let persons: Vec<(i64, Option<i64>)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-
-        // Generate and update thumbnail for each person
-        for (person_id, cover_face_id) in persons {
-            if let Ok(Some(thumbnail)) = Self::generate_thumbnail(&conn, person_id, cover_face_id) {
-                let _ = conn.execute(
-                    "UPDATE persons SET thumbnail = ?1 WHERE id = ?2",
-                    params![thumbnail, person_id],
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Rename a person
-    pub fn rename(person_id: i64, new_name: &str) -> Result<usize, String> {
-        let conn = open_conn()?;
-        let result = conn
-            .execute(
-                "UPDATE persons SET name = ?1 WHERE id = ?2",
-                params![new_name, person_id],
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(result)
-    }
-
     /// Delete a person (faces will have person_id set to NULL)
     pub fn delete(person_id: i64) -> Result<usize, String> {
         let conn = open_conn()?;
@@ -8978,10 +8938,10 @@ impl Face {
 
     /// Get slim face data for clustering: (face_id, file_id, embedding_bytes)
     /// Avoids loading full Face structs (bbox JSON, person_id, created_at) to reduce memory
-    pub fn get_all_for_clustering() -> Result<Vec<(i64, i64, Option<Vec<u8>>)>, String> {
+    pub fn get_all_for_clustering() -> Result<Vec<(i64, i64, Option<Vec<u8>>, Option<i64>)>, String> {
         let conn = open_conn()?;
         let mut stmt = conn
-            .prepare("SELECT id, file_id, embedding FROM faces")
+            .prepare("SELECT id, file_id, embedding, person_id FROM faces")
             .map_err(|e| e.to_string())?;
 
         let faces = stmt
@@ -8989,28 +8949,13 @@ impl Face {
                 let id: i64 = row.get(0)?;
                 let file_id: i64 = row.get(1)?;
                 let embedding: Option<Vec<u8>> = row.get(2)?;
-                Ok((id, file_id, embedding))
+                Ok((id, file_id, embedding, row.get::<_,Option<i64>>(3)?))
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
 
         Ok(faces)
-    }
-
-    /// Reset all face assignments and delete all persons (for re-clustering)
-    pub fn reset_all_assignments() -> Result<(), String> {
-        let conn = open_conn()?;
-
-        // Clear all person_id from faces
-        conn.execute("UPDATE faces SET person_id = NULL", [])
-            .map_err(|e| e.to_string())?;
-
-        // Delete all persons
-        conn.execute("DELETE FROM persons", [])
-            .map_err(|e| e.to_string())?;
-
-        Ok(())
     }
 
     /// Assign a face to a person
@@ -9023,33 +8968,6 @@ impl Face {
             )
             .map_err(|e| e.to_string())?;
         Ok(result)
-    }
-
-    /// Get all image file IDs that haven't been processed for faces yet
-    /// Returns: Vec<(id, file_path, width, height)>
-    pub fn get_unprocessed_image_files() -> Result<Vec<(i64, String, i64, i64, Option<i64>, i64)>, String> {
-        let conn = open_conn()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT a.id, f.path || '/' || a.name as file_path, a.width, a.height, a.modified_at, a.size
-                 FROM afiles a 
-                 JOIN afolders f ON a.folder_id = f.id
-                 WHERE a.file_type = 1 
-                   AND (a.has_faces IS NULL OR a.has_faces = 0)
-                   AND a.width IS NOT NULL AND a.height IS NOT NULL
-                 ORDER BY a.id",
-            )
-            .map_err(|e| e.to_string())?;
-
-        let files = stmt
-            .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-
-        Ok(files)
     }
 
     /// Mark a file as scanned using an existing connection
@@ -9068,26 +8986,6 @@ impl Face {
 
     /// Get statistics for face indexing
     /// Returns (processed_count, total_faces)
-    pub fn get_stats() -> Result<(usize, usize), String> {
-        let conn = open_conn()?;
-
-        // Count processed files (has_faces > 0)
-        let processed: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM afiles WHERE has_faces > 0 AND file_type = 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        // Count total faces
-        let faces: i64 = conn
-            .query_row("SELECT COUNT(*) FROM faces", [], |row| row.get(0))
-            .unwrap_or(0);
-
-        Ok((processed as usize, faces as usize))
-    }
-
     /// Get full statistics for face indexing
     /// Returns (total_images, processed_images, unprocessed_images, total_faces)
     pub fn get_stats_full() -> Result<(usize, usize, usize, usize), String> {
@@ -9101,7 +8999,7 @@ impl Face {
 
         let total: i64 = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM afiles a JOIN afolders b ON b.id = a.folder_id WHERE a.file_type = 1{}", visible_file_conditions),
+                &format!("SELECT COUNT(*) FROM afiles a JOIN afolders b ON b.id = a.folder_id WHERE a.file_type IN (1,3){}", visible_file_conditions),
                 [],
                 |row| row.get(0),
             )
@@ -9109,7 +9007,7 @@ impl Face {
 
         let processed: i64 = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM afiles a JOIN afolders b ON b.id = a.folder_id WHERE a.has_faces > 0 AND a.file_type = 1{}", visible_file_conditions),
+                &format!("SELECT COUNT(*) FROM afiles a JOIN afolders b ON b.id = a.folder_id WHERE a.has_faces > 0 AND a.file_type IN (1,3){}", visible_file_conditions),
                 [],
                 |row| row.get(0),
             )
