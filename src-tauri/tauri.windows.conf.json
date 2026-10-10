@@ -3,6 +3,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Lap",
         "minWidth": 800,
         "minHeight": 600,

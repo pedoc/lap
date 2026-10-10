@@ -8,6 +8,9 @@ pub(super) static SETTINGS_LOCK: RwLock<()> = RwLock::new(());
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct ProviderConfig {
     pub token: String,
+    pub js_key: String,
+    pub security_js_code: String,
+    pub sdk_style: String,
     pub secret: String,
     pub style: String,
     pub satellite_style: String,
@@ -24,6 +27,9 @@ impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             token: String::new(),
+            js_key: String::new(),
+            security_js_code: String::new(),
+            sdk_style: String::new(),
             secret: String::new(),
             style: String::new(),
             satellite_style: String::new(),
@@ -92,8 +98,10 @@ impl Settings {
         ))
     }
     pub fn normalize(mut self) -> Result<Self, String> {
-        if !["osm", "esri", "tianditu", "maptiler", "mapbox", "custom"]
-            .contains(&self.tile_provider.as_str())
+        if ![
+            "osm", "esri", "tianditu", "maptiler", "mapbox", "custom", "amap", "tencent",
+        ]
+        .contains(&self.tile_provider.as_str())
         {
             return Err("Unsupported map display provider".into());
         }
@@ -115,6 +123,9 @@ impl Settings {
         for cfg in self.providers.values_mut() {
             for value in [
                 &mut cfg.token,
+                &mut cfg.js_key,
+                &mut cfg.security_js_code,
+                &mut cfg.sdk_style,
                 &mut cfg.secret,
                 &mut cfg.style,
                 &mut cfg.satellite_style,
@@ -155,12 +166,27 @@ impl Settings {
                 cfg.referer = url.to_string();
             }
         }
-        for id in [self.tile_provider.as_str(), self.geocoder.as_str()] {
-            if !["osm", "esri", "offline", "custom"].contains(&id)
-                && self.provider(id)?.token.is_empty()
-            {
-                return Err(format!("{id} requires an API key/token"));
+        if ["amap", "tencent"].contains(&self.tile_provider.as_str()) {
+            let cfg = self.provider(&self.tile_provider)?;
+            if cfg.js_key.is_empty() {
+                return Err(format!(
+                    "{} map display requires a JavaScript SDK Key (not the Web Service key)",
+                    self.tile_provider
+                ));
             }
+            if self.tile_provider == "amap" && cfg.security_js_code.is_empty() {
+                return Err("AMap map display requires securityJsCode".into());
+            }
+        } else if !["osm", "esri", "custom"].contains(&self.tile_provider.as_str())
+            && self.provider(&self.tile_provider)?.token.is_empty()
+        {
+            return Err(format!("{} requires an API key/token", self.tile_provider));
+        }
+        if self.geocoder != "offline" && self.provider(&self.geocoder)?.token.is_empty() {
+            return Err(format!(
+                "{} geocoding requires a Web Service API key",
+                self.geocoder
+            ));
         }
         if self.tile_provider == "mapbox" && !self.provider("mapbox")?.token.starts_with("pk.") {
             return Err("Mapbox requires a Public Access Token starting with pk.".into());
@@ -239,6 +265,36 @@ pub fn load() -> Result<State, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sdk_display_keys_are_separate_from_geocoding_credentials() {
+        let mut settings = Settings::default();
+        settings.tile_provider = "amap".into();
+        settings.providers.get_mut("amap").unwrap().token = "fake-web-service".into();
+        assert!(
+            settings
+                .clone()
+                .normalize()
+                .unwrap_err()
+                .contains("JavaScript")
+        );
+        settings.providers.get_mut("amap").unwrap().js_key = "fake-javascript".into();
+        assert!(
+            settings
+                .clone()
+                .normalize()
+                .unwrap_err()
+                .contains("securityJsCode")
+        );
+        settings.providers.get_mut("amap").unwrap().security_js_code = "fake-security".into();
+        assert!(settings.clone().normalize().is_ok());
+        settings.geocoder = "amap".into();
+        settings.providers.get_mut("amap").unwrap().token.clear();
+        assert!(settings.normalize().unwrap_err().contains("Web Service"));
+        let mut tencent = Settings::default();
+        tencent.tile_provider = "tencent".into();
+        tencent.providers.get_mut("tencent").unwrap().js_key = "fake-js".into();
+        assert!(tencent.normalize().is_ok());
+    }
     #[test]
     fn provider_read_write_roundtrip_preserves_choices_and_inactive_credentials() {
         let mut s = Settings::default();

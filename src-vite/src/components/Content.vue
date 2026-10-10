@@ -743,6 +743,7 @@
 </template>
 
 <script setup lang="ts">
+import { startupWindowProxy } from '@/common/windowProxy';
 
 import { isFaceRename, faceChangeAffectsPerson } from '@/common/faceUpdates';
 import { ref, watch, computed, createVNode, onMounted, onBeforeUnmount, nextTick, render, markRaw } from 'vue';
@@ -10634,6 +10635,7 @@ async function openImageViewer(
       const forceSplitParam = compareSplitCount || 0;
       const compareModeParam = compareMode ? 1 : 0;
       imageWindow = new WebviewWindow(webViewLabel, {
+        ...await startupWindowProxy(),
         url: `/image-viewer?fileId=${leftFileId}&fileIndex=${leftIndex}&fileCount=${fileCount}&rightFileId=${rightFileId}&rightFileIndex=${rightIndex}&forceSplitCount=${forceSplitParam}&compareFileCount=${compareMode ? fileCount : 0}&compareMode=${compareModeParam}&nextFilePath=${encodeURIComponent(leftNextFilePath)}&rightNextFilePath=${encodeURIComponent(rightNextFilePath)}`,
         title: 'Image Viewer',
         width: 1200,
@@ -10792,6 +10794,7 @@ async function createMontageWindow() {
   const height = Math.min(800, window.screen.availHeight);
 
   const newWindow = new WebviewWindow('montage', {
+    ...await startupWindowProxy(),
     url: `/montage?fileIds=${imageIds.slice(0, MONTAGE_MAX_PHOTOS).join(',')}`,
     title: 'Montage',
     width,
@@ -10839,6 +10842,7 @@ async function openImageEditor(index: number) {
   }
 
   const newWindow = new WebviewWindow(webViewLabel, {
+        ...await startupWindowProxy(),
     url: `/image-editor?fileId=${fileId}`,
     title: 'Image Editor',
     width: 1100,

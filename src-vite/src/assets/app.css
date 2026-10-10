@@ -287,3 +287,6 @@ html, body {
   opacity: 1;
   transition: opacity 150ms ease;
 }
+
+/* Official SDK copyright/logo remain visible below the transparent Leaflet photo layer. */
+.lap-sdk-overlay .leaflet-bottom.leaflet-left { bottom: 24px; }

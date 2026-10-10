@@ -34,6 +34,7 @@ mod t_lens;
 mod t_libraw;
 mod t_raw_display;
 mod t_network;
+mod t_webview_proxy;
 mod t_map;
 mod t_resources;
 mod t_menu;
@@ -109,7 +110,15 @@ async fn main() {
         .setup(|_app| {
             t_config::set_app_identifier(&_app.config().identifier);
             if let Ok(config) = t_config::load_app_config() {
+                t_webview_proxy::initialize(config.network_proxy_url.clone());
                 t_network::initialize(config.network_proxy_url);
+            }
+            if _app.get_webview_window("main").is_none() {
+                let config=_app.config().app.windows.iter().find(|window|window.label=="main").ok_or("Main window configuration missing")?;
+                let mut builder=tauri::WebviewWindowBuilder::from_config(_app,config)?;
+                #[cfg(not(target_os="macos"))]
+                if let Some(proxy)=t_webview_proxy::startup_url(){builder=builder.proxy_url(proxy);}
+                builder.build()?;
             }
             t_video::init_ffmpeg_path(&_app.handle());
             t_menu::install_app_menu(&_app.handle())?;
@@ -390,6 +399,7 @@ async fn main() {
             t_cmds::get_build_time,
             t_cmds::get_storage_file_info,
             t_cmds::get_network_proxy,
+            t_webview_proxy::get_sdk_browser_proxy_state,
             t_cmds::set_network_proxy,
             t_cmds::test_network_proxy,
             t_cmds::get_app_resources_status,

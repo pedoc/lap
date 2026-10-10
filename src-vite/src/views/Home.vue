@@ -182,6 +182,7 @@
 </template>
 
 <script setup lang="ts">
+import { startupWindowProxy } from '@/common/windowProxy';
 import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { emit, listen } from '@tauri-apps/api/event';
@@ -760,7 +761,7 @@ async function clickSettings(tabIndex?: number) {
   };
 
   // create a new settings window
-  const newSettingsWindow = new WebviewWindow('settings', options);
+  const newSettingsWindow = new WebviewWindow('settings', { ...options, ...await startupWindowProxy() });
   
   newSettingsWindow.once('tauri://created', () => {
     console.log('settings window created');

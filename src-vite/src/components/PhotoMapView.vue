@@ -10,13 +10,14 @@
     <div ref="mapEl" class="h-full w-full"></div>
     <div class="absolute left-2 bottom-7 z-500 max-w-[calc(100%_-_1rem)] rounded-box bg-base-100/85 px-2 py-1 text-[10px]" role="status">
       <span>{{ mapThemeInfo?.name }}</span>
+      <span v-if="sdkLoading" class="ml-1">{{ t('map_services.sdk_loading') }}</span>
       <a v-if="mapThemeInfo?.provider === 'mapbox'" href="https://www.mapbox.com/" target="_blank" rel="noopener noreferrer"><img :src="mapboxLogo" alt="Mapbox" class="h-6 mt-1" /></a>
       <p v-if="mapError" class="text-error whitespace-pre-wrap">{{ t('map_services.tile_error') }}: {{ mapError }}</p>
       <button v-if="mapError" type="button" class="link" @click.stop="updateTheme">{{ t('map_services.retry') }}</button>
     </div>
 
     <div class="absolute top-2 left-2 z-500 flex cursor-pointer rounded-box bg-base-100/30 opacity-0 pointer-events-none transition-opacity duration-150 group-hover/map:bg-base-100/70 group-hover/map:opacity-100 group-hover/map:pointer-events-auto">
-      <TButton :icon="IconZoomOut" :tooltip="t('map.zoom_out')" :disabled="zoom <= 0" @click="zoomOut" />
+      <TButton :icon="IconZoomOut" :tooltip="t('map.zoom_out')" :disabled="zoom <= (mapThemeInfo?.minZoom || 0)" @click="zoomOut" />
       <TButton :icon="IconZoomIn" :tooltip="t('map.zoom_in')" :disabled="zoom >= activeMaxZoom" @click="zoomIn" />
       <TButton :icon="IconMapCenter" :tooltip="t('map.zoom_center')" @click="isQueryMap ? fitBounds() : zoomCenter()" />
       <TButton
@@ -41,6 +42,7 @@ import 'leaflet/dist/leaflet.css'
 
 import { config } from '@/common/config'
 import mapboxLogo from '@/assets/mapbox-logo.svg'
+import { createSdkBasemapRuntime } from '@/common/mapSdkRuntime'
 import { createTileLayerGroup, getMapTheme } from '@/common/mapProviders'
 import {
   getCollectionQueryFileIds,
@@ -93,6 +95,8 @@ let tileLayer = null
 let resizeObserver = null
 const mapThemeInfo = ref(null)
 const mapError = ref('')
+const sdkLoading = ref(false)
+let sdkRuntime = null
 let pointRequestToken = 0
 let detailRequestToken = 0
 let detailTimer = null
@@ -150,11 +154,12 @@ onBeforeUnmount(() => {
   for (const frame of fadeFrames) cancelAnimationFrame(frame)
   retiringMarkers.clear()
   photoMarkers.clear()
+  sdkRuntime?.destroy(); sdkRuntime = null
   map?.remove()
   map = null
 })
 
-watch(() => [config.settings.mapTheme, config.settings.mapServices, config.settings.mapServicesRevision], updateTheme, { deep: true })
+watch(() => [config.settings.mapTheme, config.settings.mapServices, config.settings.mapServicesRevision, config.settings.sdkProxyRevision], updateTheme, { deep: true })
 watch(() => config.settings.mapMarkerSize, () => renderMarkers())
 watch(() => [props.queryParams, props.querySource, props.collectionId, props.fileIds], () => {
   if (!props.active) {
@@ -484,8 +489,12 @@ function updateTheme() {
     if (tileLayer) map.removeLayer(tileLayer)
     mapThemeInfo.value = theme
     activeMaxZoom.value = theme.maxZoom
+    map.setMinZoom(theme.minZoom || 0)
     map.setMaxZoom(theme.maxZoom)
     if (map.getZoom() > theme.maxZoom) map.setZoom(theme.maxZoom)
+    if (!sdkRuntime) sdkRuntime = createSdkBasemapRuntime(L,map,{onError:reason=>{mapError.value=reason?.message||String(reason)},onLoading:value=>{sdkLoading.value=value}})
+    void sdkRuntime.set(config.settings.mapServices,theme.theme)
+    if (theme.renderer === 'sdk') { tileLayer = null; return }
     const created = createTileLayerGroup(L, theme)
     const activeLayer = created.layer
     tileLayer = activeLayer.addTo(map)

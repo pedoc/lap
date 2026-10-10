@@ -1988,7 +1988,7 @@
     "description": "Choose map display and reverse geocoding independently. Saving updates all map windows without silently switching vendors.",
     "tile_provider": "Map display service",
     "geocoder": "Location service",
-    "service_scope": "AMap and Tencent are address services here, not map renderers. Choose a display service such as Tianditu independently.",
+    "service_scope": "Choose display and location services independently. AMap/Tencent display uses official SDKs; photo GPS stays WGS84.",
     "console": "API keys / Console",
     "custom_hint": "URLs require {z}, {x}, {y}; optional {s} and {token} are supported. Attribution is plain text. Follow your provider’s copyright and caching terms.",
     "web_key_hint": "Use a Web Service / REST API key, not a JavaScript SDK key. Tencent also needs the SK if signature checking is enabled.",
@@ -2016,7 +2016,12 @@
       "subdomains": "Subdomains (e.g. abc or 0123)",
       "maxZoom": "Maximum zoom",
       "satelliteOwner": "Satellite owner (default: mapbox)",
-      "referer": "Authorized application Referer (optional)"
-    }
+      "referer": "Authorized application Referer (optional)",
+      "jsKey": "JavaScript SDK Key",
+      "securityJsCode": "AMap securityJsCode",
+      "sdkStyle": "SDK style (AMap URI / Tencent style ID, optional)"
+    },
+    "sdk_hint": "Display requires a JavaScript Key, plus securityJsCode for AMap. Web Service keys are for geocoding only. Authorize this application’s domains. Browser proxy changes require an app restart. Only unauthenticated HTTP/SOCKS5 proxies are supported; older macOS builds should use the system proxy.",
+    "sdk_loading": "Loading SDK map…"
   }
 }

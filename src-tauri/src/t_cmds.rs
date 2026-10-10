@@ -3226,8 +3226,10 @@ pub fn get_network_proxy() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub fn set_network_proxy(proxy_url: Option<String>) -> Result<(), String> {
-    crate::t_network::configure(proxy_url)
+pub fn set_network_proxy(app_handle: AppHandle, proxy_url: Option<String>) -> Result<(), String> {
+    crate::t_network::configure(proxy_url)?;
+    let _=app_handle.emit("sdk-browser-proxy-changed",());
+    Ok(())
 }
 
 #[tauri::command]

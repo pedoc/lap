@@ -14,10 +14,10 @@
       <label v-for="field in provider.fields" :key="field" class="flex items-center justify-between gap-3 text-xs">
         <span>{{ t(`map_services.fields.${field}`) }}</span>
         <input v-if="field === 'maxZoom'" v-model.number="draft.providers[provider.id][field]" type="number" min="1" max="22" class="input input-bordered input-sm w-24" :disabled="busy" />
-        <input v-else v-model="draft.providers[provider.id][field]" :type="field === 'token' || field === 'secret' ? 'password' : 'text'" spellcheck="false" autocomplete="off" class="input input-bordered input-sm w-60 min-w-0" :disabled="busy" :aria-label="`${provider.name}: ${t(`map_services.fields.${field}`)}`" />
+        <input v-else v-model="draft.providers[provider.id][field]" :type="['token', 'secret', 'jsKey', 'securityJsCode'].includes(field) ? 'password' : 'text'" spellcheck="false" autocomplete="off" class="input input-bordered input-sm w-60 min-w-0" :disabled="busy" :aria-label="`${provider.name}: ${t(`map_services.fields.${field}`)}`" />
       </label>
       <p v-if="provider.id === 'custom'" class="text-xs opacity-60">{{ t('map_services.custom_hint', { z: '{z}', x: '{x}', y: '{y}', s: '{s}', token: '{token}' }) }}</p>
-      <p v-if="provider.id === 'amap' || provider.id === 'tencent'" class="text-xs opacity-60">{{ t('map_services.web_key_hint') }}</p>
+      <p v-if="(provider.id === 'amap' || provider.id === 'tencent') && draft.geocoder === provider.id" class="text-xs opacity-60">{{ t('map_services.web_key_hint') }}</p>
       <p v-if="provider.id === 'mapbox'" class="text-xs opacity-60">{{ t('map_services.public_token_hint') }}</p>
     </section>
     <label v-if="draft.geocoder !== 'offline'" class="flex gap-2 items-start text-xs">
@@ -25,6 +25,7 @@
     </label>
     <p v-if="draft.geocoder !== 'offline'" class="text-xs text-warning">{{ t('map_services.privacy') }}</p>
     <p class="text-xs opacity-60">{{ t('map_services.proxy_hint') }}</p>
+    <p v-if="['amap','tencent'].includes(draft.tileProvider)" class="text-xs text-warning">{{ t('map_services.sdk_hint') }}</p>
     <p v-if="error" class="text-xs text-error whitespace-pre-wrap" role="alert">{{ error }}</p>
     <p v-if="saved" class="text-xs text-success" role="status">{{ t('map_services.saved') }}</p>
     <div class="flex gap-2 justify-end"><button type="button" class="btn btn-xs" :disabled="busy" @click="reset">{{ t('map_services.reload') }}</button><button type="button" class="btn btn-xs btn-primary" :disabled="busy" @click="save">{{ busy ? t('map_services.saving') : t('map_services.save') }}</button></div>
@@ -36,13 +37,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
 import { openExternalUrl } from '@/common/api';
-import { MAP_SERVICES, defaultMapServices, applyMapServices } from '@/common/mapServices';
+import { MAP_SERVICES, defaultMapServices, applyMapServices, serviceFields } from '@/common/mapServices';
 const { t } = useI18n();
 const draft = ref(JSON.parse(JSON.stringify(config.settings.mapServices || defaultMapServices())));
 const baseline = ref(config.settings.mapServicesRevision || '');
 const busy = ref(false), error = ref(''), saved = ref(false);
 const tileProviders = MAP_SERVICES.filter(provider => provider.tiles), geoProviders = MAP_SERVICES.filter(provider => provider.geo);
-const activeProviders = computed(() => MAP_SERVICES.filter(provider => provider.fields.length && [draft.value.tileProvider, draft.value.geocoder].includes(provider.id)));
+const activeProviders = computed(() => MAP_SERVICES.filter(provider => provider.fields.length && [draft.value.tileProvider, draft.value.geocoder].includes(provider.id)).map(provider => ({...provider,fields:serviceFields(provider,draft.value)})));
 async function reset() {
   error.value = ''; saved.value = false; busy.value = true;
   try { const state = await invoke('get_map_services'); applyMapServices(config, state); draft.value = JSON.parse(JSON.stringify(state.settings)); baseline.value = state.revision; }

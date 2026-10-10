@@ -57,6 +57,7 @@ async function refreshMapServices() {
   } catch { console.error('Failed to load map service configuration'); }
 }
 void refreshMapServices();
+listen('sdk-browser-proxy-changed', () => { config.settings.sdkProxyRevision = (config.settings.sdkProxyRevision || 0) + 1; });
 listen('map-services-changed', event => { applyMapServices(config, event.payload); });
 listen('map-location-changed', event => { if (event.payload.library_id === faceLibrary._libraryId) fileInfoRevision.value++; });
 

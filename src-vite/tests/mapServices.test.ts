@@ -6,12 +6,12 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { MAP_SERVICES, defaultMapServices, migrateLegacyMapServices, applyMapServices, validGpsCoordinates, escapeAttribution, serviceName } from '../src/common/mapServices.js';
+import { MAP_SERVICES, serviceFields, defaultMapServices, migrateLegacyMapServices, applyMapServices, validGpsCoordinates, escapeAttribution, serviceName } from '../src/common/mapServices.js';
 import { getMapTheme, createTileLayerGroup } from '../src/common/mapProviders.js';
 
 test('display/geocoding capabilities are separated and provider choices roundtrip without legacy normalization', () => {
   assert.ok(MAP_SERVICES.find(provider => provider.id === 'esri')?.tiles);
-  assert.ok(!MAP_SERVICES.find(provider => provider.id === 'amap')?.tiles);
+  assert.ok(MAP_SERVICES.find(provider => provider.id === 'amap')?.tiles);
   assert.ok(MAP_SERVICES.find(provider => provider.id === 'amap')?.geo);
   const settings = defaultMapServices(); settings.tileProvider = 'mapbox'; settings.geocoder = 'tencent';
   const store = { settings: {} as any }; applyMapServices(store, { settings: JSON.parse(JSON.stringify(settings)), revision: 'new-revision' });
@@ -52,15 +52,15 @@ const vue={defineEmits:()=>()=>{},ref:(value:any)=>({value}),computed:(get:any)=
 for (const component of ['MapView','PhotoMapView']) test(`${component} switches layers immediately without moving the camera or falling back on late tile errors`, () => {
   const config:any={infoPanel:{mapTheme:0},settings:{mapTheme:0,mapServices:defaultMapServices(),mapServicesRevision:'r1'}};
   const created:any[]=[], moves:any[]=[];
-  const api=runInNewContext(`${script(component)}\n;({updateTheme,mapError,mapThemeInfo,setMap(value){map=value;}})`,{...vue,config,defineProps:()=>({lat:30,lon:120,zoom:10,queryParams:null,active:true}),useI18n:()=>({t:(key:string)=>key}),useUIStore:()=>({}),getMapTheme,isMac:false,markerIcon2x:'',markerIcon:'',markerShadow:'',L:{Icon:{Default:{mergeOptions(){}}}},createTileLayerGroup:(_L:any,theme:any)=>{const callbacks:any={};const layer={addTo(){return layer;}};const result={layer,tileLayers:[{on:(name:string,fn:any)=>{callbacks[name]=fn;}}],callbacks,theme};created.push(result);return result;}});
-  api.setMap({removeLayer(){},setMaxZoom(){},getZoom:()=>10,setZoom(){},setView:(...args:any[])=>moves.push(args)});
+  const api=runInNewContext(`${script(component)}\n;({updateTheme,mapError,mapThemeInfo,setMap(value){map=value;}})`,{...vue,config,createSdkBasemapRuntime:()=>({set:async()=>{},destroy(){}}),defineProps:()=>({lat:30,lon:120,zoom:10,queryParams:null,active:true}),useI18n:()=>({t:(key:string)=>key}),useUIStore:()=>({}),getMapTheme,isMac:false,markerIcon2x:'',markerIcon:'',markerShadow:'',L:{Icon:{Default:{mergeOptions(){}}}},createTileLayerGroup:(_L:any,theme:any)=>{const callbacks:any={};const layer={addTo(){return layer;}};const result={layer,tileLayers:[{on:(name:string,fn:any)=>{callbacks[name]=fn;}}],callbacks,theme};created.push(result);return result;}});
+  api.setMap({removeLayer(){},setMinZoom(){},setMaxZoom(){},getZoom:()=>10,setZoom(){},setView:(...args:any[])=>moves.push(args)});
   api.updateTheme();const old=created[0];config.settings.mapServices.tileProvider='esri';config.settings.mapServicesRevision='r2';api.updateTheme();
   assert.equal(api.mapThemeInfo.value.provider,'esri');assert.equal(created.length,2);old.callbacks.tileerror({error:new Error('Old OSM failure')});assert.equal(api.mapError.value,'');
   created[1].callbacks.tileerror({error:new Error('HTTP 403')});assert.equal(api.mapError.value,'HTTP 403');assert.equal(api.mapThemeInfo.value.provider,'esri');assert.equal(created.length,2);assert.equal(moves.length,0);
 });
 test('settings save the selected services and all vendor parameters with an optimistic revision', async () => {
   const config:any={settings:{mapServices:defaultMapServices(),mapServicesRevision:'r1'}},calls:any[]=[];
-  const api=runInNewContext(`${script('MapServicesSettings')}\n;({draft,save,busy,error,saved})`,{...vue,config,MAP_SERVICES,defaultMapServices,applyMapServices,useI18n:()=>({t:(key:string)=>key}),invoke:async(command:string,args:any)=>{calls.push({command,args});return command==='get_map_services'?{settings:defaultMapServices(),revision:'r1'}:{settings:args.settings,revision:'r2'};}});
+  const api=runInNewContext(`${script('MapServicesSettings')}\n;({draft,save,busy,error,saved})`,{...vue,config,MAP_SERVICES,serviceFields,defaultMapServices,applyMapServices,useI18n:()=>({t:(key:string)=>key}),invoke:async(command:string,args:any)=>{calls.push({command,args});return command==='get_map_services'?{settings:defaultMapServices(),revision:'r1'}:{settings:args.settings,revision:'r2'};}});
   await new Promise(resolve=>setImmediate(resolve));api.draft.value.tileProvider='mapbox';api.draft.value.geocoder='amap';api.draft.value.providers.mapbox.token='pk.test';api.draft.value.providers.amap.token='fake-web-service-key';await api.save();
   const saved=calls.find(call=>call.command==='save_map_services');assert.equal(saved.args.expectedRevision,'r1');assert.equal(saved.args.settings.tileProvider,'mapbox');assert.equal(saved.args.settings.geocoder,'amap');assert.equal(config.settings.mapServices.tileProvider,'mapbox');assert.ok(api.saved.value);
 });
@@ -79,7 +79,7 @@ test('the real settings template renders service choices, password inputs, conse
   const {descriptor}=parse(source);let code=stripTypeScriptTypes(compileScript(descriptor,{id:'map-settings-test',inlineTemplate:true}).content);
   const imports:Record<string,any>={};code=code.replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g,(_,names)=>{for(const name of names.split(',')){const [original,alias]=name.trim().split(/\s+as\s+/);imports[alias||original]=(Vue as any)[original];}return '';}).replace(/^import .*;?\r?\n/gm,'').replace('export default','const component =');
   const settings=defaultMapServices();settings.tileProvider='mapbox';settings.geocoder='amap';settings.providers.mapbox.token='pk.not-real';
-  const component=runInNewContext(`${code}\n;component`,{...imports,MAP_SERVICES,defaultMapServices,applyMapServices,config:{settings:{mapServices:settings,mapServicesRevision:'r1'}},useI18n:()=>({t:(key:string)=>key}),invoke:async()=>({settings,revision:'r1'}),openExternalUrl(){}});
+  const component=runInNewContext(`${code}\n;component`,{...imports,MAP_SERVICES,serviceFields,defaultMapServices,applyMapServices,config:{settings:{mapServices:settings,mapServicesRevision:'r1'}},useI18n:()=>({t:(key:string)=>key}),invoke:async()=>({settings,revision:'r1'}),openExternalUrl(){}});
   const html=await renderToString(Vue.createSSRApp(component));
   assert.match(html,/value="esri"/);assert.match(html,/value="mapbox"/);assert.match(html,/value="amap"/);assert.match(html,/type="password"/);assert.match(html,/map_services\.console/);assert.match(html,/map_services\.privacy/);assert.match(html,/type="checkbox"/);
 });

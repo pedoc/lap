@@ -1988,7 +1988,7 @@
     "description": "分別選擇地圖顯示和經緯度轉地址服務。儲存後所有地圖視窗立即使用新服務，不再靜默切換供應商。",
     "tile_provider": "地圖顯示服務",
     "geocoder": "地點解析服務",
-    "service_scope": "高德和騰訊在此提供地址解析，不是地圖顯示引擎；地圖顯示可獨立選擇天圖等服務。",
+    "service_scope": "地圖顯示與地點解析可獨立選擇。高德、騰訊顯示使用官方 SDK，照片 GPS 仍儲存為 WGS84。",
     "console": "申請金鑰 / 控制台",
     "custom_hint": "URL 必須包含 {z}、{x}、{y}，可使用 {s}、{token}。署名為純文字。自建服務請遵守版權及快取條款。",
     "web_key_hint": "需要 Web 服務 / REST API Key，不是 JavaScript SDK Key。騰訊啟用簽名校驗時還需填寫 SK。",
@@ -2016,7 +2016,12 @@
       "subdomains": "子網域（如 abc 或 0123）",
       "maxZoom": "最大縮放層級",
       "satelliteOwner": "衛星樣式擁有者（預設 mapbox）",
-      "referer": "本應用授權 Referer（選填）"
-    }
+      "referer": "本應用授權 Referer（選填）",
+      "jsKey": "JavaScript SDK Key",
+      "securityJsCode": "高德 securityJsCode",
+      "sdkStyle": "SDK 樣式（高德 URI / 騰訊樣式 ID，選填）"
+    },
+    "sdk_hint": "SDK 顯示使用 JavaScript Key；高德另需 securityJsCode。Web 服務 Key 僅用於地點解析。請為本應用設定網域白名單。SDK 瀏覽器代理在啟動時套用，修改軟體代理後須重新啟動；僅支援無認證 HTTP / SOCKS5，舊 macOS 建置請使用系統代理。",
+    "sdk_loading": "SDK 地圖載入中…"
   }
 }

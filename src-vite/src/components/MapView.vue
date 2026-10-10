@@ -7,6 +7,7 @@
     <div ref="mapEl" style="width:100%; height:100%;"></div>
     <div class="absolute left-2 bottom-7 z-500 max-w-[calc(100%_-_1rem)] rounded-box bg-base-100/85 px-2 py-1 text-[10px]" role="status">
       <span>{{ mapThemeInfo?.name }}</span>
+      <span v-if="sdkLoading" class="ml-1">{{ t('map_services.sdk_loading') }}</span>
       <a v-if="mapThemeInfo?.provider === 'mapbox'" href="https://www.mapbox.com/" target="_blank" rel="noopener noreferrer"><img :src="mapboxLogo" alt="Mapbox" class="h-6 mt-1" /></a>
       <p v-if="mapError" class="text-error whitespace-pre-wrap">{{ t('map_services.tile_error') }}: {{ mapError }}</p>
       <button v-if="mapError" type="button" class="link" @click.stop="updateTheme">{{ t('map_services.retry') }}</button>
@@ -15,7 +16,7 @@
       <TButton
         :icon="IconZoomOut"
         :tooltip="t('map.zoom_out')"
-        :disabled="zoom <= 0"
+        :disabled="zoom <= (mapThemeInfo?.minZoom || 0)"
         @click="zoomOut"
       />
       <TButton
@@ -50,6 +51,7 @@ import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { config } from '@/common/config'
 import mapboxLogo from '@/assets/mapbox-logo.svg'
+import { createSdkBasemapRuntime } from '@/common/mapSdkRuntime'
 import { openExternalUrl } from '@/common/api'
 import { createTileLayerGroup, getMapTheme } from '@/common/mapProviders'
 import { isMac } from '@/common/utils'
@@ -97,6 +99,8 @@ let map = null
 let layer = null
 const mapThemeInfo = ref(null)
 const mapError = ref('')
+const sdkLoading = ref(false)
+let sdkRuntime = null
 let zoom = ref(props.zoom)
 let activeMaxZoom = ref(19)
 let resizeObserver = null
@@ -141,6 +145,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   uiStore.setMapActive(false)
   window.removeEventListener('keydown', handleMapKeyDown, true)
+  sdkRuntime?.destroy(); sdkRuntime = null
   if (map) map.remove()
   if (resizeObserver) resizeObserver.disconnect()
 })
@@ -148,7 +153,7 @@ onBeforeUnmount(() => {
 watch(() => [props.lat, props.lon, props.zoom], () => {
   updateFromProps()
 })
-watch(() => [config.infoPanel.mapTheme, config.settings.mapServices, config.settings.mapServicesRevision], updateTheme, { deep: true })
+watch(() => [config.infoPanel.mapTheme, config.settings.mapServices, config.settings.mapServicesRevision, config.settings.sdkProxyRevision], updateTheme, { deep: true })
 
 function updateFromProps() {
   if (!map) return
@@ -209,8 +214,12 @@ function updateTheme() {
     if (layer) map.removeLayer(layer)
     mapThemeInfo.value = theme
     activeMaxZoom.value = theme.maxZoom
+    map.setMinZoom(theme.minZoom || 0)
     map.setMaxZoom(theme.maxZoom)
     if (map.getZoom() > theme.maxZoom) map.setZoom(theme.maxZoom)
+    if (!sdkRuntime) sdkRuntime = createSdkBasemapRuntime(L,map,{onError:reason=>{mapError.value=reason?.message||String(reason)},onLoading:value=>{sdkLoading.value=value}})
+    void sdkRuntime.set(config.settings.mapServices,theme.theme)
+    if (theme.renderer === 'sdk') { layer = null; return }
     const created = createTileLayerGroup(L, theme)
     const activeLayer = created.layer
     layer = activeLayer.addTo(map)

@@ -6,7 +6,7 @@ export function getMapTheme(settings, themeIndex, revision = '') {
   const cfg = config.providers?.[provider] || {};
   const supportsSatellite = provider !== 'custom' || !!cfg.satelliteUrl;
   const theme = Number(themeIndex) === 1 && supportsSatellite ? 1 : 0;
-  const maxZoom = provider === 'tianditu' ? 18 : provider === 'maptiler' ? 20 : provider === 'mapbox' ? 22 : provider === 'custom' ? Number(cfg.maxZoom || 19) : theme === 1 ? 17 : 19;
+  const maxZoom = ['amap','tencent'].includes(provider) ? 20 : provider === 'tianditu' ? 18 : provider === 'maptiler' ? 20 : provider === 'mapbox' ? 22 : provider === 'custom' ? Number(cfg.maxZoom || 19) : theme === 1 ? 17 : 19;
   const attributions = {
     osm: theme === 1 ? '<a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri World Imagery</a> · Esri, Maxar, Earthstar Geographics, GIS User Community' : '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a>',
     tianditu: '<a href="https://www.tianditu.gov.cn/" target="_blank" rel="noopener noreferrer">天地图</a>',
@@ -14,9 +14,10 @@ export function getMapTheme(settings, themeIndex, revision = '') {
     mapbox: '<a href="https://www.mapbox.com/about/maps/" target="_blank" rel="noopener noreferrer">© Mapbox</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap</a> · <a href="https://apps.mapbox.com/feedback/" target="_blank" rel="noopener noreferrer">Improve this map</a>',
     custom: escapeAttribution(cfg.attribution),
   };
+  attributions.amap = ''; attributions.tencent = ''; // Copyright/logo remain in each official SDK.
   attributions.esri = attributions.osm.replace(/© OpenStreetMap contributors/, 'Esri World Street Map · Esri, HERE, Garmin, USGS, GIS User Community').replace('https://www.openstreetmap.org/copyright', 'https://www.esri.com/');
   if (!Object.hasOwn(attributions, provider)) throw new Error('Unsupported map display provider');
-  return { provider, revision, theme, maxZoom, supportsSatellite, name: provider === 'osm' ? theme === 1 ? 'Esri World Imagery' : 'OpenStreetMap' : provider === 'esri' ? theme === 1 ? 'Esri World Imagery' : 'Esri World Street Map' : serviceName(provider), layerCount: provider === 'tianditu' ? 2 : 1, attribution: attributions[provider] };
+  return { renderer: ['amap','tencent'].includes(provider) ? 'sdk' : 'raster', provider, revision, theme, minZoom: ['amap','tencent'].includes(provider) ? 2 : 0, maxZoom, supportsSatellite, name: provider === 'osm' ? theme === 1 ? 'Esri World Imagery' : 'OpenStreetMap' : provider === 'esri' ? theme === 1 ? 'Esri World Imagery' : 'Esri World Street Map' : serviceName(provider), layerCount: ['amap','tencent'].includes(provider) ? 0 : provider === 'tianditu' ? 2 : 1, attribution: attributions[provider] };
 }
 async function cancelTile(requestId) { try { const { invoke } = await import('@tauri-apps/api/core'); await invoke('cancel_map_tile', { requestId }); } catch { /* Removed tiles never surface cancellation errors. */ } }
 async function fetchTile(request) { const { invoke } = await import('@tauri-apps/api/core'); return invoke('get_map_tile', { request }); }
