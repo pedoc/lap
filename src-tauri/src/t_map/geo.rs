@@ -343,6 +343,33 @@ mod tests {
         assert!(!valid_coordinates(f64::NAN, 20.0));
     }
     #[test]
+    fn map_frontend_and_geocoding_use_the_same_reference_coordinates() {
+        // Generated independently from the reference travel project's conversion module.
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../../../src-vite/tests/fixtures/mapCoordinates.json"
+        ))
+        .unwrap();
+        for fixture in fixtures.as_array().unwrap() {
+            let original = &fixture["wgs84"];
+            let expected = &fixture["gcj02"];
+            let lon = original[0].as_f64().unwrap();
+            let lat = original[1].as_f64().unwrap();
+            let (converted_lat, converted_lon) = gcj02(lat, lon);
+            assert!((converted_lon - expected[0].as_f64().unwrap()).abs() < 1e-9);
+            assert!((converted_lat - expected[1].as_f64().unwrap()).abs() < 1e-9);
+            let mut settings = Settings::default();
+            settings.geocoder = "amap".into();
+            settings.providers.get_mut("amap").unwrap().token = "test-key".into();
+            let url = request_url(&settings, lat, lon).unwrap();
+            let location = url
+                .query_pairs()
+                .find(|(key, _)| key == "location")
+                .unwrap()
+                .1;
+            assert_eq!(location, format!("{converted_lon:.8},{converted_lat:.8}"));
+        }
+    }
+    #[test]
     fn request_parameters_use_each_vendor_coordinate_contract_and_sign_tencent() {
         let mut s = Settings::default();
         s.geocoder = "tencent".into();

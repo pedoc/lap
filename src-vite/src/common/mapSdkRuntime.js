@@ -1,12 +1,12 @@
-import {createGcjCrs,wgs84ToGcj02} from './mapCoordinates.js';
+import {createCoordinateCrs,convertCoordinate} from './mapCoordinates.js';
 import {createSdkFrame} from './mapSdkFrame.js';
 export function isSdkProvider(id){return id==='amap'||id==='tencent';}
 async function browserProxy(){const {invoke}=await import('@tauri-apps/api/core');return invoke('get_sdk_browser_proxy_state');}
 export function createSdkBasemapRuntime(L,map,{onError=()=>{},onLoading=()=>{},proxyState=browserProxy,mountFrame=createSdkFrame}={}){
   const container=map.getContainer(),originalCrs=map.options.crs,originalBounds=map.getBounds;
-  const gcjCrs=createGcjCrs(L);const originalZoomAnimation=map._zoomAnimated;let frame=null,ticket=0,active=false,theme=0,disposed=false,fingerprint='';
+  const gcjCrs=createCoordinateCrs(L,'GCJ02');const originalZoomAnimation=map._zoomAnimated;let frame=null,ticket=0,active=false,theme=0,disposed=false,fingerprint='';
   let currentBackground=container.style.background;
-  const pose=()=>{const center=map.getCenter();return {center:wgs84ToGcj02(center.lng,center.lat),zoom:map.getZoom(),theme};};
+  const pose=()=>{const raw=map.getCenter(),center=map.wrapLatLng?.(raw)||raw;return {center:convertCoordinate([center.lng,center.lat],'WGS84','GCJ02'),zoom:map.getZoom(),theme};};
   const sync=()=>frame?.setCamera(pose());
   const resize=()=>{frame?.resize();sync();};
   map.on('move zoom viewreset',sync);map.on('resize',resize);

@@ -13,7 +13,9 @@ export function sdkFrameBootstrap(config){
         map.setZoomAndCenter(value.zoom,value.center,true);
         if(mapType!==value.theme){
           if(value.theme===1){satellite ||=new sdk.TileLayer.Satellite();roads ||=new sdk.TileLayer.RoadNet();map.setLayers([satellite,roads]);}
-          else {standard ||=new sdk.TileLayer();map.setLayers([standard]);}
+          // JSAPI 2.0's default basemap is not a generic raster TileLayer.
+          // Keep its world-level coverage (zoom 2) when initializing/restoring the normal theme.
+          else {standard ||=sdk.createDefaultLayer();map.setLayers([standard]);}
         }
       }else{
         map.setCenter(new sdk.LatLng(value.center[1],value.center[0]));map.setZoom(value.zoom);

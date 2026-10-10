@@ -49,3 +49,23 @@
 - 每张地图的 SDK globals 独立在应用创建的 frame 内；改 Key 只重建该地图背景，不刷新页面。配置通过 JSON 转义，旧 frame 的迟到初始化／错误被忽略，原图和 Web 服务 Key／SK 不传入 SDK。SDK 初始化不等于瓦片加载成功，先等待 complete／tilesloaded／idle，超时显示供应商、密钥／域名／网络检查提示。
 - Tauri 浏览器的代理只能在 WebView 创建时设置。主窗口从原平台配置创建，所有辅助窗口复用同一启动代理，避免 WebView2 数据目录环境冲突。无认证 HTTP／SOCKS5 支持显式代理；修改代理后 SDK 地图会提示重启，不假装新代理已生效。原有下载、逆地理编码、栅格瓦片的 Rust HTTP 代理仍立即生效。macOS 旧构建未开启 macOS 14+ 的 WebKit 显式代理特性，应使用系统代理；界面明确提示。
 - JS Key 需具备对应 SDK 权限，并为本应用地址配置来源／域名限制。Web 服务 Key 和腾讯 Web 服务 SK 只用于解析，不能替代显示凭据。真实供应商鉴权、配额和地图加载仍需用用户自己获授权的账号验收，普通回归测试不消费用户 API 额度。
+
+## 坐标系与转换模块
+
+`src-vite/src/common/mapCoordinates.js` 复用旅行项目 `src/map/coordinates.ts` 的通用算法，支持 **WGS84、GCJ02、BD09** 三种经纬度坐标系互转，不引入行程数据结构或第三方网络依赖。
+
+```js
+import { convertCoordinate, convertPathCoordinates } from '@/common/mapCoordinates.js'
+
+// 统一元组顺序：[经度, 纬度]，不是 [纬度, 经度]。
+const gcj = convertCoordinate([116.397470, 39.908823], 'WGS84', 'GCJ02')
+const bd = convertCoordinate(gcj, 'GCJ02', 'BD09')
+const gps = convertCoordinate(bd, 'BD09', 'WGS84')
+const path = convertPathCoordinates([gcj, gcj], 'GCJ02', 'WGS84')
+```
+
+- 转换返回新数组，不修改输入；同坐标系转换也复制数据。非法元组、非有限数值及未知坐标系会报错。业务输入仍需校验经纬度范围；显示投影允许跨日期变更线的连续经度。
+- 原有 `(经度, 纬度)` 方向函数继续可用，同时支持元组。GCJ02 反算默认使用现有高精度迭代算法；`gcj02ToWgs84Approx` 仅提供快速近似。BD09 的常规反算有微小数值误差；`Exact` 别名不会消除百度算法自身的近似误差。
+- GCJ02 沿用示例的中国区域矩形判断，范围外保持原坐标；它不是精确国界判断。BD09 的附加偏移不套用该判断。不要因切换地图而改写数据库或 EXIF，已经转换的坐标须标明来源，避免重复偏移。
+- `createCoordinateCrs(L, 'GCJ02' | 'BD09')` 只适配 Leaflet 显示投影及反投影，保留世界副本的经度偏移。高德／腾讯当前使用 GCJ02；BD09 能力是公共转换工具，**不表示已接入百度地图服务**。EPSG3857 是米单位的显示投影，不作为第四种经纬度坐标系。
+- 地点解析继续遵循供应商协议：高德转换请求坐标，腾讯使用原始 GPS + `coord_type=1`，天地图使用 WGS84。前端与 Rust 高德请求通过同一组独立参考测试向量校验，测试不调用真实供应商。

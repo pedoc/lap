@@ -6,6 +6,7 @@ import {wgs84ToGcj02,gcj02ToWgs84,createGcjCrs} from '../src/common/mapCoordinat
 import {createSdkBasemapRuntime} from '../src/common/mapSdkRuntime.js';
 import {frameDocument,sdkFrameBootstrap} from '../src/common/mapSdkFrame.js';
 import {defaultMapServices,MAP_SERVICES,serviceFields} from '../src/common/mapServices.js';
+import {getMapTheme} from '../src/common/mapProviders.js';
 
 test('China SDK projection and inverse preserve original WGS84 data and leave foreign coordinates unchanged',()=>{
  const original=[116.397470,39.908823];const converted=wgs84ToGcj02(...original);assert.ok(Math.abs(converted[0]-116.4037136)<1e-6);assert.ok(Math.abs(converted[1]-39.9102265)<1e-6);
@@ -29,6 +30,17 @@ test('AMap/Tencent background switches preserve camera, transform photo projecti
  settings.tileProvider='tencent';settings.providers.tencent.jsKey='tencent-fake';await runtime.set(settings,0);assert.ok(frames[0].removed);assert.equal(frames[1].config.provider,'tencent');assert.equal(e.map.getZoom(),13);
  settings.tileProvider='esri';await runtime.set(settings,0);assert.ok(frames[1].removed);assert.equal(e.map.options.crs,e.crs);assert.equal(e.map.getCenter().lng,116.397470);assert.equal(errors.length,0);runtime.destroy();assert.equal(e.container.style.background,'original');assert.ok(e.map.getBounds().original);
 });
+test('SDK camera wraps repeated-world longitude before converting GPS while keeping saved GPS unchanged',async()=>{
+ const e=environment(),cameras:any[]=[];
+ e.map.setView({lng:116.397470+360,lat:39.908823},3,{});
+ e.map.wrapLatLng=(point:any)=>({...point,lng:((point.lng+180)%360+360)%360-180});
+ const runtime=createSdkBasemapRuntime(e.L,e.map,{proxyState:async()=>({requiresRestart:false}),mountFrame:(_container:any,config:any)=>{
+  cameras.push(config.pose);return {setCamera:(pose:any)=>cameras.push(pose),resize(){},destroy(){}};
+ }});
+ const settings=defaultMapServices();settings.tileProvider='amap';await runtime.set(settings,0);
+ assert.ok(Math.abs(cameras[0].center[0]-116.4037136)<1e-6);
+ assert.equal(e.map.getCenter().lng,116.397470+360);runtime.destroy();
+});
 test('late SDK initializations and browser proxy changes cannot install stale backgrounds',async()=>{
  const e=environment(),pending:Array<(value:any)=>void>=[],frames:any[]=[],errors:any[]=[];
  const runtime=createSdkBasemapRuntime(e.L,e.map,{proxyState:()=>new Promise(resolve=>pending.push(resolve)),mountFrame:(_container:any,config:any)=>{frames.push(config);return {setCamera(){},resize(){},destroy(){}};},onError:error=>errors.push(error)});
@@ -40,15 +52,28 @@ test('SDK fields are independent of Web Service keys and frame documents cannot 
  const html=frameDocument({provider:'amap',jsKey:'</script><script>bad()</script>',token:'unique'});assert.ok(html.endsWith('</script></body></html>'));assert.ok(!html.includes('</script><script>bad()'));assert.ok(html.includes('u003c/script>'));
 });
 for(const provider of ['amap','tencent'])test(`${provider} bootstrap uses the official SDK, reports tile readiness and changes theme without recreating the map`,async()=>{
- const callbacks:any={},messages:any[]=[],maps:any[]=[],scripts:any[]=[];let handler:(value:any)=>void=()=>{};
- class FakeMap {events:any={};layers:any[]=[];centers:any[]=[];base:any[]=[];constructor(_container:any,options:any){maps.push(this);}on(name:string,fn:any){this.events[name]=fn;}setZoomAndCenter(...args:any[]){this.centers.push(args);}setCenter(value:any){this.centers.push(value);}setZoom(){}setLayers(value:any){this.layers.push(value);}setBaseMap(value:any){this.base.push(value);}destroy(){}}
- class TileLayer{};(TileLayer as any).Satellite=class{};(TileLayer as any).RoadNet=class{};
- const sdk:any={Map:FakeMap,TileLayer,LatLng:class {lat:number;lng:number;constructor(lat:number,lng:number){this.lat=lat;this.lng=lng;}}};const window:any={AMapLoader:{load:async(args:any)=>{callbacks.loader=args;return sdk;}},TMap:sdk,addEventListener:(name:string,fn:any)=>{if(name==='message')handler=fn;}};
- const parent={postMessage:(value:any)=>messages.push(value)},config={provider,token:'private-channel',jsKey:'js-fake',securityJsCode:'security-fake',pose:{center:[116.4037136,39.9102265],zoom:13,theme:0}};
+ const callbacks:any={},messages:any[]=[],maps:any[]=[],scripts:any[]=[],defaultLayers:any[]=[],genericLayers:any[]=[];let handler:(value:any)=>void=()=>{};
+ class FakeMap {events:any={};layers:any[]=[];centers:any[]=[];base:any[]=[];options:any;zoom:number;constructor(_container:any,options:any){this.options=options;this.zoom=options.zoom;maps.push(this);}on(name:string,fn:any){this.events[name]=fn;}setZoomAndCenter(...args:any[]){this.zoom=args[0];this.centers.push(args);}setCenter(value:any){this.centers.push(value);}setZoom(value:number){this.zoom=value;}setLayers(value:any){this.layers.push(value);}setBaseMap(value:any){this.base.push(value);}destroy(){}}
+ class TileLayer{constructor(){genericLayers.push(this);}};(TileLayer as any).Satellite=class{};(TileLayer as any).RoadNet=class{};
+ const sdk:any={Map:FakeMap,TileLayer,createDefaultLayer:()=>{const layer={kind:'default',zooms:[2,20]};defaultLayers.push(layer);return layer;},LatLng:class {lat:number;lng:number;constructor(lat:number,lng:number){this.lat=lat;this.lng=lng;}}};const window:any={AMapLoader:{load:async(args:any)=>{callbacks.loader=args;return sdk;}},TMap:sdk,addEventListener:(name:string,fn:any)=>{if(name==='message')handler=fn;}};
+ const parent={postMessage:(value:any)=>messages.push(value)},config={provider,token:'private-channel',jsKey:'js-fake',securityJsCode:'security-fake',pose:{center:[116.4037136,39.9102265],zoom:2,theme:0}};
  runInNewContext(`(${sdkFrameBootstrap.toString()})(config)`,{config,window,parent,document:{createElement:()=>({}),getElementById:()=>({}),head:{appendChild:(script:any)=>scripts.push(script)}},setTimeout:()=>0,clearTimeout(){}});
  assert.ok(scripts[0].src.startsWith(provider==='amap'?'https://webapi.amap.com/':'https://map.qq.com/api/gljs'));scripts[0].onload();await new Promise(resolve=>setImmediate(resolve));assert.equal(maps.length,1);assert.ok(!messages.some(value=>value.type==='ready'));
  maps[0].events[provider==='amap'?'complete':'tilesloaded']();assert.ok(messages.some(value=>value.type==='ready'));
+ // Minimum/world zoom must retain the official default layer, including after satellite mode.
+ if(provider==='amap'){
+  const settings=defaultMapServices();settings.tileProvider=provider;
+  const theme=getMapTheme(settings,0);assert.deepEqual(Array.from(maps[0].options.zooms),[theme.minZoom,theme.maxZoom]);
+  assert.equal(defaultLayers.length,1);assert.equal(genericLayers.length,0);assert.equal(maps[0].layers[0][0],defaultLayers[0]);
+ }
+ for(const zoom of [2,3,20,3,2]){
+  handler({source:parent,data:{channel:'lap-map-sdk',token:'private-channel',type:'camera',pose:{...config.pose,zoom}}});
+  assert.equal(maps[0].zoom,zoom);
+ }
  for(let n=0;n<3;n++)handler({source:parent,data:{channel:'lap-map-sdk',token:'private-channel',type:'camera',pose:{...config.pose,theme:1}}});assert.equal(maps.length,1);assert.equal(provider==='amap'?maps[0].layers.length:maps[0].base.length,2);
+ handler({source:parent,data:{channel:'lap-map-sdk',token:'private-channel',type:'camera',pose:config.pose}});
+ assert.equal(maps[0].zoom,2);assert.equal(provider==='amap'?maps[0].layers.length:maps[0].base.length,3);
+ if(provider==='amap'){assert.equal(maps[0].layers.at(-1)[0],defaultLayers[0]);assert.equal(defaultLayers.length,1);assert.equal(genericLayers.length,0);}
 });
 test('every Tauri window uses the startup proxy snapshot and main creation retains platform configuration',()=>{
  const root=new URL('../../src-tauri/',import.meta.url);for(const name of ['tauri.conf.json','tauri.windows.conf.json']){const file=JSON.parse(readFileSync(new URL(name,root),'utf8'));assert.equal(file.app.windows[0].create,false);}
