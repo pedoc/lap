@@ -61,6 +61,7 @@ impl ReviewItem {
 pub struct PageRequest {
     pub library_id: String,
     pub filter: String,
+    pub person_id: Option<i64>,
     pub offset: usize,
     pub limit: usize,
 }
@@ -73,6 +74,7 @@ pub struct ReviewPage {
 }
 fn condition(filter: &str) -> Result<&'static str, String> {
     match filter {
+        "all" => Ok("state IN ('suggested','unknown','unassigned','confirmed')"),
         "suggested" => Ok("state='suggested'"),
         "unknown" => Ok("state IN ('unknown','unassigned')"),
         "confirmed" => Ok("state='confirmed'"),
@@ -87,11 +89,11 @@ pub fn page(conn: &Connection, request: &PageRequest) -> Result<ReviewPage, Stri
     {
         let mut statement = conn
             .prepare(&format!(
-                "{ITEMS} SELECT state,COUNT(*) FROM items GROUP BY state"
+                "{ITEMS} SELECT state,COUNT(*) FROM items WHERE (?1 IS NULL OR person_id=?1) GROUP BY state"
             ))
             .map_err(|e| e.to_string())?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map([request.person_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
             .map_err(|e| e.to_string())?;
@@ -102,16 +104,22 @@ pub fn page(conn: &Connection, request: &PageRequest) -> Result<ReviewPage, Stri
     }
     let total: i64 = conn
         .query_row(
-            &format!("{ITEMS} SELECT COUNT(*) FROM items WHERE {filter}"),
-            [],
+            &format!(
+                "{ITEMS} SELECT COUNT(*) FROM items WHERE {filter} AND (?1 IS NULL OR person_id=?1)"
+            ),
+            [request.person_id],
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
     let offset = i64::try_from(request.offset).map_err(|_| "Invalid page offset")?;
-    let mut statement=conn.prepare(&format!("{ITEMS} SELECT * FROM items WHERE {filter} ORDER BY file_id,COALESCE(face_id,annotation_id),annotation_id LIMIT ?1 OFFSET ?2")).map_err(|e|e.to_string())?;
+    let mut statement=conn.prepare(&format!("{ITEMS} SELECT * FROM items WHERE {filter} AND (?1 IS NULL OR person_id=?1) ORDER BY file_id,COALESCE(face_id,annotation_id),annotation_id LIMIT ?2 OFFSET ?3")).map_err(|e|e.to_string())?;
     let items = statement
         .query_map(
-            params![request.limit.clamp(1, 100) as i64, offset],
+            params![
+                request.person_id,
+                request.limit.clamp(1, 100) as i64,
+                offset
+            ],
             ReviewItem::read,
         )
         .map_err(|e| e.to_string())?
@@ -133,7 +141,7 @@ fn current(conn: &Connection, expected: &ReviewItem) -> Result<ReviewItem, Strin
     }
     Ok(current)
 }
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewAction {
     Confirm,
@@ -141,6 +149,8 @@ pub enum ReviewAction {
     Ignore,
     NotFace,
     Restore,
+    AssignExisting,
+    AssignNew,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -149,8 +159,21 @@ pub struct ActionRequest {
     pub profile: String,
     pub action: ReviewAction,
     pub items: Vec<ReviewItem>,
+    pub name: Option<String>,
+    pub target_person_id: Option<i64>,
+    pub expected_target_name: Option<String>,
 }
-pub fn apply(conn: &Connection, request: &ActionRequest) -> Result<usize, String> {
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewResult {
+    pub count: usize,
+    pub person_id: Option<i64>,
+    pub name: Option<String>,
+    pub previous_person_ids: Vec<i64>,
+    pub file_ids: Vec<i64>,
+    pub membership_changed: bool,
+}
+pub fn apply(conn: &Connection, request: &ActionRequest) -> Result<ReviewResult, String> {
     if request.items.is_empty() || request.items.len() > 100 {
         return Err("Select between 1 and 100 faces to review".into());
     }
@@ -165,15 +188,80 @@ pub fn apply(conn: &Connection, request: &ActionRequest) -> Result<usize, String
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| e.to_string())?;
     let result = (|| {
-        for expected in &request.items {
-            let item = current(conn, expected)?;
+        // Validate every snapshot before creating a new identity or editing any annotations.
+        let items = request
+            .items
+            .iter()
+            .map(|item| current(conn, item))
+            .collect::<Result<Vec<_>, _>>()?;
+        for item in &items {
             if item.state == "stale" {
                 return Err("Source changed; old regions cannot be applied to new content. Detect and annotate the current image instead".into());
             }
-            if request.action == ReviewAction::Restore {
-                if !["ignored", "not_face"].contains(&item.state.as_str()) {
-                    return Err("Only ignored or non-face regions can be restored".into());
+            let allowed = match request.action {
+                ReviewAction::Restore => ["ignored", "not_face"].contains(&item.state.as_str()),
+                ReviewAction::Confirm | ReviewAction::Reject => {
+                    item.state == "suggested" && item.person_id.is_some()
                 }
+                _ => {
+                    item.face_id.is_some()
+                        && ["unknown", "unassigned", "suggested", "confirmed"]
+                            .contains(&item.state.as_str())
+                }
+            };
+            if !allowed {
+                return Err("This action is not supported for the selected face states; refresh or restore first".into());
+            }
+        }
+        let (target, name) = match request.action {
+            ReviewAction::AssignNew => {
+                let name = super::face_names::valid_name(request.name.as_deref().unwrap_or(""))?;
+                (
+                    Some(super::face_names::create_person_in_transaction(
+                        conn,
+                        name,
+                        items.first().and_then(|item| item.face_id),
+                    )?),
+                    Some(name.to_string()),
+                )
+            }
+            ReviewAction::AssignExisting => {
+                let id = request
+                    .target_person_id
+                    .filter(|id| *id > 0)
+                    .ok_or("Choose a target person")?;
+                let name: Option<String> = conn
+                    .query_row("SELECT name FROM persons WHERE id=?1", [id], |row| {
+                        row.get(0)
+                    })
+                    .optional()
+                    .map_err(|e| e.to_string())?
+                    .ok_or("Target person no longer exists")?;
+                if name != request.expected_target_name {
+                    return Err("Target person changed; choose it again".into());
+                }
+                (Some(id), name)
+            }
+            _ => (None, None),
+        };
+        let membership_changed = match request.action {
+            ReviewAction::Confirm | ReviewAction::Restore => false,
+            _ => items.iter().any(|item| item.person_id != target),
+        };
+        let previous_person_ids = items
+            .iter()
+            .filter_map(|item| item.person_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let file_ids = items
+            .iter()
+            .map(|item| item.file_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        for item in items {
+            if request.action == ReviewAction::Restore {
                 let id = item.annotation_id.ok_or("Missing durable annotation")?;
                 conn.execute("UPDATE face_annotations SET kind='unassigned',person_id=NULL,updated_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=?1",[id]).map_err(|e|e.to_string())?;
                 conn.execute(
@@ -183,24 +271,14 @@ pub fn apply(conn: &Connection, request: &ActionRequest) -> Result<usize, String
                 .map_err(|e| e.to_string())?;
                 super::face_annotations::restore_file(conn, item.file_id)?;
             } else {
-                if ["ignored", "not_face"].contains(&item.state.as_str()) {
-                    return Err("Restore this face before editing it".into());
-                }
                 let mode = match request.action {
-                    ReviewAction::Confirm => {
-                        if item.state != "suggested" || item.person_id.is_none() {
-                            return Err("Only automatic person suggestions can be confirmed".into());
-                        }
-                        super::face_names::EditMode::Confirm
-                    }
-                    ReviewAction::Reject => {
-                        if item.state != "suggested" || item.person_id.is_none() {
-                            return Err("Only automatic person suggestions can be rejected".into());
-                        }
-                        super::face_names::EditMode::Unassign
-                    }
+                    ReviewAction::Confirm => super::face_names::EditMode::Confirm,
+                    ReviewAction::Reject => super::face_names::EditMode::Unassign,
                     ReviewAction::Ignore => super::face_names::EditMode::Ignore,
                     ReviewAction::NotFace => super::face_names::EditMode::NotFace,
+                    ReviewAction::AssignExisting | ReviewAction::AssignNew => {
+                        super::face_names::EditMode::AssignExisting
+                    }
                     ReviewAction::Restore => return Err("Unsupported review action".into()),
                 };
                 let edit = super::face_names::FaceNameRequest {
@@ -214,17 +292,24 @@ pub fn apply(conn: &Connection, request: &ActionRequest) -> Result<usize, String
                     expected_name: item.person_name,
                     mode,
                     name: None,
-                    target_person_id: None,
+                    target_person_id: target,
                 };
                 super::face_names::edit_in_transaction(conn, &edit)?;
             }
         }
-        Ok(request.items.len())
+        Ok(ReviewResult {
+            count: request.items.len(),
+            person_id: target,
+            name,
+            previous_person_ids,
+            file_ids,
+            membership_changed,
+        })
     })();
     match result {
-        Ok(count) => {
+        Ok(result) => {
             conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
-            Ok(count)
+            Ok(result)
         }
         Err(error) => {
             let _ = conn.execute_batch("ROLLBACK");
@@ -242,8 +327,13 @@ pub fn people(conn: &Connection, search: &str) -> Result<Vec<serde_json::Value>,
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    let mut statement=conn.prepare("SELECT id,name FROM persons WHERE COALESCE(name,'') LIKE ?1 ESCAPE '\\' COLLATE NOCASE ORDER BY manual DESC,CASE WHEN name IS NULL OR name='' THEN 1 ELSE 0 END,name COLLATE NOCASE,id LIMIT 50").map_err(|e|e.to_string())?;
-    statement.query_map([pattern],|row|Ok(serde_json::json!({"id":row.get::<_,i64>(0)?,"name":row.get::<_,Option<String>>(1)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
+    let lookup = search
+        .trim()
+        .strip_prefix('#')
+        .and_then(|id| id.parse::<i64>().ok())
+        .filter(|id| *id > 0);
+    let mut statement=conn.prepare("SELECT id,name FROM persons WHERE COALESCE(name,'') LIKE ?1 ESCAPE '\\' COLLATE NOCASE OR id=?2 ORDER BY CASE WHEN id=?2 THEN 0 ELSE 1 END,manual DESC,CASE WHEN name IS NULL OR name='' THEN 1 ELSE 0 END,name COLLATE NOCASE,id LIMIT 50").map_err(|e|e.to_string())?;
+    statement.query_map(params![pattern,lookup],|row|Ok(serde_json::json!({"id":row.get::<_,i64>(0)?,"name":row.get::<_,Option<String>>(1)?}))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
 }
 /// Cached preview only: bounded memory, no original-file writes or model invocation.
 pub fn thumbnail(conn: &Connection, expected: &ReviewItem) -> Result<Option<String>, String> {
@@ -325,6 +415,7 @@ mod tests {
             &PageRequest {
                 library_id: "lib".into(),
                 filter: filter.into(),
+                person_id: None,
                 offset: 0,
                 limit: 36,
             },
@@ -337,6 +428,9 @@ mod tests {
             profile: "p".into(),
             action,
             items,
+            name: None,
+            target_person_id: None,
+            expected_target_name: None,
         }
     }
     #[test]
@@ -350,6 +444,7 @@ mod tests {
             &PageRequest {
                 library_id: "lib".into(),
                 filter: "suggested".into(),
+                person_id: None,
                 offset: 1,
                 limit: 1,
             },
@@ -364,6 +459,7 @@ mod tests {
                 &PageRequest {
                     library_id: "lib".into(),
                     filter: "bad' OR 1=1".into(),
+                    person_id: None,
                     offset: 0,
                     limit: 1
                 }
@@ -472,5 +568,120 @@ mod tests {
         c.execute_batch("DROP TRIGGER protect_person").unwrap();
         assert_eq!(super::super::face_names::delete_person(&c, 7).unwrap(), 1);
         assert_eq!(list(&c, "unknown").counts["unassigned"], 1);
+    }
+    #[test]
+    fn batch_reassignment_changes_only_selected_faces_and_survives_model_reset() {
+        let c = db();
+        let mut r = request(ReviewAction::AssignExisting, list(&c, "suggested").items);
+        r.items.retain(|item| item.face_id == Some(11));
+        r.target_person_id = Some(8);
+        r.expected_target_name = Some("Bob".into());
+        let result = apply(&c, &r).unwrap();
+        assert_eq!(result.person_id, Some(8));
+        assert!(result.membership_changed);
+        assert_eq!(
+            c.query_row("SELECT person_id FROM faces WHERE id=13", [], |row| row
+                .get::<_, Option<
+                i64,
+            >>(
+                0
+            ))
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            c.query_row("SELECT person_id FROM faces WHERE id=12", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            8
+        );
+        super::super::face_annotations::reset_model_results(&c).unwrap();
+        assert_eq!(list(&c, "confirmed").items[0].person_id, Some(8));
+    }
+    #[test]
+    fn batch_split_creates_one_person_for_all_selected_faces_and_keeps_old_identities() {
+        let c = db();
+        let mut r = request(ReviewAction::AssignNew, list(&c, "suggested").items);
+        r.name = Some("Carol".into());
+        let result = apply(&c, &r).unwrap();
+        let id = result.person_id.unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM faces WHERE person_id=?1",
+                [id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM persons WHERE id IN (7,8)",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(list(&c, "confirmed").total, 2);
+    }
+    #[test]
+    fn stale_targets_duplicate_names_and_failed_split_transactions_leave_no_partial_people() {
+        let c = db();
+        let items = list(&c, "suggested").items;
+        let mut r = request(ReviewAction::AssignExisting, items.clone());
+        r.target_person_id = Some(8);
+        r.expected_target_name = Some("Old Bob".into());
+        assert!(apply(&c, &r).is_err());
+        let mut r = request(ReviewAction::AssignNew, items);
+        r.name = Some("Alice".into());
+        assert!(apply(&c, &r).is_err());
+        r.name = Some("Carol".into());
+        c.execute("UPDATE afiles SET height=0 WHERE id=2", [])
+            .unwrap();
+        // Refresh snapshots so failure occurs during capture, after a new person/first annotation was written.
+        r.items = list(&c, "suggested").items;
+        assert!(apply(&c, &r).is_err());
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM persons", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(list(&c, "confirmed").total, 0);
+        assert_eq!(list(&c, "suggested").total, 2);
+    }
+    #[test]
+    fn person_scoped_review_never_returns_other_people_or_unassigned_faces() {
+        let c = db();
+        let result = page(
+            &c,
+            &PageRequest {
+                library_id: "lib".into(),
+                filter: "all".into(),
+                person_id: Some(7),
+                offset: 0,
+                limit: 36,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items[0].face_id, Some(11));
+        assert_eq!(result.counts["suggested"], 1);
+        assert!(!result.counts.contains_key("unknown"));
+    }
+    #[test]
+    fn explicit_person_id_search_can_reach_unnamed_people_beyond_the_first_page() {
+        let c = db();
+        for id in 100..200 {
+            c.execute(
+                "INSERT INTO persons(id,name,manual) VALUES(?1,NULL,0)",
+                [id],
+            )
+            .unwrap();
+        }
+        let found = people(&c, "#199").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0]["id"], 199);
     }
 }

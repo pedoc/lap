@@ -549,6 +549,7 @@
     @reset="errorMessage = ''"
   />
 
+  <ThumbnailRegenerationDialog v-if="thumbnailRebuildRequest" :request="thumbnailRebuildRequest" @cancel="thumbnailRebuildRequest = null" />
   <RefreshFileInfoDialog
     v-if="fileRefreshSelection"
     :file-ids="fileRefreshSelection.ids"
@@ -743,6 +744,7 @@
 
 <script setup lang="ts">
 
+import { isFaceRename, faceChangeAffectsPerson } from '@/common/faceUpdates';
 import { ref, watch, computed, createVNode, onMounted, onBeforeUnmount, nextTick, render, markRaw } from 'vue';
 import { emit as tauriEmit, listen } from '@tauri-apps/api/event';
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -795,6 +797,9 @@ import MediaViewer from '@/components/MediaViewer.vue';
 import MessageBox from '@/components/MessageBox.vue';
 import ModalDialog from '@/components/ModalDialog.vue';
 import RefreshFileInfoDialog from '@/components/RefreshFileInfoDialog.vue';
+import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
+import { thumbnailSelectionScope } from '@/common/thumbnailRebuild';
+const thumbnailRebuildRequest = ref<any>(null);
 import { fileInfoRevision } from '@/common/fileInfoRefresh';
 import IndexRecoveryDialog from '@/components/IndexRecoveryDialog.vue';
 import MoveTo from '@/components/MoveTo.vue';
@@ -4236,12 +4241,38 @@ let peopleEditDisposed = false;
 let stopPeopleEdits: (() => void) | null = null;
 onMounted(async () => {
   const stop = await listen('face-person-changed', (event: any) => {
-    if (!peopleEditDisposed && event.payload.library_id === libConfig._libraryId && (tempViewMode.value === 'person' || (config.main.sidebarIndex === SIDEBAR.PERSON && libConfig.activePane === 'main'))) void updateContent(true);
+    const change = event.payload;
+    if (peopleEditDisposed || change.library_id !== libConfig._libraryId) return;
+    if (change.mode === 'merge' && (change.sourcePersonIds || []).includes(libConfig.person.id)) {
+      libConfig.person.name = change.name; libConfig.person.id = change.personId;
+      if (tempViewMode.value === 'person') void enterPersonTempView(change.personId, change.name || '');
+      return;
+    }
+    if (isFaceRename(change)) {
+      if (libConfig.person.id === change.personId) {
+        libConfig.person.name = change.name;
+        if (tempViewMode.value === 'person' || (config.main.sidebarIndex === SIDEBAR.PERSON && libConfig.activePane === 'main')) contentTitle.value = change.name || localeMsg.value.sidebar.people;
+      }
+      return; // Preserve pixels, zoom, selection, scroll and the temporary person view.
+    }
+    if (faceChangeAffectsPerson(change, Number(libConfig.person.id)) && (tempViewMode.value === 'person' || (config.main.sidebarIndex === SIDEBAR.PERSON && libConfig.activePane === 'main'))) {
+      rememberFocusedFileForPresentationRefresh();
+      void updateContent(true);
+    }
   });
   if (peopleEditDisposed) stop(); else stopPeopleEdits = stop;
 });
 onBeforeUnmount(() => { peopleEditDisposed = true; stopPeopleEdits?.(); });
 
+async function rebuildSelectedThumbnails() {
+  const libraryId = libConfig._libraryId;
+  try {
+    const files = selectMode.value ? await getActionableSelectedItemsForAction() : [fileList.value[selectedItemIndex.value]].filter(Boolean);
+    if (libraryId !== libConfig._libraryId) return;
+    if (files.some(isOriginalUnavailable)) throw new Error(t('thumbnail_rebuild.offline'));
+    thumbnailRebuildRequest.value = { libraryId, scope: thumbnailSelectionScope(files) };
+  } catch (error: any) { toast.error(error?.message || String(error)); }
+}
 async function detectSelectedFaces(force = false) {
   const libraryId = libConfig._libraryId;
   try {
@@ -4263,6 +4294,8 @@ function handleItemAction(payload: { action: string, index: number }) {
   const { action, index } = payload;
   if (index >= 0) selectedItemIndex.value = index; // Panel actions have no thumbnail index.
   if (currentOriginalsUnavailable() && requiresOriginalAction(action)) return;
+
+  if (action === 'regenerate-thumbnails') { void rebuildSelectedThumbnails(); return; }
 
   if (action.startsWith('rating-')) {
     const rating = Number.parseInt(action.slice('rating-'.length), 10);
@@ -5844,7 +5877,8 @@ onMounted( async() => {
   });
 
   unlistenThumbnailReady = await listen('thumbnail_ready', async (event: any) => {
-    const { file_ids, invalidate = true } = event.payload || {};
+    const { file_ids, invalidate = true, library_id, thumbnail_only = false } = event.payload || {};
+    if (library_id && library_id !== libConfig._libraryId) return;
     if (!Array.isArray(file_ids) || file_ids.length === 0) return;
 
     const readyIds = new Set(
@@ -5901,7 +5935,7 @@ onMounted( async() => {
     // Match Refresh file info: changing filePath makes Image.vue reload the
     // currently displayed file after its on-disk contents have changed.
     const activeFile = fileList.value[selectedItemIndex.value];
-    if (activeFile && readyIds.has(Number(activeFile.id || 0)) && activeFile.file_path) {
+    if (!thumbnail_only && activeFile && readyIds.has(Number(activeFile.id || 0)) && activeFile.file_path) {
       const activePath = activeFile.file_path;
       activeFile.file_path = '';
       await nextTick();

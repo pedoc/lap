@@ -33,4 +33,7 @@ pub trait FacePipeline: FaceDetector + FaceEmbedder + Send {
         &mut self,
         image: &image::DynamicImage,
     ) -> Result<(Vec<crate::t_face::FaceData>, (u32, u32)), String>;
+    fn diagnostics(&self) -> Option<super::face_diagnostics::PipelineReport> {
+        None
+    }
 }

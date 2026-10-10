@@ -145,7 +145,7 @@ test('settings has no instance creation, cloning or per-library activation UI', 
 const imageComponent = readFileSync(new URL('../src/components/Image.vue', import.meta.url), 'utf8');
 const faceWatchStart = imageComponent.indexOf('watch(() => [props.fileId, config.settings.face.enabled,');
 assert.ok(faceWatchStart >= 0);
-const faceMappingStart = imageComponent.indexOf('    if (result && result.length > 0)', faceWatchStart);
+const faceMappingStart = imageComponent.indexOf('    if (result) {', faceWatchStart);
 assert.ok(faceMappingStart >= 0);
 // Keep the actual dependency/async/cleanup logic; mapping is irrelevant to staleness.
 const faceWatchSource = imageComponent.slice(faceWatchStart, faceMappingStart) + '    faces.value = result || [];\n  }\n});';
@@ -293,4 +293,12 @@ test('a configured and verified online model still switches globally from the to
   assert.deepEqual(h.calls, [{ command: 'activate_ai_model', args: { task: 'semantic', modelId: 'clip-b32' } }]);
   assert.equal(h.view.value.selection.semantic, 'clip-b32');
   assert.equal(h.confirmations.length, 1);
+});
+
+test('background face-data refresh keeps current frames mounted until replacement arrives', async () => {
+  let resolve!: (value: any[]) => void;
+  const h = overlayHarness(() => new Promise(r => { resolve = r; }));
+  const old = [{ id: 'existing-face' }]; h.faces.value = old;
+  const updating = h.run([1, true], [1, true, 'library-a', 'small-face-space', 0], () => {});
+  assert.equal(h.faces.value, old); resolve([]); await updating; assert.deepEqual(h.faces.value, []);
 });

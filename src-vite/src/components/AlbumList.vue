@@ -1,4 +1,5 @@
 <template>
+  <ThumbnailRegenerationDialog v-if="thumbnailRebuildRequest" :request="thumbnailRebuildRequest" @cancel="thumbnailRebuildRequest = null" />
   <div class="sidebar-panel min-h-0">
     <!-- albums -->
     <div v-if="isMainPane" class="sidebar-panel-header">
@@ -262,6 +263,7 @@
 
 <script setup lang="ts">
 
+import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
 import { resetFileAccessibility } from '@/common/availability';
 import { useToast } from '@/common/toast';
 import { ref, watch, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
@@ -682,7 +684,9 @@ const handleImportComplete = async () => {
 };
 
 // Get menu items for a specific album (function for lazy evaluation)
+const thumbnailRebuildRequest = ref<any>(null);
 const getMoreMenuItems = async (album: any) => {
+  const libraryId = libConfig._libraryId;
   const isAccessible = await refreshAlbumAccess(album);
   return [
     {
@@ -707,6 +711,16 @@ const getMoreMenuItems = async (album: any) => {
       icon: isAlbumQueued(album.id) ? IconUpdateOff : IconUpdate,
       disabled: !isAccessible && !isAlbumQueued(album.id),
       action: () => toggleIndexAlbum(album.id)
+    },
+    {
+      label: t('thumbnail_rebuild.title'), icon: IconUpdate, disabled: !isAccessible,
+      action: async () => {
+        if (libraryId !== libConfig._libraryId) return;
+        try {
+          const folder = await fetchFolder(album.path, false, config.settings.folderSort);
+          if (libraryId === libConfig._libraryId && folder?.id > 0) thumbnailRebuildRequest.value = { libraryId, scope: { kind: 'folder', folderId: Number(folder.id), recursive: true } };
+        } catch (error) { console.error('Failed to resolve album root for thumbnails', error); }
+      },
     },
     {
       label: localeMsg.value.menu.album.reorder,

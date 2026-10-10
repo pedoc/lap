@@ -81,9 +81,13 @@
     </div>
 
     <div class="px-2 mb-2 shrink-0">
-      <button type="button" class="btn btn-sm w-full" :disabled="isIndexing" @click="showFaceReview = true">{{ $t('face_review.title') }}</button>
+      <button type="button" class="btn btn-sm w-full" :disabled="isIndexing" @click="reviewPerson = null; showFaceReview = true">{{ $t('face_review.title') }}</button>
     </div>
-    <FaceReview v-if="showFaceReview" @cancel="showFaceReview = false" />
+    <div v-if="faceDiagnosticState.report?.library_id === libConfig._libraryId" class="px-2 mb-2 shrink-0">
+      <button type="button" class="btn btn-xs w-full" @click="faceDiagnosticState.visible = true">{{ $t('face_diagnostics.reopen') }}</button>
+    </div>
+    <FaceReview v-if="showFaceReview" :person="reviewPerson" @cancel="showFaceReview = false" />
+    <PersonMerge v-if="mergePerson" :person="mergePerson" @cancel="mergePerson = null" />
 
     <!-- Person List -->
     <div
@@ -230,6 +234,9 @@ import {
 import ContextMenu from '@/components/ContextMenu.vue';
 import MessageBox from '@/components/MessageBox.vue';
 import FaceReview from '@/components/FaceReview.vue';
+import PersonMerge from '@/components/PersonMerge.vue';
+import { isFaceRename, applyPersonRename } from '@/common/faceUpdates';
+import { faceDiagnosticState } from '@/common/faceDiagnostics';
 import SortMenuButton from '@/components/SortMenuButton.vue';
 
 const props = defineProps({
@@ -247,6 +254,7 @@ const localeMsg = computed(() => messages.value[locale.value] as any);
 
 // persons
 const showFaceReview = ref(false);
+const reviewPerson = ref<any>(null), mergePerson = ref<any>(null);
 const allPersons = ref<any[]>([]);
 const selectedPerson = ref<any>(null);
 const isRenamingPerson = ref(false);
@@ -300,7 +308,15 @@ const faceToast = useToast();
 onMounted(async () => {
   const stop = await listen('face-person-changed', async (event: any) => {
     if (!isPersonMounted || event.payload.library_id !== libConfig._libraryId) return;
-    const id = selectedPerson.value?.id;
+    if (isFaceRename(event.payload)) {
+      applyPersonRename(allPersons.value, event.payload);
+      if (selectedPerson.value?.id === event.payload.personId) selectedPerson.value.name = event.payload.name;
+      if (libConfig.person.id === event.payload.personId) libConfig.person.name = event.payload.name;
+      return;
+    }
+    if (event.payload.mode === 'confirm' || event.payload.membershipChanged === false) return;
+    if (event.payload.mode === 'merge') await nextTick(); // Content remaps a deleted selected identity first.
+    const id = libConfig.person.id;
     await loadPersons(true, true);
     if (isPersonMounted && event.payload.library_id === libConfig._libraryId && id != null && libConfig.person?.id === id) selectedPerson.value = allPersons.value.find(person => person.id === id) || null;
     void checkFaceStats();
@@ -353,6 +369,8 @@ const showResetFacesMsgbox = ref(false);
 
 // more menuitems
 const getMoreMenuItems = () => [
+  { label: t('face_review.manage_person'), icon: IconPerson, disabled: isIndexing.value, action: () => { if (selectedPerson.value) { reviewPerson.value = { id: selectedPerson.value.id, name: selectedPerson.value.name }; showFaceReview.value = true; } } },
+  { label: t('person_merge.title'), icon: IconPerson, disabled: isIndexing.value, action: () => { if (selectedPerson.value) mergePerson.value = { id: selectedPerson.value.id, name: selectedPerson.value.name }; } },
   {
     label: localeMsg.value.menu?.person?.rename || 'Rename',
     icon: IconRename,
@@ -536,9 +554,10 @@ async function handleRenamePerson() {
     return;
   }
 
+  const libraryId = libConfig._libraryId, personId = selectedPerson.value.id;
   try {
-    const result = await renamePerson(selectedPerson.value.id, newName);
-    if (result) { isRenamingPerson.value = false; await loadPersons(); }
+    const result = await renamePerson(personId, newName, libraryId);
+    if (result && libraryId === libConfig._libraryId && selectedPerson.value?.id === personId) { isRenamingPerson.value = false; libConfig.person.name = newName; }
   } catch (error: any) { faceToast.error(error?.message || String(error)); }
 }
 

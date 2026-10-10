@@ -134,6 +134,7 @@ import {
 import { getFacesForFile, getFileThumbById, getFfmpegBackedImageExtensions } from '@/common/api';
 import { listen } from '@tauri-apps/api/event';
 import { faceColor, faceFrameStyle } from '@/common/faceUi';
+import { applyFaceRename, faceChangeAffectsFile } from '@/common/faceUpdates';
 import { RawFace, Face } from '@/common/types';
 import { rawDisplayKey, getRawDisplayOptions, appendRawDisplayParams, nextRawPreviewMode, type RawPreviewSource, type RawDisplayOptions } from '@/common/rawDisplay';
 import { useI18n } from 'vue-i18n';
@@ -260,6 +261,7 @@ const faces = ref<any[]>([]); // Store faces for the current image
 const faceDataVersion = ref(0);
 let faceListenerDisposed = false;
 let unlistenFaces: (() => void) | null = null;
+let unlistenFaceNames: (() => void) | null = null;
 function frameStyle(face: any) {
   return faceFrameStyle(face.bbox, imageSize.value[activeImage.value], { width: Number(props.imageWidth), height: Number(props.imageHeight) }, scale.value[activeImage.value], face.person_id != null && face.person_id === libConfig.person.id);
 }
@@ -268,11 +270,15 @@ function faceLabel(face: any, index: number) {
 }
 onMounted(async () => {
   const stop = await listen('face-data-changed', (event: any) => {
-    if (!faceListenerDisposed && event.payload.library_id === libConfig._libraryId && (event.payload.file_id == null || Number(event.payload.file_id) === Number(props.fileId))) faceDataVersion.value++;
+    if (!faceListenerDisposed && event.payload.library_id === libConfig._libraryId && faceChangeAffectsFile(event.payload, Number(props.fileId))) faceDataVersion.value++;
   });
   if (faceListenerDisposed) stop(); else unlistenFaces = stop;
+  const stopNames = await listen('face-person-changed', (event: any) => {
+    if (!faceListenerDisposed && event.payload.library_id === libConfig._libraryId) applyFaceRename(faces.value, event.payload);
+  });
+  if (faceListenerDisposed) stopNames(); else unlistenFaceNames = stopNames;
 });
-onBeforeUnmount(() => { faceListenerDisposed = true; unlistenFaces?.(); });
+onBeforeUnmount(() => { faceListenerDisposed = true; unlistenFaces?.(); unlistenFaceNames?.(); });
 const showFaceOverlay = computed(() =>
   config.settings.face.enabled && config.settings.face.showBoxes !== false
 );
@@ -1363,14 +1369,15 @@ watch(displayThumbnailSrc, async (newThumbSrc) => {
 });
 
 // watch fileId / face toggle changes to fetch faces
-watch(() => [props.fileId, config.settings.face.enabled, libConfig._libraryId, config.settings.ai?.faceProfile, faceDataVersion.value], async ([newFileId, faceEnabled], _previous, onCleanup) => {
+watch(() => [props.fileId, config.settings.face.enabled, libConfig._libraryId, config.settings.ai?.faceProfile, faceDataVersion.value], async ([newFileId, faceEnabled], previous, onCleanup) => {
   let stale = false;
   onCleanup(() => { stale = true; });
-  faces.value = []; // Clear faces from the previous file, library or model.
+  // An observation update must not unmount every label/editor. Only context changes clear old faces.
+  if (!previous || [0, 1, 2, 3].some(index => previous[index] !== [newFileId, faceEnabled, libConfig._libraryId, config.settings.ai?.faceProfile][index])) faces.value = [];
   if (faceEnabled && newFileId) {
     const result = await getFacesForFile(newFileId);
     if (stale) return;
-    if (result && result.length > 0) {
+    if (result) {
       // Parse bbox JSON string for each face
       faces.value = result.map((face: RawFace) => {
         try {

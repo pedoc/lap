@@ -10,6 +10,7 @@ struct Anchor {
 
 pub struct ScrfdArcFace {
     model: Option<crate::ai::types::ResolvedModel>,
+    report: crate::ai::face_diagnostics::PipelineReport,
     detection_model: Option<Session>, // SCRFD
     embedding_model: Option<Session>, // MobileFaceNet
 }
@@ -18,6 +19,7 @@ impl ScrfdArcFace {
     pub fn new() -> Self {
         Self {
             model: None,
+            report: crate::ai::face_diagnostics::PipelineReport::default(),
             detection_model: None,
             embedding_model: None,
         }
@@ -223,6 +225,14 @@ impl ScrfdArcFace {
                 };
                 for (j, anchor) in anchors.iter().enumerate() {
                     let score = scores_data[j];
+                    if score.is_finite() {
+                        self.report.maximum_candidate_confidence = Some(
+                            self.report
+                                .maximum_candidate_confidence
+                                .unwrap_or(0.)
+                                .max(score),
+                        );
+                    }
                     if !score.is_finite() || score < confidence_threshold {
                         continue;
                     }
@@ -446,43 +456,58 @@ impl ScrfdArcFace {
         &mut self,
         img: &DynamicImage,
     ) -> Result<(Vec<FaceData>, (u32, u32)), String> {
+        use crate::ai::face_diagnostics::{FaceSample, PipelineReport};
+        self.report = PipelineReport {
+            stage: "detector".into(),
+            decoded_size: Some([img.width(), img.height()]),
+            ..PipelineReport::default()
+        };
         let faces = crate::ai::capabilities::FaceDetector::detect(self, img)?;
-
+        self.report.detected_faces = faces.len();
         let mut results = Vec::new();
         for face in faces {
-            // Filter 1: Skip low confidence faces
             if face.confidence < self.parameter("detection_threshold") {
                 continue;
             }
-
-            // Filter 2: Skip very small faces (likely background people)
-            // let face_area = face.width * face.height;
-            // let img_width = img.width() as f32;
-            // let img_height = img.height() as f32;
-            // let img_area = img_width * img_height;
-            // if face_area / img_area < t_common::MIN_FACE_RATIO {
-            //     continue;
-            // }
-
-            // Filter 3: Skip faces smaller than minimum pixel size
-            // if face.width < t_common::MIN_FACE_SIZE || face.height < t_common::MIN_FACE_SIZE {
-            //     continue;
-            // }
-
-            // Filter 4: Skip blurry faces
             let blur_score = self.calculate_blur_score(img, &face);
+            let mut sample = FaceSample {
+                confidence: face.confidence,
+                width: face.width,
+                height: face.height,
+                blur_score,
+                state: "accepted".into(),
+            };
             if blur_score < self.parameter("blur_threshold") {
+                self.report.quality_filtered += 1;
+                sample.state = "quality_filtered".into();
+                if self.report.samples.len() < 20 {
+                    self.report.samples.push(sample);
+                }
                 continue;
             }
-
-            // Get embedding for quality face
-            let embedding = crate::ai::capabilities::FaceEmbedder::embed_face(self, img, &face)?;
+            self.report.stage = "embedding".into();
+            let embedding =
+                match crate::ai::capabilities::FaceEmbedder::embed_face(self, img, &face) {
+                    Ok(embedding) => embedding,
+                    Err(error) => {
+                        self.report.embedding_failed += 1;
+                        sample.state = "embedding_failed".into();
+                        if self.report.samples.len() < 20 {
+                            self.report.samples.push(sample);
+                        }
+                        return Err(error);
+                    }
+                };
+            self.report.accepted_faces += 1;
+            if self.report.samples.len() < 20 {
+                self.report.samples.push(sample);
+            }
             results.push(FaceData {
                 bbox: face,
                 embedding,
             });
         }
-
+        self.report.stage = "complete".into();
         Ok((results, (img.width(), img.height())))
     }
 
@@ -591,7 +616,48 @@ impl crate::ai::capabilities::FaceEmbedder for ScrfdArcFace {
     }
 }
 impl crate::ai::capabilities::FacePipeline for ScrfdArcFace {
+    fn diagnostics(&self) -> Option<crate::ai::face_diagnostics::PipelineReport> {
+        Some(self.report.clone())
+    }
     fn process(&mut self, image: &DynamicImage) -> Result<(Vec<FaceData>, (u32, u32)), String> {
         self.process_dynamic_image(image)
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    #[test]
+    #[ignore = "Requires LAP_FACE_DIAGNOSTIC_IMAGE and checksum-pinned catalog model root"]
+    fn actual_picture_reports_detector_and_quality_rejection_without_tuning() {
+        let path = std::env::var("LAP_FACE_DIAGNOSTIC_IMAGE").expect("diagnostic image");
+        let image = crate::ai::face_jobs::decode_image(&std::fs::read(path).unwrap()).unwrap();
+        for id in ["antelope-v2", "buffalo-m"] {
+            let mut model = crate::ai::settings::Configuration::default()
+                .resolve(id)
+                .unwrap();
+            model
+                .values
+                .insert("device".into(), serde_json::json!("cpu"));
+            let mut pipeline = ScrfdArcFace::new();
+            pipeline.load_model(model).unwrap();
+            let (faces, _) = pipeline.process_dynamic_image(&image).unwrap();
+            let d = &pipeline.report;
+            println!(
+                "{id}: detected={}, quality_filtered={}, accepted={}, max_score={:?}, samples={:?}",
+                d.detected_faces,
+                d.quality_filtered,
+                faces.len(),
+                d.maximum_candidate_confidence,
+                d.samples
+            );
+            assert!(d.detected_faces > 0);
+            assert_eq!(d.detected_faces, d.quality_filtered + faces.len());
+            if id == "buffalo-m" {
+                assert!(d.quality_filtered > 0);
+            } else {
+                assert!(!faces.is_empty());
+            }
+        }
     }
 }

@@ -1,4 +1,5 @@
 import { libConfig as faceLibrary } from '@/common/config'
+import { recordFaceDiagnostic, faceDiagnosticNeedsAttention } from '@/common/faceDiagnostics'
 import { useToast } from '@/common/toast'
 import { createApp } from 'vue'
 import { createI18n } from 'vue-i18n'
@@ -108,12 +109,15 @@ if (!isSettingsWindow) {
   listen('face_index_finished', event => {
     const result = event.payload || {}
     if (result.library_id !== faceLibrary._libraryId) return
+    recordFaceDiagnostic(result, faceLibrary._libraryId)
     const toast = useToast()
     if (result.error) toast.error(String(result.error))
     else if (result.cancelled) toast.info(i18n.global.t('face_actions.cancelled'))
     else {
-      const message = i18n.global.t('face_actions.finished', { faces: result.total_faces || 0, cached: result.cached || 0, failed: result.failed || 0 })
-      if (result.failed) toast.warning(message)
+      const message = result.diagnostics
+        ? i18n.global.t('face_diagnostics.toast', result.diagnostics)
+        : i18n.global.t('face_actions.finished', { faces: result.total_faces || 0, cached: result.cached || 0, failed: result.failed || 0 })
+      if (faceDiagnosticNeedsAttention(result)) toast.warning(message)
       else toast.success(message)
     }
   })

@@ -26,6 +26,7 @@ use crate::{t_ai, t_common, t_sqlite};
 use crate::t_raw_display::RawDisplayOptions;
 
 use serde::{Deserialize, Serialize};
+use rusqlite::OptionalExtension;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Cursor;
@@ -2622,6 +2623,15 @@ pub async fn get_file_thumb_by_id(
     Ok(None)
 }
 
+#[tauri::command]
+pub async fn regenerate_thumbnails(app_handle: AppHandle, request: crate::t_thumbnail_rebuild::Request) -> Result<crate::t_thumbnail_rebuild::Progress,String> {
+    tauri::async_runtime::spawn_blocking(move || crate::t_thumbnail_rebuild::run(request,app_handle)).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+pub fn cancel_thumbnail_regeneration(library_id:String,job_id:String)->Result<(),String> {
+    crate::t_thumbnail_rebuild::cancel(&library_id,&job_id)
+}
+
 /// get multiple thumbnails in one IPC call; missing thumbnails are generated in background
 #[tauri::command]
 pub async fn get_file_thumbs(
@@ -3445,35 +3455,73 @@ pub fn get_persons_page(request: PersonPageRequest, library_id: Option<String>) 
 
 /// rename a person
 #[tauri::command]
-pub fn rename_person(app_handle: AppHandle, person_id: i64, name: String, library_id: Option<String>) -> Result<usize, String> {
-    let _guard=FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_|"Finish or stop running inference before editing people")?;
-    let current=t_config::current_library_id()?;
-    if library_id.as_deref().is_some_and(|id|id!=current) {return Err("Library changed; reload the person".into());}
-    let conn=t_sqlite::open_conn()?;
-    let result=crate::ai::face_names::rename_person(&conn,person_id,&name)?;
-    let name=crate::ai::face_names::valid_name(&name)?;
-    let _=app_handle.emit("face-data-changed",serde_json::json!({"library_id":current,"file_id":null}));
-    let _=app_handle.emit("face-person-changed",serde_json::json!({"library_id":current,"personId":person_id,"name":name,"mode":"rename"}));
+pub fn rename_person(
+    app_handle: AppHandle,
+    person_id: i64,
+    name: String,
+    library_id: Option<String>,
+) -> Result<usize, String> {
+    let _guard = FILE_REFRESH_LIBRARY_LOCK
+        .try_write()
+        .map_err(|_| "Finish or stop running inference before editing people")?;
+    let current = t_config::current_library_id()?;
+    if library_id.as_deref().is_some_and(|id| id != current) {
+        return Err("Library changed; reload the person".into());
+    }
+    let conn = t_sqlite::open_conn()?;
+    let result = crate::ai::face_names::rename_person(&conn, person_id, &name)?;
+    let name = crate::ai::face_names::valid_name(&name)?;
+    let face: Option<(i64, i64, Option<i64>)> = conn
+        .query_row(
+            "SELECT id,file_id,annotation_id FROM faces WHERE person_id=?1 ORDER BY id LIMIT 1",
+            [person_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let _=app_handle.emit("face-person-changed",serde_json::json!({"library_id":current,"personId":person_id,"name":name,"mode":"rename","faceId":face.as_ref().map(|f|f.0),"fileId":face.as_ref().map(|f|f.1),"annotationId":face.and_then(|f|f.2),"reviewState":"confirmed"}));
     Ok(result)
 }
 #[tauri::command]
-pub async fn edit_face_name(app_handle: AppHandle, request: crate::ai::face_names::FaceNameRequest) -> Result<crate::ai::face_names::FaceNameChange, String> {
+pub async fn edit_face_name(
+    app_handle: AppHandle,
+    request: crate::ai::face_names::FaceNameRequest,
+) -> Result<crate::ai::face_names::FaceNameChange, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard=FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_|"Finish or stop running inference before editing face labels")?;
-        if t_config::current_library_id()?!=request.library_id { return Err("Library changed; reopen the face editor".into()); }
-        if crate::ai::settings::active(crate::ai::types::Task::Face)?.profile()!=request.profile { return Err("Face model changed; reload the face labels".into()); }
-        let conn=t_sqlite::open_conn()?;
-        let result=crate::ai::face_names::edit(&conn,&request)?;
-        // Thumbnail generation is best-effort; a failed preview must not undo a committed name.
-        if result.mode!=crate::ai::face_names::EditMode::Rename {
-            for person in [result.previous_person_id,result.person_id].into_iter().flatten().collect::<HashSet<_>>() { let _=Person::update_thumbnail(person); }
+        let _guard = FILE_REFRESH_LIBRARY_LOCK
+            .try_write()
+            .map_err(|_| "Finish or stop running inference before editing face labels")?;
+        if t_config::current_library_id()? != request.library_id {
+            return Err("Library changed; reopen the face editor".into());
         }
-        let _=app_handle.emit("face-data-changed",serde_json::json!({"library_id":request.library_id,"file_id":null}));
-        let mut payload=serde_json::to_value(&result).map_err(|e|e.to_string())?;
-        payload["library_id"]=serde_json::json!(request.library_id);
-        let _=app_handle.emit("face-person-changed",payload);
+        if crate::ai::settings::active(crate::ai::types::Task::Face)?.profile() != request.profile {
+            return Err("Face model changed; reload the face labels".into());
+        }
+        let conn = t_sqlite::open_conn()?;
+        let result = crate::ai::face_names::edit(&conn, &request)?;
+        // Thumbnail generation is best-effort; a failed preview must not undo a committed name.
+        if result.mode != crate::ai::face_names::EditMode::Rename {
+            for person in [result.previous_person_id, result.person_id]
+                .into_iter()
+                .flatten()
+                .collect::<HashSet<_>>()
+            {
+                let _ = Person::update_thumbnail(person);
+            }
+        }
+        if result.mode != crate::ai::face_names::EditMode::Rename {
+            let _ = app_handle.emit(
+                "face-data-changed",
+                serde_json::json!({"library_id":request.library_id,"file_id":request.file_id}),
+            );
+        }
+        let mut payload = serde_json::to_value(&result).map_err(|e| e.to_string())?;
+        payload["library_id"] = serde_json::json!(request.library_id);
+        let _ = app_handle.emit("face-person-changed", payload);
         Ok(result)
-    }).await.map_err(|e|e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Review is library-scoped and includes ignored annotations even after changing models.
@@ -3498,7 +3546,7 @@ pub async fn get_face_review_page(
 pub async fn review_faces(
     app_handle: AppHandle,
     request: crate::ai::face_review::ActionRequest,
-) -> Result<usize, String> {
+) -> Result<crate::ai::face_review::ReviewResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = FILE_REFRESH_LIBRARY_LOCK
             .try_write()
@@ -3510,7 +3558,7 @@ pub async fn review_faces(
             return Err("Face model changed; refresh the workspace".into());
         }
         let conn = t_sqlite::open_conn()?;
-        let count = crate::ai::face_review::apply(&conn, &request)?;
+        let result = crate::ai::face_review::apply(&conn, &request)?;
         for person in request
             .items
             .iter()
@@ -3519,11 +3567,13 @@ pub async fn review_faces(
         {
             let _ = Person::update_thumbnail(person);
         }
-        let payload =
-            serde_json::json!({"library_id":request.library_id,"file_id":null,"mode":"review"});
+        if let Some(person)=result.person_id { let _=Person::update_thumbnail(person); }
+        let mut payload=serde_json::to_value(&result).map_err(|e|e.to_string())?;
+        payload["library_id"]=serde_json::json!(request.library_id);
+        payload["mode"]=serde_json::to_value(request.action).map_err(|e|e.to_string())?;
         let _ = app_handle.emit("face-data-changed", payload.clone());
         let _ = app_handle.emit("face-person-changed", payload);
-        Ok(count)
+        Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3560,6 +3610,55 @@ pub async fn get_face_people(
         }
         let conn = t_sqlite::open_conn()?;
         crate::ai::face_review::people(&conn, &search)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_person_merge_preview(
+    request: crate::ai::persons::PreviewRequest,
+) -> Result<crate::ai::persons::MergePreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK
+            .try_read()
+            .map_err(|_| "Library is changing; retry shortly")?;
+        if t_config::current_library_id()? != request.library_id {
+            return Err("Library changed; reopen person management".into());
+        }
+        if crate::ai::settings::active(crate::ai::types::Task::Face)?.profile() != request.profile {
+            return Err("Face model changed; reopen person management".into());
+        }
+        let conn = t_sqlite::open_conn()?;
+        crate::ai::persons::preview(&conn, request.target_person_id, &request.source_person_ids)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn merge_persons(
+    app_handle: AppHandle,
+    request: crate::ai::persons::MergeRequest,
+) -> Result<crate::ai::persons::MergeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK
+            .try_write()
+            .map_err(|_| "Finish or stop inference before merging people")?;
+        if t_config::current_library_id()? != request.library_id {
+            return Err("Library changed; reopen person management".into());
+        }
+        if crate::ai::settings::active(crate::ai::types::Task::Face)?.profile() != request.profile {
+            return Err("Face model changed; reload the merge preview".into());
+        }
+        let conn = t_sqlite::open_conn()?;
+        let result = crate::ai::persons::merge(&conn, &request.preview)?;
+        let _ = Person::update_thumbnail(result.person_id);
+        let mut payload = serde_json::to_value(&result).map_err(|e| e.to_string())?;
+        payload["library_id"] = serde_json::json!(request.library_id);
+        payload["mode"] = serde_json::json!("merge");
+        let _ = app_handle.emit("face-data-changed", payload.clone());
+        let _ = app_handle.emit("face-person-changed", payload);
+        Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?

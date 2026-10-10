@@ -5,6 +5,7 @@
   <template v-else>
     <router-view />
     <ToastContainer />
+    <FaceDiagnosticsDialog v-if="faceDiagnosticState.visible && faceDiagnosticState.report?.library_id === libConfig._libraryId" :report="faceDiagnosticState.report" @cancel="faceDiagnosticState.visible = false" />
   </template>
 </template>
  
@@ -19,6 +20,8 @@ import { clearIndexRecoveryInfo } from '@/common/api';
 import { isMac, setTheme, SCALE_VALUES } from '@/common/utils';
 import { matchesShortcut } from '@/common/shortcuts';
 import ToastContainer from '@/components/ToastContainer.vue';
+import FaceDiagnosticsDialog from '@/components/FaceDiagnosticsDialog.vue';
+import { faceDiagnosticState } from '@/common/faceDiagnostics';
 
 const libConfig = useLibraryStore();
 const isReady = ref(false);

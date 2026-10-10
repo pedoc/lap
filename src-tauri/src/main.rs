@@ -44,6 +44,7 @@ mod t_pasteboard;
 mod t_protocol;
 mod t_similar;
 mod t_sqlite;
+mod t_thumbnail_rebuild;
 mod t_storage;
 mod t_utils;
 mod t_video;
@@ -336,6 +337,8 @@ async fn main() {
             t_cmds::get_file_thumb,
             t_cmds::get_file_thumb_by_id,
             t_cmds::get_file_thumbs,
+            t_cmds::regenerate_thumbnails,
+            t_cmds::cancel_thumbnail_regeneration,
             t_cmds::get_file_info,
             t_cmds::update_file_info,
             t_cmds::refresh_selected_file_info,
@@ -418,6 +421,8 @@ async fn main() {
             t_cmds::review_faces,
             t_cmds::get_face_review_thumbnail,
             t_cmds::get_face_people,
+            t_cmds::get_person_merge_preview,
+            t_cmds::merge_persons,
             t_cmds::delete_person,
             t_cmds::get_faces_for_file,
             t_cmds::get_person_thumbnail,

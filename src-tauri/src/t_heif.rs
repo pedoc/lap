@@ -7,6 +7,23 @@ use image::DynamicImage;
 
 use crate::t_image::resize_dynamic_image_to_jpeg;
 
+pub const DECODER_CACHE_REVISION: &str = env!("LAP_HEIF_CACHE_REVISION");
+pub fn is_heif_source(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "heic" | "heif" | "hif"))
+}
+pub fn thumbnail_key(path: &str, base: &str) -> String {
+    if !is_heif_source(path) {
+        return base.to_string();
+    }
+    let mut hash = blake3::Hasher::new();
+    hash.update(base.as_bytes());
+    hash.update(DECODER_CACHE_REVISION.as_bytes());
+    format!("h2{}", hash.finalize().to_hex())
+}
+
 // Minimal libheif FFI for decoding the primary image to RGB.
 // We keep this narrow to avoid pulling bindgen into the build.
 
@@ -61,6 +78,12 @@ unsafe extern "C" {
         options: *const c_void,
     ) -> HeifError;
     fn heif_image_release(img: *mut HeifImage);
+    fn heif_image_get_decoding_warnings(
+        img: *mut HeifImage,
+        first: c_int,
+        errors: *mut HeifError,
+        capacity: c_int,
+    ) -> c_int;
 
     fn heif_image_get_width(img: *const HeifImage, channel: c_int) -> c_int;
     fn heif_image_get_height(img: *const HeifImage, channel: c_int) -> c_int;
@@ -199,6 +222,17 @@ fn decode_primary_rgb(file_path: &str) -> Result<(Vec<u8>, u32, u32, u32), Strin
         }
         let _img_guard = ImgGuard(img);
 
+        // Tolerant codecs can return pixels plus corruption warnings. Do not cache those as success.
+        if heif_image_get_decoding_warnings(img, 0, ptr::null_mut(), 0) > 0 {
+            let mut warning = HeifError {
+                code: 0,
+                subcode: 0,
+                message: ptr::null(),
+            };
+            heif_image_get_decoding_warnings(img, 0, &mut warning, 1);
+            return Err(format!("HEIF decode warning: {}", fmt_heif_error(warning)));
+        }
+
         let width = heif_image_get_width(img, HEIF_CHANNEL_INTERLEAVED).max(0) as u32;
         let height = heif_image_get_height(img, HEIF_CHANNEL_INTERLEAVED).max(0) as u32;
         if width == 0 || height == 0 {
@@ -315,6 +349,42 @@ fn heif_fallback(file_path: &str, max_size: u32) -> Result<Option<Vec<u8>>, Stri
 mod tests {
     use super::*;
 
+    #[test]
+    fn decoder_revision_changes_heif_keys_but_not_other_formats() {
+        assert_eq!(thumbnail_key("photo.jpg", "old-key"), "old-key");
+        let key = thumbnail_key("photo.HEIC", "old-key");
+        assert!(key.starts_with("h2"));
+        assert_ne!(key, "old-key");
+        assert_eq!(key, thumbnail_key("photo.heic", "old-key"));
+        assert_ne!(key, thumbnail_key("photo.heic", "different-key"));
+    }
+    #[test]
+    #[ignore = "Requires LAP_HEIC_DIAGNOSTIC_FILE and independent LAP_HEIC_REFERENCE_IMAGE"]
+    fn real_heic_decoder_matches_independent_reference() {
+        let path = std::env::var("LAP_HEIC_DIAGNOSTIC_FILE").expect("HEIC fixture");
+        let reference = std::env::var("LAP_HEIC_REFERENCE_IMAGE").expect("reference image");
+        let bytes = get_heif_thumbnail(&path, 1, 512).unwrap().unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap().to_rgb8();
+        let expected = image::open(reference)
+            .unwrap()
+            .resize_exact(
+                decoded.width(),
+                decoded.height(),
+                image::imageops::FilterType::Triangle,
+            )
+            .to_rgb8();
+        let difference = decoded
+            .as_raw()
+            .iter()
+            .zip(expected.as_raw())
+            .map(|(a, b)| (*a as f64 - *b as f64).abs())
+            .sum::<f64>()
+            / decoded.as_raw().len() as f64;
+        assert!(
+            difference < 10.,
+            "Decode differs from independent image: {difference}"
+        );
+    }
     #[test]
     fn test_heif_fallback_nonexistent_file() {
         let res = heif_fallback("non_existent_file.heic", 256);

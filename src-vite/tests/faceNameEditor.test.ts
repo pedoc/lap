@@ -14,7 +14,7 @@ function harness({ assigned = true, failure = '' } = {}) {
   const config = { settings: { ai: { faceProfile: 'profile-a' } } };
   const face = { id: 11, file_id: 5, person_id: assigned ? 7 : null, person_name: assigned ? 'Alice' : null };
   const ui = { pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const index = handlers.indexOf(id); if (index >= 0) handlers.splice(index, 1); } };
-  const api = runInNewContext(`${code}\n;({ openEditor, save, cancel, closeEditor, submitKey, editing, saving, name, mode, error, targetPersonId, anchor, panel, snapshot, searchPeople });`, {
+  const api = runInNewContext(`${code}\n;({ openEditor, save, cancel, closeEditor, submitKey, editing, saving, name, mode, error, targetPersonId, anchor, panel, snapshot, searchPeople, selectCorrection });`, {
     ref: (value: any) => ({ value }), computed: (getter: () => any) => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: (fn: () => void) => mounts.push(fn), onBeforeUnmount: (fn: () => void) => unmounts.push(fn), nextTick: async () => {},
     defineProps: () => ({ face, label: '1 · Alice', color: '#047857' }),
@@ -83,4 +83,29 @@ test('one-way ignore actions are exposed only alongside the recovery workspace',
   const person = readFileSync(new URL('../src/components/Person.vue', import.meta.url), 'utf8');
   assert.match(source, /value="ignore"/); assert.match(source, /value="not_face"/);
   assert.match(person, /<FaceReview v-if="showFaceReview"/);
+});
+
+test('false-positive shortcut selects a non-face action without immediately hiding or renaming anything', async () => {
+  const h = harness(); await h.api.openEditor(); await h.api.selectCorrection('not_face');
+  assert.equal(h.api.mode.value, 'not_face'); assert.equal(h.calls.length, 0);
+  await h.api.save(); assert.equal(h.calls[0].args.request.mode, 'not_face');
+  assert.equal(h.calls[0].args.request.name, null); assert.equal(h.calls[0].args.request.targetPersonId, null);
+  assert.equal(h.calls[0].args.request.faceId, 11); assert.equal(h.calls[0].args.request.expectedPersonId, 7);
+});
+test('wrong-person correction removes only the assignment, rather than marking a real face as a false positive', async () => {
+  const h = harness(); await h.api.openEditor(); await h.api.selectCorrection('unassign'); await h.api.save();
+  assert.equal(h.calls[0].args.request.mode, 'unassign'); assert.equal(h.calls[0].args.request.name, null);
+});
+test('unassigned faces can be reported as false positives but cannot reject a nonexistent person', async () => {
+  const h = harness({ assigned: false }); await h.api.openEditor(); await h.api.selectCorrection('unassign');
+  assert.equal(h.api.mode.value, 'assign_new'); await h.api.selectCorrection('not_face'); await h.api.save();
+  assert.equal(h.calls[0].args.request.expectedPersonId, null); assert.equal(h.calls[0].args.request.mode, 'not_face');
+});
+test('cancelling or switching libraries before saving a false-positive report does not mutate data', async () => {
+  const h = harness(); await h.api.openEditor(); await h.api.selectCorrection('not_face'); h.api.cancel(); assert.equal(h.calls.length, 0);
+  await h.api.openEditor(); await h.api.selectCorrection('not_face'); h.libConfig._libraryId = 'other'; await h.api.save(); assert.equal(h.calls.length, 0);
+});
+test('error correction is visible outside the operation dropdown and requires explicit confirmation', () => {
+  assert.match(source, /data-face-correction="false-positive"/); assert.match(source, /data-face-correction="wrong-person"/);
+  assert.match(source, /face_editor\.confirm_false_positive/); assert.match(source, /face_editor\.not_face_hint/);
 });

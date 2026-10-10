@@ -114,6 +114,12 @@ export const useFileMenuItems = (
       // disable the entry rather than showing an empty app list.
       { ...externalAppMenu(externalAppKind), disabled: unavailable || kind === 'mixed' },
       {
+        label: translate('thumbnail_rebuild.title'),
+        icon: markRaw(IconRefresh),
+        disabled: unavailable || kind !== 'image' || selectionCount === 0,
+        action: createAction('regenerate-thumbnails'),
+      },
+      {
         label: localeMsg.value.menu.file.refresh_file_info,
         icon: markRaw(IconRefresh),
         disabled: unavailable || selectionCount === 0,
@@ -331,6 +337,12 @@ export const useFileMenuItems = (
         action: createAction('find-person')
       },
       { label: "-", action: null },
+      {
+        label: translate('thumbnail_rebuild.title'),
+        icon: markRaw(IconRefresh),
+        disabled: !isImage,
+        action: createAction('regenerate-thumbnails'),
+      },
       {
         label: localeMsg.value.menu.file.refresh_file_info,
         icon: markRaw(IconRefresh),

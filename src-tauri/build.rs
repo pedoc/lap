@@ -14,6 +14,7 @@ fn main() {
     write_build_info();
     build_libraw();
     build_libheif();
+    emit_heif_cache_revision();
 
     // build tauri
     tauri_build::build();
@@ -525,7 +526,10 @@ fn build_libde265(
 
     let is_msvc = env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
     let have_existing = candidates.iter().any(|(_, path)| path.exists());
-    if !have_existing {
+    let signature = native_source_signature(&source_dir, if is_msvc { "de265-msvc-O1-v2" } else { "de265-release-v2" });
+    let signature_path = binary_dir.join("lap-build-signature.txt");
+    let signature_matches = fs::read_to_string(&signature_path).ok().as_deref() == Some(signature.as_str());
+    if !have_existing || !signature_matches {
         let mut configure = Command::new("cmake");
         // Windows keeps CMake's default generator; other targets use Makefiles
         // to match the GitHub Actions build environment.
@@ -568,6 +572,8 @@ fn build_libde265(
                 .current_dir(&binary_dir),
             "build libde265",
         );
+        // Only certify the build after CMake succeeds. Source/flag changes invalidate old .lib files.
+        fs::write(&signature_path, &signature).expect("write libde265 build signature");
     }
 
     let (lib_name, lib_path) = match candidates.iter().find(|(_, path)| path.exists()) {
@@ -676,4 +682,40 @@ fn run_command(command: &mut Command, description: &str) {
     if !status.success() {
         panic!("Failed to {description}: exit status {status}");
     }
+}
+
+/// Content-based rather than timestamp-based: touching sources does not churn caches.
+fn native_source_signature(root: &Path, policy: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    fn hash_tree(root: &Path, path: &Path, hash: &mut std::collections::hash_map::DefaultHasher) {
+        let Ok(entries)=fs::read_dir(path) else { return; };
+        let mut paths=entries.filter_map(Result::ok).map(|entry|entry.path()).collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            if path.file_name().is_some_and(|name|name.to_string_lossy().starts_with('.')) {continue;}
+            if path.is_dir() { hash_tree(root,&path,hash); }
+            else if path.extension().is_some_and(|ext|matches!(ext.to_str(),Some("c"|"cc"|"cpp"|"h"|"hpp"|"cmake"|"in"))) || path.file_name().is_some_and(|name|name=="CMakeLists.txt") {
+                path.strip_prefix(root).unwrap_or(&path).hash(hash);
+                if let Ok(bytes)=fs::read(&path) {bytes.hash(hash);}
+            }
+        }
+    }
+    let mut hash=std::collections::hash_map::DefaultHasher::new();
+    policy.hash(&mut hash);
+    for key in ["TARGET","HOST","CMAKE_GENERATOR","CC","CXX","VSINSTALLDIR"] {env::var(key).ok().hash(&mut hash);}
+    hash_tree(root,root,&mut hash);
+    format!("{:016x}",hash.finish())
+}
+fn emit_heif_cache_revision() {
+    let root=PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest directory"));
+    let decoder=native_source_signature(&root.join("third_party/libde265"),"de265-msvc-O1-v2");
+    let heif=native_source_signature(&root.join("third_party/libheif"),"heif-rgb-decode-v2");
+    // Include the FFI/conversion source: library upgrades are not the only render changes.
+    use std::hash::{Hash,Hasher};
+    let mut hash=std::collections::hash_map::DefaultHasher::new();
+    decoder.hash(&mut hash);heif.hash(&mut hash);
+    let source=fs::read_to_string(root.join("src/t_heif.rs")).expect("HEIF source");
+    source.split("#[cfg(test)]").next().unwrap_or(&source).hash(&mut hash);
+    println!("cargo:rerun-if-changed=src/t_heif.rs");
+    println!("cargo:rustc-env=LAP_HEIF_CACHE_REVISION={:016x}",hash.finish());
 }

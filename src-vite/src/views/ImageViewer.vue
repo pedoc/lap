@@ -1,4 +1,5 @@
 <template>
+  <ThumbnailRegenerationDialog v-if="thumbnailRebuildRequest" :request="thumbnailRebuildRequest" @cancel="thumbnailRebuildRequest = null" />
 
   <div
     :class="[
@@ -209,6 +210,9 @@
 </template>
 
 <script setup lang="ts">
+import { getFileThumbById } from '@/common/api';
+import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
+import { thumbnailSelectionScope } from '@/common/thumbnailRebuild';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { faceSelectionIds } from '@/common/faceUi';
 import { indexFaces } from '@/common/api';
@@ -331,6 +335,7 @@ const collectionFileIds = ref<number[]>([]);
 
 let unlistenImg: () => void;
 let unlistenGridView: () => void;
+let unlistenThumbnailRebuild: (() => void) | null = null;
 let unlistenAlbumAccessChanged: (() => void) | null = null;
 let unlistenFilesDeleted: (() => void) | null = null;
 
@@ -423,6 +428,22 @@ onMounted(async() => {
   });
 
   // Listen 
+  unlistenThumbnailRebuild = await listen('thumbnail_ready', async (event: any) => {
+    const payload = event.payload || {};
+    if (!payload.thumbnail_only || payload.library_id !== libConfig._libraryId) return;
+    const libraryId = libConfig._libraryId;
+    const ids = new Set((payload.file_ids || []).map(Number));
+    for (const pane of ['left', 'right', 'bottomLeft', 'bottomRight'] as const) {
+      const target = getFileInfoByPane(pane);
+      if (!target || !ids.has(Number(target.id))) continue;
+      try {
+        const thumb = await getFileThumbById(target.id, config.settings.thumbnailSize, false);
+        if (libraryId !== libConfig._libraryId || getFileInfoByPane(pane)?.id !== target.id) continue;
+        if (thumb?.thumb_data_base64) target.thumbnail = `data:image/jpeg;base64,${thumb.thumb_data_base64}`;
+      } catch { /* Source view and already displayed pixels stay intact on cache errors. */ }
+    }
+  });
+
   unlistenImg = await listen('update-img', async (event: any) => {
     if(uiStore.inputStack.length > 0) {
       return;
@@ -602,6 +623,7 @@ onUnmounted(() => {
   unlistenGridView();
   if (unlistenFilesDeleted) unlistenFilesDeleted();
   unlistenAlbumAccessChanged?.();
+  unlistenThumbnailRebuild?.();
 });
 
 // Handle keyboard shortcuts
@@ -1443,6 +1465,7 @@ async function syncTagStates(fileStates: Array<{ file_id: number; has_tags: bool
   }
 }
 
+const thumbnailRebuildRequest = ref<any>(null);
 async function detectViewerFaces(force = false) {
   const libraryId = libConfig._libraryId;
   const target = getFileInfoByPane(getActiveFilePane());
@@ -1460,6 +1483,9 @@ const handleItemAction = async (payload: { action: string }) => {
   const pane = getActiveFilePane();
 
   switch (payload.action) {
+    case 'regenerate-thumbnails':
+      try { thumbnailRebuildRequest.value = { libraryId: libConfig._libraryId, scope: thumbnailSelectionScope([getFileInfoByPane(pane)]) }; } catch (error: any) { toast.error(error?.message || String(error)); }
+      break;
     case 'detect-faces': await detectViewerFaces(); break;
     case 'redetect-faces': await detectViewerFaces(true); break;
     case 'toggle-face-boxes': config.setFaceEnabled(true); config.settings.face.showBoxes = config.settings.face.showBoxes === false; break;

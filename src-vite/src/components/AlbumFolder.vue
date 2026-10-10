@@ -1,4 +1,5 @@
 <template>
+  <ThumbnailRegenerationDialog v-if="thumbnailRebuildRequest" :request="thumbnailRebuildRequest" @cancel="thumbnailRebuildRequest = null" />
   <ul
     v-if="children && children.length > 0"
     v-bind="treeRoot ? { tabindex: 0 } : {}"
@@ -181,6 +182,7 @@
 
 <script setup lang="ts">
 
+import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
 import { ref, nextTick, computed, inject, provide, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
@@ -355,6 +357,7 @@ const fileConflictDialog = ref({
 let fileConflictResolver: ((policy: FileConflictPolicy) => void) | null = null;
 
 const toast = useToast();
+const thumbnailRebuildRequest = ref<any>(null);
 const treeRootRef = ref<HTMLElement | null>(null);
 let disposed = false;
 
@@ -385,6 +388,7 @@ async function startDeleteFolder(folder: Folder) {
 
 // more menuitems - function that takes the folder being right-clicked
 const getMenuItemsForFolder = async (folder: any) => {
+  const libraryId = libConfig._libraryId;
   const isRoot = folder.path === props.rootPath;
   const canPaste = !props.unavailable && await hasImportableClipboard();
   const unavailable = props.unavailable || !await isDirectoryAccessible(folder.path);
@@ -423,6 +427,12 @@ const getMenuItemsForFolder = async (folder: any) => {
           folderPath: folder.path,
         });
       }
+    },
+    {
+      label: t('thumbnail_rebuild.title'),
+      icon: IconRefresh,
+      disabled: unavailable,
+      action: () => { if (!disposed && libraryId === libConfig._libraryId && Number(folder.id) > 0) thumbnailRebuildRequest.value = { libraryId, scope: { kind: 'folder', folderId: Number(folder.id), recursive: true } }; },
     },
     {
       label: t('menu.file.paste'),

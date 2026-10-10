@@ -6763,6 +6763,7 @@ impl AThumb {
                 hasher.update(&companion.id.unwrap_or_default().to_le_bytes());
                 if let Some(path) = companion.file_path.as_deref() {
                     hasher.update(path.as_bytes());
+                    if crate::t_heif::is_heif_source(path) {hasher.update(crate::t_heif::DECODER_CACHE_REVISION.as_bytes());}
                     if let Ok(metadata) = fs::metadata(path) {
                         hasher.update(&metadata.len().to_le_bytes());
                         let modified = metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok());
@@ -6790,7 +6791,7 @@ impl AThumb {
         thumb_key: &str,
         extension: &str,
     ) -> Result<PathBuf, String> {
-        if thumb_key.len() < 2 {
+        if thumb_key.len() < 2 || thumb_key.len()>128 || !thumb_key.bytes().all(|byte|byte.is_ascii_alphanumeric()||byte==b'-'||byte==b'_') {
             return Err("Invalid thumbnail cache key".to_string());
         }
 
@@ -7151,15 +7152,15 @@ impl AThumb {
         let thumb_mtime = Self::get_source_mtime(file_path);
         // Retain the policy key on RAW failures too, so another policy retries
         // while repeated requests for the same broken source remain cached.
-        let thumb_key = (file_type == 3 || thumb_data.is_some()).then(|| {
-            Self::build_thumb_key(
+        let thumb_key = (file_type == 3 || crate::t_heif::is_heif_source(file_path) || thumb_data.is_some()).then(|| {
+            crate::t_heif::thumbnail_key(file_path, &Self::build_thumb_key(
                 library_id,
                 file_id,
                 thumbnail_size,
                 thumb_mtime,
                 orientation,
                 (file_type == 3).then_some(prefer_embedded_raw_thumbnail),
-            )
+            ))
         });
 
         Ok(Some(Self {
@@ -7335,6 +7336,11 @@ impl AThumb {
         self.thumb_key.as_deref() != Some(key.as_str())
     }
 
+    fn heif_display_is_stale(&self, file_path: &str, orientation: i32) -> bool {
+        if !crate::t_heif::is_heif_source(file_path) || !std::path::Path::new(file_path).is_file() {return false;}
+        let base=Self::build_thumb_key(&Self::get_current_library_id(),self.file_id,self.thumb_size.unwrap_or(512).max(1) as u32,Self::get_source_mtime(file_path),orientation,None);
+        self.thumb_key.as_deref()!=Some(crate::t_heif::thumbnail_key(file_path,&base).as_str())
+    }
     fn is_stale(&self, file_path: &str, _thumbnail_size: u32) -> bool {
         // A quality setting change must not invalidate the existing cache while
         // browsing. Explicit refresh actions regenerate at the requested size.
@@ -7368,6 +7374,7 @@ impl AThumb {
                 let Ok(Some(file)) = AFile::get_file_info(file_id) else {
                     return size_changed;
                 };
+                if let Some(path)=file.file_path.as_deref() {if thumbnail.heif_display_is_stale(path,file.e_orientation.unwrap_or(1) as i32) {return true;}}
                 if file.file_type.unwrap_or(0) != 3 {
                     return size_changed;
                 }
@@ -7590,7 +7597,7 @@ impl AThumb {
         }
 
         if let Ok(Some(thumbnail)) = Self::fetch(file_id) {
-            if thumbnail.raw_display_is_stale(file_path, orientation, prefer_embedded_raw_thumbnail) {
+            if thumbnail.raw_display_is_stale(file_path, orientation, prefer_embedded_raw_thumbnail) || thumbnail.heif_display_is_stale(file_path, orientation) {
                 let _ = Self::delete(file_id);
                 return Ok(None);
             }
@@ -7641,7 +7648,7 @@ impl AThumb {
             return Ok(None);
         }
 
-        if thumbnail.raw_display_is_stale(file_path, orientation, prefer_embedded_raw_thumbnail) {
+        if thumbnail.raw_display_is_stale(file_path, orientation, prefer_embedded_raw_thumbnail) || thumbnail.heif_display_is_stale(file_path, orientation) {
             let _ = Self::delete(thumbnail.file_id);
             return Ok(None);
         }
@@ -7688,6 +7695,7 @@ impl AThumb {
             return;
         }
 
+        let library_id=Self::get_current_library_id();
         tauri::async_runtime::spawn(async move {
             let Ok(_generation_permit) = thumb_background_generation_permits()
                 .acquire_owned()
@@ -7697,7 +7705,10 @@ impl AThumb {
                 return;
             };
 
+            let task_library=library_id.clone();
             let generated = tauri::async_runtime::spawn_blocking(move || {
+                let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
+                if crate::t_config::current_library_id()?!=task_library {return Err("Library changed; thumbnail result discarded".to_string());}
                 let duration = if file_type == 2 {
                     AFile::get_file_info(file_id)
                         .ok()
@@ -7725,6 +7736,7 @@ impl AThumb {
                 let _ = app_handle.emit(
                     "thumbnail_ready",
                     serde_json::json!({
+                        "library_id": library_id,
                         "album_id": album_id,
                         "file_ids": [file_id],
                         "invalidate": force_regenerate,
@@ -7799,6 +7811,26 @@ impl AThumb {
             known_duration,
             seek_percent,
         )
+    }
+
+    pub(crate) fn rebuild_image_thumbnail(file_id: i64, thumbnail_size: u32, options: RawDisplayOptions) -> Result<bool,String> {
+        let file=AFile::get_file_info(file_id)?.ok_or("File not found")?;
+        let path=file.file_path.as_deref().ok_or("File path missing")?;
+        if !file.album_accessible || !t_utils::file_accessible(path) {return Ok(false);}
+        let kind=file.file_type.unwrap_or(0);
+        if !matches!(kind,1|3) {return Err("Thumbnail selection must contain images only".into());}
+        let _generation=Self::acquire_generation_guard(file_id,thumbnail_size);
+        let library=Self::get_current_library_id();
+        let before=Self::get_source_mtime(path);
+        let orientation=file.e_orientation.unwrap_or(1) as i32;
+        let mut thumbnail=Self::new_for_library(file_id,path,kind,orientation,thumbnail_size,options,&library,None,None)?.ok_or("Decoder returned no thumbnail")?;
+        if thumbnail.error_code!=0 || thumbnail.thumb_data.is_none() {return Err("Image decoding failed; existing thumbnail retained".into());}
+        if before!=Self::get_source_mtime(path) {return Err("Image changed during regeneration; existing thumbnail retained".into());}
+        let data=thumbnail.thumb_data.as_deref().ok_or("Missing thumbnail bytes")?;
+        let key=thumbnail.thumb_key.as_deref().ok_or("Missing thumbnail key")?;
+        Self::write_thumb_cache_bytes(&library,file.album_id.ok_or("Album missing")?,key,data)?;
+        thumbnail.thumb_data=None;thumbnail.insert()?;
+        Ok(true)
     }
 
     /// fetch raw thumbnail bytes for protocol handler
@@ -10228,6 +10260,16 @@ mod raw_display_cache_tests {
     use super::*;
     use crate::t_raw_display::RawPreviewMode;
 
+    #[test]
+    fn online_heic_decoder_revision_invalidates_old_cache_but_preserves_offline_cache() {
+        let path=std::env::temp_dir().join(format!("lap-heic-version-{}.heic",uuid::Uuid::new_v4()));
+        fs::write(&path,b"diagnostic source").unwrap();
+        let p=path.to_str().unwrap();let mut thumbnail=AThumb {id:None,file_id:44,error_code:0,thumb_data:None,thumb_key:Some("old-cache-key".into()),thumb_mtime:AThumb::get_source_mtime(p),thumb_size:Some(512),updated_at:None,thumb_data_base64:None};
+        assert!(thumbnail.heif_display_is_stale(p,1));
+        let base=AThumb::build_thumb_key(&AThumb::get_current_library_id(),44,512,thumbnail.thumb_mtime,1,None);
+        thumbnail.thumb_key=Some(crate::t_heif::thumbnail_key(p,&base));assert!(!thumbnail.heif_display_is_stale(p,1));
+        fs::remove_file(&path).unwrap();thumbnail.thumb_key=Some("old-cache-key".into());assert!(!thumbnail.heif_display_is_stale(p,1));
+    }
     #[test]
     fn unavailable_original_preserves_cached_thumbnail_even_during_forced_refresh() {
         let thumb = AThumb {

@@ -47,7 +47,7 @@ export function resetLibraryAccessibility() {
 
 const originalActions = new Set([
   'edit', 'print', 'rename', 'copy', 'move-within-library', 'move-to-folder',
-  'copy-to-folder', 'trash', 'reveal', 'detect-faces', 'redetect-faces', 'refresh-file-info', 'set-desktop-wallpaper', 'create-montage',
+  'copy-to-folder', 'trash', 'reveal', 'detect-faces', 'redetect-faces', 'regenerate-thumbnails', 'refresh-file-info', 'set-desktop-wallpaper', 'create-montage',
 ]);
 export function requiresOriginalAction(action: string): boolean {
   return originalActions.has(action) || action.startsWith('open-external-app');

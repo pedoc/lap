@@ -459,6 +459,7 @@
 </template>
 
 <script setup lang="ts">
+import { applyPersonRename } from '@/common/faceUpdates';
 import ImageNavigator from '@/components/ImageNavigator.vue';
 import { ref, nextTick, computed, watch, onBeforeUnmount, onMounted } from 'vue';
 import { listen } from '@tauri-apps/api/event';
@@ -990,7 +991,10 @@ let facePeopleDisposed = false;
 let stopFacePeople: (() => void) | null = null;
 onMounted(async () => {
   const stop = await listen('face-person-changed', (event: any) => {
-    if (!facePeopleDisposed && event.payload.library_id === libConfig._libraryId) void loadFilePersons(Number(props.fileInfo?.id || 0));
+    if (facePeopleDisposed || event.payload.library_id !== libConfig._libraryId) return;
+    if (applyPersonRename(filePersons.value, event.payload)) return;
+    if (event.payload.mode === 'confirm' || event.payload.membershipChanged === false) return;
+    void loadFilePersons(Number(props.fileInfo?.id || 0));
   });
   if (facePeopleDisposed) stop(); else stopFacePeople = stop;
 });

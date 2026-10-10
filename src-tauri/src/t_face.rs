@@ -63,39 +63,106 @@ pub struct FaceEngine {
     runtime_generation: u64,
 }
 impl FaceEngine {
-    pub fn new() -> Self { Self { model: None, backend: None, runtime_generation: crate::ai::runtime::generation() } }
+    pub fn new() -> Self {
+        Self {
+            model: None,
+            backend: None,
+            runtime_generation: crate::ai::runtime::generation(),
+        }
+    }
     pub fn load_models(&mut self, _app: &AppHandle) -> Result<(), String> {
         let model = crate::ai::settings::active(crate::ai::types::Task::Face)?;
         crate::ai::profiles::ensure(crate::ai::types::Task::Face, &model.profile())?;
-        if self.is_loaded() { return Ok(()); }
+        if self.is_loaded() {
+            return Ok(());
+        }
         self.load_model(model)
     }
     pub fn load_model(&mut self, model: crate::ai::types::ResolvedModel) -> Result<(), String> {
         let backend = crate::ai::adapters::face_backend(&model)?;
-        self.backend = Some(backend); self.model = Some(model); self.runtime_generation = crate::ai::runtime::generation(); Ok(())
+        self.backend = Some(backend);
+        self.model = Some(model);
+        self.runtime_generation = crate::ai::runtime::generation();
+        Ok(())
     }
     pub fn is_loaded(&self) -> bool {
-        self.runtime_generation == crate::ai::runtime::generation() && self.backend.is_some() && self.model.as_ref()
-            .zip(crate::ai::settings::active(crate::ai::types::Task::Face).ok().as_ref())
-            .is_some_and(|(loaded,active)| loaded.session_key() == active.session_key())
+        self.runtime_generation == crate::ai::runtime::generation()
+            && self.backend.is_some()
+            && self
+                .model
+                .as_ref()
+                .zip(
+                    crate::ai::settings::active(crate::ai::types::Task::Face)
+                        .ok()
+                        .as_ref(),
+                )
+                .is_some_and(|(loaded, active)| loaded.session_key() == active.session_key())
     }
-    fn process(&mut self,image:&DynamicImage)->Result<(Vec<FaceData>,(u32,u32)),String>{
-        let result=self.backend.as_mut().ok_or("No face model loaded")?.process(image);
-        if let Err(ref error)=result {
-            let model=self.model.clone().ok_or("No face model loaded")?;
-            if (crate::ai::runtime::is_auto(&model,"detector")||crate::ai::runtime::is_auto(&model,"embedding")) && crate::ai::runtime::used_acceleration(&model) {
-                crate::ai::runtime::force_cpu(&model,error);self.backend=None;self.load_model(model)?;
-                return self.backend.as_mut().ok_or("No face model loaded")?.process(image);
+    fn process(&mut self, image: &DynamicImage) -> Result<(Vec<FaceData>, (u32, u32)), String> {
+        let result = self
+            .backend
+            .as_mut()
+            .ok_or("No face model loaded")?
+            .process(image);
+        if let Err(ref error) = result {
+            let model = self.model.clone().ok_or("No face model loaded")?;
+            if (crate::ai::runtime::is_auto(&model, "detector")
+                || crate::ai::runtime::is_auto(&model, "embedding"))
+                && crate::ai::runtime::used_acceleration(&model)
+            {
+                crate::ai::runtime::force_cpu(&model, error);
+                self.backend = None;
+                self.load_model(model)?;
+                return self
+                    .backend
+                    .as_mut()
+                    .ok_or("No face model loaded")?
+                    .process(image);
             }
-        }result
+        }
+        result
     }
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn process_image(&mut self,path:&str)->Result<(Vec<FaceData>,(u32,u32)),String> {
-        let bytes=std::fs::read(path).map_err(|e|e.to_string())?;
+    pub fn process_image(&mut self, path: &str) -> Result<(Vec<FaceData>, (u32, u32)), String> {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         self.process_image_from_bytes(&bytes)
     }
-    pub fn process_image_from_bytes(&mut self,bytes:&[u8])->Result<(Vec<FaceData>,(u32,u32)),String> {
-        let image=crate::ai::face_jobs::decode_image(bytes)?;
+    pub fn process_image_reported(
+        &mut self,
+        bytes: &[u8],
+    ) -> (
+        Result<(Vec<FaceData>, (u32, u32)), String>,
+        crate::ai::face_diagnostics::PipelineReport,
+    ) {
+        let image = match crate::ai::face_jobs::decode_image(bytes) {
+            Ok(image) => image,
+            Err(error) => {
+                return (
+                    Err(error),
+                    crate::ai::face_diagnostics::PipelineReport {
+                        stage: "decode_image".into(),
+                        ..Default::default()
+                    },
+                );
+            }
+        };
+        let result = self.process(&image); // Keep the existing auto-provider retry behavior unchanged.
+        let report = self
+            .backend
+            .as_ref()
+            .and_then(|backend| backend.diagnostics())
+            .unwrap_or(crate::ai::face_diagnostics::PipelineReport {
+                stage: "inference".into(),
+                decoded_size: Some([image.width(), image.height()]),
+                ..Default::default()
+            });
+        (result, report)
+    }
+    pub fn process_image_from_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(Vec<FaceData>, (u32, u32)), String> {
+        let image = crate::ai::face_jobs::decode_image(bytes)?;
         self.process(&image)
     }
 }
@@ -151,6 +218,7 @@ pub fn run_face_indexing(
             payload["scope"] = serde_json::json!(scope.key());
             app_handle.emit(event, payload)
         };
+        let mut diagnostics=crate::ai::face_diagnostics::JobReport::new(&model);
         // 1. Initialization
 
         let _library_guard = match crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read() {
@@ -165,16 +233,19 @@ pub fn run_face_indexing(
             let conn=t_sqlite::open_conn()?;
             let (files,cached)=crate::ai::face_jobs::selected_images(&conn,&scope)?;
             // A bad/offline selection is rejected before modifying any of its face records.
-            if scope.file_ids.is_some() && files.iter().any(|image|!std::path::Path::new(&image.path).is_file()) {
-                return Err("Selected images are unavailable; no images were processed".into());
+            if scope.file_ids.is_some() {
+                let missing=files.iter().filter(|image|!std::path::Path::new(&image.path).is_file()).take(10).map(|image|std::path::Path::new(&image.path).file_name().map(|name|name.to_string_lossy().into_owned()).unwrap_or_else(||format!("Image #{}",image.id))).collect::<Vec<_>>();
+                if !missing.is_empty() {return Err(format!("Selected originals are unavailable; no images were processed: {}",missing.join(", ")));}
             }
             if !files.is_empty() { face_state.0.lock().map_err(|e|e.to_string())?.load_models(&app_handle)?; }
             Ok((files,cached))
         })();
         let (files,cached)=match prepared { Ok(value)=>value,Err(error)=> {
-            let _=emit("face_index_finished",serde_json::json!({"total_faces":0,"total_persons":0,"cancelled":false,"error":error}));return;
+            diagnostics.startup_error=Some(error.clone());
+            let _=emit("face_index_finished",serde_json::json!({"total_faces":0,"total_persons":0,"cancelled":false,"error":error,"diagnostics":diagnostics}));return;
         }};
         let total_files=files.len()+cached;
+        diagnostics.image_count=total_files;diagnostics.cached_images=cached;diagnostics.update_devices(&model);
         let mut total_faces=0;
         let mut current=cached;
         let mut failed=0usize;
@@ -210,7 +281,7 @@ pub fn run_face_indexing(
                         "total_faces": 0,
                         "total_persons": 0,
                         "cancelled": false,
-                        "error": e
+                        "error": e, "diagnostics":diagnostics
                     }),
                 );
 
@@ -227,53 +298,43 @@ pub fn run_face_indexing(
 
             current += 1;
 
-            let mut engine = face_state.0.lock().unwrap();
-
-            // Prefer the original/high-resolution preview: small thumbnails lose faces in group photos.
+            use crate::ai::face_diagnostics::{ImageReport,PipelineReport};
+            let filename=std::path::Path::new(&file_path).file_name().map(|name|name.to_string_lossy().into_owned()).unwrap_or_else(||format!("Image #{file_id}"));
+            let mut detail=ImageReport {file_id,file_name:filename.clone(),source_size:[width,height],format:std::path::Path::new(&file_path).extension().map(|extension|extension.to_string_lossy().to_ascii_lowercase()).unwrap_or_default(),..ImageReport::default()};
             let before=std::fs::metadata(&file_path).ok().map(|m|(m.len(),m.modified().ok()));
-            let bytes=tauri::async_runtime::block_on(crate::t_image::get_file_image_bytes_cached(
-                &file_path,crate::t_raw_display::RawDisplayOptions::rendered_bright()));
-            let process_result=bytes.and_then(|bytes|engine.process_image_from_bytes(&bytes));
+            let bytes=tauri::async_runtime::block_on(crate::t_image::get_file_image_bytes_cached(&file_path,crate::t_raw_display::RawDisplayOptions::rendered_bright()));
+            let process_result=match bytes {
+                Ok(bytes)=>{let (result,report)=face_state.0.lock().unwrap().process_image_reported(&bytes);detail.pipeline=report;result},
+                Err(error)=>{detail.pipeline=PipelineReport {stage:"read_image".into(),..Default::default()};Err(error)},
+            };
+            diagnostics.update_devices(&model);
             let after=std::fs::metadata(&file_path).ok().map(|m|(m.len(),m.modified().ok()));
-            drop(engine);
-            if before.is_none() || before!=after || before.as_ref().is_some_and(|s|s.0!=size as u64) {
-                failed+=1;
-                continue;
-            }
-            let used_thumb=true; // Scale any backend preview's coordinates to catalog dimensions.
-            match process_result {
-                Ok((mut faces, (proc_w, proc_h))) => {
-                    if proc_w==0 || proc_h==0 || faces.iter().any(|face| ![face.bbox.x,face.bbox.y,face.bbox.width,face.bbox.height,face.bbox.confidence].iter().all(|v|v.is_finite()) || face.bbox.width<=0. || face.bbox.height<=0.) {
-                        failed+=1; continue;
-                    }
-                    // Scale original/high-resolution preview coordinates to catalog dimensions.
-                    if used_thumb {
-                        let scale_x = width as f32 / proc_w as f32;
-                        let scale_y = height as f32 / proc_h as f32;
-
-                        for face in &mut faces {
-                            face.bbox.x *= scale_x;
-                            face.bbox.y *= scale_y;
-                            face.bbox.width *= scale_x;
-                            face.bbox.height *= scale_y;
-                            if let Some(points)=face.bbox.landmarks.as_mut(){for point in points{point.0*=scale_x;point.1*=scale_y;}}
+            if before.is_none()||before!=after||before.as_ref().is_some_and(|entry|entry.0!=size as u64) {
+                failed+=1;detail.pipeline.stage="source_validation".into();detail.error=Some("Source missing or changed during inference; old face records were retained".into());detail.outcome="failed".into();
+            } else {
+                match process_result {
+                    Ok((mut faces,(proc_w,proc_h)))=>{
+                        if proc_w==0||proc_h==0||faces.iter().any(|face|![face.bbox.x,face.bbox.y,face.bbox.width,face.bbox.height,face.bbox.confidence].iter().all(|value|value.is_finite())||face.bbox.width<=0.||face.bbox.height<=0.) {
+                            failed+=1;detail.pipeline.stage="output_validation".into();detail.error=Some("Model returned invalid image dimensions or face regions".into());detail.outcome="failed".into();
+                        } else {
+                            let scale_x=width as f32/proc_w as f32;let scale_y=height as f32/proc_h as f32;
+                            for face in &mut faces {face.bbox.x*=scale_x;face.bbox.y*=scale_y;face.bbox.width*=scale_x;face.bbox.height*=scale_y;if let Some(points)=face.bbox.landmarks.as_mut(){for point in points{point.0*=scale_x;point.1*=scale_y;}}}
+                            let records=faces.into_iter().map(|face|serde_json::to_string(&face.bbox).map(|bbox|(bbox,face.embedding))).collect::<Result<Vec<_>,_>>();
+                            let committed=records.map_err(|error|error.to_string()).and_then(|records|crate::ai::face_jobs::replace_scanned_reported(&db_conn,&source,&records));
+                            match committed {
+                                Ok(report)=>{
+                                    total_faces+=report.stored_regions;detail.stored_regions=report.stored_regions;detail.manual_regions=report.manual_regions;detail.annotation_suppressed=report.suppressed_detections;
+                                    detail.outcome=if detail.annotation_suppressed>0&&detail.stored_regions==0 {"annotation_suppressed"} else if detail.pipeline.detected_faces==0 {"no_detection"} else if detail.pipeline.accepted_faces==0&&detail.pipeline.quality_filtered>0 {"quality_filtered"} else {"stored"}.into();
+                                    let _=emit("face-data-changed",serde_json::json!({"file_id":file_id}));
+                                },
+                                Err(error)=>{failed+=1;detail.pipeline.stage="database_commit".into();detail.error=Some(error.replace(&file_path,&filename));detail.outcome="failed".into();},
+                            }
                         }
-                    }
-
-                    let records=faces.into_iter().map(|face| serde_json::to_string(&face.bbox).map(|bbox|(bbox,face.embedding))).collect::<Result<Vec<_>,_>>();
-                    let Ok(records)=records else { failed+=1; continue; };
-                    let committed=crate::ai::face_jobs::replace_scanned(&db_conn,&source,&records);
-                    match committed {
-                        Ok(count) => { total_faces+=count; let _=emit("face-data-changed",serde_json::json!({"file_id":file_id})); },
-                        Err(error) => { failed+=1; eprintln!("Failed to commit face results for {file_id}: {error}"); },
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to process image {}: {}", file_path, e);
-                    // Decode/inference failures must not erase previous faces or mark a failed image as face-free.
-                    failed+=1;
+                    },
+                    Err(error)=>{failed+=1;detail.error=Some(error.replace(&file_path,&filename));detail.outcome="failed".into();},
                 }
             }
+            diagnostics.add(detail);
 
             // Each committed image becomes visible immediately.
             {
@@ -301,7 +362,7 @@ pub fn run_face_indexing(
                 serde_json::json!({
                     "total_faces": total_faces,
                     "total_persons": 0,
-                    "cancelled": true
+                    "cancelled": true, "failed":failed, "cached":cached, "diagnostics":diagnostics
                 }),
             );
 
@@ -345,7 +406,7 @@ pub fn run_face_indexing(
         ) {
             Ok(count) => count,
             Err(e) => {
-                let _=emit("face_index_finished",serde_json::json!({"total_faces":total_faces,"total_persons":0,"cancelled":false,"failed":failed,"cached":cached,"error":e}));
+                let _=emit("face_index_finished",serde_json::json!({"total_faces":total_faces,"total_persons":0,"cancelled":false,"failed":failed,"cached":cached,"error":e,"diagnostics":diagnostics}));
                 return;
             }
         };
@@ -358,7 +419,7 @@ pub fn run_face_indexing(
             serde_json::json!({
                 "total_faces": total_faces,
                 "total_persons": total_persons,
-                "cancelled": cancelled_during_cluster, "failed":failed, "cached":cached
+                "cancelled": cancelled_during_cluster, "failed":failed, "cached":cached, "diagnostics":diagnostics
             }),
         );
 

@@ -7,20 +7,22 @@ import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, type FaceReviewItem } from '../src/common/faceReview.ts';
+import { applyFaceRename } from '../src/common/faceUpdates.ts';
 import { faceColor } from '../src/common/faceUi.ts';
 const item: FaceReviewItem = { faceId: 11, annotationId: null, fileId: 1, fileName: 'a.jpg', personId: 7, personName: 'Alice', bbox: '{"x":1,"y":1,"width":20,"height":20}', width: 100, height: 100, modifiedAt: 10, size: 100, state: 'suggested' };
 const source = readFileSync(new URL('../src/components/FaceReview.vue', import.meta.url), 'utf8');
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
 const code = stripTypeScriptTypes(script).replace(/^import .*;\r?\n/gm, '');
-const helpers = { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, faceColor };
+const helpers = { applyFaceRename, faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, faceColor };
 function harness(handler?: (command: string, args: any) => Promise<any>) {
+  const listeners: Record<string, (event: any) => void> = {};
   const calls: any[] = [], events: any[] = [], handlers: string[] = [], mounts: Array<() => any> = [], unmounts: Array<() => void> = [];
   const libConfig = { _libraryId: 'library-a' }, config = { settings: { ai: { faceProfile: 'profile-a' } } };
-  const api = runInNewContext(`${code}\n;({load, apply, close, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root});`, {
+  const api = runInNewContext(`${code}\n;({load, apply, close, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root, targetPerson, newName, canSubmit, previews});`, {
     ...helpers,
     ref: (value: any) => ({ value }), computed: (getter: () => any) => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: (fn: () => void) => mounts.push(fn), onBeforeUnmount: (fn: () => void) => unmounts.push(fn), nextTick: async () => {},
-    defineEmits: () => (...args: any[]) => events.push(args), useI18n: () => ({ t: (key: string) => key }),
+    defineProps: () => ({ person: null }), defineEmits: () => (...args: any[]) => events.push(args), useI18n: () => ({ t: (key: string) => key }),
     useUIStore: () => ({ pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const i = handlers.indexOf(id); if (i >= 0) handlers.splice(i, 1); } }),
     libConfig, config, window: { innerWidth: 1000, innerHeight: 800, addEventListener() {}, removeEventListener() {} },
     invoke: async (command: string, args: any) => {
@@ -28,9 +30,9 @@ function harness(handler?: (command: string, args: any) => Promise<any>) {
       if (handler) return handler(command, args);
       if (command === 'get_face_review_page') return { items: [{ ...item }], total: 1, counts: { suggested: 1 } };
       return null;
-    }, listen: async () => () => {},
+    }, listen: async (name: string, callback: (event: any) => void) => { listeners[name] = callback; return () => { delete listeners[name]; }; },
   });
-  return { api, calls, events, handlers, libConfig, config, mount: async () => { for (const mount of mounts) await mount(); }, unmount: () => unmounts.forEach(fn => fn()) };
+  return { api, calls, events, handlers, libConfig, config, dispatch: (name: string, payload: any) => listeners[name]?.({ payload }), mount: async () => { for (const mount of mounts) await mount(); }, unmount: () => unmounts.forEach(fn => fn()) };
 }
 test('review actions distinguish suggested, manual, ignored and stale states', () => {
   assert.equal(faceReviewCanApply('confirm', [item]), true);
@@ -48,11 +50,11 @@ test('review counts and editor adapters preserve explicit unassignment and ident
   assert.equal(faceReviewCount('unknown', { unknown: 2, unassigned: 3 }), 5);
   assert.equal(faceReviewCount('ignored', { ignored: 2, not_face: 4 }), 6);
   assert.equal(faceForEditor(item).person_id, 7);
-  assert.notEqual(faceReviewKey(item), faceReviewKey({ ...item, annotationId: 9 }));
+  assert.equal(faceReviewKey(item), faceReviewKey({ ...item, annotationId: 9 }));
 });
 test('review page loading is explicitly library-scoped and clears old selections', async () => {
   const h = harness(); h.api.selected.value = ['old']; await h.api.load();
-  assert.deepEqual(h.calls[0], { command: 'get_face_review_page', args: { request: { libraryId: 'library-a', filter: 'suggested', offset: 0, limit: 36 } } });
+  assert.deepEqual(h.calls[0], { command: 'get_face_review_page', args: { request: { libraryId: 'library-a', filter: 'suggested', personId: null, offset: 0, limit: 36 } } });
   assert.equal(h.api.selected.value.length, 0); assert.equal(h.api.items.value[0].faceId, 11);
   h.api.toggleAll(); assert.equal(h.api.selectedItems.value.length, 1);
   h.api.toggleAll(); assert.equal(h.api.selectedItems.value.length, 0);
@@ -96,7 +98,7 @@ test('review keyboard/input ownership is released when the dialog is disposed', 
   h.unmount(); assert.equal(h.handlers.length, 0);
 });
 async function rendered(rows: FaceReviewItem[], filter = 'suggested') {
-  const patched = source.replace('const items = ref<FaceReviewItem[]>([])', 'const items = ref<FaceReviewItem[]>(__rows)').replace("const filter = ref('suggested')", `const filter = ref('${filter}')`);
+  const patched = source.replace('const items = ref<FaceReviewItem[]>([])', 'const items = ref<FaceReviewItem[]>(__rows)').replace("const filter = ref(personId ? 'all' : 'suggested')", `const filter = ref('${filter}')`);
   const { descriptor } = parse(patched);
   let compiled = stripTypeScriptTypes(compileScript(descriptor, { id: 'review-test', inlineTemplate: true }).content);
   const imports: Record<string, any> = {};
@@ -155,4 +157,27 @@ test('ignored regions have a visible recovery action and no misleading person ed
   const html = await rendered([{ ...item, faceId: null, annotationId: 2, personId: null, personName: null, state: 'not_face' }], 'ignored');
   assert.match(html, /face_review\.action_restore/); assert.match(html, /face_review\.restore_hint/);
   assert.match(html, /face_review\.state_not_face/); assert.doesNotMatch(html, /data-editor/);
+});
+
+test('batch reassignment requires an explicitly chosen identity and sends its current name', async () => {
+  const h = harness(); await h.api.load(); h.api.toggleAll(); h.api.pending.value = 'assign_existing';
+  await h.api.apply(); assert.equal(h.calls.some(c => c.command === 'review_faces'), false);
+  h.api.targetPerson.value = { id: 8, name: 'Bob' }; await h.api.apply();
+  const request = h.calls.find(c => c.command === 'review_faces').args.request;
+  assert.equal(request.action, 'assign_existing'); assert.equal(request.targetPersonId, 8); assert.equal(request.expectedTargetName, 'Bob');
+});
+test('splitting selected faces submits a single new identity without merging whole people', async () => {
+  const h = harness(); await h.api.load(); h.api.toggleAll(); h.api.pending.value = 'assign_new'; h.api.newName.value = ' Carol '; await h.api.apply();
+  const request = h.calls.find(c => c.command === 'review_faces').args.request;
+  assert.equal(request.action, 'assign_new'); assert.equal(request.name, 'Carol'); assert.equal(request.items.length, 1);
+});
+
+test('inline renaming in the actual review listener retains previews, row objects and selection', async () => {
+  const h = harness(); await h.mount(); h.api.filter.value = 'all'; h.api.toggleAll();
+  const row = h.api.items.value[0], key = faceReviewKey(row); h.api.previews.value[key] = 'cached-jpeg';
+  const requests = h.calls.filter(c => c.command === 'get_face_review_page').length;
+  h.dispatch('face-person-changed', { library_id: 'library-a', mode: 'rename', personId: 7, name: 'Alice New', faceId: 11, fileId: 1, annotationId: 9, reviewState: 'confirmed' });
+  assert.equal(h.api.items.value[0], row); assert.equal(row.personName, 'Alice New'); assert.equal(row.state, 'confirmed');
+  assert.equal(h.api.previews.value[key], 'cached-jpeg'); assert.equal(h.api.selectedItems.value.length, 1);
+  assert.equal(h.calls.filter(c => c.command === 'get_face_review_page').length, requests); h.unmount();
 });

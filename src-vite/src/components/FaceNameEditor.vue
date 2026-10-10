@@ -9,6 +9,13 @@
       :style="position" @pointerdown.stop @mousedown.stop @touchstart.stop @click.stop @dblclick.stop @contextmenu.stop @wheel.stop @keydown.stop="editorKey">
       <div class="font-semibold">{{ t('face_editor.title') }}</div>
       <p class="text-xs opacity-70">{{ t(face.review_state === 'confirmed' ? 'face_editor.manual_status' : face.review_state === 'unassigned' ? 'face_editor.unassigned_status' : 'face_editor.automatic_status') }}</p>
+      <div class="rounded-box border border-base-content/15 p-2 space-y-1">
+        <p class="text-xs font-semibold">{{ t('face_editor.correction_title') }}</p>
+        <div class="flex flex-wrap gap-1">
+          <button v-if="snapshot?.expectedPersonId != null" type="button" data-face-correction="wrong-person" class="btn btn-xs" :class="mode === 'unassign' ? 'btn-warning' : 'btn-ghost'" :disabled="saving" :aria-pressed="mode === 'unassign'" @click="selectCorrection('unassign')">{{ t('face_editor.wrong_person') }}</button>
+          <button type="button" data-face-correction="false-positive" class="btn btn-xs" :class="mode === 'not_face' ? 'btn-error' : 'btn-ghost text-error'" :disabled="saving" :aria-pressed="mode === 'not_face'" @click="selectCorrection('not_face')">{{ t('face_editor.false_positive') }}</button>
+        </div>
+      </div>
       <label class="block text-xs">{{ t('face_editor.operation') }}
         <select v-model="mode" class="select select-bordered select-sm w-full mt-1" :disabled="saving" @change="modeChanged">
           <option v-if="snapshot?.expectedPersonId != null" value="rename">{{ t('face_editor.rename') }}</option>
@@ -36,11 +43,11 @@
           <p v-if="!searching && !people.length" class="text-xs opacity-60">{{ t('face_editor.no_results') }}</p>
         </div>
       </template>
-      <p v-else class="text-xs">{{ t(mode === 'confirm' ? 'face_editor.confirm_hint' : ['ignore', 'not_face'].includes(mode) ? 'face_editor.ignore_hint' : 'face_editor.unassign_hint') }}</p>
+      <p v-else class="text-xs">{{ t(mode === 'confirm' ? 'face_editor.confirm_hint' : mode === 'not_face' ? 'face_editor.not_face_hint' : mode === 'ignore' ? 'face_editor.ignore_hint' : 'face_editor.unassign_hint') }}</p>
       <p v-if="error" role="alert" class="text-error text-xs whitespace-pre-wrap">{{ error }}</p>
       <div class="flex justify-end gap-2">
         <button type="button" class="btn btn-sm" :disabled="saving" @click="cancel">{{ t('face_editor.cancel') }}</button>
-        <button type="button" class="btn btn-sm btn-primary" :disabled="saving || !canSave" @click="save">{{ saving ? t('face_editor.saving') : t('face_editor.save') }}</button>
+        <button type="button" class="btn btn-sm btn-primary" :disabled="saving || !canSave" @click="save">{{ saving ? t('face_editor.saving') : mode === 'not_face' ? t('face_editor.confirm_false_positive') : t('face_editor.save') }}</button>
       </div>
     </div>
   </Teleport>
@@ -111,6 +118,11 @@ async function searchPeople() {
     people.value = result || [];
   } catch (e: any) { if (epoch === generation && request === searchRequest) error.value = e?.message || String(e); }
   finally { if (request === searchRequest && epoch === generation) searching.value = false; }
+}
+async function selectCorrection(nextMode: 'unassign' | 'not_face') {
+  if (saving.value || !currentContext() || (nextMode === 'unassign' && snapshot.value?.expectedPersonId == null)) return;
+  mode.value = nextMode;
+  await modeChanged(); // Choose an action first; persistence still requires the explicit Save button.
 }
 async function modeChanged() {
   error.value = ''; targetPersonId.value = null; searchRequest++;

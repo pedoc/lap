@@ -35,6 +35,8 @@ pub struct FaceNameChange {
     pub previous_person_id: Option<i64>,
     pub name: Option<String>,
     pub mode: EditMode,
+    pub annotation_id: i64,
+    pub review_state: String,
 }
 pub fn valid_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
@@ -63,6 +65,16 @@ fn rename_in_transaction(conn: &Connection, person_id: i64, name: &str) -> Resul
         return Err("Person no longer exists".into());
     }
     Ok(affected)
+}
+pub(crate) fn create_person_in_transaction(
+    conn: &Connection,
+    name: &str,
+    cover: Option<i64>,
+) -> Result<i64, String> {
+    let name = valid_name(name)?;
+    unique_name(conn, name, None)?;
+    conn.execute("INSERT INTO persons(name,created_at,cover_face_id,manual) VALUES(?1,CAST(strftime('%s','now') AS INTEGER),?2,1)",params![name,cover]).map_err(|e|e.to_string())?;
+    Ok(conn.last_insert_rowid())
 }
 pub fn rename_person(conn: &Connection, person_id: i64, name: &str) -> Result<usize, String> {
     super::face_annotations::import_existing(conn)?;
@@ -146,17 +158,8 @@ pub(crate) fn edit_in_transaction(
         }
         EditMode::AssignNew => {
             let name = valid_name(request.name.as_deref().unwrap_or(""))?;
-            unique_name(conn, name, None)?;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_secs() as i64)
-                .unwrap_or(0);
-            conn.execute(
-                "INSERT INTO persons(name,created_at,cover_face_id) VALUES(?1,?2,?3)",
-                params![name, now, request.face_id],
-            )
-            .map_err(|e| e.to_string())?;
-            (Some(conn.last_insert_rowid()), Some(name.to_string()))
+            let id = create_person_in_transaction(conn, name, Some(request.face_id))?;
+            (Some(id), Some(name.to_string()))
         }
         EditMode::Unassign | EditMode::Ignore | EditMode::NotFace => (None, None),
         EditMode::Confirm => {
@@ -181,7 +184,7 @@ pub(crate) fn edit_in_transaction(
             }
         }
     }
-    super::face_annotations::capture_face(
+    let annotation_id = super::face_annotations::capture_face(
         conn,
         request.face_id,
         match request.mode {
@@ -198,6 +201,14 @@ pub(crate) fn edit_in_transaction(
         previous_person_id: current.0,
         name,
         mode: request.mode,
+        annotation_id,
+        review_state: match request.mode {
+            EditMode::Ignore => "ignored",
+            EditMode::NotFace => "not_face",
+            _ if person_id.is_some() => "confirmed",
+            _ => "unassigned",
+        }
+        .into(),
     })
 }
 /// Explicit person deletion is one transaction, including durable annotation updates.

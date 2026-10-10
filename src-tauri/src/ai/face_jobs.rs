@@ -122,11 +122,25 @@ fn overlap(a: &crate::t_face::FaceBox, b: &crate::t_face::FaceBox) -> f32 {
     }
 }
 /// Preserve face IDs/person assignments for overlapping detections from the same compatible index.
+#[derive(Clone, Debug, Default)]
+pub struct CommitReport {
+    pub stored_regions: usize,
+    pub manual_regions: usize,
+    pub suppressed_detections: usize,
+}
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn replace_scanned(
     conn: &Connection,
     image: &SourceImage,
     records: &[(String, Vec<f32>)],
 ) -> Result<usize, String> {
+    replace_scanned_reported(conn, image, records).map(|report| report.stored_regions)
+}
+pub fn replace_scanned_reported(
+    conn: &Connection,
+    image: &SourceImage,
+    records: &[(String, Vec<f32>)],
+) -> Result<CommitReport, String> {
     super::face_annotations::import_existing(conn)?;
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| e.to_string())?;
@@ -160,6 +174,7 @@ pub fn replace_scanned(
         };
         let annotations = super::face_annotations::active_for_file(conn, image.id)?;
         let mut retained = HashSet::new();
+        let mut suppressed_detections = 0;
         for (bbox, vector) in records {
             let new: crate::t_face::FaceBox =
                 serde_json::from_str(bbox).map_err(|_| "Invalid face bounding box")?;
@@ -170,6 +185,7 @@ pub fn replace_scanned(
                         &super::face_annotations::pixel_box(annotation, image.width, image.height),
                     ) >= 0.5
             }) {
+                suppressed_detections += 1;
                 continue;
             }
             let matched = old
@@ -232,7 +248,12 @@ pub fn replace_scanned(
             image.id,
             if count == 0 { 2 } else { 1 },
         )?;
-        Ok(count as usize)
+        let manual:i64=conn.query_row("SELECT COUNT(*) FROM faces f JOIN face_annotations n ON n.id=f.annotation_id WHERE f.file_id=?1 AND n.kind IN ('confirmed','unassigned')",[image.id],|row|row.get(0)).map_err(|e|e.to_string())?;
+        Ok(CommitReport {
+            stored_regions: count as usize,
+            manual_regions: manual as usize,
+            suppressed_detections,
+        })
     })();
     match result {
         Ok(count) => {
@@ -290,6 +311,26 @@ mod tests {
                 .unwrap(),
             2
         );
+    }
+    #[test]
+    fn commit_diagnostics_distinguish_annotation_suppression_from_detector_misses() {
+        let c = db();
+        c.execute(
+            "INSERT INTO faces VALUES(11,1,?1,X'01020304',7,0)",
+            [bbox(0.)],
+        )
+        .unwrap();
+        super::super::face_annotations::import_existing(&c).unwrap();
+        c.execute("UPDATE faces SET person_id=NULL WHERE id=11", [])
+            .unwrap();
+        super::super::face_annotations::capture_face(&c, 11, "not_face").unwrap();
+        let source = selected_images(&c, &FaceScope::new(Some(vec![1]), true).unwrap())
+            .unwrap()
+            .0
+            .remove(0);
+        let report = replace_scanned_reported(&c, &source, &[(bbox(0.), vec![1., 0.])]).unwrap();
+        assert_eq!(report.suppressed_detections, 1);
+        assert_eq!(report.stored_regions, 0);
     }
     #[test]
     fn empty_invalid_or_unbounded_selection_never_becomes_library_scan() {
