@@ -7828,67 +7828,6 @@ impl AThumb {
         Ok(true)
     }
 
-    /// fetch raw thumbnail bytes for protocol handler
-    pub fn fetch_raw_for_library(
-        file_id: i64,
-        library_id: &str,
-    ) -> Result<Option<Vec<u8>>, String> {
-        let thumb = Self::fetch_for_library(file_id, library_id)?;
-
-        // error_code 2: image is small enough to use the original file directly
-        if let Some(ref thumb) = thumb {
-            if thumb.error_code == 2 {
-                if let Ok(Some(file)) = AFile::get_file_info(file_id) {
-                    if let Some(ref file_path) = file.file_path {
-                        if let Ok(data) = std::fs::read(file_path) {
-                            return Ok(Some(data));
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(thumb) = thumb.filter(|t| t.error_code == 0) {
-            if let Some(data) = thumb.thumb_data {
-                return Ok(Some(data));
-            }
-
-            let file = AFile::get_file_info(file_id)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("File not found for thumbnail: {}", file_id))?;
-            let file_path = file
-                .file_path
-                .ok_or_else(|| format!("File path not found for thumbnail: {}", file_id))?;
-            let file_type = file.file_type.unwrap_or(0);
-            let orientation = file.e_orientation.unwrap_or(1) as i32;
-            let thumbnail_size = thumb.thumb_size.unwrap_or(200).max(1) as u32;
-            let prefer_embedded_raw_thumbnail = thumb
-                .thumb_key
-                .as_deref()
-                .map(|key| RawDisplayOptions {
-                    mode: if key.starts_with('e') || key.starts_with('b') { crate::t_raw_display::RawPreviewMode::Embedded } else { crate::t_raw_display::RawPreviewMode::Rendered },
-                    auto_bright: key.starts_with('a') || key.starts_with('b'),
-                    prefer_pair: false,
-                })
-                .unwrap_or_default();
-
-            return Ok(Self::create_cache_backed_thumb_for_library(
-                file_id,
-                &file_path,
-                file_type,
-                orientation,
-                thumbnail_size,
-                prefer_embedded_raw_thumbnail,
-                library_id,
-                file.duration.map(|d| d as u64),
-                None,
-            )?
-            .and_then(|thumb| thumb.thumb_data));
-        }
-
-        Ok(None)
-    }
-
     /// delete a thumbnail from db
     pub fn delete(file_id: i64) -> Result<usize, String> {
         if let Ok(Some(key)) = Self::fetch_thumb_key(file_id) {

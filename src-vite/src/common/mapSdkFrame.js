@@ -37,7 +37,10 @@ export function sdkFrameBootstrap(config){
     try{
       const pose=latest||config.pose;
       if(config.provider==='amap'){
-        map=new sdk.Map('map',{viewMode:'2D',pitch:0,rotation:0,zoom:pose.zoom,center:pose.center,zooms:[2,20],mapStyle:config.style||'amap://styles/normal',dragEnable:false,zoomEnable:false,keyboardEnable:false,doubleClickZoom:false,rotateEnable:false,pitchEnable:false});
+        // AMap also gates setZoomAndCenter when zoomEnable is false. Keep it
+        // enabled for camera synchronization; iframe pointer-events:none still
+        // leaves every mouse/touch gesture to the Leaflet photo viewport.
+        map=new sdk.Map('map',{viewMode:'2D',pitch:0,rotation:0,zoom:pose.zoom,center:pose.center,zooms:[2,20],mapStyle:config.style||'amap://styles/normal',dragEnable:false,zoomEnable:true,keyboardEnable:false,doubleClickZoom:false,rotateEnable:false,pitchEnable:false});
         map.on('complete',loaded);map.on('error',()=>fail('map_failed'));
       }else{
         const options={center:new sdk.LatLng(pose.center[1],pose.center[0]),zoom:pose.zoom,viewMode:'2D',pitch:0,rotation:0,showControl:false};

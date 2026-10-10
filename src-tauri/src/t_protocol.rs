@@ -1,4 +1,5 @@
 use tauri::{Builder, Wry};
+use std::io::Read;
 
 use crate::{t_image, t_sqlite};
 use crate::t_raw_display::{RawDisplayOptions, RawPreviewMode};
@@ -7,6 +8,7 @@ fn text_response(status: http::StatusCode, body: &str) -> http::Response<Vec<u8>
     http::Response::builder()
         .status(status)
         .header(http::header::CONTENT_TYPE, "text/plain")
+        .header(http::header::CACHE_CONTROL, "no-store")
         .header(http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(http::header::ACCESS_CONTROL_ALLOW_METHODS, "GET, OPTIONS")
         .header(http::header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
@@ -125,6 +127,97 @@ mod raw_display_tests {
     }
 }
 
+fn thumbnail_error_response(
+    status: http::StatusCode,
+    file_id: i64,
+    reason: &str,
+) -> http::Response<Vec<u8>> {
+    text_response(status, &format!("Thumbnail for file {file_id}: {reason}"))
+}
+
+fn load_protocol_thumbnail(
+    file_id: i64,
+    library_id: &str,
+    thumbnail_size: u32,
+    options: RawDisplayOptions,
+) -> Result<http::Response<Vec<u8>>, String> {
+    // Keep both the database and cache namespace stable, including after queueing.
+    crate::t_cmds::with_current_library(library_id, || {
+        let Some(file) = t_sqlite::AFile::get_file_info(file_id)? else {
+            return Ok(thumbnail_error_response(
+                http::StatusCode::NOT_FOUND,
+                file_id,
+                "file is not in this library",
+            ));
+        };
+        let Some(path) = file.file_path.as_deref().filter(|path| !path.is_empty()) else {
+            return Ok(thumbnail_error_response(
+                http::StatusCode::NOT_FOUND,
+                file_id,
+                "source path is missing",
+            ));
+        };
+        // Reuse the existing cache validation, deduplication and decoder path for all types.
+        // A cache miss is pending work, not a 404; wait for the requested size to be generated.
+        let thumbnail = t_sqlite::AThumb::get_or_create_thumb(
+            file_id,
+            path,
+            file.file_type.unwrap_or(0),
+            file.e_orientation.unwrap_or(1) as i32,
+            thumbnail_size,
+            options,
+            false,
+            file.duration.map(|duration| duration.max(0) as u64),
+            None,
+        )?;
+        let data = match thumbnail {
+            Some(thumb) if thumb.error_code == 0 => thumb.thumb_data,
+            Some(thumb) if thumb.error_code == 2 => {
+                // Small images deliberately use the original instead of a separate cache file.
+                const MAX_ORIGINAL_THUMB_BYTES: u64 = 32 * 1024 * 1024;
+                let mut input = std::fs::File::open(path)
+                    .map_err(|error| format!("cannot open original: {error}"))?;
+                let mut bytes = Vec::new();
+                std::io::Read::take(&mut input, MAX_ORIGINAL_THUMB_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| error.to_string())?;
+                if bytes.len() as u64 > MAX_ORIGINAL_THUMB_BYTES {
+                    return Ok(thumbnail_error_response(
+                        http::StatusCode::PAYLOAD_TOO_LARGE,
+                        file_id,
+                        "original exceeds thumbnail response size limit",
+                    ));
+                }
+                Some(bytes)
+            }
+            _ => None,
+        };
+        Ok(match data.filter(|bytes| !bytes.is_empty()) {
+            Some(data) if file.file_type == Some(3) => raw_image_response(data),
+            Some(data) => image_response(data),
+            None if !std::path::Path::new(path).is_file() => thumbnail_error_response(
+                http::StatusCode::NOT_FOUND,
+                file_id,
+                "original is unavailable and no cached thumbnail exists",
+            ),
+            None => thumbnail_error_response(
+                http::StatusCode::UNPROCESSABLE_ENTITY,
+                file_id,
+                "could not decode or generate thumbnail; check decoder support and source integrity",
+            ),
+        })
+    })
+}
+
+fn thumbnail_request_failure(file_id: i64, reason: &str) -> http::Response<Vec<u8>> {
+    let status = if reason == "Library changed" {
+        http::StatusCode::CONFLICT
+    } else {
+        http::StatusCode::INTERNAL_SERVER_ERROR
+    };
+    thumbnail_error_response(status, file_id, reason)
+}
+
 pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
     builder
         .register_asynchronous_uri_scheme_protocol("thumb", |_ctx, request, responder| {
@@ -145,67 +238,46 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
             }
 
             let options = raw_display_options(request.uri().query());
-            let thumbnail_size = request.uri().query().unwrap_or_default().split('&')
-                .find_map(|part| part.strip_prefix("size=").and_then(|value| value.parse::<u32>().ok()))
-                .unwrap_or(512).clamp(64, 2048);
-            let app_handle = _ctx.app_handle().clone();
+            let thumbnail_size = request
+                .uri()
+                .query()
+                .unwrap_or_default()
+                .split('&')
+                .find_map(|part| {
+                    part.strip_prefix("size=")
+                        .and_then(|value| value.parse::<u32>().ok())
+                })
+                .unwrap_or(512)
+                .clamp(64, 2048);
             tauri::async_runtime::spawn(async move {
-                if let Ok(Some(file)) = t_sqlite::AFile::get_file_info(file_id) {
-                    if file.file_type == Some(3) {
-                        let permit = match t_sqlite::thumb_background_generation_permits().acquire_owned().await {
-                            Ok(permit) => permit,
-                            Err(_) => { responder.respond(text_response(http::StatusCode::SERVICE_UNAVAILABLE, "thumbnail queue closed")); return; }
-                        };
-                        let result = tauri::async_runtime::spawn_blocking(move || {
-                            let _permit = permit;
-                            // The queue can outlive a library switch. Re-read the
-                            // file only after validating and locking its library.
-                            crate::t_cmds::with_current_library(&library_id, || {
-                                let file = t_sqlite::AFile::get_file_info(file_id)?
-                                    .ok_or_else(|| "File not found".to_string())?;
-                                if file.file_type != Some(3) { return Err("File type changed".to_string()); }
-                                t_sqlite::AThumb::get_or_create_thumb(file_id, file.file_path.as_deref().unwrap_or_default(),
-                                    3, file.e_orientation.unwrap_or(1) as i32, thumbnail_size, options, false, None, None)
-                            })
-                        }).await;
-                        let response = match result {
-                            Ok(Ok(Some(thumb))) => match thumb.thumb_data {
-                                Some(data) => raw_image_response(data),
-                                None => text_response(http::StatusCode::NOT_FOUND, "thumbnail not found"),
-                            },
-                            _ => text_response(http::StatusCode::NOT_FOUND, "thumbnail not found"),
-                        };
-                        responder.respond(response);
+                let permit = match t_sqlite::thumb_background_generation_permits()
+                    .acquire_owned()
+                    .await
+                {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        responder.respond(thumbnail_error_response(
+                            http::StatusCode::SERVICE_UNAVAILABLE,
+                            file_id,
+                            "thumbnail queue closed",
+                        ));
                         return;
                     }
-                }
-                let response = match t_sqlite::AThumb::fetch_raw_for_library(file_id, &library_id) {
-                    Ok(Some(data)) => image_response(data),
-                    _ => {
-                        if let Ok(Some(file)) = t_sqlite::AFile::get_file_info(file_id) {
-                            if let Some(file_path) = file.file_path.clone() {
-                                let file_type = file.file_type.unwrap_or(0);
-                                let orientation = file.e_orientation.unwrap_or(1) as i32;
-                                let album_id = file.album_id.unwrap_or(0);
-                                let thumbnail_size = 200;
-                                t_sqlite::AThumb::schedule_background_generation_for_library(
-                                    app_handle,
-                                    file_id,
-                                    file_path,
-                                    file_type,
-                                    orientation,
-                                    thumbnail_size,
-                                    options,
-                                    album_id,
-                                    false,
-                                    None,
-                                );
-                            }
-                        }
-                        text_response(http::StatusCode::NOT_FOUND, "thumbnail not found")
-                    }
                 };
-                responder.respond(response);
+                // All file/SQLite work belongs on blocking workers, never the UI or async reactor.
+                let result = tauri::async_runtime::spawn_blocking(move || {
+                    let _permit = permit;
+                    load_protocol_thumbnail(file_id, &library_id, thumbnail_size, options)
+                })
+                .await;
+                responder.respond(match result {
+                    Ok(Ok(response)) => response,
+                    Ok(Err(error)) => thumbnail_request_failure(file_id, &error),
+                    Err(error) => thumbnail_request_failure(
+                        file_id,
+                        &format!("thumbnail worker failed: {error}"),
+                    ),
+                });
             });
         })
         .register_asynchronous_uri_scheme_protocol("preview", |_ctx, request, responder| {
@@ -314,4 +386,32 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
                 responder.respond(response);
             });
         })
+}
+
+#[cfg(test)]
+mod thumbnail_and_sdk_host_tests {
+    use super::*;
+
+    #[test]
+    fn thumbnail_errors_distinguish_missing_files_decode_failures_and_stale_libraries() {
+        let missing = thumbnail_error_response(http::StatusCode::NOT_FOUND, 4527, "source missing");
+        assert_eq!(missing.status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(missing.headers()[http::header::CACHE_CONTROL], "no-store");
+        assert!(String::from_utf8_lossy(missing.body()).contains("4527"));
+        let decode = thumbnail_error_response(
+            http::StatusCode::UNPROCESSABLE_ENTITY,
+            7637,
+            "decoder failed",
+        );
+        assert_eq!(decode.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            thumbnail_request_failure(7, "Library changed").status(),
+            http::StatusCode::CONFLICT
+        );
+        assert_eq!(
+            thumbnail_request_failure(7, "database busy").status(),
+            http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
 }

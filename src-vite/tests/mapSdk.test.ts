@@ -53,7 +53,7 @@ test('SDK fields are independent of Web Service keys and frame documents cannot 
 });
 for(const provider of ['amap','tencent'])test(`${provider} bootstrap uses the official SDK, reports tile readiness and changes theme without recreating the map`,async()=>{
  const callbacks:any={},messages:any[]=[],maps:any[]=[],scripts:any[]=[],defaultLayers:any[]=[],genericLayers:any[]=[];let handler:(value:any)=>void=()=>{};
- class FakeMap {events:any={};layers:any[]=[];centers:any[]=[];base:any[]=[];options:any;zoom:number;constructor(_container:any,options:any){this.options=options;this.zoom=options.zoom;maps.push(this);}on(name:string,fn:any){this.events[name]=fn;}setZoomAndCenter(...args:any[]){this.zoom=args[0];this.centers.push(args);}setCenter(value:any){this.centers.push(value);}setZoom(value:number){this.zoom=value;}setLayers(value:any){this.layers.push(value);}setBaseMap(value:any){this.base.push(value);}destroy(){}}
+ class FakeMap {events:any={};layers:any[]=[];centers:any[]=[];base:any[]=[];options:any;zoom:number;constructor(_container:any,options:any){this.options=options;this.zoom=provider==='amap'&&options.zoomEnable===false?10:options.zoom;maps.push(this);}on(name:string,fn:any){this.events[name]=fn;}setZoomAndCenter(...args:any[]){if(this.options.zoomEnable!==false)this.zoom=args[0];this.centers.push(args);}setCenter(value:any){this.centers.push(value);}setZoom(value:number){this.zoom=value;}setLayers(value:any){this.layers.push(value);}setBaseMap(value:any){this.base.push(value);}destroy(){}}
  class TileLayer{constructor(){genericLayers.push(this);}};(TileLayer as any).Satellite=class{};(TileLayer as any).RoadNet=class{};
  const sdk:any={Map:FakeMap,TileLayer,createDefaultLayer:()=>{const layer={kind:'default',zooms:[2,20]};defaultLayers.push(layer);return layer;},LatLng:class {lat:number;lng:number;constructor(lat:number,lng:number){this.lat=lat;this.lng=lng;}}};const window:any={AMapLoader:{load:async(args:any)=>{callbacks.loader=args;return sdk;}},TMap:sdk,addEventListener:(name:string,fn:any)=>{if(name==='message')handler=fn;}};
  const parent={postMessage:(value:any)=>messages.push(value)},config={provider,token:'private-channel',jsKey:'js-fake',securityJsCode:'security-fake',pose:{center:[116.4037136,39.9102265],zoom:2,theme:0}};
@@ -63,6 +63,7 @@ for(const provider of ['amap','tencent'])test(`${provider} bootstrap uses the of
  // Minimum/world zoom must retain the official default layer, including after satellite mode.
  if(provider==='amap'){
   const settings=defaultMapServices();settings.tileProvider=provider;
+  assert.equal(maps[0].options.zoomEnable,true);assert.equal(maps[0].options.dragEnable,false);assert.equal(maps[0].options.keyboardEnable,false);
   const theme=getMapTheme(settings,0);assert.deepEqual(Array.from(maps[0].options.zooms),[theme.minZoom,theme.maxZoom]);
   assert.equal(defaultLayers.length,1);assert.equal(genericLayers.length,0);assert.equal(maps[0].layers[0][0],defaultLayers[0]);
  }

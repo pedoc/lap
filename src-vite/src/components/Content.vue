@@ -5888,73 +5888,10 @@ onMounted( async() => {
     refreshLibraryTotalCount();
   });
 
-  unlistenThumbnailReady = await listen('thumbnail_ready', async (event: any) => {
-    const { file_ids, invalidate = true, library_id, thumbnail_only = false } = event.payload || {};
-    if (library_id && library_id !== libConfig._libraryId) return;
-    if (!Array.isArray(file_ids) || file_ids.length === 0) return;
-
-    const readyIds = new Set(
-      file_ids.map((id: any) => Number(id)).filter((id: number) => Number.isFinite(id) && id > 0)
-    );
-    if (readyIds.size === 0) return;
-    // A companion edit changes the grouped RAW display even though its own
-    // modified_at timestamp and logical selection ID remain unchanged.
-    for (const file of fileList.value) {
-      if (file.media_subtype === 'raw_jpeg_pair' && readyIds.has(Number(file.live_photo_video_id))) {
-        readyIds.add(Number(file.id));
-      }
-    }
-
-    // A normal scan emits this event when the thumbnail first becomes ready.
-    // The streaming list is already fetching that image, so clearing it here
-    // would turn a successful first paint into a second, visible load. Only
-    // invalidation events represent an existing thumbnail being replaced.
-    if (!invalidate) {
-      if (fileList.value.length === 0) return;
-      const missingFiles = fileList.value.filter(
-        (file: any) => file && !file.isPlaceholder && (!file.thumbnail || file.rawThumbnailStale) && readyIds.has(Number(file.id || 0))
-      );
-      if (missingFiles.length > 0) getFileListThumb(missingFiles);
-      return;
-    }
-
-    // The backend has just replaced these thumbnails after detecting a changed
-    // file. Drop their data-URL entries even when this view is empty, so a
-    // later list render cannot reuse an outdated image from memory.
-    for (const fileId of readyIds) {
-      clearCachedThumbnailDataUrl(fileId, config.settings.thumbnailSize);
-    }
-    if (fileList.value.length === 0) return;
-
-    const loadedFiles = fileList.value.filter(
-      (file: any) => file && !file.isPlaceholder && readyIds.has(Number(file.id || 0))
-    );
-    if (loadedFiles.length === 0) return;
-
-    // Pick up the new modified_at value before rebuilding URLs; it is the
-    // persistent cache version for this file's contents.
-    await Promise.all(loadedFiles.map(async (file: any) => {
-      const refreshed = await getFileInfo(Number(file.id));
-      if (refreshed && fileList.value.includes(file)) Object.assign(file, refreshed);
-    }));
-
-    // Reload the regenerated thumbnails instead of retaining the old values
-    // that arrived with the refreshed file list.
-    for (const file of loadedFiles) {
-      file.thumbnail = '';
-    }
-
-    // Match Refresh file info: changing filePath makes Image.vue reload the
-    // currently displayed file after its on-disk contents have changed.
-    const activeFile = fileList.value[selectedItemIndex.value];
-    if (!thumbnail_only && activeFile && readyIds.has(Number(activeFile.id || 0)) && activeFile.file_path) {
-      const activePath = activeFile.file_path;
-      activeFile.file_path = '';
-      await nextTick();
-      activeFile.file_path = activePath;
-    }
-
-    getFileListThumb(loadedFiles, 0, 8, true);
+  unlistenThumbnailReady = await listen('thumbnail_ready', (event: any) => {
+    void handleThumbnailReady(event).catch(error => {
+      console.warn('Failed to update ready thumbnails:', error);
+    });
   });
 
   // listen for external refresh requests (e.g. from folder context menu)
@@ -10445,6 +10382,81 @@ function preserveLoadedThumbnails(files: any[]) {
     }
     return file;
   });
+}
+
+async function handleThumbnailReady(event: any) {
+  const { file_ids, invalidate = true, library_id, thumbnail_only = false } = event.payload || {};
+  const libraryId = libConfig._libraryId;
+  const requestId = currentThumbRequestId;
+  const isCurrent = () => libraryId === libConfig._libraryId && requestId === currentThumbRequestId;
+  if (library_id && library_id !== libraryId) return;
+  if (!Array.isArray(file_ids) || file_ids.length === 0) return;
+
+  const readyIds = new Set(
+    file_ids.map((id: any) => Number(id)).filter((id: number) => Number.isFinite(id) && id > 0)
+  );
+  if (readyIds.size === 0) return;
+  // A companion edit changes the grouped RAW display even though its own
+  // modified_at timestamp and logical selection ID remain unchanged.
+  for (const file of fileList.value) {
+    if (file && !file.isPlaceholder && file.media_subtype === 'raw_jpeg_pair' && readyIds.has(Number(file.live_photo_video_id))) {
+      readyIds.add(Number(file.id));
+    }
+  }
+
+  // A normal scan emits this event when the thumbnail first becomes ready.
+  // The streaming list is already fetching that image, so clearing it here
+  // would turn a successful first paint into a second, visible load. Only
+  // invalidation events represent an existing thumbnail being replaced.
+  if (!invalidate) {
+    if (fileList.value.length === 0) return;
+    const missingFiles = fileList.value.filter(
+      (file: any) => file && !file.isPlaceholder && (!file.thumbnail || file.rawThumbnailStale) && readyIds.has(Number(file.id || 0))
+    );
+    if (missingFiles.length > 0) await getFileListThumb(missingFiles);
+    return;
+  }
+
+  // The backend has just replaced these thumbnails after detecting a changed
+  // file. Drop their data-URL entries even when this view is empty, so a
+  // later list render cannot reuse an outdated image from memory.
+  for (const fileId of readyIds) {
+    clearCachedThumbnailDataUrl(fileId, config.settings.thumbnailSize);
+  }
+  if (fileList.value.length === 0) return;
+
+  const loadedFiles = fileList.value.filter(
+    (file: any) => file && !file.isPlaceholder && readyIds.has(Number(file.id || 0))
+  );
+  if (loadedFiles.length === 0) return;
+
+  // Pick up the new modified_at value before rebuilding URLs; it is the
+  // persistent cache version for this file's contents.
+  await Promise.all(loadedFiles.map(async (file: any) => {
+    const refreshed = await getFileInfo(Number(file.id));
+    if (isCurrent() && refreshed && fileList.value.includes(file)) Object.assign(file, refreshed);
+  }));
+
+  if (!isCurrent()) return;
+
+  // Reload the regenerated thumbnails instead of retaining the old values
+  // that arrived with the refreshed file list.
+  const currentFiles = loadedFiles.filter((file: any) => fileList.value.includes(file));
+  for (const file of currentFiles) {
+    file.thumbnail = '';
+  }
+
+  // Match Refresh file info: changing filePath makes Image.vue reload the
+  // currently displayed file after its on-disk contents have changed.
+  const activeFile = fileList.value[selectedItemIndex.value];
+  if (!thumbnail_only && activeFile && readyIds.has(Number(activeFile.id || 0)) && activeFile.file_path) {
+    const activePath = activeFile.file_path;
+    activeFile.file_path = '';
+    await nextTick();
+    if (activeFile.file_path === '') activeFile.file_path = activePath;
+  }
+
+  if (isCurrent()) await getFileListThumb(currentFiles, 0, 8, true);
 }
 
 // Get the thumbnail for the files (non-blocking, runs in background)
