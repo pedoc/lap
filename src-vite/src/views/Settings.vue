@@ -403,49 +403,7 @@
             </div>
           </div>
 
-          <!-- map -->
-          <div class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
-            <div class="flex items-center gap-2 text-base-content/30">
-              <span class="font-bold uppercase text-[10px] tracking-widest">{{ $t('settings.advanced.section_map') }}</span>
-            </div>
-            <div class="flex items-center justify-between gap-4 px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
-              <div class="min-w-0 flex flex-col gap-0.5 text-sm leading-5">
-                <div>{{ $t('settings.advanced.map_provider') }}</div>
-                <div class="text-xs text-base-content/30">{{ $t('settings.advanced.map_provider_hint') }}</div>
-              </div>
-              <select class="select select-bordered select-sm min-w-40 shrink-0" v-model="config.settings.mapProvider">
-                <option v-for="option in mapProviderOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-            <div v-if="config.settings.mapProvider === 'tianditu'" class="flex items-center justify-between gap-4 px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
-              <div class="min-w-0 flex flex-col gap-0.5 text-sm leading-5">
-                <div>{{ $t('settings.advanced.tianditu_token') }}</div>
-                <div class="text-xs text-base-content/30">{{ $t('settings.advanced.tianditu_token_hint') }}</div>
-              </div>
-              <div class="flex shrink-0 items-center gap-2">
-                <div class="relative">
-                  <input
-                    v-model="tiandituTokenInput"
-                    class="input input-bordered input-sm min-w-40 w-48"
-                    type="text"
-                    spellcheck="false"
-                    autocomplete="off"
-                    :placeholder="$t('settings.advanced.tianditu_token_placeholder')"
-                    @input="onTiandituTokenInput"
-                    @keydown.enter.prevent="commitTiandituToken"
-                    @blur="commitTiandituToken"
-                  >
-                </div>
-                <span
-                  v-if="tiandituTokenStatus !== 'idle'"
-                  class="min-w-20 text-xs whitespace-nowrap"
-                  :class="tiandituTokenStatusClass"
-                >
-                  {{ tiandituTokenStatusLabel }}
-                </span>
-              </div>
-            </div>
-          </div>
+          <MapServicesSettings />
 
           <!-- data -->
           <div class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
@@ -622,6 +580,7 @@ import { useToast } from '@/common/toast';
 import { IconClose, IconRestore } from '@/common/icons';
 
 import AiModelSettings from '@/components/AiModelSettings.vue';
+import MapServicesSettings from '@/components/MapServicesSettings.vue';
 import TitleBar from '@/components/TitleBar.vue';
 import SettingsAbout from '@/components/SettingsAbout.vue';
 import MessageBox from '@/components/MessageBox.vue';
@@ -669,8 +628,6 @@ const appResources = ref({ ffmpegReady: false });
 const downloadingResource = ref('');
 const appResourcesProgress = ref(0);
 let unlistenAppResourcesProgress: (() => void) | null = null;
-const tiandituTokenInput = ref(String(config.settings.tiandituToken || ''));
-const tiandituTokenStatus = ref<'idle' | 'saved' | 'empty'>('idle');
 
 const onRestoreDone = () => {
   showRestoreDialog.value = false;
@@ -771,52 +728,6 @@ const thumbnailQualityOptions = computed(() => {
     { value: 1024, label: labels[2] },
   ];
 });
-
-const mapProviderOptions = computed(() => {
-  const labels = localeMsg.value.settings.advanced.map_provider_options || [
-    'Global (default)',
-    'China (Tianditu)',
-  ];
-  return [
-    { value: 'global', label: labels[0] },
-    { value: 'tianditu', label: labels[1] },
-  ];
-});
-
-const tiandituTokenStatusLabel = computed(() => {
-  const labels: Record<string, string> = {
-    saved: t('settings.advanced.tianditu_token_status_saved'),
-    empty: t('settings.advanced.tianditu_token_status_empty'),
-  };
-  return labels[tiandituTokenStatus.value] || '';
-});
-
-const tiandituTokenStatusClass = computed(() => {
-  if (tiandituTokenStatus.value === 'saved') return 'text-success';
-  return 'text-base-content/40';
-});
-
-function onTiandituTokenInput() {
-  tiandituTokenStatus.value = 'idle';
-}
-
-function normalizeTiandituToken(value: string) {
-  const token = value.trim();
-  const queryToken = token.match(/[?&]tk=([^&#\s]+)/i)?.[1];
-  const normalizedToken = queryToken || token.replace(/^tk=/i, '');
-  try {
-    return decodeURIComponent(normalizedToken);
-  } catch {
-    return normalizedToken;
-  }
-}
-
-function commitTiandituToken() {
-  const token = normalizeTiandituToken(tiandituTokenInput.value);
-  tiandituTokenInput.value = token;
-  config.settings.tiandituToken = token;
-  tiandituTokenStatus.value = token ? 'saved' : 'empty';
-}
 
 function onThumbnailSizeChange(event: Event) {
   const next = normalizeThumbnailSize((event.target as HTMLSelectElement).value);

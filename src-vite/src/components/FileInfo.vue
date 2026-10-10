@@ -409,13 +409,13 @@
             <div
               :class="['flex items-center text-[12px] text-base-content/75', hasLocation ? 'cursor-pointer hover:text-primary' : '']"
               @click.stop="navigateLocation"
-            >{{ formatGeoLocation() }}</div>
+            ><div class="flex flex-col items-start">{{ formatGeoLocation() }}<PhotoLocationResolver v-if="fileInfo" :file="fileInfo" /></div></div>
           </div>
         </Transition>
       </div>
 
       <!-- Map View -->
-      <div v-if="fileInfo?.gps_latitude && fileInfo?.gps_longitude" 
+      <div v-if="validGpsCoordinates(fileInfo?.gps_latitude, fileInfo?.gps_longitude)"
         class="border-t border-base-content/5 px-1 py-4 space-y-3 flex flex-col transition-[flex-grow]" 
         :class="{ 'flex-1 min-h-75 shrink-0': showMapPanel }">
         <div class="flex items-center gap-1 cursor-pointer text-base-content/70 hover:text-base-content shrink-0" @click.stop="toggleMapPanel">
@@ -507,6 +507,8 @@ import TButton from '@/components/TButton.vue';
 import FavoriteRatingControl from '@/components/FavoriteRatingControl.vue';
 import ImageHistogram from '@/components/ImageHistogram.vue';
 import MapView from '@/components/MapView.vue';
+import PhotoLocationResolver from '@/components/PhotoLocationResolver.vue';
+import { validGpsCoordinates } from '@/common/mapServices';
 
 const props = defineProps({
   navigatorViewport: { type: Object, default: null },

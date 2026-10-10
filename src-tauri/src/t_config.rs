@@ -411,6 +411,8 @@ pub struct AppConfig {
     pub db_storage_dir: Option<String>,
     #[serde(default)]
     pub network_proxy_url: Option<String>,
+    #[serde(default)]
+    pub map_services: Option<crate::t_map::Settings>,
     pub current_library_id: String,
     pub libraries: Vec<Library>,
 }
@@ -427,6 +429,7 @@ impl Default for AppConfig {
             last_selected_item_index: default_last_selected_item_index(),
             db_storage_dir: None,
             network_proxy_url: None,
+            map_services: None,
             current_library_id: "default".to_string(),
             libraries: vec![Library {
                 id: "default".to_string(),
@@ -724,6 +727,7 @@ fn recover_app_config_from_library_dbs() -> Result<AppConfig, String> {
         last_selected_item_index: default_last_selected_item_index(),
         db_storage_dir: None,
         network_proxy_url: None,
+        map_services: None,
         current_library_id,
         libraries,
     })

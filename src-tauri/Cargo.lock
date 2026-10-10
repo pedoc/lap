@@ -26,6 +26,7 @@ dependencies = [
  "keyring",
  "libc",
  "little_exif",
+ "md5",
  "ndarray",
  "objc2",
  "objc2-app-kit",
@@ -3607,6 +3608,12 @@ dependencies = [
  "cfg-if",
  "rayon",
 ]
+
+[[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "memchr"

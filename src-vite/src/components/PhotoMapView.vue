@@ -8,6 +8,13 @@
       <span class="loading loading-spinner loading-md text-primary"></span>
     </div>
     <div ref="mapEl" class="h-full w-full"></div>
+    <div class="absolute left-2 bottom-7 z-500 max-w-[calc(100%_-_1rem)] rounded-box bg-base-100/85 px-2 py-1 text-[10px]" role="status">
+      <span>{{ mapThemeInfo?.name }}</span>
+      <a v-if="mapThemeInfo?.provider === 'mapbox'" href="https://www.mapbox.com/" target="_blank" rel="noopener noreferrer"><img :src="mapboxLogo" alt="Mapbox" class="h-6 mt-1" /></a>
+      <p v-if="mapError" class="text-error whitespace-pre-wrap">{{ t('map_services.tile_error') }}: {{ mapError }}</p>
+      <button v-if="mapError" type="button" class="link" @click.stop="updateTheme">{{ t('map_services.retry') }}</button>
+    </div>
+
     <div class="absolute top-2 left-2 z-500 flex cursor-pointer rounded-box bg-base-100/30 opacity-0 pointer-events-none transition-opacity duration-150 group-hover/map:bg-base-100/70 group-hover/map:opacity-100 group-hover/map:pointer-events-auto">
       <TButton :icon="IconZoomOut" :tooltip="t('map.zoom_out')" :disabled="zoom <= 0" @click="zoomOut" />
       <TButton :icon="IconZoomIn" :tooltip="t('map.zoom_in')" :disabled="zoom >= activeMaxZoom" @click="zoomIn" />
@@ -15,6 +22,7 @@
       <TButton
         :icon="config.settings.mapTheme === 0 ? IconMapDefault : IconMapSatellite"
         :tooltip="t(config.settings.mapTheme === 0 ? 'map.standard' : 'map.satellite')"
+        :disabled="mapThemeInfo && !mapThemeInfo.supportsSatellite"
         @click="toggleMap"
       />
       <TButton v-if="showAppleMapsButton" :icon="IconExternal" :tooltip="t('file_info.open_apple_maps')" @click="openAppleMaps" />
@@ -32,7 +40,8 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
 import { config } from '@/common/config'
-import { createTileLayerGroup, getGlobalMapTheme, getMapTheme } from '@/common/mapProviders'
+import mapboxLogo from '@/assets/mapbox-logo.svg'
+import { createTileLayerGroup, getMapTheme } from '@/common/mapProviders'
 import {
   getCollectionQueryFileIds,
   getFilesByIds,
@@ -82,7 +91,8 @@ let map = null
 let markerLayer = null
 let tileLayer = null
 let resizeObserver = null
-let tileErrorFallbackTriggered = false
+const mapThemeInfo = ref(null)
+const mapError = ref('')
 let pointRequestToken = 0
 let detailRequestToken = 0
 let detailTimer = null
@@ -144,7 +154,7 @@ onBeforeUnmount(() => {
   map = null
 })
 
-watch(() => [config.settings.mapTheme, config.settings.mapProvider, config.settings.tiandituToken], updateTheme)
+watch(() => [config.settings.mapTheme, config.settings.mapServices, config.settings.mapServicesRevision], updateTheme, { deep: true })
 watch(() => config.settings.mapMarkerSize, () => renderMarkers())
 watch(() => [props.queryParams, props.querySource, props.collectionId, props.fileIds], () => {
   if (!props.active) {
@@ -466,30 +476,24 @@ function addPhotoMarker(lat, lon, fileId, count, cluster = null) {
 }
 
 function updateTheme() {
-  const theme = getMapTheme(config.settings.mapProvider, config.settings.tiandituToken, config.settings.mapTheme)
-  applyTheme(theme, false)
-}
-
-function applyTheme(theme, isFallback) {
   if (!map) return
-  if (tileLayer) map.removeLayer(tileLayer)
-  activeMaxZoom.value = theme.maxZoom
-  map.setMaxZoom(theme.maxZoom)
-  if (map.getZoom() > theme.maxZoom) map.setZoom(theme.maxZoom)
-  if (!isFallback) tileErrorFallbackTriggered = false
-
-  const created = createTileLayerGroup(L, theme)
-  const activeLayer = created.layer
-  tileLayer = activeLayer.addTo(map)
-  created.tileLayers.forEach(layer => {
-    layer.on('tileerror', () => {
-      // Requests from a removed layer can still fail after a provider switch.
-      // Ignore them so an old OSM request cannot replace the new provider.
-      if (tileLayer !== activeLayer || tileErrorFallbackTriggered || isFallback) return
-      tileErrorFallbackTriggered = true
-      applyTheme(getGlobalMapTheme(config.settings.mapTheme), true)
-    })
-  })
+  mapError.value = ''
+  try {
+    const theme = getMapTheme(config.settings.mapServices, config.settings.mapTheme, config.settings.mapServicesRevision)
+    if (!theme.supportsSatellite) config.settings.mapTheme = 0
+    if (tileLayer) map.removeLayer(tileLayer)
+    mapThemeInfo.value = theme
+    activeMaxZoom.value = theme.maxZoom
+    map.setMaxZoom(theme.maxZoom)
+    if (map.getZoom() > theme.maxZoom) map.setZoom(theme.maxZoom)
+    const created = createTileLayerGroup(L, theme)
+    const activeLayer = created.layer
+    tileLayer = activeLayer.addTo(map)
+    created.tileLayers.forEach(tile => tile.on('tileerror', event => {
+      if (tileLayer !== activeLayer) return // Ignore delayed failures from a removed provider layer.
+      mapError.value = event.error?.message || t('map_services.tile_error')
+    }))
+  } catch (reason) { mapError.value = reason?.message || String(reason) }
 }
 
 function zoomIn() { if (map && zoom.value < activeMaxZoom.value) map.setZoom(zoom.value + 1) }

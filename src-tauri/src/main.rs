@@ -34,6 +34,7 @@ mod t_lens;
 mod t_libraw;
 mod t_raw_display;
 mod t_network;
+mod t_map;
 mod t_resources;
 mod t_menu;
 mod t_migration;
@@ -425,6 +426,11 @@ async fn main() {
             t_cmds::merge_persons,
             t_cmds::set_person_hidden,
             t_cmds::set_person_cover,
+            t_map::commands::get_map_services,
+            t_map::commands::save_map_services,
+            t_map::commands::get_map_tile,
+            t_map::commands::cancel_map_tile,
+            t_map::commands::resolve_photo_location,
             t_cmds::delete_person,
             t_cmds::get_faces_for_file,
             t_cmds::get_person_thumbnail,

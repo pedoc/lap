@@ -75,6 +75,7 @@ tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 uuid = { version = "1", features = ["v4"] }
 blake3 = "1.8.3"
 sha2 = "0.10"
+md5 = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 jxl-oxide = { version = "0.12.5", features = ["image"] }
 libc = "0.2"

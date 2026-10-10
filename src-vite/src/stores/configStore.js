@@ -138,6 +138,8 @@ export const useConfigStore = defineStore('configStore', {
       
       // grid view settings
       thumbnailSize: 512,         // gallery thumbnail quality: 256, 512, or 1024
+      mapServices: null,
+      mapServicesRevision: '',
       mapProvider: 'global',      // global | tianditu
       tiandituToken: '',
       mapMarkerSize: 64,          // map photo marker size in px
@@ -397,6 +399,7 @@ export const useConfigStore = defineStore('configStore', {
 
   },
   persist: {
+    omit: ['settings.mapServices', 'settings.mapServicesRevision'],
     serializer: {
       serialize: JSON.stringify,
       deserialize: (value) => {

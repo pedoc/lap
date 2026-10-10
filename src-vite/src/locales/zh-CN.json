@@ -1982,5 +1982,41 @@
     "cover_hint": "选择封面会确认这张人脸的归属，并在重新检测或切换模型后保留。",
     "hidden_empty": "没有隐藏的人物",
     "cover_unavailable": "没有可用的人脸预览，请先重新生成这张照片的缩略图。"
+  },
+  "map_services": {
+    "title": "地图与地点服务",
+    "description": "分别选择地图显示和经纬度转地址服务。配置保存后，所有地图窗口立即使用新服务，不再静默切换供应商。",
+    "tile_provider": "地图显示服务",
+    "geocoder": "地点解析服务",
+    "service_scope": "高德和腾讯在此提供地址解析，不是地图显示引擎；地图显示可独立选择天地图等服务。",
+    "console": "申请密钥 / 控制台",
+    "custom_hint": "URL 必须包含 {z}、{x}、{y}，可使用 {s}、{token}。署名是纯文本。自建服务请遵守版权及缓存条款。",
+    "web_key_hint": "需要 Web 服务 / REST API Key，不是 JavaScript SDK Key。腾讯启用签名校验时还需填写 SK。",
+    "public_token_hint": "只接受以 pk. 开头的 Mapbox Public Access Token。样式所有者和样式 ID 可自定义。",
+    "auto_import": "导入或刷新照片元数据时自动调用在线解析（默认关闭，可能使扫描变慢并产生费用；失败时使用离线结果）。",
+    "privacy": "在线解析会将经纬度发送给所选服务，不上传照片。已有照片不会因切换服务而批量改写，可在照片信息中单独重新解析。",
+    "proxy_hint": "瓦片与地址请求均使用“通用”中的软件代理。离线地点解析不需要网络；地图显示仍需要联网。",
+    "saved": "已保存并应用到地图窗口",
+    "reload": "重新载入配置",
+    "save": "保存并应用",
+    "saving": "保存中…",
+    "resolve": "重新解析拍摄地点",
+    "resolving": "解析地点中…",
+    "tile_error": "地图瓦片加载失败",
+    "retry": "重试当前服务",
+    "fields": {
+      "token": "API Key / Token",
+      "secret": "服务 SK（可选）",
+      "owner": "样式所有者",
+      "style": "普通地图样式 ID",
+      "satelliteStyle": "卫星地图样式 ID",
+      "tileUrl": "普通瓦片 URL",
+      "satelliteUrl": "卫星瓦片 URL（可选）",
+      "attribution": "版权署名（必填）",
+      "subdomains": "子域（如 abc 或 0123）",
+      "maxZoom": "最大缩放级别",
+      "satelliteOwner": "卫星样式所有者（默认 mapbox）",
+      "referer": "本应用授权 Referer（可选）"
+    }
   }
 }

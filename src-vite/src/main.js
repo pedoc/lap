@@ -15,6 +15,8 @@ import App from '@/App.vue'
 import { useConfigStore } from '@/stores/configStore'
 import '@/assets/app.css'
 import { applyAiConfiguration } from '@/common/aiModels'
+import { applyMapServices, migrateLegacyMapServices } from '@/common/mapServices'
+import { fileInfoRevision } from '@/common/fileInfoRefresh'
 
 // I18n
 import en from '@/locales/en.json'
@@ -44,6 +46,20 @@ const config = useConfigStore() // Use the config store
 const currentWindowLabel = getCurrentWebviewWindow().label
 const isMainWindow = currentWindowLabel === 'main'
 const isSettingsWindow = currentWindowLabel === 'settings'
+async function refreshMapServices() {
+  try {
+    let state = await invoke('get_map_services');
+    if (!state.configured && isMainWindow) {
+      try { state = await invoke('save_map_services', { settings: migrateLegacyMapServices(config.settings), expectedRevision: state.revision }); }
+      catch { state = await invoke('get_map_services'); }
+    }
+    applyMapServices(config, state);
+  } catch { console.error('Failed to load map service configuration'); }
+}
+void refreshMapServices();
+listen('map-services-changed', event => { applyMapServices(config, event.payload); });
+listen('map-location-changed', event => { if (event.payload.library_id === faceLibrary._libraryId) fileInfoRevision.value++; });
+
 let aiRefreshRequest = 0
 async function refreshAiConfiguration() {
   const request = ++aiRefreshRequest

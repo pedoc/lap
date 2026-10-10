@@ -1982,5 +1982,41 @@
     "cover_hint": "Choosing a cover confirms this face’s identity and preserves it across rescans and model changes.",
     "hidden_empty": "No hidden people",
     "cover_unavailable": "No face preview is available. Regenerate this photo’s thumbnail first."
+  },
+  "map_services": {
+    "title": "Maps and location services",
+    "description": "Choose map display and reverse geocoding independently. Saving updates all map windows without silently switching vendors.",
+    "tile_provider": "Map display service",
+    "geocoder": "Location service",
+    "service_scope": "AMap and Tencent are address services here, not map renderers. Choose a display service such as Tianditu independently.",
+    "console": "API keys / Console",
+    "custom_hint": "URLs require {z}, {x}, {y}; optional {s} and {token} are supported. Attribution is plain text. Follow your provider’s copyright and caching terms.",
+    "web_key_hint": "Use a Web Service / REST API key, not a JavaScript SDK key. Tencent also needs the SK if signature checking is enabled.",
+    "public_token_hint": "Use a Mapbox Public Access Token starting with pk. Style owner and IDs are configurable.",
+    "auto_import": "Resolve locations online when importing or refreshing metadata (off by default; may slow scans and incur charges; failures use offline results).",
+    "privacy": "Online resolution sends coordinates to the selected service, never photos. Switching does not bulk rewrite existing locations; resolve individual photos in their information panel.",
+    "proxy_hint": "Tiles and address requests use the application proxy in General. Offline location lookup needs no network; map display is still online.",
+    "saved": "Saved and applied to map windows",
+    "reload": "Reload configuration",
+    "save": "Save and apply",
+    "saving": "Saving…",
+    "resolve": "Resolve shooting location again",
+    "resolving": "Resolving location…",
+    "tile_error": "Map tile could not be loaded",
+    "retry": "Retry this service",
+    "fields": {
+      "token": "API Key / Token",
+      "secret": "Service SK (optional)",
+      "owner": "Style owner",
+      "style": "Standard style ID",
+      "satelliteStyle": "Satellite style ID",
+      "tileUrl": "Standard tile URL",
+      "satelliteUrl": "Satellite tile URL (optional)",
+      "attribution": "Attribution (required)",
+      "subdomains": "Subdomains (e.g. abc or 0123)",
+      "maxZoom": "Maximum zoom",
+      "satelliteOwner": "Satellite owner (default: mapbox)",
+      "referer": "Authorized application Referer (optional)"
+    }
   }
 }
