@@ -1971,5 +1971,16 @@
     "stage_database_commit": "保存结果",
     "stage_inference": "模型处理",
     "stage_complete": "处理完成"
+  },
+  "person_management": {
+    "visible": "人物",
+    "hidden": "已隐藏",
+    "hide": "隐藏人物",
+    "unhide": "取消隐藏",
+    "choose_cover": "选择人物封面",
+    "use_cover": "设为人物封面",
+    "cover_hint": "选择封面会确认这张人脸的归属，并在重新检测或切换模型后保留。",
+    "hidden_empty": "没有隐藏的人物",
+    "cover_unavailable": "没有可用的人脸预览，请先重新生成这张照片的缩略图。"
   }
 }

@@ -289,6 +289,15 @@ pub fn run_face_indexing(
             }
         };
 
+        let mut grouping = crate::ai::face_incremental::GroupingCadence::default();
+        let mut last_grouping = std::time::Instant::now();
+        let mut total_persons = 0usize;
+        let publish_people = |result: &t_cluster::ClusterResult| {
+            if !result.person_ids.is_empty() {
+                let _ = emit("face-person-changed",serde_json::json!({"mode":"incremental","previousPersonIds":result.person_ids,"fileIds":result.file_ids}));
+                let _ = emit("face-data-changed",serde_json::json!({"fileIds":result.file_ids}));
+            }
+        };
         for source in files {
             let (file_id,file_path,width,height,size)=(source.id,source.path.clone(),source.width,source.height,source.size);
             if *cancel_token.lock().unwrap() || crate::t_config::current_library_id().ok().as_deref() != Some(library_id.as_str()) {
@@ -323,6 +332,7 @@ pub fn run_face_indexing(
                             let committed=records.map_err(|error|error.to_string()).and_then(|records|crate::ai::face_jobs::replace_scanned_reported(&db_conn,&source,&records));
                             match committed {
                                 Ok(report)=>{
+                                    grouping.committed(report.stored_regions);
                                     total_faces+=report.stored_regions;detail.stored_regions=report.stored_regions;detail.manual_regions=report.manual_regions;detail.annotation_suppressed=report.suppressed_detections;
                                     detail.outcome=if detail.annotation_suppressed>0&&detail.stored_regions==0 {"annotation_suppressed"} else if detail.pipeline.detected_faces==0 {"no_detection"} else if detail.pipeline.accepted_faces==0&&detail.pipeline.quality_filtered>0 {"quality_filtered"} else {"stored"}.into();
                                     let _=emit("face-data-changed",serde_json::json!({"file_id":file_id}));
@@ -335,6 +345,22 @@ pub fn run_face_indexing(
                 }
             }
             diagnostics.add(detail);
+            if grouping.due(last_grouping.elapsed()) && !*cancel_token.lock().unwrap() {
+                progress_token.lock().unwrap().phase = "clustering".into();
+                let _ = emit("face_index_progress",serde_json::json!({"current":current,"total":total_files,"faces_found":total_faces,"phase":"clustering","failed":failed,"cached":cached}));
+                let result = t_cluster::cluster_faces(epsilon,scope.file_ids.as_deref(),|progress| {
+                    let _=emit("cluster_progress",serde_json::json!({"phase":progress.phase,"current":progress.current,"total":progress.total}));
+                },|| *cancel_token.lock().unwrap());
+                match result {
+                    Ok(result) => { if !*cancel_token.lock().unwrap() { total_persons=result.total_persons; } publish_people(&result); }
+                    Err(error) => {
+                        let _=emit("face_index_finished",serde_json::json!({"total_faces":total_faces,"total_persons":total_persons,"cancelled":false,"failed":failed,"cached":cached,"error":error,"diagnostics":diagnostics}));
+                        return;
+                    }
+                }
+                grouping.published(); last_grouping=std::time::Instant::now();
+                progress_token.lock().unwrap().phase = "indexing".into();
+            }
 
             // Each committed image becomes visible immediately.
             {
@@ -361,7 +387,7 @@ pub fn run_face_indexing(
                 "face_index_finished",
                 serde_json::json!({
                     "total_faces": total_faces,
-                    "total_persons": 0,
+                    "total_persons": total_persons,
                     "cancelled": true, "failed":failed, "cached":cached, "diagnostics":diagnostics
                 }),
             );
@@ -404,7 +430,7 @@ pub fn run_face_indexing(
                 *cancel_token_cluster.lock().unwrap()
             },
         ) {
-            Ok(count) => count,
+            Ok(result) => { publish_people(&result); if *cancel_token.lock().unwrap() { total_persons } else { result.total_persons } },
             Err(e) => {
                 let _=emit("face_index_finished",serde_json::json!({"total_faces":total_faces,"total_persons":0,"cancelled":false,"failed":failed,"cached":cached,"error":e,"diagnostics":diagnostics}));
                 return;

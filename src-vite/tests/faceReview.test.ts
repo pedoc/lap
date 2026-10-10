@@ -9,20 +9,21 @@ import { renderToString } from 'vue/server-renderer';
 import { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, type FaceReviewItem } from '../src/common/faceReview.ts';
 import { applyFaceRename } from '../src/common/faceUpdates.ts';
 import { faceColor } from '../src/common/faceUi.ts';
+import { canUsePersonCover } from '../src/common/personList.ts';
 const item: FaceReviewItem = { faceId: 11, annotationId: null, fileId: 1, fileName: 'a.jpg', personId: 7, personName: 'Alice', bbox: '{"x":1,"y":1,"width":20,"height":20}', width: 100, height: 100, modifiedAt: 10, size: 100, state: 'suggested' };
 const source = readFileSync(new URL('../src/components/FaceReview.vue', import.meta.url), 'utf8');
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
 const code = stripTypeScriptTypes(script).replace(/^import .*;\r?\n/gm, '');
-const helpers = { applyFaceRename, faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, faceColor };
-function harness(handler?: (command: string, args: any) => Promise<any>) {
+const helpers = { canUsePersonCover, applyFaceRename, faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, faceColor };
+function harness(handler?: (command: string, args: any) => Promise<any>, person: any = null) {
   const listeners: Record<string, (event: any) => void> = {};
   const calls: any[] = [], events: any[] = [], handlers: string[] = [], mounts: Array<() => any> = [], unmounts: Array<() => void> = [];
   const libConfig = { _libraryId: 'library-a' }, config = { settings: { ai: { faceProfile: 'profile-a' } } };
-  const api = runInNewContext(`${code}\n;({load, apply, close, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root, targetPerson, newName, canSubmit, previews});`, {
+  const api = runInNewContext(`${code}\n;({load, apply, chooseCover, close, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root, targetPerson, newName, canSubmit, previews});`, {
     ...helpers,
     ref: (value: any) => ({ value }), computed: (getter: () => any) => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: (fn: () => void) => mounts.push(fn), onBeforeUnmount: (fn: () => void) => unmounts.push(fn), nextTick: async () => {},
-    defineProps: () => ({ person: null }), defineEmits: () => (...args: any[]) => events.push(args), useI18n: () => ({ t: (key: string) => key }),
+    defineProps: () => ({ person }), defineEmits: () => (...args: any[]) => events.push(args), useI18n: () => ({ t: (key: string) => key }),
     useUIStore: () => ({ pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const i = handlers.indexOf(id); if (i >= 0) handlers.splice(i, 1); } }),
     libConfig, config, window: { innerWidth: 1000, innerHeight: 800, addEventListener() {}, removeEventListener() {} },
     invoke: async (command: string, args: any) => {
@@ -97,7 +98,7 @@ test('review keyboard/input ownership is released when the dialog is disposed', 
   h.api.busy.value = false; h.api.close(); assert.equal(h.events[0][0], 'cancel');
   h.unmount(); assert.equal(h.handlers.length, 0);
 });
-async function rendered(rows: FaceReviewItem[], filter = 'suggested') {
+async function rendered(rows: FaceReviewItem[], filter = 'suggested', person: any = null) {
   const patched = source.replace('const items = ref<FaceReviewItem[]>([])', 'const items = ref<FaceReviewItem[]>(__rows)').replace("const filter = ref(personId ? 'all' : 'suggested')", `const filter = ref('${filter}')`);
   const { descriptor } = parse(patched);
   let compiled = stripTypeScriptTypes(compileScript(descriptor, { id: 'review-test', inlineTemplate: true }).content);
@@ -114,7 +115,7 @@ async function rendered(rows: FaceReviewItem[], filter = 'suggested') {
     config: { settings: { ai: { faceProfile: 'p' } } }, libConfig: { _libraryId: 'lib' }, invoke: async () => null, listen: async () => () => {},
     window: { innerWidth: 1000, innerHeight: 800 },
   });
-  return renderToString(Vue.createSSRApp(component));
+  return renderToString(Vue.createSSRApp(component, { person }));
 }
 test('the real compiled review template renders person editors and distinct review categories', async () => {
   const html = await rendered([item]);
@@ -180,4 +181,22 @@ test('inline renaming in the actual review listener retains previews, row object
   assert.equal(h.api.items.value[0], row); assert.equal(row.personName, 'Alice New'); assert.equal(row.state, 'confirmed');
   assert.equal(h.api.previews.value[key], 'cached-jpeg'); assert.equal(h.api.selectedItems.value.length, 1);
   assert.equal(h.calls.filter(c => c.command === 'get_face_review_page').length, requests); h.unmount();
+});
+
+test('person review renders cover selection only for active faces of that identity', async () => {
+  const html = await rendered([item, {...item, faceId:12, state:'ignored'}], 'all', {id:7,name:'Alice'});
+  assert.equal((html.match(/person_management\.use_cover/g) || []).length,1);
+  const global = await rendered([item], 'all');
+  assert.doesNotMatch(global,/person_management\.use_cover/);
+});
+test('choosing a cover sends a versioned face snapshot and closes only after success', async () => {
+  const h = harness(undefined,{id:7,name:'Alice'});
+  await h.api.load(); await h.api.chooseCover(h.api.items.value[0]);
+  const request = h.calls.find(call=>call.command==='set_person_cover').args;
+  assert.equal(request.libraryId,'library-a'); assert.equal(request.profile,'profile-a'); assert.equal(request.personId,7);
+  assert.equal(request.item.faceId,11); assert.equal(request.item.modifiedAt,10);
+  assert.equal(h.events[0][0],'cancel');
+  const failed = harness(async command => { if(command==='set_person_cover') throw new Error('Source changed'); return {items:[item],total:1,counts:{}}; },{id:7,name:'Alice'});
+  await failed.api.load(); await failed.api.chooseCover(item);
+  assert.equal(failed.api.error.value,'Source changed'); assert.equal(failed.events.length,0);
 });

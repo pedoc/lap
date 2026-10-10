@@ -131,7 +131,7 @@ pub fn page(conn: &Connection, request: &PageRequest) -> Result<ReviewPage, Stri
         counts,
     })
 }
-fn current(conn: &Connection, expected: &ReviewItem) -> Result<ReviewItem, String> {
+pub(crate) fn current(conn: &Connection, expected: &ReviewItem) -> Result<ReviewItem, String> {
     if expected.file_id <= 0 || (expected.face_id.is_none() && expected.annotation_id.is_none()) {
         return Err("Invalid face review selection".into());
     }

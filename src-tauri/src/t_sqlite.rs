@@ -8336,6 +8336,7 @@ impl ATag {
 /// Person struct for face recognition
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Person {
+    pub hidden: bool,
     pub id: i64,
     pub name: Option<String>,
     pub count: Option<i64>,
@@ -8355,6 +8356,10 @@ pub struct PersonPage {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonPageRequest {
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default)]
+    pub ids: Option<Vec<i64>>,
     pub sort: i64,
     pub offset: usize,
     pub limit: usize,
@@ -8374,12 +8379,14 @@ impl Person {
     /// Optimized: single query, no runtime image processing
     pub fn get_all(sort: i64) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
+        crate::ai::face_annotations::ensure_schema(&conn)?;
 
         // Single query with JOIN for count, directly fetch pre-stored thumbnail
         let query = "
-            SELECT p.id, p.name, COUNT(f.id) as count, p.thumbnail
+            SELECT p.id, p.name, COUNT(f.id) as count, p.thumbnail, p.hidden
             FROM persons p
             LEFT JOIN faces f ON f.person_id = p.id
+            WHERE p.hidden=0
             GROUP BY p.id
             ORDER BY {order_clause}
         ";
@@ -8399,6 +8406,7 @@ impl Person {
                     .as_ref()
                     .map(|data| general_purpose::STANDARD.encode(data));
                 Ok(Self {
+                    hidden: row.get(4)?,
                     id: row.get(0)?,
                     name: row.get(1)?,
                     count: row.get(2)?,
@@ -8419,6 +8427,7 @@ impl Person {
     /// Prefers the pre-stored thumbnail; generates it on-the-fly if missing.
     pub fn get_thumbnail(person_id: i64) -> Result<Option<String>, String> {
         let conn = open_conn()?;
+        crate::ai::face_annotations::ensure_schema(&conn)?;
 
         // Prefer the pre-stored thumbnail.
         let stored: Option<Vec<u8>> = conn
@@ -8458,6 +8467,17 @@ impl Person {
 
     pub fn get_page(request: &PersonPageRequest) -> Result<PersonPage, String> {
         let conn = open_conn()?;
+        crate::ai::face_annotations::ensure_schema(&conn)?;
+        let visible_file_conditions = format!(
+            "{} AND {} AND {}",
+            AFile::album_filter_sql("a"),
+            AFile::search_exclusion_condition("b"),
+            AFile::live_photo_companion_exclusion_condition(),
+        );
+        Self::get_page_on(&conn, request, &visible_file_conditions)
+    }
+
+    fn get_page_on(conn: &Connection, request: &PersonPageRequest, visible_file_conditions: &str) -> Result<PersonPage, String> {
         let limit = request.limit.clamp(1, 100);
         let search = request.search.trim();
         let search_pattern = format!(
@@ -8467,15 +8487,17 @@ impl Person {
                 .replace('%', "\\%")
                 .replace('_', "\\_")
         );
-        let visible_file_conditions = format!(
-            "{} AND {} AND {}",
-            AFile::album_filter_sql("a"),
-            AFile::search_exclusion_condition("b"),
-            AFile::live_photo_companion_exclusion_condition(),
-        );
+        let id_condition = match &request.ids {
+            None => String::new(),
+            Some(ids) => {
+                if ids.is_empty() || ids.len() > 100 || ids.iter().any(|id| *id <= 0) { return Err("Choose 1–100 valid people".into()); }
+                format!(" AND p.id IN ({})", ids.iter().map(i64::to_string).collect::<Vec<_>>().join(","))
+            }
+        };
         let visible_person_condition = format!(
-            "EXISTS (SELECT 1 FROM faces f JOIN afiles a ON a.id = f.file_id JOIN afolders b ON b.id = a.folder_id WHERE f.person_id = p.id{})",
-            visible_file_conditions,
+            "p.hidden={}{} AND (EXISTS (SELECT 1 FROM faces f JOIN afiles a ON a.id = f.file_id JOIN afolders b ON b.id = a.folder_id WHERE f.person_id = p.id{}){})",
+            i32::from(request.hidden), id_condition, visible_file_conditions,
+            if request.hidden { " OR NOT EXISTS(SELECT 1 FROM faces WHERE person_id=p.id)" } else { "" },
         );
         let total: i64 = conn
             .query_row(
@@ -8525,22 +8547,20 @@ impl Person {
             _ => name_asc,
         };
         let query = format!(
-            "SELECT p.id, p.name, COUNT(DISTINCT a.id) as count, p.thumbnail
+            "SELECT p.id, p.name,
+                    (SELECT COUNT(DISTINCT a.id) FROM faces f JOIN afiles a ON a.id=f.file_id JOIN afolders b ON b.id=a.folder_id WHERE f.person_id=p.id{visible_file_conditions}) AS count,
+                    p.thumbnail, p.hidden
              FROM persons p
-             JOIN faces f ON f.person_id = p.id
-             JOIN afiles a ON a.id = f.file_id
-             JOIN afolders b ON b.id = a.folder_id
-             WHERE (?1 = '' OR COALESCE(p.name, '') LIKE ?2 ESCAPE '\\' COLLATE NOCASE){}
-             GROUP BY p.id
+             WHERE (?1 = '' OR COALESCE(p.name, '') LIKE ?2 ESCAPE '\\' COLLATE NOCASE) AND {visible_person_condition}
              ORDER BY {order_clause}
              LIMIT ?3 OFFSET ?4",
-            visible_file_conditions,
         );
         let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
         let persons_iter = stmt
             .query_map(params![search, search_pattern, (limit + 1) as i64, request.offset as i64], |row| {
                 let thumb_data: Option<Vec<u8>> = row.get(3)?;
                 Ok(Self {
+                    hidden: row.get(4)?,
                     id: row.get(0)?,
                     name: row.get(1)?,
                     count: row.get(2)?,
@@ -8787,7 +8807,8 @@ impl Person {
         // Generate thumbnail
         let thumbnail = Self::generate_thumbnail(&conn, person_id, cover_face_id)?;
 
-        // Update in database
+        // Do not discard the last usable cover when the source is offline.
+        if thumbnail.is_none() { return Ok(()); }
         conn.execute(
             "UPDATE persons SET thumbnail = ?1 WHERE id = ?2",
             params![thumbnail, person_id],
@@ -8803,21 +8824,86 @@ impl Person {
         crate::ai::face_names::delete_person(&conn, person_id)
     }
 
-    /// Create a new person (usually from face clustering)
-    pub fn create(name: Option<&str>) -> Result<i64, String> {
-        let conn = open_conn()?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
 
-        conn.execute(
-            "INSERT INTO persons (name, created_at) VALUES (?1, ?2)",
-            params![name, now],
-        )
-        .map_err(|e| e.to_string())?;
+}
 
-        Ok(conn.last_insert_rowid())
+#[cfg(test)]
+mod person_visibility_tests {
+    use super::*;
+    fn db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,thumbnail BLOB,hidden INTEGER); CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,visible INTEGER); CREATE TABLE afolders(id INTEGER PRIMARY KEY); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER); INSERT INTO persons VALUES(1,'Alice',NULL,0),(2,'Bob',NULL,1),(3,'No visible media',NULL,0); INSERT INTO afolders VALUES(1); INSERT INTO afiles VALUES(1,1,1),(2,1,1),(3,1,0); INSERT INTO faces VALUES(1,1,1),(2,1,1),(3,2,2),(4,3,3);").unwrap();
+        conn
+    }
+    fn request(hidden: bool) -> PersonPageRequest {
+        PersonPageRequest {
+            sort: 0,
+            offset: 0,
+            limit: 1,
+            search: String::new(),
+            hidden,
+            ids: None,
+            refresh_summary: Some(PersonPageRefreshSummary {
+                selected_person_id: Some(2),
+            }),
+        }
+    }
+    #[test]
+    fn hidden_people_have_a_separate_paginated_list_without_affecting_photo_counts() {
+        let c = db();
+        let visible = Person::get_page_on(&c, &request(false), " AND a.visible=1").unwrap();
+        assert_eq!(visible.total, 1);
+        assert_eq!(visible.persons[0].id, 1);
+        assert_eq!(visible.persons[0].count, Some(1));
+        assert!(!visible.persons[0].hidden);
+        assert_eq!(visible.selected_person_visible, Some(false));
+        let hidden = Person::get_page_on(&c, &request(true), " AND a.visible=1").unwrap();
+        assert_eq!(hidden.total, 1);
+        assert_eq!(hidden.persons[0].id, 2);
+        assert!(hidden.persons[0].hidden);
+        assert_eq!(hidden.selected_person_visible, Some(true));
+        let mut search = request(true);
+        search.search = "Alice".into();
+        let empty = Person::get_page_on(&c, &search, " AND a.visible=1").unwrap();
+        assert!(empty.persons.is_empty());
+        assert_eq!(empty.total, 0);
+    }
+    #[test]
+    fn hidden_identity_without_current_observations_remains_recoverable() {
+        let c = db();
+        c.execute("INSERT INTO persons VALUES(4,'Hidden empty',NULL,1)", [])
+            .unwrap();
+        let mut query = request(true);
+        query.limit = 100;
+        let page = Person::get_page_on(&c, &query, " AND a.visible=1").unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(
+            page.persons
+                .iter()
+                .find(|person| person.id == 4)
+                .unwrap()
+                .count,
+            Some(0)
+        );
+        assert_eq!(
+            Person::get_page_on(&c, &request(false), " AND a.visible=1")
+                .unwrap()
+                .total,
+            1
+        );
+    }
+    #[test]
+    fn retained_ids_are_bounded_and_respect_hidden_and_media_filters() {
+        let c = db();
+        let mut query = request(false);
+        query.ids = Some(vec![1, 2, 3]);
+        let page = Person::get_page_on(&c, &query, " AND a.visible=1").unwrap();
+        assert_eq!(page.persons.len(), 1);
+        assert_eq!(page.persons[0].id, 1);
+        for ids in [vec![], vec![0], vec![-1], vec![1; 101]] {
+            query.ids = Some(ids);
+            assert!(Person::get_page_on(&c, &query, "").is_err());
+        }
     }
 }
 
@@ -8957,18 +9043,6 @@ impl Face {
             .map_err(|e| e.to_string())?;
 
         Ok(faces)
-    }
-
-    /// Assign a face to a person
-    pub fn assign_to_person(face_id: i64, person_id: i64) -> Result<usize, String> {
-        let conn = open_conn()?;
-        let result = conn
-            .execute(
-                "UPDATE faces SET person_id = ?1 WHERE id = ?2",
-                params![person_id, face_id],
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(result)
     }
 
     /// Mark a file as scanned using an existing connection

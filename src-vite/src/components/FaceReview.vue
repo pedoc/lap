@@ -41,6 +41,7 @@
               <span v-else class="text-xs opacity-50 p-2 text-center">{{ t('face_review.no_preview') }}</span>
               <input v-if="item.state !== 'stale'" v-model="selected" type="checkbox" :value="faceReviewKey(item)" :disabled="busy" class="checkbox checkbox-sm absolute top-1 left-1 bg-base-100" :aria-label="`${t('face_review.select_face')}: ${item.fileName} #${item.faceId || item.annotationId}`" />
             </label>
+            <button v-if="canUsePersonCover(item, personId)" type="button" class="btn btn-xs" :disabled="busy || loading || !previews[faceReviewKey(item)]" :title="t(previews[faceReviewKey(item)] ? 'person_management.cover_hint' : 'person_management.cover_unavailable')" @click="chooseCover(item)">{{ t('person_management.use_cover') }}</button>
             <FaceNameEditor v-if="faceReviewCanEdit(item)" :face="faceForEditor(item)" :label="item.personName || `${t('face_actions.unknown')} #${item.personId ?? item.faceId}`" :color="faceColor(faceForEditor(item), 0)" />
             <span v-else class="text-xs truncate">{{ item.personName || t('face_actions.unknown') }}</span>
             <span class="text-xs opacity-60">{{ t(`face_review.state_${item.state}`) }}</span>
@@ -68,6 +69,7 @@ import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
 import { faceColor } from '@/common/faceUi';
+import { canUsePersonCover } from '@/common/personList';
 import { applyFaceRename } from '@/common/faceUpdates';
 import { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, type FaceReviewItem, type FaceReviewAction } from '@/common/faceReview';
 import ModalDialog from '@/components/ModalDialog.vue';
@@ -123,6 +125,15 @@ async function loadPreviews(rows: FaceReviewItem[], ticket: number) {
     }
   };
   await Promise.all([worker(), worker(), worker()]);
+}
+async function chooseCover(item: FaceReviewItem) {
+  if (!current() || busy.value || !canUsePersonCover(item, personId)) return;
+  busy.value = true; error.value = '';
+  try {
+    await invoke('set_person_cover', { libraryId, profile, personId, item: { ...item } });
+    if (current()) { await load(); emit('cancel'); }
+  } catch (e: any) { if (current()) error.value = e?.message || String(e); }
+  finally { if (alive) busy.value = false; }
 }
 async function apply() {
   const action = pending.value;

@@ -58,19 +58,40 @@ fn sources(ids: &[i64], target: i64) -> Result<Vec<i64>, String> {
     Ok(unique.into_iter().collect())
 }
 fn snapshot(conn: &Connection, id: i64) -> Result<PersonSnapshot, String> {
-    let (name, manual, cover): (Option<String>, i64, Option<i64>) = conn
+    let (name, manual, cover, hidden, cover_annotation): (
+        Option<String>,
+        i64,
+        Option<i64>,
+        bool,
+        Option<i64>,
+    ) = conn
         .query_row(
-            "SELECT name,manual,cover_face_id FROM persons WHERE id=?1",
+            "SELECT name,manual,cover_face_id,hidden,cover_annotation_id FROM persons WHERE id=?1",
             [id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or("Person no longer exists; refresh the merge preview")?;
     let mut hash = Sha256::new();
     hash.update(
-        serde_json::to_vec(&serde_json::json!([id, name, manual, cover]))
-            .map_err(|e| e.to_string())?,
+        serde_json::to_vec(&serde_json::json!([
+            id,
+            name,
+            manual,
+            cover,
+            hidden,
+            cover_annotation
+        ]))
+        .map_err(|e| e.to_string())?,
     );
     let mut face_count = 0;
     {
@@ -213,12 +234,77 @@ pub fn merge(conn: &Connection, expected: &MergePreview) -> Result<MergeResult, 
         }
     }
 }
+/// Hiding affects only People navigation, never media or face membership.
+pub fn set_hidden(conn: &Connection, person_id: i64, hidden: bool) -> Result<(), String> {
+    super::face_annotations::ensure_schema(conn)?;
+    let changed = conn
+        .execute(
+            "UPDATE persons SET hidden=?1,manual=1 WHERE id=?2",
+            rusqlite::params![hidden, person_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed != 1 {
+        return Err("Person no longer exists; refresh the list".into());
+    }
+    Ok(())
+}
+
+pub fn set_cover(
+    conn: &Connection,
+    person_id: i64,
+    item: &super::face_review::ReviewItem,
+) -> Result<(), String> {
+    let preview = super::face_review::thumbnail(conn, item)?.ok_or(
+        "Face preview unavailable; regenerate the photo thumbnail before choosing a cover",
+    )?;
+    use base64::Engine;
+    let jpeg = base64::engine::general_purpose::STANDARD
+        .decode(preview)
+        .map_err(|e| e.to_string())?;
+    set_cover_with_thumbnail(conn, person_id, item, &jpeg)
+}
+
+fn set_cover_with_thumbnail(
+    conn: &Connection,
+    person_id: i64,
+    item: &super::face_review::ReviewItem,
+    jpeg: &[u8],
+) -> Result<(), String> {
+    super::face_annotations::import_existing(conn)?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| e.to_string())?;
+    let result = (|| {
+        let current = super::face_review::current(conn, item)?;
+        if current.person_id != Some(person_id)
+            || !["suggested", "confirmed"].contains(&current.state.as_str())
+        {
+            return Err("Choose an active face belonging to this person".into());
+        }
+        let face = current.face_id.ok_or("Face is no longer available")?;
+        let annotation = super::face_annotations::capture_face(conn, face, "confirmed")?;
+        conn.execute("UPDATE persons SET cover_face_id=?1,cover_annotation_id=?2,thumbnail=?3,manual=1 WHERE id=?4", rusqlite::params![face,annotation,jpeg,person_id]).map_err(|e|e.to_string())?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT").map_err(|e| e.to_string()),
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE afiles(id INTEGER PRIMARY KEY,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER,has_faces INTEGER); CREATE TABLE persons(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,created_at INTEGER,cover_face_id INTEGER,thumbnail BLOB); CREATE TABLE faces(id INTEGER PRIMARY KEY AUTOINCREMENT,file_id INTEGER,person_id INTEGER,bbox TEXT,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,100,100,10,100,1),(2,100,100,10,100,1); INSERT INTO persons VALUES(1,'Alice',0,11,X'01'),(2,'Bob',0,12,X'02'),(3,'Untouched',0,NULL,NULL);").unwrap();
+        c.execute(
+            "ALTER TABLE afiles ADD COLUMN name TEXT NOT NULL DEFAULT 'test.jpg'",
+            [],
+        )
+        .unwrap();
         super::super::face_annotations::ensure_schema(&c).unwrap();
         c.execute(
             "INSERT INTO face_annotation_meta VALUES('imported-v1','1')",
@@ -228,6 +314,116 @@ mod tests {
         let bbox=serde_json::json!({"x":10,"y":10,"width":20,"height":20,"confidence":1,"landmarks":null}).to_string();
         c.execute("INSERT INTO faces(id,file_id,person_id,bbox,embedding,created_at) VALUES(11,1,1,?1,X'01020304',0),(12,2,2,?1,X'05060708',0),(13,2,1,?1,X'090a0b0c',0)",[bbox]).unwrap();
         c
+    }
+    fn face(c: &Connection, person: i64, face_id: i64) -> super::super::face_review::ReviewItem {
+        super::super::face_review::page(
+            c,
+            &super::super::face_review::PageRequest {
+                library_id: "test-library".into(),
+                filter: "all".into(),
+                person_id: Some(person),
+                offset: 0,
+                limit: 100,
+            },
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|item| item.face_id == Some(face_id))
+        .unwrap()
+    }
+    #[test]
+    fn hide_unhide_does_not_modify_faces_annotations_or_media() {
+        let c = db();
+        set_hidden(&c, 1, true).unwrap();
+        assert!(
+            c.query_row("SELECT hidden FROM persons WHERE id=1", [], |r| r
+                .get::<_, bool>(0))
+                .unwrap()
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM faces WHERE person_id=1", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM face_annotations", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        set_hidden(&c, 1, false).unwrap();
+        assert!(
+            !c.query_row("SELECT hidden FROM persons WHERE id=1", [], |r| r
+                .get::<_, bool>(0))
+                .unwrap()
+        );
+        assert!(set_hidden(&c, 999, true).is_err());
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM afiles", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+    #[test]
+    fn chosen_cover_and_hidden_state_survive_model_result_reset() {
+        let c = db();
+        let item = face(&c, 1, 13);
+        set_cover_with_thumbnail(&c, 1, &item, b"chosen-preview").unwrap();
+        set_hidden(&c, 1, true).unwrap();
+        super::super::face_annotations::reset_model_results(&c).unwrap();
+        let (hidden, cover, annotation, thumbnail): (bool, Option<i64>, Option<i64>, Vec<u8>) = c
+            .query_row(
+                "SELECT hidden,cover_face_id,cover_annotation_id,thumbnail FROM persons WHERE id=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert!(hidden);
+        assert!(annotation.is_some());
+        assert!(cover.is_some());
+        assert_eq!(thumbnail, b"chosen-preview");
+        assert_eq!(
+            c.query_row("SELECT person_id FROM faces WHERE id=?1", [cover], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn stale_or_foreign_cover_is_rejected_without_changing_existing_preview() {
+        let c = db();
+        let item = face(&c, 1, 11);
+        assert!(set_cover_with_thumbnail(&c, 2, &item, b"wrong").is_err());
+        c.execute("UPDATE afiles SET modified_at=11 WHERE id=1", [])
+            .unwrap();
+        assert!(set_cover_with_thumbnail(&c, 1, &item, b"stale").is_err());
+        assert_eq!(
+            c.query_row("SELECT thumbnail FROM persons WHERE id=1", [], |r| r
+                .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            vec![1]
+        );
+    }
+    #[test]
+    fn cover_write_failure_rolls_back_confirmation_and_cover_changes() {
+        let c = db();
+        let item = face(&c, 1, 11);
+        c.execute_batch("CREATE TRIGGER prevent_cover BEFORE UPDATE OF cover_face_id ON persons BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
+        assert!(set_cover_with_thumbnail(&c, 1, &item, b"new").is_err());
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM face_annotations", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row("SELECT cover_face_id FROM persons WHERE id=1", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            11
+        );
     }
     #[test]
     fn merge_preserves_target_name_vectors_regions_cover_and_unrelated_people() {

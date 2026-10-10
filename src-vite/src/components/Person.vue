@@ -1,11 +1,11 @@
 <template>
   <div class="sidebar-panel relative overflow-hidden">
-    <!-- Face Indexing Progress Overlay -->
+    <!-- Progress stays non-blocking so committed people can be browsed immediately. -->
     <div v-if="isIndexing" 
-      class="absolute inset-0 z-50 bg-base-200/80 backdrop-blur-md"
+      class="shrink-0 px-2 py-2 border-b border-base-content/10"
     >
-      <div class="mt-8 px-2 flex flex-col items-center text-base-content/30">
-        <IconUpdate class="w-8 h-8 mb-2 animate-spin" />
+      <div class="flex flex-col items-center text-base-content/70">
+        <IconUpdate class="w-4 h-4 mb-1 animate-spin" />
         <span class="text-sm text-center">
           {{ indexProgress.phase === 'clustering' 
             ? $t('face_index.clustering') 
@@ -18,7 +18,7 @@
         <span v-else-if="indexProgress.faces_found > 0" class="text-xs text-center mt-1">
           {{ $t('face_index.faces_found', { count: indexProgress.faces_found.toLocaleString() }) }}
         </span>
-        <button class="btn btn-primary btn-sm mt-4" @click="clickCancelIndex">
+        <button class="btn btn-primary btn-xs mt-2" @click="clickCancelIndex">
           <IconClose class="w-4 h-4" />
           {{ $t('face_index.cancel') }}
         </button>
@@ -89,6 +89,10 @@
     <FaceReview v-if="showFaceReview" :person="reviewPerson" @cancel="showFaceReview = false" />
     <PersonMerge v-if="mergePerson" :person="mergePerson" @cancel="mergePerson = null" />
 
+    <div class="flex gap-1 px-2 mb-2 shrink-0">
+      <button type="button" class="btn btn-xs flex-1" :class="!showHidden ? 'btn-primary' : 'btn-ghost'" :aria-pressed="!showHidden" @click="showHidden = false">{{ t('person_management.visible') }}</button>
+      <button type="button" class="btn btn-xs flex-1" :class="showHidden ? 'btn-primary' : 'btn-ghost'" :aria-pressed="showHidden" @click="showHidden = true">{{ t('person_management.hidden') }}</button>
+    </div>
     <!-- Person List -->
     <div
       v-if="allPersons.length > 0"
@@ -160,6 +164,7 @@
       <span class="text-center">{{ $t('tooltip.not_found.person') }}</span>
     </div>
 
+    <div v-else-if="showHidden && !isIndexing" class="mt-2 px-2 text-sm text-center text-base-content/50">{{ t('person_management.hidden_empty') }}</div>
     <!-- No Persons Found Message -->
     <div v-else-if="!isIndexing && incompleteCount > 0" class="mt-2 px-2 flex flex-col items-center justify-center text-base-content/30">
       <span class="text-sm text-center">{{ $t('face_index.incomplete', { count: incompleteCount.toLocaleString() }) }}</span>
@@ -217,6 +222,8 @@
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { reconcilePeople } from '@/common/personList';
 import { useToast } from '@/common/toast';
 import { config, libConfig } from '@/common/config';
 import { getPersonsPage, renamePerson, deletePerson, indexFaces, cancelFaceIndex, isFaceIndexing, listenFaceIndexProgress, listenFaceIndexFinished, listenClusterProgress, resetFaces, getFaceStats } from '@/common/api';
@@ -279,6 +286,9 @@ const isLoadingMorePersons = ref(false);
 const hasMorePersons = ref(false);
 const allPersonCount = ref(0);
 const personSearch = ref('');
+const showHidden = ref(false);
+let incrementalTimer: ReturnType<typeof setTimeout> | null = null;
+let incrementalRefreshRunning = false, incrementalRefreshPending = false;
 const isPersonSearchFocused = ref(false);
 // Disable search only for a truly empty library; never lock it on a zero-match
 // search (allPersonCount now reflects the query), so the user can always clear it.
@@ -287,6 +297,7 @@ const personSearchDisabled = computed(
 );
 const PERSON_PAGE_SIZE = 100;
 let personLoadRequest = 0;
+let personPageOffset = 0;
 let personSearchTimer: ReturnType<typeof setTimeout> | null = null;
 let isPersonMounted = true;
 
@@ -308,6 +319,19 @@ const faceToast = useToast();
 onMounted(async () => {
   const stop = await listen('face-person-changed', async (event: any) => {
     if (!isPersonMounted || event.payload.library_id !== libConfig._libraryId) return;
+    if (event.payload.mode === 'incremental') { schedulePeopleRefresh(); return; }
+    if (event.payload.mode === 'cover') {
+      for (const person of allPersons.value) if (person.id === event.payload.personId) person.thumbnail = event.payload.thumbnail;
+      if (selectedPerson.value?.id === event.payload.personId) selectedPerson.value.thumbnail = event.payload.thumbnail;
+      return;
+    }
+    if (event.payload.mode === 'visibility') {
+      const personId = event.payload.personId;
+      allPersons.value = allPersons.value.filter(person => person.id !== personId);
+      if (selectedPerson.value?.id === personId) { selectedPerson.value = null; libConfig.person.id = null; libConfig.person.name = null; }
+      void loadPersons(true, true);
+      return;
+    }
     if (isFaceRename(event.payload)) {
       applyPersonRename(allPersons.value, event.payload);
       if (selectedPerson.value?.id === event.payload.personId) selectedPerson.value.name = event.payload.name;
@@ -368,12 +392,22 @@ const showDeletePersonMsgbox = ref(false);
 const showResetFacesMsgbox = ref(false);
 
 // more menuitems
+async function togglePersonHidden() {
+  const person = selectedPerson.value;
+  if (!person || isIndexing.value) return;
+  const libraryId = libConfig._libraryId;
+  try { await invoke('set_person_hidden', { libraryId, personId: person.id, hidden: !person.hidden }); }
+  catch (error: any) { if (libraryId === libConfig._libraryId) faceToast.error(error?.message || String(error)); }
+}
 const getMoreMenuItems = () => [
+  { label: t('person_management.choose_cover'), icon: IconPerson, disabled: isIndexing.value, action: () => { if (selectedPerson.value) { reviewPerson.value = { id: selectedPerson.value.id, name: selectedPerson.value.name }; showFaceReview.value = true; } } },
+  { label: t(selectedPerson.value?.hidden ? 'person_management.unhide' : 'person_management.hide'), icon: IconPerson, disabled: isIndexing.value, action: togglePersonHidden },
   { label: t('face_review.manage_person'), icon: IconPerson, disabled: isIndexing.value, action: () => { if (selectedPerson.value) { reviewPerson.value = { id: selectedPerson.value.id, name: selectedPerson.value.name }; showFaceReview.value = true; } } },
   { label: t('person_merge.title'), icon: IconPerson, disabled: isIndexing.value, action: () => { if (selectedPerson.value) mergePerson.value = { id: selectedPerson.value.id, name: selectedPerson.value.name }; } },
   {
     label: localeMsg.value.menu?.person?.rename || 'Rename',
     icon: IconRename,
+    disabled: isIndexing.value,
     action: () => {
       isRenamingPerson.value = true;
       originalPersonName.value = selectedPerson.value?.name || '';
@@ -388,6 +422,7 @@ const getMoreMenuItems = () => [
   {
     label: localeMsg.value.menu?.person?.delete || 'Delete',
     icon: IconTrash,
+    disabled: isIndexing.value,
     action: () => {
       showDeletePersonMsgbox.value = true;
     },
@@ -420,7 +455,7 @@ onMounted(async () => {
     isIndexing.value = false;
     indexProgress.value = { current: 0, total: 0, faces_found: 0, phase: 'indexing' };
     clusterProgress.value = { phase: '', current: 0, total: 0 };
-    loadPersons(); // Reload persons after indexing completes
+    schedulePeopleRefresh(); // Keep row objects, selection and scroll after the final batch.
     checkFaceStats();
   });
   
@@ -463,6 +498,7 @@ onUnmounted(() => {
   isPersonMounted = false;
   personLoadRequest++;
   if (personSearchTimer) clearTimeout(personSearchTimer);
+  if (incrementalTimer) clearTimeout(incrementalTimer);
   if (unlistenProgress) unlistenProgress();
   if (unlistenFinished) unlistenFinished();
   if (unlistenCluster) unlistenCluster();
@@ -486,13 +522,14 @@ async function loadPersons(reset = true, validateSelectedPerson = false) {
   try {
     const page = await getPersonsPage({
       sort: config.settings.personSort,
-      offset: reset ? 0 : allPersons.value.length,
+      offset: reset ? 0 : personPageOffset,
       limit: PERSON_PAGE_SIZE,
       search,
+      hidden: showHidden.value,
       refreshSummary: validateSelectedPerson
         ? { selectedPersonId: libConfig.person?.id ?? null }
         : null,
-    });
+    }, libraryId);
     if (!isPersonMounted || requestId !== personLoadRequest || libraryId !== libConfig._libraryId) return;
 
     if (page) {
@@ -504,9 +541,8 @@ async function loadPersons(reset = true, validateSelectedPerson = false) {
           libConfig.person.name = null;
         }
       }
-      allPersons.value = reset
-        ? page.persons
-        : [...allPersons.value, ...page.persons];
+      personPageOffset = (reset ? 0 : personPageOffset) + page.persons.length;
+      allPersons.value = reset ? page.persons : reconcilePeople(allPersons.value, [...allPersons.value, ...page.persons]);
       hasMorePersons.value = page.has_more;
       // `total` is the search-filtered visible count, so the header reflects the query.
       allPersonCount.value = page.total;
@@ -524,6 +560,54 @@ async function loadPersons(reset = true, validateSelectedPerson = false) {
     }
   }
 }
+
+// Coalesce batches and fetch the already loaded window without clearing rows or auto-selecting.
+function schedulePeopleRefresh() {
+  incrementalRefreshPending = true;
+  if (incrementalTimer || incrementalRefreshRunning) return;
+  incrementalTimer = setTimeout(() => { incrementalTimer = null; void refreshPeopleInPlace(); }, 200);
+}
+async function refreshPeopleInPlace() {
+  if (!isPersonMounted || incrementalRefreshRunning) return;
+  incrementalRefreshRunning = true; incrementalRefreshPending = false;
+  const libraryId = libConfig._libraryId, ticket = ++personLoadRequest;
+  const search = personSearch.value.trim(), hidden = showHidden.value, sort = config.settings.personSort;
+  const wanted = Math.max(PERSON_PAGE_SIZE, personPageOffset);
+  const retainedIds = allPersons.value.map(person => person.id);
+  const people: any[] = [];
+  let lastPage: any = null;
+  try {
+    for (let offset = 0; offset < wanted; offset += PERSON_PAGE_SIZE) {
+      const page = await getPersonsPage({ sort, offset, limit: PERSON_PAGE_SIZE, search, hidden }, libraryId);
+      if (!isPersonMounted || ticket !== personLoadRequest || libraryId !== libConfig._libraryId || hidden !== showHidden.value || search !== personSearch.value.trim()) return;
+      if (!page) return; // Keep the last usable rows on transient errors.
+      people.push(...page.persons); lastPage = page;
+      if (!page.has_more) break;
+    }
+    const windowSize = people.length;
+    const present = new Set(people.map(person => person.id));
+    const missing = retainedIds.filter(id => !present.has(id));
+    for (let index = 0; index < missing.length; index += PERSON_PAGE_SIZE) {
+      const page = await getPersonsPage({ sort, offset: 0, limit: PERSON_PAGE_SIZE, search, hidden, ids: missing.slice(index, index + PERSON_PAGE_SIZE) }, libraryId);
+      if (!isPersonMounted || ticket !== personLoadRequest || libraryId !== libConfig._libraryId) return;
+      if (!page) return;
+      people.push(...page.persons);
+    }
+    personPageOffset = windowSize;
+    allPersons.value = reconcilePeople(allPersons.value, people);
+    if (selectedPerson.value) {
+      const selected = allPersons.value.find(person => person.id === selectedPerson.value.id);
+      selectedPerson.value = selected || null;
+      if (!selected && libConfig.person.id != null) { libConfig.person.id = null; libConfig.person.name = null; }
+    }
+    if (lastPage) { allPersonCount.value = lastPage.total; hasMorePersons.value = lastPage.has_more; }
+  } finally {
+    incrementalRefreshRunning = false;
+    if (ticket === personLoadRequest) { isLoadingPersons.value = false; isLoadingMorePersons.value = false; }
+    if (isPersonMounted && incrementalRefreshPending) schedulePeopleRefresh();
+  }
+}
+watch(showHidden, () => { selectedPerson.value = null; libConfig.person.id = null; libConfig.person.name = null; void loadPersons(); });
 
 function handlePersonListScroll(event: Event) {
   const target = event.currentTarget as HTMLElement;

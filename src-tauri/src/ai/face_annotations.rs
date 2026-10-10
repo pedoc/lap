@@ -35,6 +35,18 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
+    for (name, definition) in [
+        ("hidden", "INTEGER NOT NULL DEFAULT 0"),
+        ("cover_annotation_id", "INTEGER"),
+    ] {
+        if !column(conn, "persons", name)? {
+            conn.execute(
+                &format!("ALTER TABLE persons ADD COLUMN {name} {definition}"),
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
     if !column(conn, "faces", "annotation_id")? {
         conn.execute("ALTER TABLE faces ADD COLUMN annotation_id INTEGER", [])
             .map_err(|e| e.to_string())?;
@@ -238,6 +250,7 @@ pub fn restore_file(conn: &Connection, file: i64) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         conn.execute("INSERT INTO faces(file_id,bbox,embedding,person_id,annotation_id,created_at) VALUES(?1,?2,NULL,?3,?4,0)",params![file,bbox,annotation.person_id,annotation.id]).map_err(|e|e.to_string())?;
     }
+    conn.execute("UPDATE persons SET cover_face_id=(SELECT id FROM faces WHERE annotation_id=persons.cover_annotation_id AND person_id=persons.id) WHERE cover_annotation_id IN (SELECT id FROM face_annotations WHERE file_id=?1)", [file]).map_err(|e|e.to_string())?;
     Ok(())
 }
 pub fn reset_model_results(conn: &Connection) -> Result<(), String> {

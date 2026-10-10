@@ -1971,5 +1971,16 @@
     "stage_database_commit": "Store results",
     "stage_inference": "Model processing",
     "stage_complete": "Completed"
+  },
+  "person_management": {
+    "visible": "People",
+    "hidden": "Hidden",
+    "hide": "Hide person",
+    "unhide": "Unhide person",
+    "choose_cover": "Choose person cover",
+    "use_cover": "Use as person cover",
+    "cover_hint": "Choosing a cover confirms this face’s identity and preserves it across rescans and model changes.",
+    "hidden_empty": "No hidden people",
+    "cover_unavailable": "No face preview is available. Regenerate this photo’s thumbnail first."
   }
 }

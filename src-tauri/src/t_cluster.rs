@@ -78,23 +78,63 @@ fn insert_top_k(candidates: &mut Vec<(usize, f32)>, edge: (usize, f32), max_edge
 /// 1. Uses slim face data (id, file_id, embedding_bytes) instead of full Face structs
 /// 2. Prunes candidate edges to Top-K during build (not after), bounding memory at N * K_NEIGHBORS
 /// 3. Pre-parses all embeddings once to avoid allocations in inner loop
+#[derive(Default, Debug)]
+pub struct ClusterResult {
+    pub total_persons: usize,
+    pub person_ids: Vec<i64>,
+    pub file_ids: Vec<i64>,
+}
+
 pub fn cluster_faces<F, C>(
     threshold: f32,
     file_ids: Option<&[i64]>,
     mut progress_fn: F,
     is_cancelled_fn: C,
-) -> Result<usize, String>
+) -> Result<ClusterResult, String>
 where
     F: FnMut(ClusterProgress),
     C: Fn() -> bool,
 {
     let model = crate::ai::settings::active(crate::ai::types::Task::Face)?;
-    let k_neighbors = model.number("cluster_neighbors") as usize;
+    let conn = crate::t_sqlite::open_conn()?;
+    let result = group_faces(
+        &conn,
+        Face::get_all_for_clustering()?,
+        threshold,
+        model.number("cluster_neighbors") as usize,
+        model.number("cluster_iterations") as usize,
+        model.number("cluster_min_samples") as usize,
+        file_ids,
+        &mut progress_fn,
+        &is_cancelled_fn,
+    )?;
+    progress_fn(ClusterProgress {
+        phase: "thumbnail".into(),
+        current: 0,
+        total: result.person_ids.len(),
+    });
+    for person in &result.person_ids {
+        if is_cancelled_fn() {
+            break;
+        }
+        let _ = Person::update_thumbnail(*person);
+    }
+    Ok(result)
+}
 
-    // Existing assignments are immutable anchors; adding photos must not delete names/person IDs.
-
-    // 2. Get ALL faces for clustering — slim: (face_id, file_id, embedding_bytes)
-    let mut slim_faces = Face::get_all_for_clustering()?;
+#[allow(clippy::too_many_arguments)]
+fn group_faces<F: FnMut(ClusterProgress), C: Fn() -> bool>(
+    conn: &rusqlite::Connection,
+    mut slim_faces: Vec<(i64, i64, Option<Vec<u8>>, Option<i64>)>,
+    threshold: f32,
+    k_neighbors: usize,
+    max_iterations: usize,
+    min_samples: usize,
+    file_ids: Option<&[i64]>,
+    mut progress_fn: F,
+    is_cancelled_fn: C,
+) -> Result<ClusterResult, String> {
+    // Existing automatic/manual identities remain immutable anchors across batches.
     if let Some(ids) = file_ids {
         let scope = ids
             .iter()
@@ -116,7 +156,7 @@ where
     let (mut labels, anchor_people) = seed_people(&existing);
     let n = slim_faces.len();
     if n == 0 {
-        return Ok(0);
+        return Ok(ClusterResult::default());
     }
 
     // 3. Pre-parse embeddings (do this once)
@@ -138,7 +178,7 @@ where
     for i in 0..n {
         // Check for cancellation
         if is_cancelled_fn() {
-            return Ok(0);
+            return Ok(ClusterResult::default());
         }
 
         if existing[i].is_some() {
@@ -205,12 +245,11 @@ where
     // 6. Run Chinese Whispers Algorithm
     let mut order: Vec<usize> = (0..n).collect();
     let mut rng = rand::thread_rng();
-    let max_iterations = model.number("cluster_iterations") as usize;
 
     for iter in 0..max_iterations {
         // Check for cancellation
         if is_cancelled_fn() {
-            return Ok(0);
+            return Ok(ClusterResult::default());
         }
 
         let mut changed = false;
@@ -260,7 +299,7 @@ where
 
     // Check for cancellation before assignment
     if is_cancelled_fn() {
-        return Ok(0);
+        return Ok(ClusterResult::default());
     }
 
     // 6. Collect clusters
@@ -275,7 +314,6 @@ where
     drop(order);
 
     // 7. Filter clusters
-    let min_samples = model.number("cluster_min_samples") as usize;
     let valid_clusters: Vec<_> = cluster_map
         .into_iter()
         .filter(|(label, face_indices)| {
@@ -286,57 +324,76 @@ where
     let total_clusters = valid_clusters.len();
 
     // 8. Assign faces to persons
-    let mut total_assigned = 0;
+    let mut changed_files = std::collections::HashSet::new();
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| e.to_string())?;
+    let assignment = (|| -> Result<(), String> {
+        for (cluster_idx, (label, cluster_face_indices)) in valid_clusters.into_iter().enumerate() {
+            if is_cancelled_fn() {
+                return Err("Face grouping cancelled".into());
+            }
 
-    for (cluster_idx, (label, cluster_face_indices)) in valid_clusters.into_iter().enumerate() {
-        if is_cancelled_fn() {
-            return Ok(total_assigned);
+            progress_fn(ClusterProgress {
+                phase: "assign".to_string(),
+                current: cluster_idx + 1,
+                total: total_clusters,
+            });
+
+            let person_id = match anchor_people.get(&label) {
+                Some(id) => *id,
+                None => {
+                    conn.execute(
+                        "INSERT INTO persons(name,created_at) VALUES(NULL,?1)",
+                        [chrono::Utc::now().timestamp()],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    conn.last_insert_rowid()
+                }
+            };
+
+            for face_idx in cluster_face_indices {
+                if is_cancelled_fn() {
+                    return Err("Face grouping cancelled".into());
+                }
+                if existing[face_idx].is_some() {
+                    continue;
+                }
+                let changed = conn
+                    .execute(
+                        "UPDATE faces SET person_id=?1 WHERE id=?2 AND person_id IS NULL",
+                        rusqlite::params![person_id, slim_faces[face_idx].0],
+                    )
+                    .map_err(|e| e.to_string())?;
+                if changed != 1 {
+                    return Err("Face membership changed during grouping".into());
+                }
+                changed_people.insert(person_id);
+                changed_files.insert(slim_faces[face_idx].1);
+            }
         }
 
-        progress_fn(ClusterProgress {
-            phase: "assign".to_string(),
-            current: cluster_idx + 1,
-            total: total_clusters,
-        });
-
-        let person_id = match anchor_people.get(&label) {
-            Some(id) => *id,
-            None => Person::create(None)?,
-        };
-
-        for face_idx in cluster_face_indices {
-            if existing[face_idx].is_some() {
-                continue;
+        if is_cancelled_fn() {
+            return Err("Face grouping cancelled".into());
+        }
+        Ok(())
+    })();
+    match assignment {
+        Ok(()) => conn.execute_batch("COMMIT").map_err(|e| e.to_string())?,
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            if is_cancelled_fn() {
+                return Ok(ClusterResult::default());
             }
-            Face::assign_to_person(slim_faces[face_idx].0, person_id)?;
-            changed_people.insert(person_id);
-            total_assigned += 1;
+            return Err(error);
         }
     }
-
     drop(slim_faces);
 
-    // 9. Generate thumbnails
-    progress_fn(ClusterProgress {
-        phase: "thumbnail".to_string(),
-        current: 0,
-        total: total_clusters,
-    });
-
-    for person in changed_people {
-        if is_cancelled_fn() {
-            break;
-        }
-        Person::update_thumbnail(person)?;
-    }
-
-    progress_fn(ClusterProgress {
-        phase: "thumbnail".to_string(),
-        current: total_clusters,
-        total: total_clusters,
-    });
-
-    Ok(total_clusters)
+    Ok(ClusterResult {
+        total_persons: total_clusters,
+        person_ids: changed_people.into_iter().collect(),
+        file_ids: changed_files.into_iter().collect(),
+    })
 }
 
 fn seed_people(existing: &[Option<i64>]) -> (Vec<usize>, HashMap<usize, i64>) {
@@ -359,6 +416,151 @@ fn seed_people(existing: &[Option<i64>]) -> (Vec<usize>, HashMap<usize, i64>) {
 #[cfg(test)]
 mod face_anchor_tests {
     use super::*;
+    fn db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE persons(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,created_at INTEGER,hidden INTEGER DEFAULT 0,cover_face_id INTEGER); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,embedding BLOB,person_id INTEGER); INSERT INTO faces(id,file_id) VALUES(1,1),(2,2);").unwrap();
+        conn
+    }
+    fn rows(conn: &rusqlite::Connection) -> Vec<(i64, i64, Option<Vec<u8>>, Option<i64>)> {
+        let mut statement = conn
+            .prepare("SELECT id,file_id,embedding,person_id FROM faces ORDER BY id")
+            .unwrap();
+        let mut rows = statement
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for row in &mut rows {
+            row.2 = Some([1.0f32, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect());
+        }
+        rows
+    }
+    #[test]
+    fn early_batch_creates_people_and_later_batches_reuse_stable_identity() {
+        let c = db();
+        let first = group_faces(&c, rows(&c), 0.4, 10, 10, 2, None, |_| {}, || false).unwrap();
+        assert_eq!(first.person_ids.len(), 1);
+        assert_eq!(first.file_ids.len(), 2);
+        let person = first.person_ids[0];
+        c.execute(
+            "UPDATE persons SET name='Alice',hidden=1,cover_face_id=1 WHERE id=?1",
+            [person],
+        )
+        .unwrap();
+        c.execute("INSERT INTO faces(id,file_id) VALUES(3,3)", [])
+            .unwrap();
+        let second =
+            group_faces(&c, rows(&c), 0.4, 10, 10, 2, Some(&[3]), |_| {}, || false).unwrap();
+        assert_eq!(second.person_ids, vec![person]);
+        assert_eq!(second.file_ids, vec![3]);
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM persons", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row("SELECT person_id FROM faces WHERE id=3", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            person
+        );
+        assert_eq!(
+            c.query_row("SELECT name,hidden,cover_face_id FROM persons", [], |r| Ok(
+                (
+                    r.get::<_, String>(0)?,
+                    r.get::<_, bool>(1)?,
+                    r.get::<_, i64>(2)?
+                )
+            ))
+            .unwrap(),
+            ("Alice".into(), true, 1)
+        );
+    }
+    #[test]
+    fn grouping_failure_rolls_back_every_assignment_and_new_person() {
+        let c = db();
+        c.execute_batch("CREATE TRIGGER fail_second BEFORE UPDATE ON faces WHEN NEW.id=2 BEGIN SELECT RAISE(ABORT,'failed assignment'); END;").unwrap();
+        assert!(group_faces(&c, rows(&c), 0.4, 10, 10, 2, None, |_| {}, || false).is_err());
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM persons", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT count(*) FROM faces WHERE person_id IS NOT NULL",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn cancelling_assignment_does_not_publish_a_partial_batch() {
+        let c = db();
+        let cancelled = std::cell::Cell::new(false);
+        let result = group_faces(
+            &c,
+            rows(&c),
+            0.4,
+            10,
+            10,
+            2,
+            None,
+            |progress| {
+                if progress.phase == "assign" {
+                    cancelled.set(true);
+                }
+            },
+            || cancelled.get(),
+        )
+        .unwrap();
+        assert!(result.person_ids.is_empty());
+        assert!(result.file_ids.is_empty());
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM persons", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT count(*) FROM faces WHERE person_id IS NOT NULL",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn unfinished_small_cluster_is_available_to_a_later_batch_and_selection_is_fenced() {
+        let c = db();
+        c.execute("DELETE FROM faces WHERE id=2", []).unwrap();
+        let first = group_faces(&c, rows(&c), 0.4, 10, 10, 2, None, |_| {}, || false).unwrap();
+        assert_eq!(first.total_persons, 0);
+        c.execute("INSERT INTO faces(id,file_id) VALUES(2,2),(3,3)", [])
+            .unwrap();
+        let second = group_faces(
+            &c,
+            rows(&c),
+            0.4,
+            10,
+            10,
+            2,
+            Some(&[1, 2]),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert_eq!(second.total_persons, 1);
+        assert_eq!(
+            c.query_row("SELECT person_id FROM faces WHERE id=3", [], |r| r
+                .get::<_, Option<i64>>(0))
+                .unwrap(),
+            None
+        );
+    }
     #[test]
     fn existing_people_keep_stable_labels_and_new_faces_do_not_replace_them() {
         let (labels, people) = seed_people(&[Some(7), None, Some(7), Some(9)]);

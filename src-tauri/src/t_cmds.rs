@@ -3664,6 +3664,44 @@ pub async fn merge_persons(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn set_person_hidden(
+    app_handle: AppHandle,
+    library_id: String,
+    person_id: i64,
+    hidden: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_| "Finish or stop inference before editing people")?;
+        if t_config::current_library_id()? != library_id { return Err("Library changed; refresh people".into()); }
+        let conn = t_sqlite::open_conn()?;
+        crate::ai::persons::set_hidden(&conn,person_id,hidden)?;
+        let _ = app_handle.emit("face-person-changed",serde_json::json!({"library_id":library_id,"personId":person_id,"hidden":hidden,"mode":"visibility","membershipChanged":false}));
+        Ok(())
+    }).await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_person_cover(
+    app_handle: AppHandle,
+    library_id: String,
+    profile: String,
+    person_id: i64,
+    item: crate::ai::face_review::ReviewItem,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_| "Finish or stop inference before choosing a cover")?;
+        if t_config::current_library_id()? != library_id { return Err("Library changed; reopen person management".into()); }
+        if crate::ai::settings::active(crate::ai::types::Task::Face)?.profile() != profile { return Err("Face model changed; refresh people".into()); }
+        let conn = t_sqlite::open_conn()?;
+        crate::ai::persons::set_cover(&conn,person_id,&item)?;
+        let thumbnail = Person::get_thumbnail(person_id)?;
+        let _ = app_handle.emit("face-data-changed",serde_json::json!({"library_id":library_id,"file_id":item.file_id}));
+        let _ = app_handle.emit("face-person-changed",serde_json::json!({"library_id":library_id,"personId":person_id,"thumbnail":thumbnail,"mode":"cover","membershipChanged":false}));
+        Ok(())
+    }).await.map_err(|e|e.to_string())?
+}
+
 /// delete a person
 #[tauri::command]
 pub fn delete_person(person_id: i64) -> Result<usize, String> {

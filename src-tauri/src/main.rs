@@ -423,6 +423,8 @@ async fn main() {
             t_cmds::get_face_people,
             t_cmds::get_person_merge_preview,
             t_cmds::merge_persons,
+            t_cmds::set_person_hidden,
+            t_cmds::set_person_cover,
             t_cmds::delete_person,
             t_cmds::get_faces_for_file,
             t_cmds::get_person_thumbnail,

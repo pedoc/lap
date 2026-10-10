@@ -4243,6 +4243,17 @@ onMounted(async () => {
   const stop = await listen('face-person-changed', (event: any) => {
     const change = event.payload;
     if (peopleEditDisposed || change.library_id !== libConfig._libraryId) return;
+    if (change.mode === 'incremental') {
+      if (faceChangeAffectsPerson(change, Number(libConfig.person.id)) && (tempViewMode.value === 'person' || (config.main.sidebarIndex === SIDEBAR.PERSON && libConfig.activePane === 'main'))) {
+        // Refresh the same person query, not the navigation context; retain random ordering and selection anchors.
+        rememberFocusedFileForPresentationRefresh();
+        captureSelectionForFileListRefresh();
+        currentThumbRequestId++;
+        const requestId = ++currentContentRequestId;
+        void getFileList({ ...currentQueryParams.value, personId: libConfig.person.id }, requestId, null, currentQueryParams.value.randomSeed);
+      }
+      return;
+    }
     if (change.mode === 'merge' && (change.sourcePersonIds || []).includes(libConfig.person.id)) {
       libConfig.person.name = change.name; libConfig.person.id = change.personId;
       if (tempViewMode.value === 'person') void enterPersonTempView(change.personId, change.name || '');
@@ -7120,8 +7131,9 @@ async function getFileList(
   } = {},
   requestId: number,
   sourceContext: { source: 'collection' | 'smart'; collectionId?: number | null; smartParams?: any } | null = null,
+  retainedRandomSeed?: ReturnType<typeof createRandomSeed>,
 ) { 
-  const randomSeed = createRandomSeed();
+  const randomSeed = retainedRandomSeed ?? createRandomSeed();
   currentQuerySource.value = sourceContext?.source || 'query';
   currentSmartQueryParams.value = sourceContext?.source === 'smart'
     ? { ...sourceContext.smartParams, randomSeed }
