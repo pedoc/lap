@@ -288,5 +288,8 @@ html, body {
   transition: opacity 150ms ease;
 }
 
-/* Official SDK copyright/logo remain visible below the transparent Leaflet photo layer. */
-.lap-sdk-overlay .leaflet-bottom.leaflet-left { bottom: 24px; }
+/* Each selected provider owns the entire viewport and its marker positioning. */
+.lap-map-engine { position: absolute; inset: 0; }
+.lap-location-pin { position: relative; pointer-events: auto; }
+.lap-location-pin::before { content: ''; position: absolute; top: 1px; left: 1px; width: 18px; height: 18px; border: 2px solid white; border-radius: 50%; background: var(--color-primary); z-index: 1; }
+.lap-location-pin::after { content: ''; position: absolute; top: 16px; left: 4px; border-top: 12px solid var(--color-primary); border-left: 6px solid transparent; border-right: 6px solid transparent; }

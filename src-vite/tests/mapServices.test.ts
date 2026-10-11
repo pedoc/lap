@@ -49,14 +49,13 @@ test('tile transport uses revision-scoped IPC, cancellation and object URLs inst
 });
 function script(name: string) { const source=readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');return stripTypeScriptTypes(source.match(/<script setup(?: lang="ts")?>([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'').replace(/^import\s*['"][^'"]+['"];?\r?\n/gm,'').replaceAll('import.meta.url', "'file:///test/'"); }
 const vue={defineEmits:()=>()=>{},ref:(value:any)=>({value}),computed:(get:any)=>({get value(){return get();}}),watch(){},onMounted(){},onBeforeUnmount(){},nextTick:async()=>{}};
-for (const component of ['MapView','PhotoMapView']) test(`${component} switches layers immediately without moving the camera or falling back on late tile errors`, () => {
+for (const component of ['MapView','PhotoMapView']) test(`${component} delegates whole-engine switching without resetting the camera`, () => {
   const config:any={infoPanel:{mapTheme:0},settings:{mapTheme:0,mapServices:defaultMapServices(),mapServicesRevision:'r1'}};
-  const created:any[]=[], moves:any[]=[];
-  const api=runInNewContext(`${script(component)}\n;({updateTheme,mapError,mapThemeInfo,setMap(value){map=value;}})`,{...vue,config,createSdkBasemapRuntime:()=>({set:async()=>{},destroy(){}}),defineProps:()=>({lat:30,lon:120,zoom:10,queryParams:null,active:true}),useI18n:()=>({t:(key:string)=>key}),useUIStore:()=>({}),getMapTheme,isMac:false,markerIcon2x:'',markerIcon:'',markerShadow:'',L:{Icon:{Default:{mergeOptions(){}}}},createTileLayerGroup:(_L:any,theme:any)=>{const callbacks:any={};const layer={addTo(){return layer;}};const result={layer,tileLayers:[{on:(name:string,fn:any)=>{callbacks[name]=fn;}}],callbacks,theme};created.push(result);return result;}});
-  api.setMap({removeLayer(){},setMinZoom(){},setMaxZoom(){},getZoom:()=>10,setZoom(){},setView:(...args:any[])=>moves.push(args)});
-  api.updateTheme();const old=created[0];config.settings.mapServices.tileProvider='esri';config.settings.mapServicesRevision='r2';api.updateTheme();
-  assert.equal(api.mapThemeInfo.value.provider,'esri');assert.equal(created.length,2);old.callbacks.tileerror({error:new Error('Old OSM failure')});assert.equal(api.mapError.value,'');
-  created[1].callbacks.tileerror({error:new Error('HTTP 403')});assert.equal(api.mapError.value,'HTTP 403');assert.equal(api.mapThemeInfo.value.provider,'esri');assert.equal(created.length,2);assert.equal(moves.length,0);
+  const changes:any[]=[], moves:any[]=[];
+  const api=runInNewContext(`${script(component)}\n;({updateTheme,mapError,mapThemeInfo,setMap(value){map=value;}})`,{...vue,config,createMapRenderer:()=>({}),defineProps:()=>({lat:30,lon:120,zoom:10,queryParams:null,active:true}),useI18n:()=>({t:(key:string)=>key}),useUIStore:()=>({}),getMapTheme,isMac:false,L:{}});
+  api.setMap({set:(settings:any,theme:any)=>{changes.push({settings,theme});return Promise.resolve();},setView:(...args:any[])=>moves.push(args)});
+  api.updateTheme();config.settings.mapServices.tileProvider='amap';config.settings.mapServicesRevision='r2';api.updateTheme();
+  assert.equal(api.mapThemeInfo.value.provider,'amap');assert.equal(changes.length,2);assert.equal(changes[1].theme.renderer,'sdk');assert.equal(moves.length,0);
 });
 test('settings save the selected services and all vendor parameters with an optimistic revision', async () => {
   const config:any={settings:{mapServices:defaultMapServices(),mapServicesRevision:'r1'}},calls:any[]=[];

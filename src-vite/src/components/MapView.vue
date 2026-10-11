@@ -4,7 +4,7 @@
     @mouseenter="uiStore.setMapActive(true)"
     @mouseleave="uiStore.setMapActive(false)"
   >
-    <div ref="mapEl" style="width:100%; height:100%;"></div>
+    <div ref="mapEl" class="relative" style="width:100%; height:100%;"></div>
     <div class="absolute left-2 bottom-7 z-500 max-w-[calc(100%_-_1rem)] rounded-box bg-base-100/85 px-2 py-1 text-[10px]" role="status">
       <span>{{ mapThemeInfo?.name }}</span>
       <span v-if="sdkLoading" class="ml-1">{{ t('map_services.sdk_loading') }}</span>
@@ -51,22 +51,16 @@ import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { config } from '@/common/config'
 import mapboxLogo from '@/assets/mapbox-logo.svg'
-import { createSdkBasemapRuntime } from '@/common/mapSdkRuntime'
+import { createMapRenderer } from '@/common/mapRenderer'
 import { openExternalUrl } from '@/common/api'
-import { createTileLayerGroup, getMapTheme } from '@/common/mapProviders'
+import { getMapTheme } from '@/common/mapProviders'
 import { isMac } from '@/common/utils'
 import { useUIStore } from '@/stores/uiStore'
 
 import { IconZoomIn, IconZoomOut, IconMapCenter, IconMapDefault, IconMapSatellite, IconExternal } from '@/common/icons'
 import TButton from '@/components/TButton.vue'
 
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
-
 // default marker icon
-import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
-import markerIcon from 'leaflet/dist/images/marker-icon.png'
-import markerShadow from 'leaflet/dist/images/marker-shadow.png'
 
 // Props: lat/lon from parent; no geolocation fallback
 const props = defineProps({
@@ -96,38 +90,19 @@ const uiStore = useUIStore()
 const mapEl = ref(null)
 let marker = null
 let map = null
-let layer = null
 const mapThemeInfo = ref(null)
 const mapError = ref('')
 const sdkLoading = ref(false)
-let sdkRuntime = null
 let zoom = ref(props.zoom)
 let activeMaxZoom = ref(19)
 let resizeObserver = null
 const showAppleMapsButton = computed(() => isMac && validLatLon(props.lat, props.lon))
 
 onMounted(() => {
-  map = L.map(mapEl.value, {
-    center: [0, 0],
-    zoom: 2,
-    // attributionControl: false,
-    keyboard: false,
-    zoomControl: false,
-    maxZoom: 19,
-  })
-  map.attributionControl.setPrefix('')
+  map = createMapRenderer(mapEl.value, {center: [0,0], zoom: 2, onError: reason => {mapError.value = reason?.message || String(reason)}, onLoading: value => {sdkLoading.value = value}})
 
   map.on('zoomend', () => {
     zoom.value = map.getZoom()
-  })
-
-  // delete default marker icon
-  delete L.Icon.Default.prototype._getIconUrl
-  // set default marker icon
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: markerIcon2x,
-    iconUrl: markerIcon,
-    shadowUrl: markerShadow
   })
 
   resizeObserver = new ResizeObserver(() => {
@@ -145,7 +120,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   uiStore.setMapActive(false)
   window.removeEventListener('keydown', handleMapKeyDown, true)
-  sdkRuntime?.destroy(); sdkRuntime = null
   if (map) map.remove()
   if (resizeObserver) resizeObserver.disconnect()
 })
@@ -161,7 +135,7 @@ function updateFromProps() {
     if (marker) {
       marker.setLatLng([props.lat, props.lon])
     } else {
-      marker = L.marker([props.lat, props.lon]).addTo(map)
+      marker = map.createMarker([props.lat, props.lon]).addTo(map)
     }
     map.setView([props.lat, props.lon], zoom.value)
   } else {
@@ -211,22 +185,9 @@ function updateTheme() {
   try {
     const theme = getMapTheme(config.settings.mapServices, config.infoPanel.mapTheme, config.settings.mapServicesRevision)
     if (!theme.supportsSatellite) config.infoPanel.mapTheme = 0
-    if (layer) map.removeLayer(layer)
     mapThemeInfo.value = theme
     activeMaxZoom.value = theme.maxZoom
-    map.setMinZoom(theme.minZoom || 0)
-    map.setMaxZoom(theme.maxZoom)
-    if (map.getZoom() > theme.maxZoom) map.setZoom(theme.maxZoom)
-    if (!sdkRuntime) sdkRuntime = createSdkBasemapRuntime(L,map,{onError:reason=>{mapError.value=reason?.message||String(reason)},onLoading:value=>{sdkLoading.value=value}})
-    void sdkRuntime.set(config.settings.mapServices,theme.theme)
-    if (theme.renderer === 'sdk') { layer = null; return }
-    const created = createTileLayerGroup(L, theme)
-    const activeLayer = created.layer
-    layer = activeLayer.addTo(map)
-    created.tileLayers.forEach(tile => tile.on('tileerror', event => {
-      if (layer !== activeLayer) return // Ignore delayed failures from a removed provider layer.
-      mapError.value = event.error?.message || t('map_services.tile_error')
-    }))
+    void map.set(config.settings.mapServices, theme)
   } catch (reason) { mapError.value = reason?.message || String(reason) }
 }
 

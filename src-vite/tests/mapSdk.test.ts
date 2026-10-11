@@ -1,83 +1,142 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runInNewContext} from 'node:vm';
 import {readFileSync} from 'node:fs';
-import {wgs84ToGcj02,gcj02ToWgs84,createGcjCrs} from '../src/common/mapCoordinates.js';
-import {createSdkBasemapRuntime} from '../src/common/mapSdkRuntime.js';
-import {frameDocument,sdkFrameBootstrap} from '../src/common/mapSdkFrame.js';
-import {defaultMapServices,MAP_SERVICES,serviceFields} from '../src/common/mapServices.js';
+import {createNativeMapEngine} from '../src/common/mapEngines.js';
+import {createMapRenderer} from '../src/common/mapRenderer.js';
+import {defaultMapServices} from '../src/common/mapServices.js';
 import {getMapTheme} from '../src/common/mapProviders.js';
+import {convertCoordinate} from '../src/common/mapCoordinates.js';
+import {projectPhotoPoint,createPhotoClusterCache} from '../src/common/mapClusters.js';
+import {createMapBounds} from '../src/common/mapGeometry.js';
 
-test('China SDK projection and inverse preserve original WGS84 data and leave foreign coordinates unchanged',()=>{
- const original=[116.397470,39.908823];const converted=wgs84ToGcj02(...original);assert.ok(Math.abs(converted[0]-116.4037136)<1e-6);assert.ok(Math.abs(converted[1]-39.9102265)<1e-6);
- const restored=gcj02ToWgs84(...converted);assert.ok(Math.abs(restored[0]-original[0])<1e-9);assert.ok(Math.abs(restored[1]-original[1])<1e-9);assert.deepEqual(original,[116.397470,39.908823]);assert.deepEqual(wgs84ToGcj02(2.3522,48.8566),[2.3522,48.8566]);
-});
-function environment(){
- const crs:any={code:'WGS84',projection:{project:(v:any)=>({x:v.lng,y:v.lat}),unproject:(v:any)=>({lng:v.x,lat:v.y})}};
- const L:any={CRS:{EPSG3857:crs},latLng:(lat:number,lng:number)=>({lat,lng}),point:(x:number,y:number)=>({x,y}),latLngBounds:(points:any[])=>({points,pad(){return this;}})};
- const classes=new Set<string>(),container:any={style:{background:'original'},classList:{toggle:(id:string,on:boolean)=>on?classes.add(id):classes.delete(id),remove:(id:string)=>classes.delete(id)}};
- const events:any={},moves:any[]=[];let center={lat:39.908823,lng:116.397470},zoom=13;
- const map:any={options:{crs},_zoomAnimated:true,getContainer:()=>container,getCenter:()=>center,getZoom:()=>zoom,getBounds:()=>({original:true}),getPixelBounds:()=>({min:{x:116.38,y:39.90},max:{x:116.42,y:39.93}}),unproject:(point:any)=>map.options.crs.projection.unproject(point),on:(name:string,fn:any)=>{events[name]=fn;},off:(name:string)=>{delete events[name];},setView:(next:any,value:number,options:any)=>{center=next;zoom=value;moves.push({center,zoom,options});}};
- return {L,map,container,crs,events,moves};
+function bounds(a:any=[-10,-20],b:any=[10,20]) {return createMapBounds(Array.isArray(a[0])?a:[a,b]);}
+function element(){const events:any={};return {style:{},className:'',children:[] as any[],clientWidth:800,clientHeight:600,setAttribute(){},addEventListener:(name:string,fn:any)=>events[name]=fn,dispatch(name:string){events[name]?.({stopPropagation(){},preventDefault(){}});},appendChild(value:any){this.children.push(value);},remove(){},events};}
+function fakeSdk(){
+ const maps:any[]=[],markers:any[]=[],overlays:any[]=[];
+ class LatLng{lat:number;lng:number;constructor(lat:number,lng:number){this.lat=lat;this.lng=lng;}getLat(){return this.lat;}getLng(){return this.lng;}}
+ class Point{x:number;y:number;constructor(x:number,y:number){this.x=x;this.y=y;}getX(){return this.x;}getY(){return this.y;}}
+ class Map{events:any={};options:any;center:any;zoom:number;removed=false;layers:any[]=[];constructor(_el:any,options:any){this.options=options;this.center=Array.isArray(options.center)?new LatLng(options.center[1],options.center[0]):options.center;this.zoom=options.zoom;maps.push(this);}on(n:string,f:any){this.events[n]=f;}off(n:string){delete this.events[n];}getCenter(){return this.center;}getZoom(){return this.zoom;}getPitch(){return 0;}getRotation(){return 0;}setZoomAndCenter(z:number,c:any){if(this.options.zoomEnable!==false)this.zoom=z;this.center=new LatLng(c[1],c[0]);}setCenter(c:any){this.center=c;}setZoom(z:number){this.zoom=z;}setLayers(v:any){this.layers=v;}setBaseMap(v:any){this.layers=v;}addControl(){}containerToLngLat(p:any){return new LatLng(this.center.lat+(300-p.y)/100000,this.center.lng+(p.x-400)/100000);}unprojectFromContainer(p:any){return this.containerToLngLat(p);}projectToContainer(){return new Point(100,200);}destroy(){this.removed=true;}}
+ class Marker{options:any;constructor(options:any){this.options=options;markers.push(this);}setMap(m:any){this.options.map=m;}setPosition(p:any){this.options.position=p;}}
+ class DOMOverlay{privateMap:any;dom:any;get map(){return this.privateMap;}constructor(options:any){this.privateMap=options.map;(this as any).onInit(options);this.dom=(this as any).createDOM();(this as any).updateDOM();overlays.push(this);}setMap(map:any){this.privateMap=map;}}
+ const TileLayer:any=class{};TileLayer.Satellite=class{};TileLayer.RoadNet=class{};
+ return {sdk:{Map,Marker,DOMOverlay,LatLng,Pixel:Point,Point,TileLayer,createDefaultLayer:()=>({default:true})},maps,markers,overlays};
 }
-test('AMap/Tencent background switches preserve camera, transform photo projection and keep range queries WGS84',async()=>{
- const e=environment(),frames:any[]=[],errors:any[]=[];
- const runtime=createSdkBasemapRuntime(e.L,e.map,{proxyState:async()=>({requiresRestart:false}),onError:error=>errors.push(error),mountFrame:(_container:any,config:any,callbacks:any)=>{const frame={config,callbacks,cameras:[] as any[],removed:false,setCamera(value:any){this.cameras.push(value);},resize(){},destroy(){this.removed=true;}};frames.push(frame);return frame;}});
- const settings=defaultMapServices();settings.tileProvider='amap';settings.providers.amap.jsKey='js-fake';settings.providers.amap.securityJsCode='security-fake';settings.providers.amap.token='private-rest-key';
- await runtime.set(settings,0);assert.equal(frames.length,1);assert.equal(e.map.getCenter().lng,116.397470);assert.ok(Math.abs(frames[0].config.pose.center[0]-116.4037136)<1e-6);assert.ok(!JSON.stringify(frames[0].config).includes('private-rest-key'));
- assert.equal(e.map.options.crs.code,'GCJ02:3857');assert.equal(e.map._zoomAnimated,false);const bounds=e.map.getBounds();assert.equal(bounds.points.length,36);assert.ok(bounds.points.every((point:any)=>point.lng<116.42));
- await runtime.set(settings,1);assert.equal(frames.length,1);assert.equal(frames[0].cameras.at(-1).theme,1);
- settings.tileProvider='tencent';settings.providers.tencent.jsKey='tencent-fake';await runtime.set(settings,0);assert.ok(frames[0].removed);assert.equal(frames[1].config.provider,'tencent');assert.equal(e.map.getZoom(),13);
- settings.tileProvider='esri';await runtime.set(settings,0);assert.ok(frames[1].removed);assert.equal(e.map.options.crs,e.crs);assert.equal(e.map.getCenter().lng,116.397470);assert.equal(errors.length,0);runtime.destroy();assert.equal(e.container.style.background,'original');assert.ok(e.map.getBounds().original);
+for(const provider of ['amap','tencent'])test(`${provider} owns the only map instance, native photo markers, gestures and WGS84 boundaries`,()=>{
+ const s=fakeSdk(),settings=defaultMapServices();settings.tileProvider=provider;
+ const input={lat:39.908823,lng:116.397470};let changed=0;const errors:any[]=[];
+ const engine=createNativeMapEngine({provider,sdk:s.sdk,container:element(),view:{center:input,zoom:10},theme:getMapTheme(settings,0),config:{},onChange:()=>changed++,onError:e=>errors.push(e),onLoading(){}});
+ assert.equal(s.maps.length,1);assert.equal(engine.native,s.maps[0]);assert.equal(s.maps[0].options.viewMode,'3D');
+ if(provider==='amap'){assert.equal(s.maps[0].options.zoomEnable,true);assert.equal(s.maps[0].options.dragEnable,true);}
+ engine.setView(input,11);assert.equal(engine.getZoom(),11);assert.ok(Math.abs(engine.getCenter().lng-input.lng)<1e-9);
+ s.maps[0].events.moveend();assert.equal(changed,1);const b=engine.getBounds(100);assert.ok(b.getWest()<input.lng&&b.getEast()>input.lng);
+ const el=element(),handle=engine.createMarker({position:input,element:el,size:[64,72],anchor:[32,72]});
+ if(provider==='amap'){assert.equal(s.markers[0].options.content,el);assert.deepEqual(s.markers[0].options.position,convertCoordinate([input.lng,input.lat],'WGS84','GCJ02'));}
+ else{assert.equal(s.overlays[0].dom,el);assert.equal(el.style.transform,'translate3d(68px,128px,0)');}
+ handle.setPosition({lat:31,lng:121});handle.remove();engine.destroy();assert.ok(s.maps[0].removed);assert.equal(Object.keys(s.maps[0].events).length,0);assert.equal(errors.length,0);
 });
-test('SDK camera wraps repeated-world longitude before converting GPS while keeping saved GPS unchanged',async()=>{
- const e=environment(),cameras:any[]=[];
- e.map.setView({lng:116.397470+360,lat:39.908823},3,{});
- e.map.wrapLatLng=(point:any)=>({...point,lng:((point.lng+180)%360+360)%360-180});
- const runtime=createSdkBasemapRuntime(e.L,e.map,{proxyState:async()=>({requiresRestart:false}),mountFrame:(_container:any,config:any)=>{
-  cameras.push(config.pose);return {setCamera:(pose:any)=>cameras.push(pose),resize(){},destroy(){}};
- }});
- const settings=defaultMapServices();settings.tileProvider='amap';await runtime.set(settings,0);
- assert.ok(Math.abs(cameras[0].center[0]-116.4037136)<1e-6);
- assert.equal(e.map.getCenter().lng,116.397470+360);runtime.destroy();
+function fakeFactory(records:any[]){return (args:any)=>{const e:any={...args,view:{...args.view},destroyed:false,markers:[] as any[],native:{provider:args.provider},coordinateSystem:args.theme.renderer==='sdk'?'GCJ02':'WGS84',capabilities:{},snapshot(){return this.view;},getCenter(){return this.view.center;},getZoom(){return this.view.zoom;},getBounds:()=>bounds(),setView(center:any,zoom:number){this.view={center,zoom};this.onChange();},setTheme(theme:any){this.theme=theme;},invalidateSize(){},createMarker(data:any){const m={data,removed:false,setPosition(value:any){data.position=value;},remove(){this.removed=true;}};this.markers.push(m);return m;},destroy(){this.destroyed=true;},fitBounds(){}};records.push(e);return e;};}
+async function withDom(fn:any){const previous=(globalThis as any).document;(globalThis as any).document={createElement:()=>element()};try{await fn();}finally{(globalThis as any).document=previous;}}
+test('whole-engine switches keep WGS84 camera, stable photo DOM and clicks while destroying old engines',()=>withDom(async()=>{
+ const records:any[]=[],factory=fakeFactory(records),runtime=createMapRenderer(element(),{center:[39,116],zoom:10,nativeFactory:factory,rasterFactory:factory,sdkLoader:async()=>({}),proxyState:async()=>({})});
+ const settings=defaultMapServices();await runtime.set(settings,getMapTheme(settings,0));
+ const marker=runtime.createMarker([39,116],{html:'photo',size:[64,72]}).addTo(runtime);const dom=marker.getElement();let clicked=0;marker.on('click',()=>clicked++);
+ runtime.setView([40,117],12);settings.tileProvider='amap';await runtime.set(settings,getMapTheme(settings,0));
+ assert.ok(records[0].destroyed);assert.equal(records[0].markers[0].removed,true);assert.equal(runtime.getRendererKind(),'amap');assert.equal(runtime.getNativeMap().provider,'amap');assert.equal(runtime.getCenter().lng,117);assert.equal(runtime.getZoom(),12);assert.equal(records[1].markers[0].data.element,dom);dom.dispatch('click');assert.equal(clicked,1);
+ await runtime.set(settings,getMapTheme(settings,1));assert.equal(records.length,2);assert.equal(records[1].theme.theme,1);
+ settings.tileProvider='tencent';await runtime.set(settings,getMapTheme(settings,0));assert.ok(records[1].destroyed);assert.equal(runtime.getRendererKind(),'tencent');assert.equal(runtime.getZoom(),12);
+ settings.tileProvider='esri';await runtime.set(settings,getMapTheme(settings,0));assert.ok(records[2].destroyed);assert.equal(runtime.getRendererKind(),'leaflet');assert.equal(records[3].markers[0].data.element,dom);runtime.remove();assert.ok(records[3].destroyed);
+}));
+test('superseded SDK loads cannot mount stale maps, and failures never silently replace the chosen supplier',()=>withDom(async()=>{
+ const records:any[]=[],pending:any[]=[],errors:any[]=[],factory=fakeFactory(records);
+ const runtime=createMapRenderer(element(),{nativeFactory:factory,rasterFactory:factory,proxyState:async()=>({}),sdkLoader:()=>new Promise(r=>pending.push(r)),onError:e=>errors.push(e)});
+ const a=defaultMapServices();a.tileProvider='amap';const first=runtime.set(a,getMapTheme(a,0));await new Promise(r=>setImmediate(r));
+ const b=defaultMapServices();b.tileProvider='tencent';const second=runtime.set(b,getMapTheme(b,0));await new Promise(r=>setImmediate(r));pending[1]({});await second;pending[0]({});await first;
+ assert.equal(records.length,1);assert.equal(records[0].provider,'tencent');runtime.remove();
+ const failed=createMapRenderer(element(),{rasterFactory:factory,proxyState:async()=>({requiresRestart:true}),onError:e=>errors.push(e)});await failed.set(a,getMapTheme(a,0));assert.equal(failed.getRendererKind(),'amap');assert.equal(failed.getNativeMap(),null);assert.match(errors[0].message,/Restart Lap/);failed.remove();
+}));
+test('native camera changes feed the business viewport and marker removal cannot leave overlays behind',()=>withDom(async()=>{
+ const records:any[]=[],factory=fakeFactory(records),runtime=createMapRenderer(element(),{nativeFactory:factory,proxyState:async()=>({}),sdkLoader:async()=>({})});
+ const settings=defaultMapServices();settings.tileProvider='amap';await runtime.set(settings,getMapTheme(settings,0));let changed=0;runtime.on('moveend',()=>changed++);
+ records[0].view={center:{lat:30,lng:120},zoom:15};records[0].onChange();assert.equal(runtime.getZoom(),15);assert.equal(runtime.getCenter().lng,120);assert.equal(changed,1);
+ const group=runtime.createLayerGroup(),marker=runtime.createMarker([30,120]).addTo(group);group.removeLayer(marker);assert.equal(records[0].markers[0].removed,true);assert.equal(group.hasLayer(marker),false);runtime.remove();
+}));
+test('cluster index uses the active datum and does not reuse WGS84 pixel bins as GCJ02 bins',()=>{
+ const point={lat:39.908823,lon:116.397470,file_id:1,count:1};const w=projectPhotoPoint(point,20),g=projectPhotoPoint(point,20,'GCJ02');assert.ok(Math.abs(g.x-w.x)>1000);
+ const cache=createPhotoClusterCache(),area={min:{x:g.x-1,y:g.y-1},max:{x:g.x+1,y:g.y+1}};
+ const request={source:'overview',version:1,points:[point],maxZoom:20,zoom:20,padding:0,spacing:48,bounds:area};
+ assert.equal(cache({...request,coordinateSystem:'WGS84'}).length,0);assert.equal(cache({...request,coordinateSystem:'GCJ02'}).length,1);
 });
-test('late SDK initializations and browser proxy changes cannot install stale backgrounds',async()=>{
- const e=environment(),pending:Array<(value:any)=>void>=[],frames:any[]=[],errors:any[]=[];
- const runtime=createSdkBasemapRuntime(e.L,e.map,{proxyState:()=>new Promise(resolve=>pending.push(resolve)),mountFrame:(_container:any,config:any)=>{frames.push(config);return {setCamera(){},resize(){},destroy(){}};},onError:error=>errors.push(error)});
- const a=defaultMapServices();a.tileProvider='amap';const old=runtime.set(a,0);const b=defaultMapServices();b.tileProvider='tencent';const current=runtime.set(b,0);pending[1]({requiresRestart:false});await current;pending[0]({requiresRestart:false});await old;assert.equal(frames.length,1);assert.equal(frames[0].provider,'tencent');
- const changed=runtime.set(b,0);pending[2]({requiresRestart:true});await changed;assert.match(errors[0].message,/Restart Lap/);runtime.destroy();
-});
-test('SDK fields are independent of Web Service keys and frame documents cannot execute user key markup',()=>{
- const settings=defaultMapServices();settings.tileProvider='amap';const provider=MAP_SERVICES.find(value=>value.id==='amap')!;assert.deepEqual(serviceFields(provider,settings),['jsKey','securityJsCode','sdkStyle']);settings.geocoder='amap';assert.ok(serviceFields(provider,settings).includes('token'));
- const html=frameDocument({provider:'amap',jsKey:'</script><script>bad()</script>',token:'unique'});assert.ok(html.endsWith('</script></body></html>'));assert.ok(!html.includes('</script><script>bad()'));assert.ok(html.includes('u003c/script>'));
-});
-for(const provider of ['amap','tencent'])test(`${provider} bootstrap uses the official SDK, reports tile readiness and changes theme without recreating the map`,async()=>{
- const callbacks:any={},messages:any[]=[],maps:any[]=[],scripts:any[]=[],defaultLayers:any[]=[],genericLayers:any[]=[];let handler:(value:any)=>void=()=>{};
- class FakeMap {events:any={};layers:any[]=[];centers:any[]=[];base:any[]=[];options:any;zoom:number;constructor(_container:any,options:any){this.options=options;this.zoom=provider==='amap'&&options.zoomEnable===false?10:options.zoom;maps.push(this);}on(name:string,fn:any){this.events[name]=fn;}setZoomAndCenter(...args:any[]){if(this.options.zoomEnable!==false)this.zoom=args[0];this.centers.push(args);}setCenter(value:any){this.centers.push(value);}setZoom(value:number){this.zoom=value;}setLayers(value:any){this.layers.push(value);}setBaseMap(value:any){this.base.push(value);}destroy(){}}
- class TileLayer{constructor(){genericLayers.push(this);}};(TileLayer as any).Satellite=class{};(TileLayer as any).RoadNet=class{};
- const sdk:any={Map:FakeMap,TileLayer,createDefaultLayer:()=>{const layer={kind:'default',zooms:[2,20]};defaultLayers.push(layer);return layer;},LatLng:class {lat:number;lng:number;constructor(lat:number,lng:number){this.lat=lat;this.lng=lng;}}};const window:any={AMapLoader:{load:async(args:any)=>{callbacks.loader=args;return sdk;}},TMap:sdk,addEventListener:(name:string,fn:any)=>{if(name==='message')handler=fn;}};
- const parent={postMessage:(value:any)=>messages.push(value)},config={provider,token:'private-channel',jsKey:'js-fake',securityJsCode:'security-fake',pose:{center:[116.4037136,39.9102265],zoom:2,theme:0}};
- runInNewContext(`(${sdkFrameBootstrap.toString()})(config)`,{config,window,parent,document:{createElement:()=>({}),getElementById:()=>({}),head:{appendChild:(script:any)=>scripts.push(script)}},setTimeout:()=>0,clearTimeout(){}});
- assert.ok(scripts[0].src.startsWith(provider==='amap'?'https://webapi.amap.com/':'https://map.qq.com/api/gljs'));scripts[0].onload();await new Promise(resolve=>setImmediate(resolve));assert.equal(maps.length,1);assert.ok(!messages.some(value=>value.type==='ready'));
- maps[0].events[provider==='amap'?'complete':'tilesloaded']();assert.ok(messages.some(value=>value.type==='ready'));
- // Minimum/world zoom must retain the official default layer, including after satellite mode.
- if(provider==='amap'){
-  const settings=defaultMapServices();settings.tileProvider=provider;
-  assert.equal(maps[0].options.zoomEnable,true);assert.equal(maps[0].options.dragEnable,false);assert.equal(maps[0].options.keyboardEnable,false);
-  const theme=getMapTheme(settings,0);assert.deepEqual(Array.from(maps[0].options.zooms),[theme.minZoom,theme.maxZoom]);
-  assert.equal(defaultLayers.length,1);assert.equal(genericLayers.length,0);assert.equal(maps[0].layers[0][0],defaultLayers[0]);
- }
- for(const zoom of [2,3,20,3,2]){
-  handler({source:parent,data:{channel:'lap-map-sdk',token:'private-channel',type:'camera',pose:{...config.pose,zoom}}});
-  assert.equal(maps[0].zoom,zoom);
- }
- for(let n=0;n<3;n++)handler({source:parent,data:{channel:'lap-map-sdk',token:'private-channel',type:'camera',pose:{...config.pose,theme:1}}});assert.equal(maps.length,1);assert.equal(provider==='amap'?maps[0].layers.length:maps[0].base.length,2);
- handler({source:parent,data:{channel:'lap-map-sdk',token:'private-channel',type:'camera',pose:config.pose}});
- assert.equal(maps[0].zoom,2);assert.equal(provider==='amap'?maps[0].layers.length:maps[0].base.length,3);
- if(provider==='amap'){assert.equal(maps[0].layers.at(-1)[0],defaultLayers[0]);assert.equal(defaultLayers.length,1);assert.equal(genericLayers.length,0);}
+test('views no longer instantiate Leaflet maps or Leaflet markers; SDK markers are owned by the native renderer',()=>{
+ for(const name of ['MapView','PhotoMapView']){const source=readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');assert.ok(source.includes('createMapRenderer'));assert.equal(/\bL\./.test(source),false);assert.equal(source.includes('leaflet'),false);assert.equal(source.includes('createSdkBasemapRuntime'),false);}
+ const native=readFileSync(new URL('../src/common/mapEngines.js',import.meta.url),'utf8');assert.equal(/\bL\b|leaflet/.test(native),false);assert.ok(native.includes('new sdk.Marker'));assert.ok(native.includes('extends sdk.DOMOverlay'));
 });
 test('every Tauri window uses the startup proxy snapshot and main creation retains platform configuration',()=>{
  const root=new URL('../../src-tauri/',import.meta.url);for(const name of ['tauri.conf.json','tauri.windows.conf.json']){const file=JSON.parse(readFileSync(new URL(name,root),'utf8'));assert.equal(file.app.windows[0].create,false);}
  const main=readFileSync(new URL('src/main.rs',root),'utf8');assert.ok(main.includes('WebviewWindowBuilder::from_config'));assert.ok(main.includes('builder.proxy_url(proxy)'));
  const home=readFileSync(new URL('../src/views/Home.vue',import.meta.url),'utf8'),content=readFileSync(new URL('../src/components/Content.vue',import.meta.url),'utf8');assert.ok(home.includes('...await startupWindowProxy()'));assert.equal((content.match(/new WebviewWindow/g)||[]).length,(content.match(/\.\.\.await startupWindowProxy\(\)/g)||[]).length);
 });
+
+test('proxy changes are checked even when reusing the same native map and theme',()=>withDom(async()=>{
+ const records:any[]=[],factory=fakeFactory(records),errors:any[]=[];let changed=false;
+ const runtime=createMapRenderer(element(),{nativeFactory:factory,sdkLoader:async()=>({}),proxyState:async()=>({requiresRestart:changed}),onError:e=>errors.push(e)});
+ const settings=defaultMapServices();settings.tileProvider='amap';await runtime.set(settings,getMapTheme(settings,0));changed=true;
+ await runtime.set(settings,getMapTheme(settings,1));assert.ok(records[0].destroyed);assert.equal(runtime.getNativeMap(),null);assert.match(errors[0].message,/Restart Lap/);runtime.remove();
+}));
+test('explicit cluster snapshots override a reused version after renderer or library switches',()=>{
+ const cache=createPhotoClusterCache(),request={source:'overview',version:1,maxZoom:2,zoom:2,padding:0,spacing:48,bounds:{min:{x:0,y:0},max:{x:1024,y:1024}}};
+ const a=cache({...request,points:[{lat:0,lon:0,file_id:1,count:1}]});const b=cache({...request,points:[{lat:0,lon:0,file_id:2,count:1}]});assert.equal(a[0].file_id,1);assert.equal(b[0].file_id,2);
+});
+test('Tencent loader can return to an earlier key without reusing a deleted SDK global',async()=>{
+ const {loadMapSdk}=await import('../src/common/mapSdkLoader.js');const oldWindow=(globalThis as any).window,oldDocument=(globalThis as any).document;const requested:string[]=[];
+ try{
+  (globalThis as any).window={};(globalThis as any).document={createElement:()=>({remove(){}}),head:{appendChild(script:any){requested.push(script.src);const key=new URL(script.src).searchParams.get('key');(globalThis as any).window.TMap={key};script.onload();}}};
+  const first=await loadMapSdk('tencent',{jsKey:'fake-a'});const same=await loadMapSdk('tencent',{jsKey:'fake-a'});assert.equal(first,same);assert.equal(requested.length,1);
+  const second=await loadMapSdk('tencent',{jsKey:'fake-b'});assert.equal(second.key,'fake-b');const back=await loadMapSdk('tencent',{jsKey:'fake-a'});assert.equal(back.key,'fake-a');assert.equal(requested.length,3);
+ }finally{(globalThis as any).window=oldWindow;(globalThis as any).document=oldDocument;}
+});
+
+test('hidden information-map viewports defer native initialization until they have a size',()=>withDom(async()=>{
+ const host=element();host.clientWidth=0;const records:any[]=[],factory=fakeFactory(records),runtime=createMapRenderer(host,{nativeFactory:factory,proxyState:async()=>({}),sdkLoader:async()=>({})});
+ const settings=defaultMapServices();settings.tileProvider='amap';await runtime.set(settings,getMapTheme(settings,0));assert.equal(records.length,0);
+ host.clientWidth=800;runtime.invalidateSize();await new Promise(r=>setImmediate(r));assert.equal(records.length,1);runtime.remove();
+}));
+
+test('native SDK path and views have no Leaflet dependency; only the raster adapter loads it lazily',()=>{
+ for(const file of ['mapRenderer','mapEngines']){
+  const source=readFileSync(new URL(`../src/common/${file}.js`,import.meta.url),'utf8');
+  assert.equal(/\bL\./.test(source),false);
+  assert.equal(/(?:from|import\()\s*['"]leaflet/.test(source),false);
+ }
+ const raster=readFileSync(new URL('../src/common/mapRasterEngine.js',import.meta.url),'utf8');
+ assert.ok(raster.includes("import('leaflet')"));assert.ok(raster.includes("import('leaflet/dist/leaflet.css')"));
+});
+
+for(const provider of ['amap','tencent','osm'])test(`${provider} theme reuse keeps camera and engine event callbacks alive`,()=>withDom(async()=>{
+ const records:any[]=[],factory=fakeFactory(records),errors:any[]=[],runtime=createMapRenderer(element(),{nativeFactory:factory,rasterFactory:factory,sdkLoader:async()=>({}),proxyState:async()=>({}),onError:e=>errors.push(e)});
+ const settings=defaultMapServices();settings.tileProvider=provider;await runtime.set(settings,getMapTheme(settings,0));
+ let changed=0;runtime.on('moveend',()=>changed++);
+ await runtime.set(settings,getMapTheme(settings,1));
+ assert.equal(records.length,1);records[0].view={center:{lat:31,lng:121},zoom:11};records[0].onChange();
+ assert.equal(changed,1);assert.deepEqual(runtime.getCenter(),{lat:31,lng:121});
+ records[0].onError(new Error('active engine error'));assert.equal(errors.length,1);
+ runtime.remove();records[0].onChange();records[0].onError(new Error('stale'));assert.equal(changed,1);assert.equal(errors.length,1);
+}));
+test('late raster dependency loading cannot replace a new native engine or mount after disposal',()=>withDom(async()=>{
+ for(const disposed of [false,true]){
+  const records:any[]=[],factory=fakeFactory(records);let resolve:(value:any)=>void=()=>{};
+  const runtime=createMapRenderer(element(),{nativeFactory:factory,rasterFactory:args=>new Promise(r=>{resolve=()=>r(factory(args));}),sdkLoader:async()=>({}),proxyState:async()=>({})});
+  const settings=defaultMapServices(),pending=runtime.set(settings,getMapTheme(settings,0));
+  if(disposed)runtime.remove();else{settings.tileProvider='amap';await runtime.set(settings,getMapTheme(settings,0));}
+  resolve(null);await pending;assert.ok(records.at(-1).destroyed);
+  if(!disposed){assert.equal(runtime.getNativeMap(),records[0].native);assert.equal(records[0].destroyed,false);}
+  runtime.remove();
+ }
+}));
+test('camera and marker edits during raster loading are applied when the adapter becomes ready',()=>withDom(async()=>{
+ const records:any[]=[],factory=fakeFactory(records);let resolve:(value:any)=>void=()=>{};
+ const runtime=createMapRenderer(element(),{rasterFactory:args=>new Promise(r=>{resolve=()=>r(factory(args));})});
+ const settings=defaultMapServices(),pending=runtime.set(settings,getMapTheme(settings,0));
+ runtime.setView([31,121],13);const marker=runtime.createMarker([39,116]).addTo(runtime);marker.setLatLng([31,121]);
+ resolve(null);await pending;assert.deepEqual(runtime.getCenter(),{lat:31,lng:121});assert.equal(runtime.getZoom(),13);
+ assert.deepEqual(records[0].markers[0].data.position,{lat:31,lng:121});runtime.remove();
+}));

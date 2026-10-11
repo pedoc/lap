@@ -1,3 +1,4 @@
+import {convertCoordinate} from './mapCoordinates.js';
 // Distance-grid nearest-neighbor search, following Leaflet.markercluster:
 // https://github.com/Leaflet/Leaflet.markercluster/blob/master/src/DistanceGrid.js
 // Fixed photo anchors avoid centroid shifts introducing new icon collisions.
@@ -62,18 +63,19 @@ export function buildPhotoClusterIndex(points, project, maxZoom, padding = 0, sp
 }
 
 // Leaflet EPSG:3857 / 256px tile projection, independent of DOM for workers.
-export function projectPhotoPoint(point, zoom) {
+export function projectPhotoPoint(point, zoom, coordinateSystem = 'WGS84') {
+  const [lon, latitude] = convertCoordinate([point.lon,point.lat], 'WGS84', coordinateSystem);
   const scale = 256 * 2 ** zoom
-  const lat = Math.max(-85.0511287798, Math.min(85.0511287798, point.lat))
+  const lat = Math.max(-85.0511287798, Math.min(85.0511287798, latitude))
   const sin = Math.sin(lat * Math.PI / 180)
   return {
-    x: scale * (point.lon / 360 + 0.5),
+    x: scale * (lon / 360 + 0.5),
     y: scale * (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)),
   }
 }
 
-export function photoClusterInView(cluster, zoom, bounds) {
-  const pixel = projectPhotoPoint(cluster, zoom)
+export function photoClusterInView(cluster, zoom, bounds, coordinateSystem = 'WGS84') {
+  const pixel = projectPhotoPoint(cluster, zoom, coordinateSystem)
   // Hierarchical anchor displacement is < 96px; include the 72px icon too.
   const buffer = 176
   return pixel.x >= bounds.min.x - buffer && pixel.x <= bounds.max.x + buffer
@@ -82,12 +84,12 @@ export function photoClusterInView(cluster, zoom, bounds) {
 
 export function createPhotoClusterCache() {
   const sources = new Map()
-  return ({ source, version, points, maxZoom, zoom, padding, spacing, bounds }) => {
+  return ({ source, version, points, maxZoom, zoom, padding, spacing, bounds, coordinateSystem = 'WGS84' }) => {
     let cached = sources.get(source)
-    if (!cached || cached.version !== version || cached.maxZoom !== maxZoom || cached.spacing !== spacing) {
-      cached = { version, maxZoom, spacing, levels: buildPhotoClusterIndex(points, projectPhotoPoint, maxZoom, padding, spacing) }
+    if (points || !cached || cached.version !== version || cached.maxZoom !== maxZoom || cached.spacing !== spacing || cached.coordinateSystem !== coordinateSystem) {
+      cached = { version, maxZoom, spacing, coordinateSystem, levels: buildPhotoClusterIndex(points, (point,zoom) => projectPhotoPoint(point,zoom,coordinateSystem), maxZoom, padding, spacing) }
       sources.set(source, cached)
     }
-    return (cached.levels.get(Math.floor(zoom)) || []).filter(cluster => photoClusterInView(cluster, zoom, bounds))
+    return (cached.levels.get(Math.floor(zoom)) || []).filter(cluster => photoClusterInView(cluster, zoom, bounds, coordinateSystem))
   }
 }

@@ -7,7 +7,7 @@
     <div v-if="loading" class="absolute inset-0 z-50 flex items-center justify-center bg-base-200/50">
       <span class="loading loading-spinner loading-md text-primary"></span>
     </div>
-    <div ref="mapEl" class="h-full w-full"></div>
+    <div ref="mapEl" class="relative h-full w-full"></div>
     <div class="absolute left-2 bottom-7 z-500 max-w-[calc(100%_-_1rem)] rounded-box bg-base-100/85 px-2 py-1 text-[10px]" role="status">
       <span>{{ mapThemeInfo?.name }}</span>
       <span v-if="sdkLoading" class="ml-1">{{ t('map_services.sdk_loading') }}</span>
@@ -37,13 +37,12 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
 
 import { config } from '@/common/config'
 import mapboxLogo from '@/assets/mapbox-logo.svg'
-import { createSdkBasemapRuntime } from '@/common/mapSdkRuntime'
-import { createTileLayerGroup, getMapTheme } from '@/common/mapProviders'
+import { createMapRenderer } from '@/common/mapRenderer'
+import { createMapBounds } from '@/common/mapGeometry'
+import { getMapTheme } from '@/common/mapProviders'
 import {
   getCollectionQueryFileIds,
   getFilesByIds,
@@ -84,19 +83,17 @@ const showAppleMapsButton = computed(() => !isQueryMap.value && isMac && validLa
 const DETAIL_ZOOM = 13
 const DETAIL_LIMIT = 500
 const MARKER_FADE_MS = 200
-// Leaflet resolves a one-point bounds to its maximum zoom. Keep surrounding
-// map context and avoid requesting an unsupported raster detail level instead.
+// Keep surrounding map context when fitting a single photo instead of
+// zooming to the renderer's maximum detail level.
 const SINGLE_POINT_FIT_ZOOM = 13
 const activeMaxZoom = ref(19)
 
 let map = null
 let markerLayer = null
-let tileLayer = null
 let resizeObserver = null
 const mapThemeInfo = ref(null)
 const mapError = ref('')
 const sdkLoading = ref(false)
-let sdkRuntime = null
 let pointRequestToken = 0
 let detailRequestToken = 0
 let detailTimer = null
@@ -114,10 +111,8 @@ let clusterRenderFrame = null
 const clusterSources = new Map()
 
 onMounted(async () => {
-  map = L.map(mapEl.value, { center: [20, 0], zoom: 2, keyboard: false, zoomControl: false, maxZoom: activeMaxZoom.value })
-  map.attributionControl.setPrefix('')
-  L.control.scale({ position: 'bottomleft', imperial: false }).addTo(map)
-  markerLayer = L.layerGroup().addTo(map)
+  map = createMapRenderer(mapEl.value, {center: [20,0], zoom: 2, onError: reason => {mapError.value = reason?.message || String(reason)}, onLoading: value => {sdkLoading.value = value}})
+  markerLayer = map.createLayerGroup()
   clusterWorker = new Worker(new URL('../common/mapClusters.worker.js', import.meta.url), { type: 'module' })
   clusterWorker.onmessage = ({ data }) => {
     if (!map || !props.active || data.requestId !== clusterRequestId) return
@@ -126,6 +121,7 @@ onMounted(async () => {
   }
   map.on('zoomend', onMapChanged)
   map.on('moveend', onMapChanged)
+  map.on('rendererchange', () => {clusterSources.clear(); renderMarkers(); scheduleDetailFetch()})
   resizeObserver = new ResizeObserver(() => map?.invalidateSize())
   resizeObserver.observe(mapEl.value)
   updateTheme()
@@ -154,7 +150,6 @@ onBeforeUnmount(() => {
   for (const frame of fadeFrames) cancelAnimationFrame(frame)
   retiringMarkers.clear()
   photoMarkers.clear()
-  sdkRuntime?.destroy(); sdkRuntime = null
   map?.remove()
   map = null
 })
@@ -238,7 +233,7 @@ function updateFromCoords() {
     singleMarker.value = null
   }
   if (validLatLon(props.lat, props.lon)) {
-    singleMarker.value = L.marker([props.lat, props.lon]).addTo(markerLayer)
+    singleMarker.value = map.createMarker([props.lat, props.lon]).addTo(markerLayer)
     map.setView([props.lat, props.lon], zoom.value)
   } else {
     map.setView([0, 0], 2)
@@ -261,11 +256,7 @@ function scheduleDetailFetch() {
 }
 
 function bufferedMapBounds(padding) {
-  const bounds = map.getPixelBounds()
-  return L.latLngBounds(
-    map.unproject(bounds.min.subtract([padding, padding])),
-    map.unproject(bounds.max.add([padding, padding])),
-  )
+  return map.getBufferedBounds(padding)
 }
 
 async function fetchVisibleFiles() {
@@ -367,7 +358,7 @@ function requestPhotoClusters() {
   }
   const pixelBounds = map.getPixelBounds()
   clusterWorker.postMessage({
-    requestId: clusterRequestId, source, version: cached.version,
+    requestId: clusterRequestId, source, version: cached.version, coordinateSystem: map.getCoordinateSystem(),
     points: previous?.version === cached.version ? undefined : cached.candidates,
     maxZoom: cached.maxZoom, zoom: map.getZoom(), padding: useDetails ? 0.0001 : 0.01,
     spacing,
@@ -433,13 +424,12 @@ async function openPhotoCluster(cluster) {
 function addPhotoMarker(lat, lon, fileId, count, cluster = null) {
   if (lat == null || lon == null) return
   const size = Number(config.settings.mapMarkerSize || 64);
-  const icon = L.divIcon({
+  const marker = map.createMarker([lat, lon], {
     className: 'map-photo-marker-wrapper',
-    iconSize: [size, size + 8],
-    iconAnchor: [Math.round(size / 2), size + 8],
+    size: [size, size + 8],
+    anchor: [Math.round(size / 2), size + 8],
     html: `<div class="map-photo-marker"><img src="${getThumbUrl(fileId, false, config.settings.thumbnailSize || 512)}" />${count > 1 ? `<span>${count > 999 ? '999+' : count}</span>` : ''}</div>`,
-  })
-  const marker = L.marker([lat, lon], { icon, keyboard: false }).addTo(markerLayer)
+  }).addTo(markerLayer)
   const element = marker.getElement()
   element?.style.setProperty('--map-photo-fade-duration', `${MARKER_FADE_MS}ms`)
   element?.style.setProperty('--map-photo-marker-size', `${size}px`)
@@ -472,9 +462,8 @@ function addPhotoMarker(lat, lon, fileId, count, cluster = null) {
     }
     void openPhotoCluster(cluster)
   })
-  marker.on('dblclick', (event) => {
+  marker.on('dblclick', () => {
     if (cluster && Number(count) !== 1) return
-    L.DomEvent.stop(event.originalEvent)
     emit('preview-file', fileId)
   })
   return marker
@@ -486,22 +475,9 @@ function updateTheme() {
   try {
     const theme = getMapTheme(config.settings.mapServices, config.settings.mapTheme, config.settings.mapServicesRevision)
     if (!theme.supportsSatellite) config.settings.mapTheme = 0
-    if (tileLayer) map.removeLayer(tileLayer)
     mapThemeInfo.value = theme
     activeMaxZoom.value = theme.maxZoom
-    map.setMinZoom(theme.minZoom || 0)
-    map.setMaxZoom(theme.maxZoom)
-    if (map.getZoom() > theme.maxZoom) map.setZoom(theme.maxZoom)
-    if (!sdkRuntime) sdkRuntime = createSdkBasemapRuntime(L,map,{onError:reason=>{mapError.value=reason?.message||String(reason)},onLoading:value=>{sdkLoading.value=value}})
-    void sdkRuntime.set(config.settings.mapServices,theme.theme)
-    if (theme.renderer === 'sdk') { tileLayer = null; return }
-    const created = createTileLayerGroup(L, theme)
-    const activeLayer = created.layer
-    tileLayer = activeLayer.addTo(map)
-    created.tileLayers.forEach(tile => tile.on('tileerror', event => {
-      if (tileLayer !== activeLayer) return // Ignore delayed failures from a removed provider layer.
-      mapError.value = event.error?.message || t('map_services.tile_error')
-    }))
+    void map.set(config.settings.mapServices, theme)
   } catch (reason) { mapError.value = reason?.message || String(reason) }
 }
 
@@ -512,7 +488,7 @@ function fitBounds() {
   fitMapToPoints()
 }
 function fitMapToPoints() {
-  map.fitBounds(L.latLngBounds(points.value.map(point => [point.lat, point.lon])), {
+  map.fitBounds(createMapBounds(points.value.map(point => [point.lat, point.lon])), {
     padding: [20, 20],
     maxZoom: points.value.length === 1 ? Math.min(SINGLE_POINT_FIT_ZOOM, activeMaxZoom.value) : activeMaxZoom.value,
   })
