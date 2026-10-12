@@ -6,6 +6,7 @@ pub mod commands;
 pub mod face_annotations;
 pub mod face_jobs;
 pub mod face_diagnostics;
+pub mod face_confirmation;
 pub mod face_names;
 pub mod face_review;
 pub mod hardware;

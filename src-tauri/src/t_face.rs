@@ -321,6 +321,7 @@ pub fn run_face_indexing(
             if before.is_none()||before!=after||before.as_ref().is_some_and(|entry|entry.0!=size as u64) {
                 failed+=1;detail.pipeline.stage="source_validation".into();detail.error=Some("Source missing or changed during inference; old face records were retained".into());detail.outcome="failed".into();
             } else {
+                detail.source_revision = before.as_ref().and_then(|entry|crate::ai::face_confirmation::source_revision(file_id,entry.0,entry.1));
                 match process_result {
                     Ok((mut faces,(proc_w,proc_h)))=>{
                         if proc_w==0||proc_h==0||faces.iter().any(|face|![face.bbox.x,face.bbox.y,face.bbox.width,face.bbox.height,face.bbox.confidence].iter().all(|value|value.is_finite())||face.bbox.width<=0.||face.bbox.height<=0.) {
@@ -455,8 +456,28 @@ pub fn run_face_indexing(
 }
 
 impl crate::ai::capabilities::FaceDetector for FaceEngine {
-    fn detect(&mut self, image: &DynamicImage) -> Result<Vec<FaceBox>, String> { self.backend.as_mut().ok_or("No face model loaded")?.detect(image) }
+    fn detect(&mut self,image:&DynamicImage)->Result<Vec<FaceBox>,String>{
+        let result=self.backend.as_mut().ok_or("No face model loaded")?.detect(image);
+        if let Err(ref error)=result {
+            let model=self.model.clone().ok_or("No face model loaded")?;
+            if crate::ai::runtime::is_auto(&model,"detector") && crate::ai::runtime::used_acceleration(&model) {
+                crate::ai::runtime::force_cpu(&model,error);self.load_model(model)?;
+                return self.backend.as_mut().ok_or("No face model loaded")?.detect(image);
+            }
+        }
+        result
+    }
 }
 impl crate::ai::capabilities::FaceEmbedder for FaceEngine {
-    fn embed_face(&mut self, image: &DynamicImage, face: &FaceBox) -> Result<Vec<f32>, String> { self.backend.as_mut().ok_or("No face model loaded")?.embed_face(image, face) }
+    fn embed_face(&mut self,image:&DynamicImage,face:&FaceBox)->Result<Vec<f32>,String>{
+        let result=self.backend.as_mut().ok_or("No face model loaded")?.embed_face(image,face);
+        if let Err(ref error)=result {
+            let model=self.model.clone().ok_or("No face model loaded")?;
+            if crate::ai::runtime::is_auto(&model,"embedding") && crate::ai::runtime::used_acceleration(&model) {
+                crate::ai::runtime::force_cpu(&model,error);self.load_model(model)?;
+                return self.backend.as_mut().ok_or("No face model loaded")?.embed_face(image,face);
+            }
+        }
+        result
+    }
 }

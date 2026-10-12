@@ -471,6 +471,9 @@ impl ScrfdArcFace {
             }
             let blur_score = self.calculate_blur_score(img, &face);
             let mut sample = FaceSample {
+                region: crate::ai::face_annotations::normalized_box(
+                    &face, img.width() as i64, img.height() as i64,
+                ).ok(),
                 confidence: face.confidence,
                 width: face.width,
                 height: face.height,

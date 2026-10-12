@@ -3547,6 +3547,53 @@ pub async fn edit_face_name(
     .map_err(|e| e.to_string())?
 }
 
+/// Explicit confirmation bypasses quality only, never the detector or manual exclusions.
+#[tauri::command]
+pub async fn confirm_face_detection(
+    app_handle: AppHandle,
+    state: State<'_, t_face::FaceState>,
+    request: crate::ai::face_confirmation::Request,
+) -> Result<crate::ai::face_confirmation::ResultView, String> {
+    let engine = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move||{
+        use crate::ai::capabilities::{FaceDetector,FaceEmbedder};
+        crate::ai::face_confirmation::validate(&request)?;
+        let _guard=FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_|"FACE_CONFIRM_BUSY: Finish running inference or library operations before confirming a face")?;
+        if t_config::current_library_id()?!=request.library_id {return Err("FACE_CONFIRM_STALE: Library changed; reopen the report".into());}
+        let model=crate::ai::settings::active(crate::ai::types::Task::Face)?;
+        if model.profile()!=request.profile {return Err("FACE_CONFIRM_STALE: Face model or parameters changed; re-detect first".into());}
+        let scope=crate::ai::face_jobs::FaceScope::new(Some(vec![request.file_id]),true)?;
+        let conn=t_sqlite::open_conn()?;
+        let (sources,_)=crate::ai::face_jobs::selected_images(&conn,&scope)?;
+        let source=sources.into_iter().next().ok_or("Source image no longer exists")?;
+        if request.source_size!=[source.width,source.height] {return Err("FACE_CONFIRM_STALE: Source dimensions changed; re-detect first".into());}
+        let metadata=std::fs::metadata(&source.path).map_err(|_|"FACE_CONFIRM_STALE: Original image is unavailable; re-detect after restoring it")?;
+        let revision=crate::ai::face_confirmation::source_revision(source.id,metadata.len(),metadata.modified().ok());
+        if revision.as_deref()!=Some(request.source_revision.as_str()) || metadata.len()!=source.size as u64 {return Err("FACE_CONFIRM_STALE: Original image changed; re-detect first".into());}
+        let bytes=tauri::async_runtime::block_on(crate::t_image::get_file_image_bytes_cached(&source.path,crate::t_raw_display::RawDisplayOptions::rendered_bright())).map_err(|error|error.replace(&source.path,"source image"))?;
+        let image=crate::ai::face_jobs::decode_image(&bytes)?;
+        if [image.width(),image.height()]!=request.decoded_size {return Err("FACE_CONFIRM_STALE: Decoded image dimensions changed; re-detect first".into());}
+        let mut engine=engine.lock().map_err(|_|"Face engine is unavailable")?;
+        engine.load_models(&app_handle)?;
+        // Reproduce a real, threshold-qualified detector candidate. Do NOT run the blur gate or replace all faces.
+        let detections=FaceDetector::detect(&mut *engine,&image)?;
+        let bbox=crate::ai::face_confirmation::matching_detection(detections,&request.region,request.decoded_size,model.number("detection_threshold") as f32)?;
+        let vector=FaceEmbedder::embed_face(&mut *engine,&image,&bbox)?;
+        let vector=crate::ai::capabilities::validate_vector(vector,model.definition.dimension)?;
+        drop(engine);
+        let after=std::fs::metadata(&source.path).map_err(|_|"FACE_CONFIRM_STALE: Original image disappeared")?;
+        if crate::ai::face_confirmation::source_revision(source.id,after.len(),after.modified().ok())!=revision {return Err("FACE_CONFIRM_STALE: Original image changed during confirmation; result discarded".into());}
+        let bbox=crate::ai::face_confirmation::source_box(bbox,request.decoded_size,request.source_size);
+        if t_config::current_library_id()?!=request.library_id || crate::ai::settings::active(crate::ai::types::Task::Face)?.profile()!=request.profile {return Err("FACE_CONFIRM_STALE: Library or model changed; result discarded".into());}
+        let result=crate::ai::face_confirmation::commit(&conn,&source,&bbox,&vector)?;
+        drop(conn);
+        if let Some(person)=result.person_id {let _=Person::update_thumbnail(person);}
+        let _=app_handle.emit("face-data-changed",serde_json::json!({"library_id":request.library_id,"file_id":request.file_id}));
+        let _=app_handle.emit("face-person-changed",serde_json::json!({"library_id":request.library_id,"mode":"incremental","file_ids":[request.file_id],"person_ids":result.person_id.into_iter().collect::<Vec<_>>()}));
+        Ok(result)
+    }).await.map_err(|_|"Face confirmation worker failed".to_string())?
+}
+
 /// Review is library-scoped and includes ignored annotations even after changing models.
 #[tauri::command]
 pub async fn get_face_review_page(

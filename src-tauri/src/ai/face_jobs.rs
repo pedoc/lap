@@ -110,7 +110,7 @@ pub fn decode_image(bytes: &[u8]) -> Result<image::DynamicImage, String> {
     image.apply_orientation(orientation);
     Ok(image)
 }
-fn overlap(a: &crate::t_face::FaceBox, b: &crate::t_face::FaceBox) -> f32 {
+pub(super) fn overlap(a: &crate::t_face::FaceBox, b: &crate::t_face::FaceBox) -> f32 {
     let area = |face: &crate::t_face::FaceBox| face.width.max(0.) * face.height.max(0.);
     let intersection = ((a.x + a.width).min(b.x + b.width) - a.x.max(b.x)).max(0.)
         * ((a.y + a.height).min(b.y + b.height) - a.y.max(b.y)).max(0.);

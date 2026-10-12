@@ -428,6 +428,7 @@ async fn main() {
             t_cmds::get_persons_page,
             t_cmds::rename_person,
             t_cmds::edit_face_name,
+            t_cmds::confirm_face_detection,
             t_cmds::get_face_review_page,
             t_cmds::review_faces,
             t_cmds::get_face_review_thumbnail,

@@ -3,6 +3,7 @@ use serde::Serialize;
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FaceSample {
+    pub region: Option<super::face_annotations::Region>,
     pub confidence: f32,
     pub width: f32,
     pub height: f32,
@@ -26,6 +27,7 @@ pub struct PipelineReport {
 pub struct ImageReport {
     pub file_id: i64,
     pub file_name: String,
+    pub source_revision: Option<String>,
     pub source_size: [i64; 2],
     pub format: String,
     pub pipeline: PipelineReport,

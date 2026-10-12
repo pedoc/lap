@@ -57,6 +57,13 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
 fn normalized(bbox: &str, width: i64, height: i64) -> Result<Region, String> {
     let bbox: crate::t_face::FaceBox =
         serde_json::from_str(bbox).map_err(|_| "Invalid face region")?;
+    normalized_box(&bbox, width, height)
+}
+pub fn normalized_box(
+    bbox: &crate::t_face::FaceBox,
+    width: i64,
+    height: i64,
+) -> Result<Region, String> {
     if width <= 0
         || height <= 0
         || ![bbox.x, bbox.y, bbox.width, bbox.height]
