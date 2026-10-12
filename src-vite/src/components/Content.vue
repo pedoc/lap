@@ -181,6 +181,10 @@
       <ProgressBar :key="scanProgressSession" :percent="topProgressPercent" />
     </div>
 
+    <details v-if="activeSmartAlbum && (hasSemanticRules(activeSmartAlbum.query?.rules || []) || smartQueryError)" class="absolute top-12 right-2 z-40 max-w-[min(480px,90%)] bg-base-200 rounded-box shadow" :open="!!smartQueryError">
+      <summary class="cursor-pointer px-2 py-1 text-xs" :class="smartQueryError ? 'text-error' : ''">{{ smartQueryError ? $t('smart_albums.failed') : $t('smart_albums.ai_status') }}</summary>
+      <SmartAlbumStatus :params="smartQueryParams(activeSmartAlbum)" :error="smartQueryError" @retry="refreshActiveSmartAlbum" />
+    </details>
     <!-- content view -->
     <div ref="contentViewDiv" class="relative flex-1 flex flex-row overflow-hidden">
       <div class="relative flex-1 flex flex-row overflow-hidden">
@@ -790,6 +794,8 @@ import PhotoMapView from '@/components/PhotoMapView.vue';
 import ContextMenu from '@/components/ContextMenu.vue';
 import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFileDragActive, isReturningNativeFileDrag, startNativeFileDrag } from '@/common/nativeDrag';
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
+import SmartAlbumStatus from './SmartAlbumStatus.vue';
+import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, isSmartFolder } from '@/common/smartAlbums';
 import { useFileMenuItems } from '@/common/fileMenu';
 import { faceSelectionIds } from '@/common/faceUi';
 import { indexFaces } from '@/common/api';
@@ -1200,6 +1206,7 @@ const selectionMenuItems = useFileMenuItems(
     selectMode: ref(true),
     selectionMediaKind,
     selectionCount: selectedCount,
+    selectionIds: () => Array.from(selectedFileIds),
     selectionHasUnavailable,
   },
 );
@@ -1508,7 +1515,7 @@ function createViewBackup() {
 function getActiveCustomSmartAlbum() {
   if (libConfig.smartAlbum.type !== 'custom' || !libConfig.smartAlbum.id) return null;
   return (libConfig.smartAlbums || []).find(
-    (item: any) => item.id === libConfig.smartAlbum.id
+    (item: any) => item.id === libConfig.smartAlbum.id && !isSmartFolder(item)
   ) || null;
 }
 
@@ -3369,6 +3376,33 @@ const isMapVisible = computed(() => isMapView.value && !showQuickView.value && t
 const mapViewMounted = ref(isMapView.value);
 const mapTempViewState = ref<{ lat: number; lon: number; zoom: number } | null>(null);
 const currentSmartQueryParams = ref<any | null>(null);
+const smartQueryError = ref('');
+let smartRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+const smartEventStops: (()=>void)[] = [];
+let smartEventsDisposed = false;
+let smartClock:ReturnType<typeof setInterval>|undefined;
+function refreshActiveSmartAlbum() {
+  const album = activeSmartAlbum.value;
+  if(!album || tempViewMode.value !== 'none') return;
+  rememberFocusedFileForPresentationRefresh();captureSelectionForFileListRefresh();
+  currentThumbRequestId++;
+  void getSmartFileList(album, ++currentContentRequestId);
+}
+function queueSmartRefresh(){
+  if(smartRefreshTimer)return;
+  smartRefreshTimer=setTimeout(()=>{smartRefreshTimer=undefined;if(isLoading.value){queueSmartRefresh();return;}refreshActiveSmartAlbum();},800);
+}
+watch(()=>config.settings.ai?.semanticProfile,()=>{if(activeSmartAlbum.value && hasSemanticRules(activeSmartAlbum.value.query?.rules || []))queueSmartRefresh();});
+watch(()=>uiStore.countUpdateTick,()=>{if(activeSmartAlbum.value)queueSmartRefresh();});
+watch(()=>activeSmartAlbum.value?.name, name=>{if(name && tempViewMode.value==='none')contentTitle.value=name;});
+onMounted(async()=>{
+  smartClock=setInterval(()=>{if(activeSmartAlbum.value&&hasTimeSmartRules(activeSmartAlbum.value.query?.rules||[]))queueSmartRefresh();},60000);
+  for(const name of ['semantic-index-changed','smart-album-index-progress','index_progress','index_finished','face-person-changed','face_index_finished','location-resolution-progress','map-location-changed']) {
+    const stop=await listen(name,(event:any)=>{const library=event.payload?.libraryId||event.payload?.library_id;if(library&&library!==libConfig._libraryId)return;if(name==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;queueSmartRefresh();});
+    if(smartEventsDisposed){stop();return;}smartEventStops.push(stop);
+  }
+});
+onBeforeUnmount(()=>{smartEventsDisposed=true;clearTimeout(smartRefreshTimer);clearInterval(smartClock);smartEventStops.forEach(stop=>stop());});
 const currentCollectionId = ref<number | null>(null);
 const currentSearchFileIds = ref<number[]>([]);
 const mapQueryParams = computed(() => (
@@ -6155,7 +6189,7 @@ watch(
     libConfig.album.id, libConfig.album.folderId, libConfig.album.folderPath, libConfig.album.selected, // album
     libConfig.smartAlbum.type, libConfig.smartAlbum.id,
     // Count and cover updates are query outputs, not refresh triggers.
-    JSON.stringify((libConfig.smartAlbums || []).map(({ count, coverFileId, ...rest }: any) => rest)), // smart album
+    smartResultSignature(activeSmartAlbum.value), // Only active result-affecting changes reload photos; folders, names, and counters do not.
     libConfig.search.searchText,
     libConfig.rating.item, // rating
     libConfig.culling.item, // culling
@@ -6601,6 +6635,7 @@ async function fetchDataRange(start: number, end: number, reverse = false) {
         })
         .catch(err => {
             console.error(`Error fetching chunk ${key}:`, err);
+            if(currentQuerySource.value==='smart' && requestId===currentContentRequestId)smartQueryError.value=String(err);
         })
         .finally(() => {
           pendingRequests.delete(key);
@@ -7149,7 +7184,7 @@ async function getFileList(
         if (requestId === currentContentRequestId) {
           timelineData.value = data;
         }
-      });
+      }).catch(error=>{if(currentQuerySource.value==='smart')smartQueryError.value=String(error);});
       
       // Initialize fileList with placeholders
       fileList.value = createVirtualFileSlots(totalFileCount.value);
@@ -7325,24 +7360,26 @@ async function getSmartFileList(smartAlbum: any, requestId: number) {
     return;
   }
 
+  smartQueryError.value='';
   currentQuerySource.value = 'smart';
   currentCollectionId.value = null;
   currentSearchFileIds.value = [];
   dedupSmartFileIds.value = null;
   currentSmartQueryParams.value = {
+    ...smartQueryParams(smartAlbum),
     version: Number(query.version || 1),
     match: query.match === 'any' ? 'any' : 'all',
     rules,
     sortType: Number(smartAlbum?.sort?.type ?? 0),
     sortOrder: Number(smartAlbum?.sort?.order ?? 1),
-    randomSeed: createRandomSeed(),
+    randomSeed: currentSmartQueryParams.value?.randomSeed ?? createRandomSeed(),
     folderSort: Number(config.settings.folderSort || 0),
     calendarSort: Number(config.settings.calendarSort || 0),
     categorySort: categorySortForGroup(effectiveGroupBy.value),
     groupBy: effectiveGroupBy.value,
   };
   void refreshDedupSmartFileIds(requestId, currentSmartQueryParams.value);
-  void updateSmartAlbumCover(smartAlbum, requestId);
+  void updateSmartAlbumCover(smartAlbum, requestId).catch(error=>{if(requestId===currentContentRequestId)smartQueryError.value=String(error);});
 
   isLoading.value = true;
 
@@ -7362,7 +7399,7 @@ async function getSmartFileList(smartAlbum: any, requestId: number) {
         if (requestId === currentContentRequestId) {
           timelineData.value = data;
         }
-      });
+      }).catch(error=>{if(requestId===currentContentRequestId)smartQueryError.value=String(error);});
 
       fileList.value = createVirtualFileSlots(totalFileCount.value);
       markDedupSourceUpdated(requestId);
@@ -7382,6 +7419,7 @@ async function getSmartFileList(smartAlbum: any, requestId: number) {
     }
   } catch (err) {
     console.error('getSmartFileList error:', err);
+    if(requestId===currentContentRequestId)smartQueryError.value=String(err);
     if (requestId === currentContentRequestId) {
       clearSelectionForFileListUpdate();
       clearContentRows();
@@ -7616,7 +7654,7 @@ async function getUnifiedSearchFileList(searchText: string, requestId: number) {
         count: group.files.length,
         countLabel: group.countLabel,
         size,
-      });
+      }).catch(error=>{if(currentQuerySource.value==='smart')smartQueryError.value=String(error);});
       groupedTimelineGroups.value.push({
         groupId: group.id,
         label: group.label,
@@ -8298,7 +8336,7 @@ const onFileSaved = async (success: boolean, payload: SavedFilePayload = {}) => 
       } else {
         getCurrentQueryTimeLine().then(data => {
           timelineData.value = data;
-        });
+        }).catch(error=>{if(currentQuerySource.value==='smart')smartQueryError.value=String(error);});
       }
       toast.success(localeMsg.value.tooltip.save_image.save_as_success || localeMsg.value.tooltip.save_image.success);
     } else {
@@ -9108,7 +9146,7 @@ const onTrashFile = async (retryItemsOverride: any[] = []) => {
     } else {
       getCurrentQueryTimeLine().then(data => {
         timelineData.value = data;
-      });
+      }).catch(error=>{if(currentQuerySource.value==='smart')smartQueryError.value=String(error);});
     }
 
     if (deletedFileIds.length > 0) {

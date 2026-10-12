@@ -2091,6 +2091,10 @@ pub struct SmartQueryParams {
     pub r#match: String,
     #[serde(default)]
     pub rules: Vec<SmartRule>,
+    #[serde(default)]
+    pub include_file_ids: Vec<i64>,
+    #[serde(default)]
+    pub exclude_file_ids: Vec<i64>,
     pub sort_type: i64,
     pub sort_order: i64,
     #[serde(default)]
@@ -3201,7 +3205,7 @@ impl AFile {
         base_query.to_string()
     }
 
-    fn live_photo_companion_exclusion_condition() -> String {
+    pub(crate) fn live_photo_companion_exclusion_condition() -> String {
         format!("a.id NOT IN (SELECT primary_file.live_photo_video_id FROM afiles primary_file
             WHERE primary_file.live_photo_video_id IS NOT NULL AND {})", Self::album_scan_predicate("primary_file"))
     }
@@ -3705,7 +3709,7 @@ impl AFile {
         conditions.push(Self::album_query_predicate("a"));
     }
 
-    fn album_filter_sql(alias: &str) -> String {
+    pub(crate) fn album_filter_sql(alias: &str) -> String {
         format!(" AND {}", Self::album_query_predicate(alias))
     }
 
@@ -5820,7 +5824,91 @@ impl AFile {
         }
     }
 
-    fn build_smart_query_parts(
+    fn build_smart_condition_tree(
+        rule: &SmartRule,
+        joins: &mut Vec<String>,
+        needs_group: &mut bool,
+        sql_params: &mut Vec<Box<dyn ToSql>>,
+        depth: usize,
+        count: &mut usize,
+    ) -> Result<String, String> {
+        *count += 1;
+        if depth >= 6 || *count > 100 {
+            return Err("Too many smart conditions or nesting levels".into());
+        }
+        if rule.field == "group" {
+            let children: Vec<SmartRule> = serde_json::from_value(
+                rule.value
+                    .get("rules")
+                    .cloned()
+                    .ok_or("Condition group needs rules")?,
+            )
+            .map_err(|e| e.to_string())?;
+            if children.is_empty() {
+                return Err("Condition group must not be empty".into());
+            }
+            let joiner = match rule.operator.as_str() {
+                "all" => " AND ",
+                "any" => " OR ",
+                _ => return Err("Invalid group match mode".into()),
+            };
+            let conditions = children
+                .iter()
+                .map(|child| {
+                    Self::build_smart_condition_tree(
+                        child,
+                        joins,
+                        needs_group,
+                        sql_params,
+                        depth + 1,
+                        count,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(format!("({})", conditions.join(joiner)));
+        }
+        if matches!(rule.field.as_str(), "semantic" | "similar_image") {
+            let key = rule
+                .value
+                .get("_cacheKey")
+                .and_then(|v| v.as_str())
+                .ok_or("AI condition must be prepared first")?;
+            let threshold = rule
+                .value
+                .get("threshold")
+                .and_then(|v| v.as_f64())
+                .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                .ok_or("Matching threshold must be between 0 and 1")?;
+            if !matches!(rule.operator.as_str(), "matches" | "not_matches") {
+                return Err("Invalid AI condition operator".into());
+            }
+            sql_params.push(Box::new(key.to_string()));
+            sql_params.push(Box::new(threshold));
+            let comparison = if rule.operator == "not_matches" {
+                "<"
+            } else {
+                ">="
+            };
+            // An unindexed photo is UNKNOWN, including for negative AI conditions.
+            return Ok(format!(
+                "a.embeds IS NOT NULL AND EXISTS (SELECT 1 FROM smart_album_scores ss WHERE ss.query_key=? AND ss.file_id=a.id AND ss.modified_at IS a.modified_at AND ss.size=a.size AND ss.score {} ? AND EXISTS (SELECT 1 FROM smart_album_queries sq JOIN ai_index_profiles ap ON ap.task='semantic' AND ap.fingerprint=sq.profile WHERE sq.query_key=ss.query_key))",
+                comparison
+            ));
+        }
+        if rule.field == "anniversary" {
+            if rule.operator != "is" || rule.value != serde_json::json!(true) {
+                return Err("Invalid anniversary condition".into());
+            }
+            use chrono::Datelike;
+            let today = chrono::Local::now();
+            sql_params.push(Box::new(today.format("%m-%d").to_string()));
+            sql_params.push(Box::new(today.year().to_string()));
+            return Ok("strftime('%m-%d',a.taken_date,'unixepoch','localtime')=? AND strftime('%Y',a.taken_date,'unixepoch','localtime')<?".into());
+        }
+        Self::build_smart_rule_condition(rule, joins, needs_group, sql_params)
+    }
+
+    pub(crate) fn build_smart_query_parts(
         params: &SmartQueryParams,
     ) -> Result<(String, String, Vec<Box<dyn ToSql>>, bool), String> {
         if params.rules.is_empty() {
@@ -5832,13 +5920,46 @@ impl AFile {
         let mut sql_params: Vec<Box<dyn ToSql>> = Vec::new();
         let mut needs_group = false;
 
+        if !matches!(params.r#match.as_str(), "all" | "any") {
+            return Err("Invalid smart match mode".into());
+        }
+        let mut count = 0;
         for rule in &params.rules {
-            conditions.push(Self::build_smart_rule_condition(
+            conditions.push(Self::build_smart_condition_tree(
                 rule,
                 &mut joins,
                 &mut needs_group,
                 &mut sql_params,
+                0,
+                &mut count,
             )?);
+        }
+        // Bind overrides after rule values, before the always-applied visibility predicates.
+        let rule_condition = format!(
+            "({})",
+            conditions.join(if params.r#match == "any" {
+                " OR "
+            } else {
+                " AND "
+            })
+        );
+        conditions.clear();
+        if params.include_file_ids.is_empty() {
+            conditions.push(rule_condition);
+        } else {
+            sql_params.push(Box::new(
+                serde_json::to_string(&params.include_file_ids).map_err(|e| e.to_string())?,
+            ));
+            conditions.push(format!(
+                "({} OR a.id IN (SELECT value FROM json_each(?)))",
+                rule_condition
+            ));
+        }
+        if !params.exclude_file_ids.is_empty() {
+            sql_params.push(Box::new(
+                serde_json::to_string(&params.exclude_file_ids).map_err(|e| e.to_string())?,
+            ));
+            conditions.push("a.id NOT IN (SELECT value FROM json_each(?))".into());
         }
 
         Self::append_album_filter(&mut conditions);
@@ -5867,22 +5988,14 @@ impl AFile {
             }
         }
 
-        let joiner = if params.r#match == "any" {
-            " OR "
-        } else {
-            " AND "
-        };
-        let rule_count = params.rules.len();
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else if rule_count > 0 {
-            let (rule_conditions, trailing_conditions) = conditions.split_at(rule_count);
-            let mut grouped = vec![format!("({})", rule_conditions.join(joiner))];
-            grouped.extend(trailing_conditions.iter().cloned());
-            format!(" WHERE {}", grouped.join(" AND "))
-        } else {
-            format!(" WHERE {}", conditions.join(" AND "))
-        };
+        let where_clause = format!(
+            " WHERE {}",
+            conditions
+                .iter()
+                .map(|c| format!("({})", c))
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        );
 
         let joins_clause = if joins.is_empty() {
             String::new()
@@ -5892,7 +6005,6 @@ impl AFile {
 
         Ok((joins_clause, where_clause, sql_params, needs_group))
     }
-
     pub fn get_smart_query_count_and_sum(params: &SmartQueryParams) -> Result<(i64, i64), String> {
         let (joins, where_clause, sql_params, needs_group) = Self::build_smart_query_parts(params)?;
         let sql = if needs_group {
@@ -6584,7 +6696,7 @@ impl AFile {
         Ok(results)
     }
 
-    fn cosine_similarity_blob(query: &[f32], query_norm: f32, blob: &[u8]) -> f32 {
+    pub(crate) fn cosine_similarity_blob(query: &[f32], query_norm: f32, blob: &[u8]) -> f32 {
         if query_norm == 0.0 || blob.len() % 4 != 0 {
             return 0.0;
         }

@@ -1,13 +1,18 @@
 <template>
   <ModalDialog :title="isNew ? $t('album.smart_edit.title_add') : $t('album.smart_edit.title_edit')" :width="620" position-key="smart-album-edit" @cancel="clickCancel">
+    <SmartAlbumPhotoPicker v-if="referenceRule" @select="(id:number)=>{referenceRule.value.fileId=id;referenceRule=null;}" @cancel="referenceRule=null" />
     <section
-      class="min-h-0 overflow-y-auto pr-1"
+      class="min-h-0 max-h-[50vh] overflow-y-auto pr-1"
       @dragenter.stop
       @dragover.stop
       @dragleave.stop
       @drop.stop
     >
       <p v-if="locationOptionsError" role="alert" class="mb-2 text-xs text-error break-all">{{ locationOptionsError }}</p>
+      <div class="flex gap-2 mb-3">
+        <select v-model="template" class="select select-sm flex-1" @change="applyTemplate"><option value="">{{ $t('smart_albums.template') }}</option><option v-for="item in SMART_TEMPLATES" :key="item" :value="item">{{ $t(`smart_albums.templates.${item}`) }}</option></select>
+        <select v-model="parentId" class="select select-sm flex-1" :aria-label="$t('smart_albums.move')"><option :value="null">{{ $t('smart_albums.root') }}</option><option v-for="row in folderOptions" :key="row.node.id" :value="row.node.id">{{ row.path }}</option></select>
+      </div>
       <div class="w-full grid grid-cols-[92px_1fr] gap-x-4 gap-y-3 items-start text-xs select-none">
         <div class="h-8 flex items-center text-[10px] uppercase tracking-widest font-bold text-base-content/30">{{ $t('album.smart_edit.name') }}</div>
         <input ref="inputNameRef" v-model="name" type="text" maxlength="255" class="w-full input input-sm text-xs font-semibold" :placeholder="$t('album.smart_edit.validation_name')" />
@@ -53,89 +58,32 @@
         </section>
 
         <section class="col-span-2 rounded-box border border-base-content/10 bg-base-300/20 p-3 shadow-sm">
-          <div class="mb-2 flex min-h-8 items-center justify-between gap-3">
-            <span class="text-[10px] uppercase tracking-widest font-bold text-base-content/30">{{ $t('album.smart_edit.match') }}</span>
-            <div role="tablist" class="tabs tabs-box tabs-xs shrink-0 bg-base-100/40 shadow-inner">
-              <button
-                role="tab"
-                :class="['tab', matchMode === 'all' ? 'tab-active text-primary' : '']"
-                @click="matchMode = 'all'"
-              >
-                {{ $t('album.smart_edit.match_all') }}
-              </button>
-              <button
-                role="tab"
-                :class="['tab', matchMode === 'any' ? 'tab-active text-primary' : '']"
-                @click="matchMode = 'any'"
-              >
-                {{ $t('album.smart_edit.match_any') }}
-              </button>
-            </div>
-          </div>
-
-          <div class="space-y-2">
-            <div
-              ref="rulesListRef"
-              :class="[
-                'pr-1',
-                rules.length > 4 ? 'max-h-[236px] overflow-y-auto' : ''
-              ]"
-            >
-              <template
-              v-for="(rule, index) in rules"
-              :key="rule.id"
-              >
-                <div class="grid grid-cols-[minmax(0,1fr)_88px_minmax(0,1.45fr)_28px] gap-2 items-center rounded-box border border-transparent px-1 py-1 transition-colors hover:border-base-content/5 hover:bg-base-100/40">
-                  <select v-model="rule.field" class="select select-sm text-xs w-full" @change="resetRule(rule)">
-                    <option v-for="field in fieldOptions" :key="field.value" :value="field.value">{{ field.label }}</option>
-                  </select>
-                  <select v-model="rule.operator" class="select select-sm text-xs w-[88px]" @change="resetRuleValue(rule)">
-                    <option v-for="operator in getOperatorOptions(rule.field)" :key="operator.value" :value="operator.value">{{ operator.label }}</option>
-                  </select>
-                  <RuleValueControl
-                    :rule="rule"
-                    :tag-options="tagOptions"
-                    :person-options="personOptions"
-                    :album-options="albumOptions"
-                    :collection-options="collectionOptions"
-                    :camera-options="cameraOptions"
-                    :lens-options="lensOptions"
-                    :location-options="locationOptions"
-                    :file-type-options="fileTypeOptions"
-                    :culling-options="cullingOptions"
-                    :media-subtype-options="mediaSubtypeOptions"
-                    :extension-options="extensionOptions"
-                  />
-                  <TButton
-                    :icon="IconRemove"
-                    :buttonSize="'small'"
-                    :tooltip="$t('album.smart_edit.remove_rule')"
-                    :disabled="rules.length <= 1"
-                    @click="removeRule(index)"
-                  />
-                </div>
-                <div
-                  v-if="index < rules.length - 1"
-                  class="flex h-5 items-center gap-2 px-2 text-[9px] font-bold uppercase tracking-widest text-base-content/30"
-                >
-                  <span class="h-px flex-1 bg-base-content/5"></span>
-                  <span>{{ matchMode === 'all' ? $t('album.smart_edit.match_and') : $t('album.smart_edit.match_or') }}</span>
-                  <span class="h-px flex-1 bg-base-content/5"></span>
-                </div>
-              </template>
-            </div>
-            <div class="border-t border-base-content/5 pt-2 flex items-center justify-between">
-              <button class="btn btn-sm rounded-box" :disabled="rules.length >= maxRules" @click="addRule">
-                <IconAdd class="w-4 h-4" />
-                {{ $t('album.smart_edit.add_rule') }}
-              </button>
-              <span class="text-base-content/30 tabular-nums">{{ $t('album.smart_edit.rules_count', { count: rules.length, max: maxRules }) }}</span>
-            </div>
-          </div>
+          <SmartAlbumRules :group="rootGroup" :depth="0" :total="ruleCount" :make-rule="makeRule">
+            <template #rule="{rule}">
+              <div class="grid grid-cols-[minmax(0,1fr)_88px] gap-2">
+                <select v-model="rule.field" class="select select-sm text-xs w-full" @change="resetRule(rule)"><option v-for="field in fieldOptions" :key="field.value" :value="field.value">{{ field.label }}</option></select>
+                <select v-model="rule.operator" class="select select-sm text-xs w-full" @change="resetRuleValue(rule)"><option v-for="operator in getOperatorOptions(rule.field)" :key="operator.value" :value="operator.value">{{ operator.label }}</option></select>
+                <RuleValueControl class="col-span-2" :rule="rule" :tag-options="tagOptions" :person-options="personOptions" :album-options="albumOptions" :collection-options="collectionOptions" :camera-options="cameraOptions" :lens-options="lensOptions" :location-options="locationOptions" :file-type-options="fileTypeOptions" :culling-options="cullingOptions" :media-subtype-options="mediaSubtypeOptions" :extension-options="extensionOptions" />
+              </div>
+            </template>
+          </SmartAlbumRules>
+          <div class="text-xs mt-2 text-base-content/40">{{ $t('album.smart_edit.rules_count',{count:ruleCount,max:maxRules}) }}</div>
         </section>
       </div>
     </section>
 
+    <section class="mt-3 max-h-[25vh] overflow-y-auto space-y-2">
+      <div class="flex gap-2"><button class="btn btn-sm" :disabled="!!validationMessage || previewBusy" @click="previewResults"><span v-if="previewBusy" class="loading loading-spinner loading-xs"></span>{{ $t('smart_albums.preview') }}</button><button v-if="hasSemanticRules(rules)" class="btn btn-ghost btn-sm" @click="recalibrate">{{ $t('smart_albums.model_changed') }}</button></div>
+      <p v-if="previewError" role="alert" class="text-error text-xs break-all">{{ $t('smart_albums.preview_error',{error:previewError}) }}</p>
+      <p v-if="preview" class="text-xs" :class="previewStale ? 'text-warning' : ''">{{ previewStale ? $t('smart_albums.preview_stale') : $t('smart_albums.preview_count',{count:preview.count}) }}</p>
+      <div v-if="preview && !previewStale" class="flex gap-1 overflow-x-auto"><img v-for="file in preview.files" :key="file.id" :src="file.previewUrl" :title="file.name" class="w-12 h-12 object-cover rounded" /></div>
+      <SmartAlbumStatus v-if="hasSemanticRules(rules)" :params="queryParams()" @retry="previewResults" />
+      <details v-if="includeIds.length || excludeIds.length" class="text-xs"><summary class="cursor-pointer">{{ $t('smart_albums.adjustments') }} — {{ $t('smart_albums.included',{count:includeIds.length}) }} / {{ $t('smart_albums.excluded',{count:excludeIds.length}) }}</summary>
+        <div class="max-h-28 overflow-auto mt-2"><div v-for="id in includeIds" :key="'i'+id">+ #{{ id }} <button class="link" @click="includeIds = includeIds.filter(v=>v!==id)">{{ $t('smart_albums.reset') }}</button></div><div v-for="id in excludeIds" :key="'e'+id">− #{{ id }} <button class="link" @click="excludeIds = excludeIds.filter(v=>v!==id)">{{ $t('smart_albums.reset') }}</button></div></div>
+        <button class="btn btn-ghost btn-xs mt-1" @click="includeIds=[];excludeIds=[]">{{ $t('smart_albums.clear_adjustments') }}</button>
+      </details>
+    </section>
+    <p v-if="hasSemanticRules(rules) && (!preview || previewStale)" class="text-xs mt-2 text-warning">{{ $t('smart_albums.preview_required') }}</p>
     <div v-if="validationMessage" class="mt-3 text-xs text-warning">{{ validationMessage }}</div>
 
     <div class="mt-4 flex justify-end space-x-4">
@@ -148,6 +96,14 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import SmartAlbumPhotoPicker from './SmartAlbumPhotoPicker.vue';
+import SmartAlbumRules from './SmartAlbumRules.vue';
+import SmartAlbumStatus from './SmartAlbumStatus.vue';
+import { SMART_TAG_CATEGORIES } from '@/common/smartTags';
+import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules } from '@/common/smartAlbums';
+import { libConfig } from '@/common/config';
+import { getSmartQueryCountAndSum, getSmartQueryFiles, getSmartAlbumStatus, getFileThumbById } from '@/common/api';
+import { getThumbnailDataUrl, isWin, getThumbUrl } from '@/common/utils';
 import { locationNodePath } from '@/common/locationNames';
 import { getAllTags, getCameraInfo, getLensInfo, getLocationInfo, getPersons, getSupportedFormatExtensions, listAlbums, listCollections } from '@/common/api';
 import { IconAdd, IconEdit, IconRemove } from '@/common/icons';
@@ -158,6 +114,8 @@ import ModalDialog from '@/components/ModalDialog.vue';
 import TButton from '@/components/TButton.vue';
 
 const props = defineProps({
+  parentId: { type: String, default: null },
+  nodes: { type: Array, default: () => [] },
   smartAlbum: {
     type: Object,
     default: null,
@@ -171,8 +129,137 @@ const localeMsg = computed(() => messages.value[locale.value] as any);
 const inputNameRef = ref<HTMLInputElement | null>(null);
 const descriptionRef = ref<HTMLTextAreaElement | null>(null);
 const rulesListRef = ref<HTMLElement | null>(null);
-const maxRules = 20;
+const editLibraryId = libConfig._libraryId;
+const referenceRule = ref<any>(null);
+const maxRules = MAX_SMART_RULES;
+const parentId = ref(props.smartAlbum?.parentId || props.parentId || null);
+const folderOptions = computed(() =>
+  smartTreeRows((props.nodes as any[]).map((n) => ({ ...n, expanded: true }))).filter((r) =>
+    isSmartFolder(r.node),
+  ),
+);
+const includeIds = ref<number[]>([...(props.smartAlbum?.query?.includeFileIds || [])]);
+const excludeIds = ref<number[]>([...(props.smartAlbum?.query?.excludeFileIds || [])]);
+const template = ref('');
+const preview = ref<any>(null);
+const previewError = ref('');
+const previewBusy = ref(false);
+let previewToken = 0;
+let editDisposed = false;
+const rootGroup = computed(() => ({
+  id: 'root',
+  field: 'group',
+  get operator() {
+    return matchMode.value;
+  },
+  set operator(value: string) {
+    matchMode.value = value;
+  },
+  value: { rules: rules.value },
+}));
+const ruleCount = computed(() => smartRuleCount(rules.value));
+function serializeRule(rule: any): any {
+  return {
+    id: rule.id,
+    field: rule.field,
+    operator: rule.operator,
+    value:
+      rule.field === 'group' ? { rules: smartChildren(rule).map(serializeRule) } : normalizeRuleValue(rule),
+  };
+}
+function queryParams() {
+  return {
+    version: 2,
+    match: matchMode.value,
+    rules: rules.value.map(serializeRule),
+    includeFileIds: includeIds.value,
+    excludeFileIds: excludeIds.value,
+    sortType: sortType.value,
+    sortOrder: sortOrder.value,
+    groupBy: 0,
+  };
+}
+const previewSignature = computed(() => JSON.stringify(queryParams()));
+const previewStale = computed(() => preview.value && preview.value.signature !== previewSignature.value);
+function applyTemplate() {
+  if (!template.value) return;
+  rules.value = smartTemplateRules(template.value, makeRule);
+  matchMode.value = 'all';
+  if (!name.value.trim()) name.value = t(`smart_albums.templates.${template.value}`);
+  template.value = '';
+}
+function recalibrate() {
+  visitSmartRules(rules.value, (rule) => {
+    if (['semantic', 'similar_image'].includes(rule.field)) delete rule.value.modelProfile;
+  });
+  preview.value = null;
+  previewError.value = '';
+}
+async function previewResults() {
+  if (validationMessage.value) return;
+  const token = ++previewToken;
+  const library = libConfig._libraryId;
+  const signature = previewSignature.value;
+  const params = JSON.parse(signature);
+  previewBusy.value = true;
+  previewError.value = '';
+  try {
+    const [count, files, status] = await Promise.all([
+      getSmartQueryCountAndSum(params),
+      getSmartQueryFiles(params, 0, 12),
+      getSmartAlbumStatus(params),
+    ]);
+    if (
+      editDisposed ||
+      token !== previewToken ||
+      library !== libConfig._libraryId ||
+      signature !== previewSignature.value
+    )
+      return;
+    const previews = await Promise.all(
+      files.map(async (file: any) => {
+        try {
+          return {
+            ...file,
+            previewUrl: isWin
+              ? getThumbnailDataUrl(await getFileThumbById(file.id, 128, false), '', false, 128)
+              : getThumbUrl(file.id, false, 128),
+          };
+        } catch {
+          return { ...file, previewUrl: '' };
+        }
+      }),
+    );
+    if (
+      editDisposed ||
+      token !== previewToken ||
+      library !== libConfig._libraryId ||
+      signature !== previewSignature.value
+    )
+      return;
+    if (status.profile)
+      visitSmartRules(rules.value, (rule) => {
+        if (['semantic', 'similar_image'].includes(rule.field) && !rule.value.modelProfile)
+          rule.value.modelProfile = status.profile;
+      });
+    preview.value = { count: count[0], files: previews, status, signature: previewSignature.value };
+  } catch (error) {
+    if (!editDisposed && token === previewToken && signature === previewSignature.value)
+      previewError.value = String(error);
+  } finally {
+    if (token === previewToken) previewBusy.value = false;
+  }
+}
 
+watch(
+  () => libConfig._libraryId,
+  (library) => {
+    if (library !== editLibraryId) {
+      previewToken++;
+      emit('cancel');
+    }
+  },
+);
 const isNew = computed(() => !props.smartAlbum);
 const name = ref(props.smartAlbum?.name || '');
 const description = ref(props.smartAlbum?.description || '');
@@ -196,7 +283,7 @@ const lensOptions = ref<any[]>([]);
 const locationOptions = ref<any[]>([]);
 const locationOptionsError = ref('');
 const extensionOptions = ref<any[]>([]);
-const rules = ref<any[]>([]);
+const rules = ref<any[]>(cloneRules(props.smartAlbum?.query?.rules));
 
 const fileTypeOptions = computed(() => [
   { value: 1, label: localeMsg.value.toolbar.filter?.file_type_options?.[1] || 'Image' },
@@ -241,6 +328,9 @@ const groupOptions = computed(() => {
 });
 
 const fieldOptions = computed(() => [
+  { value: 'semantic', label: t('smart_albums.semantic') },
+  { value: 'similar_image', label: t('smart_albums.similar_image') },
+  { value: 'anniversary', label: t('smart_albums.anniversary') },
   // Source
   { value: 'album', label: t('album.smart_edit.fields.album') },
   { value: 'collection', label: t('album.smart_edit.fields.collection') },
@@ -280,11 +370,19 @@ const fieldOptions = computed(() => [
 ]);
 
 const validationMessage = computed(() => {
+  if (ruleCount.value > maxRules) return t('album.smart_edit.validation_rule');
   if (rules.value.length === 0) return t('album.smart_edit.validation_rule');
   if (!rules.value.every(isRuleValid)) return t('album.smart_edit.validation_rule');
   return '';
 });
-const canSave = computed(() => name.value.trim().length > 0 && validationMessage.value.length === 0);
+const canSave = computed(
+  () =>
+    libConfig._libraryId === editLibraryId &&
+    name.value.trim().length > 0 &&
+    validationMessage.value.length === 0 &&
+    (!hasSemanticRules(rules.value) || Boolean(preview.value && !previewStale.value && !previewError.value)),
+);
+
 
 function makeRule(field = 'date_taken') {
   const rule = {
@@ -301,7 +399,7 @@ function cloneRules(source: any[] | undefined) {
   const cloned = Array.isArray(source)
     ? source.map(rule => normalizeRuleForEdit(rule))
     : [];
-  return cloned.length > 0 ? cloned.slice(0, maxRules) : [makeRule()];
+  return cloned.length > 0 ? cloned : [makeRule()];
 }
 
 function normalizeRuleForEdit(rule: any) {
@@ -311,12 +409,14 @@ function normalizeRuleForEdit(rule: any) {
     id: rule.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
     field,
     operator: rule.operator || getOperatorOptions(field)[0]?.value || 'is',
-    value: normalizeRuleValueForEdit(sourceField, cloneValue(rule.value)),
+    value: sourceField === 'group' ? {rules: smartChildren(rule).map(normalizeRuleForEdit)} : normalizeRuleValueForEdit(sourceField, cloneValue(rule.value)),
   };
 }
 
 function getOperatorOptions(field: string) {
   const op = (key: string) => ({ value: key, label: t(`album.smart_edit.operators.${key}`) });
+  if (['semantic','similar_image'].includes(field)) return [{value:'matches',label:'≥'}, {value:'not_matches',label:'<'}];
+  if (field === 'anniversary') return [op('is')];
   if (field === 'name') return [op('contains'), op('not_contains')];
   if (['file_type', 'media_subtype', 'extension', 'camera', 'lens', 'location', 'album', 'collection'].includes(field)) return [op('is'), op('is_not')];
   if (field === 'favorite' || field === 'has_gps') return [op('is')];
@@ -339,7 +439,10 @@ function resetRuleValue(rule: any) {
 }
 
 function setDefaultRuleValue(rule: any) {
-  if (rule.field === 'name') rule.value = '';
+  if (rule.field === 'semantic') rule.value = {prompt:'',threshold:0.25};
+  else if (rule.field === 'similar_image') rule.value = {fileId:null,threshold:0.5};
+  else if (rule.field === 'anniversary') rule.value = true;
+  else if (rule.field === 'name') rule.value = '';
   else if (rule.field === 'file_type') rule.value = 1;
   else if (rule.field === 'media_subtype') rule.value = 'motion_photo';
   else if (rule.field === 'extension') rule.value = extensionOptions.value[0]?.value || 'jpg';
@@ -367,6 +470,9 @@ function setDefaultRuleValue(rule: any) {
 
 function isRuleValid(rule: any) {
   if (!rule.field || !rule.operator) return false;
+  if(rule.field==='group')return smartChildren(rule).length>0 && smartChildren(rule).every(isRuleValid);
+  if(['semantic','similar_image'].includes(rule.field))return Number.isFinite(Number(rule.value?.threshold)) && Number(rule.value.threshold)>=0 && Number(rule.value.threshold)<=1 && (rule.field==='semantic'?Boolean(rule.value?.prompt?.trim()):Number.isSafeInteger(Number(rule.value?.fileId))&&Number(rule.value.fileId)>0);
+  if(rule.field==='anniversary')return true;
   if (['empty', 'not_empty'].includes(rule.operator)) return true;
   if (rule.operator === 'between') {
     return Boolean(
@@ -435,16 +541,15 @@ function clickOk() {
     id: props.smartAlbum?.id || crypto.randomUUID?.() || `${Date.now()}`,
     name: name.value.trim(),
     description: description.value.trim(),
+    kind: 'album',
+    parentId: parentId.value,
     source: 'rules',
     query: {
-      version: 1,
+      version: 2,
       match: matchMode.value,
-      rules: rules.value.slice(0, maxRules).map(rule => ({
-        id: rule.id,
-        field: rule.field,
-        operator: rule.operator,
-        value: normalizeRuleValue(rule),
-      })),
+      rules: rules.value.map(serializeRule),
+      includeFileIds: includeIds.value,
+      excludeFileIds: excludeIds.value,
     },
     group: { type: groupType.value },
     sort: { type: sortType.value, order: sortOrder.value },
@@ -623,7 +728,7 @@ async function loadSupportedFormatOptions() {
     }))
     .filter((option: any) => option.value)
     .sort((a: any, b: any) => a.value.localeCompare(b.value));
-  rules.value = cloneRules(props.smartAlbum?.query?.rules);
+
 }
 
 function flattenMakeModelOptions(items: any[]) {
@@ -653,14 +758,15 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  editDisposed = true; previewToken++;
   window.removeEventListener('keydown', handleKeyDown);
   uiStore.removeInputHandler('SmartAlbumEdit');
 });
 
 watch([tagOptions, personOptions, albumOptions, collectionOptions, cameraOptions, lensOptions, locationOptions], () => {
-  for (const rule of rules.value) {
+  visitSmartRules(rules.value, rule => {
     if (rule.value === null || rule.value === undefined || rule.value === '') setDefaultRuleValue(rule);
-  }
+  });
 });
 
 const RuleValueControl = defineComponent({
@@ -893,6 +999,11 @@ const RuleValueControl = defineComponent({
       return '';
     };
     return () => {
+      if (props.rule.field === 'anniversary') return h('span',{class:'text-xs'},t('smart_albums.anniversary'));
+      if (['semantic','similar_image'].includes(props.rule.field)) return h('div',{class:'space-y-1'},[
+        ...(props.rule.field==='semantic' ? [h('select',{class:selectClass,value:'',onChange:(e:any)=>{props.rule.value.prompt=e.target.value;}},[h('option',{value:''},t('smart_albums.template')),...SMART_TAG_CATEGORIES.flatMap(category=>category.items.map(item=>h('option',{value:item.prompt},t(`subject.items.${item.id}`))))]),h('input',{class:inputClass,value:props.rule.value.prompt,placeholder:t('smart_albums.prompt'),maxlength:1000,onInput:(e:any)=>{props.rule.value.prompt=e.target.value;}})] : [h('div',{class:'flex gap-1'},[numberInput(props.rule.value.fileId,(e:any)=>{props.rule.value.fileId=Number(e.target.value);},{min:1,step:1,placeholder:t('smart_albums.reference_id')}),h('button',{type:'button',class:'btn btn-sm',onClick:()=>{referenceRule.value=props.rule;}},t('smart_albums.choose_reference'))])]),
+        h('label',{class:'flex items-center gap-2 text-xs'},[t('smart_albums.threshold'),numberInput(props.rule.value.threshold,(e:any)=>{props.rule.value.threshold=Number(e.target.value);},{min:0,max:1,step:0.01})]),
+      ]);
       if (['empty', 'not_empty'].includes(props.rule.operator) && !isDateRuleField(props.rule.field)) return h('span', { class: 'text-xs text-base-content/30' }, '-');
       if (props.rule.field === 'file_type') return fileTypeInput();
       if (props.rule.field === 'culling') return selectInput(props.cullingOptions);

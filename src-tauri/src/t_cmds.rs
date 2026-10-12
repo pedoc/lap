@@ -1383,65 +1383,172 @@ pub fn get_collection_query_file_ids(
 }
 
 #[tauri::command]
-pub async fn get_smart_query_count_and_sum(params: SmartQueryParams) -> Result<(i64, i64), String> {
-    AFile::get_smart_query_count_and_sum(&params)
-        .map_err(|e| format!("Error while getting smart query files count: {}", e))
+pub async fn get_smart_album_status(
+    params: SmartQueryParams,
+) -> Result<crate::t_smart_album::SmartStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        crate::t_smart_album::status(&params)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn start_smart_album_index(
+    state: State<'_, t_ai::AiState>,
+    app: tauri::AppHandle,
+    library_id: String,
+) -> Result<crate::t_smart_album::IndexJob, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::t_smart_album::start_index(state, app, library_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn stop_smart_album_index(library_id: String, job_id: String) -> Result<(), String> {
+    crate::t_smart_album::stop_index(&library_id, &job_id)
 }
 
 #[tauri::command]
-pub async fn get_smart_query_time_line(params: SmartQueryParams) -> Result<Vec<ATimeLine>, String> {
-    AFile::get_smart_query_time_line(&params)
-        .map_err(|e| format!("Error while getting smart query timeline: {}", e))
+pub async fn get_smart_query_count_and_sum(
+    state: State<'_, t_ai::AiState>,
+    mut params: SmartQueryParams,
+) -> Result<(i64, i64), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        crate::t_smart_album::prepare(&state, &mut params)?;
+        AFile::get_smart_query_count_and_sum(&params)
+            .map_err(|e| format!("Error while getting smart query files count: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_smart_query_time_line(
+    state: State<'_, t_ai::AiState>,
+    mut params: SmartQueryParams,
+) -> Result<Vec<ATimeLine>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        crate::t_smart_album::prepare(&state, &mut params)?;
+        AFile::get_smart_query_time_line(&params)
+            .map_err(|e| format!("Error while getting smart query timeline: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn get_smart_query_files(
-    params: SmartQueryParams,
+    state: State<'_, t_ai::AiState>,
+    mut params: SmartQueryParams,
     offset: i64,
     limit: i64,
 ) -> Result<Vec<AFile>, String> {
-    AFile::get_smart_query_files(&params, offset, limit)
-        .map_err(|e| format!("Error while getting smart query files: {}", e))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        crate::t_smart_album::prepare(&state, &mut params)?;
+        AFile::get_smart_query_files(&params, offset, limit)
+            .map_err(|e| format!("Error while getting smart query files: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Get grouped render rows for a smart query.
 /// The result includes group header rows, file item rows, group metadata, and row counts for virtual scrolling.
 #[tauri::command]
 pub async fn get_smart_grouped_query_rows(
-    params: SmartQueryParams,
+    state: State<'_, t_ai::AiState>,
+    mut params: SmartQueryParams,
     offset: i64,
     limit: i64,
 ) -> Result<GroupedQueryResult, String> {
-    AFile::get_smart_grouped_query_rows(&params, offset, limit)
-        .map_err(|e| format!("Error while getting smart grouped query rows: {}", e))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        crate::t_smart_album::prepare(&state, &mut params)?;
+        AFile::get_smart_grouped_query_rows(&params, offset, limit)
+            .map_err(|e| format!("Error while getting smart grouped query rows: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Get all file ids in one group for a smart query.
 /// Used by the group header checkbox so selecting a group is not limited to loaded rows.
 #[tauri::command]
 pub async fn get_smart_group_file_ids(
-    params: SmartQueryParams,
+    state: State<'_, t_ai::AiState>,
+    mut params: SmartQueryParams,
     group_id: String,
 ) -> Result<Vec<i64>, String> {
-    AFile::get_smart_group_file_ids(&params, &group_id)
-        .map_err(|e| format!("Error while getting smart group file ids: {}", e))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        crate::t_smart_album::prepare(&state, &mut params)?;
+        AFile::get_smart_group_file_ids(&params, &group_id)
+            .map_err(|e| format!("Error while getting smart group file ids: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Get all file ids in the current smart query.
 /// Used by Select All to support large virtualized result sets without loading every file object.
 #[tauri::command]
-pub async fn get_smart_query_file_ids(params: SmartQueryParams) -> Result<Vec<i64>, String> {
-    AFile::get_smart_query_file_ids(&params)
-        .map_err(|e| format!("Error while getting smart query file ids: {}", e))
+pub async fn get_smart_query_file_ids(
+    state: State<'_, t_ai::AiState>,
+    mut params: SmartQueryParams,
+) -> Result<Vec<i64>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        crate::t_smart_album::prepare(&state, &mut params)?;
+        AFile::get_smart_query_file_ids(&params)
+            .map_err(|e| format!("Error while getting smart query file ids: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn get_smart_query_file_position(
-    params: SmartQueryParams,
+    state: State<'_, t_ai::AiState>,
+    mut params: SmartQueryParams,
     file_id: i64,
 ) -> Result<Option<i64>, String> {
-    AFile::get_smart_query_file_position(&params, file_id)
-        .map_err(|e| format!("Error while getting smart query file position: {}", e))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        crate::t_smart_album::prepare(&state, &mut params)?;
+        AFile::get_smart_query_file_position(&params, file_id)
+            .map_err(|e| format!("Error while getting smart query file position: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// get all files from the folder
@@ -3293,11 +3400,13 @@ pub fn check_ai_status(state: State<t_ai::AiState>) -> String {
 
 /// generate embedding for a file
 #[tauri::command]
-pub async fn generate_embedding(state: State<'_, t_ai::AiState>, file_id: i64) -> Result<String, String> {
+pub async fn generate_embedding(state: State<'_, t_ai::AiState>, app_handle: AppHandle, file_id: i64) -> Result<String, String> {
     let state = (*state).clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
-        AFile::generate_embedding_for_request(&state, file_id, true)
+        let result = AFile::generate_embedding_for_request(&state, file_id, true);
+        if result.is_ok() { let _ = app_handle.emit("semantic-index-changed", serde_json::json!({"library_id": crate::t_config::current_library_id()?, "file_id": file_id})); }
+        result
     })
         .await.map_err(|e|e.to_string())?
 }

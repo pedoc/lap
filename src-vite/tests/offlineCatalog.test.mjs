@@ -8,7 +8,7 @@ function moduleBody(path) {
   const source = fs.readFileSync(new URL(path, import.meta.url), 'utf8');
   return ts.transpile(source.replace(/^import[\s\S]*?from ['"][^'"]+['"];?\n/gm, '').replace(/export /g, ''), { target: ts.ScriptTarget.ES2022 });
 }
-const libConfig = { _libraryId: 'offline-test', album: { id: 1 }, activePane: 'album' };
+const libConfig = { _libraryId: 'offline-test', album: { id: 1 }, activePane: 'album', smartAlbum: {type:'system',id:null}, smartAlbums: [] };
 const availability = new Function('reactive', 'libConfig', moduleBody('../src/common/availability.ts') + '; return { isOriginalUnavailable, setAlbumAccessibility, setFileAccessibility, setFolderAccessibility, resetFileAccessibility, resetLibraryAccessibility, requiresOriginalAction };')(reactive, libConfig);
 const { isOriginalUnavailable, setAlbumAccessibility, setFileAccessibility, setFolderAccessibility, resetFileAccessibility, resetLibraryAccessibility, requiresOriginalAction } = availability;
 
@@ -35,8 +35,9 @@ test('offline state does not remove catalog data and follows reconnection, indiv
 const source = fs.readFileSync(new URL('../src/common/fileMenu.ts', import.meta.url), 'utf8');
 const iconNames = source.match(/import \{([^}]+)\} from '@\/common\/icons'/)[1].split(',').map(s => s.trim()).filter(Boolean);
 const config = { main: { sidebarIndex: 1 }, settings: { face: { enabled: true } }, externalAppsFor: () => [{ id: 'editor', name: 'Editor' }], defaultExternalApp: () => null };
-const useFileMenuItems = new Function('computed', 'markRaw', 'config', 'libConfig', 'SIDEBAR', 'DEFAULT_PLATFORM', 'getShortcutLabel', 'isOriginalUnavailable', 'requiresOriginalAction', ...iconNames, moduleBody('../src/common/fileMenu.ts') + '; return useFileMenuItems;')(
-  computed, markRaw, config, libConfig, { ALBUM: 1 }, '', () => '', isOriginalUnavailable, requiresOriginalAction, ...iconNames.map(() => ({})),
+const smartHelpers = new Function(moduleBody('../src/common/smartAlbums.ts') + '; return {smartTreeRows,isSmartFolder,setSmartOverrides};')();
+const useFileMenuItems = new Function('smartTreeRows','isSmartFolder','setSmartOverrides','computed', 'markRaw', 'config', 'libConfig', 'SIDEBAR', 'DEFAULT_PLATFORM', 'getShortcutLabel', 'isOriginalUnavailable', 'requiresOriginalAction', ...iconNames, moduleBody('../src/common/fileMenu.ts') + '; return useFileMenuItems;')(
+  smartHelpers.smartTreeRows,smartHelpers.isSmartFolder,smartHelpers.setSmartOverrides, computed, markRaw, config, libConfig, { ALBUM: 1, SMART_ALBUM: 2 }, '', () => '', isOriginalUnavailable, requiresOriginalAction, ...iconNames.map(() => ({})),
 );
 const words = () => new Proxy({}, { get: (_, key) => String(key) });
 const locale = ref({ menu: { file: words(), meta: words() }, rating: words(), culling: words() });
@@ -364,4 +365,16 @@ test('oversized drag selection skips native preview and hydration while keeping 
   assert.equal(fixture.calls.hydrated, 0);
   assert.equal(fixture.calls.started, 1);
   assert.equal(fixture.deps.isContentInternalDrag.value, true);
+});
+
+
+test('offline photos can be manually included without touching originals, and stale-library menus cannot act', () => {
+  const oldLibrary=libConfig._libraryId;
+  libConfig.smartAlbums=[{id:'smart',name:'Smart',query:{match:'all',rules:[]}}];
+  const menu=useFileMenuItems(ref({id:42,album_id:1,album_accessible:false,file_type:1}),locale,true,key=>key,()=>{});
+  const include=menu.value.find(item=>item.label==='smart_albums.include').children[0];
+  include.action();assert.deepEqual(libConfig.smartAlbums[0].query.includeFileIds,[42]);
+  libConfig._libraryId='new';libConfig.smartAlbums=[{id:'smart',name:'Smart',query:{match:'all',rules:[]}}];
+  include.action();assert.equal(libConfig.smartAlbums[0].query.includeFileIds,undefined);
+  libConfig._libraryId=oldLibrary;libConfig.smartAlbums=[];
 });

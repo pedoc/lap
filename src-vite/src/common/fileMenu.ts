@@ -1,4 +1,5 @@
 import { isOriginalUnavailable, requiresOriginalAction } from '@/common/availability';
+import { isSmartFolder, smartTreeRows, setSmartOverrides } from '@/common/smartAlbums';
 import { computed, markRaw, Ref } from 'vue';
 import { config, libConfig } from '@/common/config';
 import { SIDEBAR } from '@/common/constants';
@@ -47,6 +48,7 @@ export const useFileMenuItems = (
     selectMode?: Ref<boolean>;
     selectionMediaKind?: Ref<'image' | 'video' | 'mixed' | 'empty'>;
     selectionCount?: Ref<number>;
+    selectionIds?: () => number[];
     selectionHasUnavailable?: Ref<boolean>;
   }
 ) => {
@@ -81,6 +83,44 @@ export const useFileMenuItems = (
     };
   };
 
+  const smartAlbumMenu = () => {
+    const libraryId = libConfig._libraryId;
+    const ids = () =>
+      options?.selectMode?.value
+        ? options?.selectionIds?.() || []
+        : [Number(file.value?.id)].filter((id) => id > 0);
+    if (options?.selectMode?.value && !options.selectionIds) return [];
+    const albums = smartTreeRows(
+      (libConfig.smartAlbums || []).map((n: any) => ({ ...n, expanded: true })),
+    ).filter((row) => !isSmartFolder(row.node));
+    const update = (id: string, action: 'include' | 'exclude' | 'reset') => {
+      if (libConfig._libraryId !== libraryId) return;
+      libConfig.smartAlbums = (libConfig.smartAlbums || []).map((album: any) =>
+        album.id === id ? setSmartOverrides(album, ids(), action) : album,
+      );
+    };
+    const current = albums.find((row) => row.node.id === libConfig.smartAlbum.id);
+    return [
+      ...(albums.length
+        ? [
+            {
+              label: translate('smart_albums.include'),
+              children: albums.map((row) => ({
+                label: row.path,
+                action: () => update(row.node.id, 'include'),
+              })),
+            },
+          ]
+        : []),
+      ...(current && config.main.sidebarIndex === SIDEBAR.SMART_ALBUM && libConfig.activePane !== 'collection'
+        ? [
+            { label: translate('smart_albums.exclude'), action: () => update(current.node.id, 'exclude') },
+            { label: translate('smart_albums.reset'), action: () => update(current.node.id, 'reset') },
+          ]
+        : []),
+    ];
+  };
+
   // Creates a context menu for multi-select mode.
   const buildSelectionMenu = () => {
     const kind = options?.selectionMediaKind?.value ?? 'empty';
@@ -88,6 +128,7 @@ export const useFileMenuItems = (
     const selectionCount = options?.selectionCount?.value ?? 0;
     const unavailable = options?.selectionHasUnavailable?.value === true;
     return [
+      ...smartAlbumMenu(),
       {
         label: String(localeMsg.value.menu.file.compare_selected_images || 'Compare selected images'),
         icon: markRaw(selectionCount >= 3 ? IconSplitOn4 : IconSplitOn),
@@ -143,6 +184,7 @@ export const useFileMenuItems = (
       || (f.file_type === 3 && f.media_subtype === 'raw_jpeg_pair' && f.live_photo_video_path);
     const unavailable = isOriginalUnavailable(f);
     const items: any[] = [
+      ...smartAlbumMenu(),
       {
         label: localeMsg.value.menu.file.view_in_new_window,
         icon: markRaw(IconMonitor),

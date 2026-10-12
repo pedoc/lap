@@ -2976,6 +2976,8 @@ fn schedule_synced_file_processing(app_handle: tauri::AppHandle, task: SyncedFil
             let ai_state: tauri::State<crate::t_ai::AiState> = app_handle_for_embedding.state();
             if let Err(e) = AFile::generate_embedding(&ai_state, task.file_id) {
                 eprintln!("Failed to generate embedding for {}: {}", file_path, e);
+            } else {
+                let _ = app_handle_for_embedding.emit("semantic-index-changed", serde_json::json!({"library_id": crate::t_config::current_library_id().unwrap_or_default(), "file_id": task.file_id}));
             }
         })
         .await;

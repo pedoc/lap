@@ -1,387 +1,613 @@
 <template>
   <div class="sidebar-panel">
     <div class="sidebar-panel-header">
-      <span class="sidebar-panel-header-title flex-1">
-        {{ $t('album.smart_album_list') }}<template v-if="customSmartAlbums.length > 0"> ({{ customSmartAlbums.length.toLocaleString() }})</template>
-      </span>
+      <span class="sidebar-panel-header-title flex-1"
+        >{{ $t("album.smart_album_list") }} ({{
+          nodes.filter((n) => !isSmartFolder(n)).length
+        }})</span
+      >
+      <TButton
+        :icon="IconFolder"
+        buttonSize="small"
+        :tooltip="$t('smart_albums.new_folder')"
+        @click="newFolder(null)"
+      />
       <TButton
         :icon="IconAdd"
-        :buttonSize="'small'"
+        buttonSize="small"
         :tooltip="$t('album.add_smart_album')"
-        @click="clickAddSmartAlbum"
+        @click="newAlbum(null)"
       />
     </div>
-
-    <div class="mx-1 mb-2 px-1 shrink-0">
-      <div
-        :class="[
-          'h-8 flex items-center rounded-box transition-colors bg-base-100/40',
-          isSmartAlbumSearchFocused ? 'border-2 border-primary' : 'border border-base-content/10 hover:border-base-content/30',
-          customSmartAlbums.length === 0 ? 'opacity-50' : '',
-        ]"
-      >
-        <IconSearch class="ml-2 w-4 h-4 shrink-0" :class="isSmartAlbumSearchFocused ? 'text-primary/70' : 'text-base-content/30'" />
-        <input
-          v-model="smartAlbumSearch"
-          type="text"
-          :disabled="customSmartAlbums.length === 0"
-          :placeholder="$t('album.search_smart_albums')"
-          class="w-full min-w-0 bg-transparent border-none focus:ring-0 px-2 text-sm placeholder-base-content/30 focus:outline-none disabled:opacity-50"
-          @focus="isSmartAlbumSearchFocused = true"
-          @blur="isSmartAlbumSearchFocused = false"
-        />
-        <button
-          v-if="smartAlbumSearch"
-          type="button"
-          :disabled="customSmartAlbums.length === 0"
-          class="mr-1 p-1 rounded-box text-base-content/30 hover:text-base-content/70 disabled:opacity-30"
-          @click="smartAlbumSearch = ''"
-        >
-          <IconClose class="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-
-    <VueDraggable
-      v-if="filteredSmartAlbums.length > 0"
-      v-model="customSmartAlbums"
-      tag="ul"
-      :disabled="reorderingSmartAlbumId === null || Boolean(smartAlbumSearch.trim())"
-      :handle="'.smart-album-drag-handle'"
-      :animation="200"
-      @start="onDragStart"
-      @end="onDragEnd"
-      @drop.stop
-      class="flex-1 overflow-x-hidden overflow-y-auto rounded-box select-none"
+    <input
+      v-model="search"
+      class="input input-sm mx-2 mb-2"
+      :placeholder="$t('album.search_smart_albums')"
+      :aria-label="$t('album.search_smart_albums')"
+    />
+    <div
+      v-if="dragId"
+      class="px-3 py-2 text-xs border border-dashed border-primary"
+      @dragover.prevent
+      @drop.prevent.stop="dropOn(null)"
     >
-      <li v-for="smartAlbum in filteredSmartAlbums" :key="smartAlbum.id">
+      {{ $t("smart_albums.root") }}
+    </div>
+    <ul class="flex-1 overflow-auto select-none">
+      <li
+        v-for="{ node, depth, path } in rows"
+        :key="node.id"
+        :style="{ paddingLeft: `${depth * 16}px` }"
+      >
         <div
-          :data-reordering-smart-album="isReorderingSmartAlbum(smartAlbum) ? 'true' : undefined"
-          :class="[
-            'sidebar-item sidebar-item-media group',
-            libConfig.smartAlbum.type === 'custom' && libConfig.smartAlbum.id === smartAlbum.id ? 'sidebar-item-selected' : 'sidebar-item-hover',
-          ]"
-          @click="clickCustomSmartAlbum(smartAlbum)"
-          @contextmenu.prevent.stop="(event: MouseEvent) => handleSmartAlbumContextMenu(smartAlbum, event)"
+          :title="path"
+          :draggable="!search.trim()"
+          class="sidebar-item sidebar-item-media group"
+          :class="
+            selected(node) ? 'sidebar-item-selected' : 'sidebar-item-hover'
+          "
+          @dragstart="dragStart($event, node.id)"
+          @dragend="dragId = null"
+          @dragover.prevent
+          @drop.prevent.stop="dropOn(node)"
+          @click="clickNode(node)"
+          @contextmenu.prevent.stop="
+            (event) => menus[node.id]?.open?.(event.clientX, event.clientY)
+          "
         >
-          <IconDragHandle
-            v-if="isReorderingSmartAlbum(smartAlbum)"
-            class="smart-album-drag-handle p-1 w-6 h-6 shrink-0 cursor-move text-base-content/70 hover:text-base-content"
-            :title="$t('album.smart_edit.reorder')"
-            @click.stop
+          <span v-if="isSmartFolder(node)" class="shrink-0 w-4 text-xs">{{
+            node.expanded === false ? "▶" : "▼"
+          }}</span>
+          <IconFolder
+            v-if="isSmartFolder(node)"
+            class="w-6 h-6 shrink-0 mr-2"
           />
-          <span v-else-if="reorderingSmartAlbumId !== null" class="p-1 w-6 h-6 shrink-0"></span>
-          <div class="w-10 h-10 mr-2 rounded-box shrink-0 overflow-hidden border border-base-content/5 bg-base-content/5">
+          <div
+            v-else
+            class="w-10 h-10 shrink-0 mr-2 rounded-box overflow-hidden bg-base-content/5 flex items-center justify-center"
+          >
             <img
-              v-if="getSmartAlbumCount(smartAlbum) > 0 && getSmartAlbumCoverSrc(smartAlbum) && Number(smartAlbumCoverErrors[smartAlbum.id]) !== Number(smartAlbum.coverFileId)"
-              :src="getSmartAlbumCoverSrc(smartAlbum)"
+              v-if="coverUrls[node.id]"
+              :src="coverUrls[node.id]"
               class="w-full h-full object-cover"
-              @error="smartAlbumCoverErrors[smartAlbum.id] = Number(smartAlbum.coverFileId)"
+              @error="coverUrls[node.id] = ''"
             />
-            <div v-else class="w-full h-full flex items-center justify-center text-base-content/30">
-              <IconFolderCog class="w-5 h-5" />
-            </div>
+            <IconFolderCog v-else class="w-5 h-5 text-base-content/30" />
           </div>
-          <span class="sidebar-item-label">{{ smartAlbum.name }}</span>
-          <div class="ml-auto flex flex-row items-center text-base-content/30">
-            <span
-              v-if="hasSmartAlbumCount(smartAlbum)"
-              class="sidebar-item-count shrink-0"
-            >{{ getSmartAlbumCount(smartAlbum).toLocaleString() }}</span>
-            <div :class="[isSmartAlbumSelected(smartAlbum) ? '' : 'hidden group-hover:flex']">
-              <ContextMenu
-                :ref="(element: any) => { if (element) smartAlbumContextMenus[smartAlbum.id] = element }"
-                :iconMenu="IconMore"
-                :menuItems="getMoreMenuItems(smartAlbum)"
-                :smallIcon="true"
-              />
-            </div>
-          </div>
+          <span class="sidebar-item-label">{{ node.name }}</span>
+          <span
+            v-if="countErrors[node.id]"
+            :title="countErrors[node.id]"
+            class="text-error text-xs"
+            @click.stop="scheduleCounts()"
+            >!</span
+          >
+          <span
+            v-else-if="!isSmartFolder(node) && node.count != null"
+            class="sidebar-item-count"
+            >{{ Number(node.count).toLocaleString() }}</span
+          >
+          <ContextMenu
+            :ref="
+              (element: any) => {
+                if (element) menus[node.id] = element;
+              }
+            "
+            :iconMenu="IconMore"
+            :menuItems="menuItems(node)"
+            :smallIcon="true"
+          />
         </div>
       </li>
-    </VueDraggable>
-    <div v-else-if="customSmartAlbums.length > 0" class="sidebar-empty text-sm">
-      <span class="text-center">{{ $t('album.no_smart_albums_found') }}</span>
+    </ul>
+    <div v-if="!rows.length" class="sidebar-empty text-sm">
+      {{ $t("album.no_smart_albums.description") }}
     </div>
-    <div v-else class="mt-2 px-2 flex flex-col items-center justify-center text-base-content/30">
-      <span class="text-sm text-center">{{ $t('album.no_smart_albums.description') }}</span>
-    </div>
-
     <SmartAlbumEdit
-      v-if="showEditDialog"
-      :smartAlbum="editingSmartAlbum"
-      @ok="saveSmartAlbum"
-      @cancel="closeEditDialog"
+      v-if="showEdit"
+      :smartAlbum="editing"
+      :parentId="creationParent"
+      :nodes="nodes"
+      @ok="saveAlbum"
+      @cancel="showEdit = false"
     />
+    <ModalDialog
+      v-if="nameDialog"
+      :title="
+        nameDialog.id
+          ? $t('smart_albums.rename')
+          : $t('smart_albums.new_folder')
+      "
+      :width="400"
+      @cancel="nameDialog = null"
+    >
+      <input
+        v-model="nodeName"
+        autofocus
+        class="input w-full"
+        maxlength="200"
+        :aria-label="$t('smart_albums.folder_name')"
+        @keydown.enter="saveName"
+      />
+      <div class="flex justify-end gap-2 mt-4">
+        <button class="t-button-default" @click="nameDialog = null">
+          {{ $t("msgbox.cancel") }}</button
+        ><button
+          class="t-button-primary"
+          :disabled="!nodeName.trim()"
+          @click="saveName"
+        >
+          {{ $t("msgbox.ok") }}
+        </button>
+      </div>
+    </ModalDialog>
+    <ModalDialog
+      v-if="moving"
+      :title="$t('smart_albums.move')"
+      :width="440"
+      @cancel="moving = null"
+    >
+      <select v-model="moveParent" class="select w-full">
+        <option :value="null">{{ $t("smart_albums.root") }}</option>
+        <option
+          v-for="row in destinations"
+          :key="row.node.id"
+          :value="row.node.id"
+        >
+          {{ row.path }}
+        </option>
+      </select>
+      <div class="flex justify-end gap-2 mt-4">
+        <button class="t-button-default" @click="moving = null">
+          {{ $t("msgbox.cancel") }}</button
+        ><button class="t-button-primary" @click="confirmMove">
+          {{ $t("msgbox.ok") }}
+        </button>
+      </div>
+    </ModalDialog>
     <MessageBox
-      v-if="showDeleteDialog"
+      v-if="deleting"
       :title="$t('album.smart_edit.delete')"
-      :message="$t('album.smart_edit.delete_message', { name: deletingSmartAlbum?.name || '' })"
-      :OkText="$t('album.smart_edit.delete')"
+      :message="
+        isSmartFolder(deleting)
+          ? $t('smart_albums.folder_delete')
+          : $t('album.smart_edit.delete_message', { name: deleting.name })
+      "
+      :okText="$t('album.smart_edit.delete')"
       :cancelText="$t('msgbox.cancel')"
       warningOk
-      @ok="confirmDeleteSmartAlbum"
-      @cancel="closeDeleteDialog"
+      @ok="confirmDelete"
+      @cancel="deleting = null"
     />
   </div>
 </template>
-
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { listen } from '@tauri-apps/api/event';
-import { VueDraggable } from 'vue-draggable-plus';
-import { config, libConfig } from '@/common/config';
-import { useUIStore } from '@/stores/uiStore';
-import { getThumbUrl, getThumbnailDataUrl, getThumbnailDataUrlInflight, isWin, setThumbnailDataUrlInflight } from '@/common/utils';
-import { getFileThumbById, getSmartQueryCountAndSum } from '@/common/api';
-import { IconAdd, IconClose, IconDragHandle, IconEdit, IconMore, IconFolderCog, IconOrder, IconSearch, IconTrash } from '@/common/icons';
-import TButton from '@/components/TButton.vue';
-import ContextMenu from '@/components/ContextMenu.vue';
-import SmartAlbumEdit from '@/components/SmartAlbumEdit.vue';
-import MessageBox from '@/components/MessageBox.vue';
-
-const customSmartAlbums = ref<any[]>([]);
-const uiStore = useUIStore();
+import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { isFaceRename } from '@/common/faceUpdates';
+import { useUIStore } from "@/stores/uiStore";
+import { useI18n } from "vue-i18n";
+import { listen } from "@tauri-apps/api/event";
+import { config, libConfig } from "@/common/config";
+import {
+  hasTimeSmartRules,
+  isSmartFolder,
+  smartTreeRows,
+  smartQueryParams,
+  smartResultSignature,
+  moveSmartNode,
+  canMoveSmartNode,
+  removeSmartNode,
+} from "@/common/smartAlbums";
+import { getFileThumbById, getSmartQueryCountAndSum } from "@/common/api";
+import { getThumbUrl, getThumbnailDataUrl, isWin } from "@/common/utils";
+import {
+  IconAdd,
+  IconFolder,
+  IconFolderCog,
+  IconMore,
+  IconEdit,
+  IconTrash,
+  IconOrder,
+} from "@/common/icons";
+import TButton from "./TButton.vue";
+import ContextMenu from "./ContextMenu.vue";
+import SmartAlbumEdit from "./SmartAlbumEdit.vue";
+import ModalDialog from "./ModalDialog.vue";
+import MessageBox from "./MessageBox.vue";
 const { t } = useI18n();
-const showEditDialog = ref(false);
-const editingSmartAlbum = ref<any | null>(null);
-const showDeleteDialog = ref(false);
-const deletingSmartAlbum = ref<any | null>(null);
-const smartAlbumContextMenus = ref<Record<string, any>>({});
-const smartAlbumCoverErrors = ref<Record<string, number>>({});
-const smartAlbumCoverUrls = ref<Record<string, string>>({});
-const reorderingSmartAlbumId = ref<string | null>(null);
-const smartAlbumSearch = ref('');
-const isSmartAlbumSearchFocused = ref(false);
-let smartAlbumCoverLoadToken = 0;
-let smartCountRequest = 0;
-let smartCountsDisposed = false;
-const unlistenSmartCounts: (() => void)[] = [];
-
-const filteredSmartAlbums = computed(() => {
-  const query = smartAlbumSearch.value.trim().toLowerCase();
-  if (!query) return customSmartAlbums.value;
-  return customSmartAlbums.value.filter(smartAlbum => smartAlbum.name.toLowerCase().includes(query));
-});
-
-watch(() => libConfig.smartAlbums, (albums) => {
-  customSmartAlbums.value = Array.isArray(albums) ? [...albums] : [];
-}, { immediate: true });
-
-// Counts are computed per smart query. Re-fetch whenever the set of albums or
-// their queries change (id/updatedAt), so each
-// album shows its own count instead of the currently-viewed query's count.
-const smartAlbumCountSignature = computed(() =>
-  (libConfig.smartAlbums || []).map((album: any) => `${album.id}:${album.updatedAt ?? album.createdAt ?? ''}`).join('|')
+const nodes = computed<any[]>(() => libConfig.smartAlbums || []);
+const search = ref("");
+const rows = computed(() => smartTreeRows(nodes.value, search.value));
+const menus = ref<Record<string, any>>({});
+const coverUrls = ref<Record<string, string>>({});
+const countErrors = ref<Record<string, string>>({});
+const showEdit = ref(false);
+const editing = ref<any>(null);
+const creationParent = ref<string | null>(null);
+const nameDialog = ref<any>(null);
+const nodeName = ref("");
+const moving = ref<any>(null);
+const moveParent = ref<string | null>(null);
+const deleting = ref<any>(null);
+const dragId = ref<string | null>(null);
+const destinations = computed(() =>
+  smartTreeRows(nodes.value.map((n) => ({ ...n, expanded: true }))).filter(
+    (r) =>
+      isSmartFolder(r.node) &&
+      moving.value &&
+      canMoveSmartNode(nodes.value, moving.value.id, r.node.id),
+  ),
 );
-
-async function refreshSmartAlbumCounts() {
-  const request = ++smartCountRequest;
-  const libraryId = libConfig._libraryId;
-  const albums = customSmartAlbums.value.filter((album: any) => {
-    const rules = Array.isArray(album?.query?.rules) ? album.query.rules : [];
-    return rules.length > 0;
-  });
-  if (albums.length === 0) return;
-
-  const results = await Promise.all(albums.map(async (album: any) => {
-    const query = album.query;
-    try {
-      const params = {
-        version: Number(query.version || 1),
-        match: query.match === 'any' ? 'any' : 'all',
-        rules: query.rules,
-        sortType: Number(album?.sort?.type ?? 0),
-        sortOrder: Number(album?.sort?.order ?? 1),
-        folderSort: Number(config.settings.folderSort || 0),
-        calendarSort: Number(config.settings.calendarSort || 0),
-        // Count/sum query is not grouped, so category ordering is irrelevant here.
-        categorySort: 0,
-      };
-      const result = await getSmartQueryCountAndSum(params);
-      return [String(album.id), Number(result?.[0] || 0)] as const;
-    } catch {
-      return [String(album.id), 0] as const;
-    }
-  }));
-
-  if (smartCountsDisposed || request !== smartCountRequest || libraryId !== libConfig._libraryId) return;
-  const countMap = Object.fromEntries(results);
-  libConfig.smartAlbums = (libConfig.smartAlbums || []).map((album: any) => ({
-    ...album,
-    count: countMap[String(album.id)] ?? 0,
-  }));
+function selected(n: any) {
+  return (
+    !isSmartFolder(n) &&
+    libConfig.smartAlbum.type === "custom" &&
+    libConfig.smartAlbum.id === n.id
+  );
 }
-
-watch(
-  () => [smartAlbumCountSignature.value, libConfig._libraryId],
-  () => { void refreshSmartAlbumCounts(); },
-  { immediate: true },
-);
-
-watch(smartAlbumSearch, () => {
-  reorderingSmartAlbumId.value = null;
-});
-
-const getSmartAlbumCoverSrc = (smartAlbum: any) => {
-  const coverFileId = Number(smartAlbum?.coverFileId || 0);
-  if (!coverFileId) return '';
-  return isWin ? smartAlbumCoverUrls.value[String(smartAlbum.id)] || '' : getThumbUrl(coverFileId, false, config.settings.thumbnailSize);
-};
-
-const loadWindowsSmartAlbumCovers = async (albums: any[]) => {
-  if (!isWin) return;
-  const loadToken = ++smartAlbumCoverLoadToken;
-
-  const covers = await Promise.all(albums.map(async (smartAlbum) => {
-    const coverFileId = Number(smartAlbum?.coverFileId || 0);
-    if (!coverFileId) return [String(smartAlbum.id), ''] as const;
-
-    const inflight = getThumbnailDataUrlInflight(coverFileId, config.settings.thumbnailSize);
-    const url = await (inflight || setThumbnailDataUrlInflight(
-      coverFileId,
-      config.settings.thumbnailSize,
-      getFileThumbById(coverFileId, config.settings.thumbnailSize, false)
-        .then(thumb => getThumbnailDataUrl(thumb, '', false, config.settings.thumbnailSize))
-    ));
-    return [String(smartAlbum.id), url || ''] as const;
-  }));
-
-  if (loadToken !== smartAlbumCoverLoadToken) return;
-  smartAlbumCoverUrls.value = Object.fromEntries(covers.filter(([, url]) => url));
-};
-
-watch(
-  () => customSmartAlbums.value.map((smartAlbum: any) => [smartAlbum.id, smartAlbum.coverFileId]),
-  () => { void loadWindowsSmartAlbumCovers(customSmartAlbums.value); },
-  { immediate: true },
-);
-
-function clickCustomSmartAlbum(smartAlbum: any) {
-  libConfig.smartAlbum.type = 'custom';
-  libConfig.smartAlbum.id = smartAlbum.id;
+function clickNode(n: any) {
+  if (isSmartFolder(n))
+    libConfig.smartAlbums = nodes.value.map((v) =>
+      v.id === n.id ? { ...v, expanded: v.expanded === false } : v,
+    );
+  else {
+    libConfig.smartAlbum.type = "custom";
+    libConfig.smartAlbum.id = n.id;
+  }
 }
-
-const isSmartAlbumSelected = (smartAlbum: any) => libConfig.smartAlbum.type === 'custom' && libConfig.smartAlbum.id === smartAlbum.id;
-const getSmartAlbumCount = (smartAlbum: any) => {
-  return Number(smartAlbum?.count || 0);
-};
-const hasSmartAlbumCount = (smartAlbum: any) => getSmartAlbumCount(smartAlbum) > 0;
-
-function clickAddSmartAlbum() {
-  editingSmartAlbum.value = null;
-  showEditDialog.value = true;
+function newAlbum(parentId: string | null) {
+  creationParent.value = parentId;
+  editing.value = null;
+  showEdit.value = true;
 }
-
-function handleSmartAlbumContextMenu(smartAlbum: any, event: MouseEvent) {
-  clickCustomSmartAlbum(smartAlbum);
-  smartAlbumContextMenus.value[smartAlbum.id]?.open?.(event.clientX, event.clientY);
+function newFolder(parentId: string | null) {
+  nameDialog.value = { parentId };
+  nodeName.value = "";
 }
-
-const getMoreMenuItems = (smartAlbum: any) => [
-  {
-    label: t('album.smart_edit.title_edit'),
-    icon: IconEdit,
-    action: () => clickEditSmartAlbum(smartAlbum),
-  },
-  {
-    label: t('album.smart_edit.reorder'),
-    icon: IconOrder,
-    action: () => {
-      reorderingSmartAlbumId.value = reorderingSmartAlbumId.value === smartAlbum.id ? null : smartAlbum.id;
+function saveName() {
+  if (!nodeName.value.trim() || !nameDialog.value) return;
+  const d = nameDialog.value;
+  libConfig.smartAlbums = d.id
+    ? nodes.value.map((n) =>
+        n.id === d.id ? { ...n, name: nodeName.value.trim() } : n,
+      )
+    : [
+        ...nodes.value,
+        {
+          id: crypto.randomUUID(),
+          kind: "folder",
+          parentId: d.parentId,
+          expanded: true,
+          name: nodeName.value.trim(),
+        },
+      ];
+  nameDialog.value = null;
+}
+function saveAlbum(album: any) {
+  const index = nodes.value.findIndex((n) => n.id === album.id);
+  if (
+    index >= 0 &&
+    smartResultSignature(nodes.value[index]) === smartResultSignature(album)
+  )
+    album = {
+      ...album,
+      count: nodes.value[index].count,
+      coverFileId: nodes.value[index].coverFileId,
+    };
+  libConfig.smartAlbums =
+    index < 0
+      ? [...nodes.value, album]
+      : nodes.value.map((n) => (n.id === album.id ? album : n));
+  if (album.parentId)
+    libConfig.smartAlbums = nodes.value.map((n) =>
+      n.id === album.parentId ? { ...n, expanded: true } : n,
+    );
+  libConfig.smartAlbum.type = "custom";
+  libConfig.smartAlbum.id = album.id;
+  showEdit.value = false;
+}
+function reorder(n: any, direction: number) {
+  const siblings = nodes.value.filter(
+    (v) => (v.parentId || null) === (n.parentId || null),
+  );
+  const neighbour =
+    siblings[siblings.findIndex((v) => v.id === n.id) + direction];
+  if (!neighbour) return;
+  const copy = [...nodes.value];
+  const a = copy.findIndex((v) => v.id === n.id);
+  const b = copy.findIndex((v) => v.id === neighbour.id);
+  [copy[a], copy[b]] = [copy[b], copy[a]];
+  libConfig.smartAlbums = copy;
+}
+function menuItems(n: any) {
+  return [
+    ...(isSmartFolder(n)
+      ? [
+          {
+            label: t("album.add_smart_album"),
+            icon: IconAdd,
+            action: () => newAlbum(n.id),
+          },
+          {
+            label: t("smart_albums.new_folder"),
+            icon: IconFolder,
+            action: () => newFolder(n.id),
+          },
+        ]
+      : [
+          {
+            label: t("album.smart_edit.title_edit"),
+            icon: IconEdit,
+            action: () => {
+              editing.value = n;
+              showEdit.value = true;
+            },
+          },
+        ]),
+    {
+      label: t("smart_albums.rename"),
+      icon: IconEdit,
+      action: () => {
+        nameDialog.value = n;
+        nodeName.value = n.name;
+      },
     },
-  },
-  {
-    label: "-",
-    action: null
-  },
-  {
-    label: t('album.smart_edit.delete'),
-    icon: IconTrash,
-    action: () => clickDeleteSmartAlbum(smartAlbum),
-  },
-];
-
-const isReorderingSmartAlbum = (smartAlbum: any) => reorderingSmartAlbumId.value === smartAlbum.id;
-
-function handleReorderOutsidePointerDown(event: PointerEvent) {
-  if (event.button !== 0 || reorderingSmartAlbumId.value === null) return;
-  if (event.target instanceof Element && event.target.closest('[data-reordering-smart-album="true"]')) return;
-  reorderingSmartAlbumId.value = null;
+    {
+      label: t("smart_albums.move"),
+      icon: IconFolder,
+      action: () => {
+        moving.value = n;
+        moveParent.value = n.parentId || null;
+      },
+    },
+    {
+      label: "↑ " + t("album.smart_edit.reorder"),
+      icon: IconOrder,
+      action: () => reorder(n, -1),
+    },
+    {
+      label: "↓ " + t("album.smart_edit.reorder"),
+      icon: IconOrder,
+      action: () => reorder(n, 1),
+    },
+    { label: t("smart_albums.retry"), action: scheduleCounts },
+    {
+      label: t("album.smart_edit.delete"),
+      icon: IconTrash,
+      action: () => {
+        deleting.value = n;
+      },
+    },
+  ];
 }
-
-onMounted(async () => {
-  document.addEventListener('pointerdown', handleReorderOutsidePointerDown, true);
-  for (const eventName of ['album-updated', 'index_finished']) {
-    const stop = await listen(eventName, (event: any) => {
-      if (eventName === 'album-updated' && !event.payload?.filtersChanged) return;
-      void refreshSmartAlbumCounts();
-    });
-    if (smartCountsDisposed) { stop(); return; }
-    unlistenSmartCounts.push(stop);
+function confirmMove() {
+  if (moving.value)
+    libConfig.smartAlbums = moveSmartNode(
+      nodes.value,
+      moving.value.id,
+      moveParent.value,
+    );
+  moving.value = null;
+}
+function dragStart(event: DragEvent, id: string) {
+  dragId.value = id;
+  event.dataTransfer?.setData("application/x-lap-smart-album", id);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+function dropOn(target: any) {
+  const id = dragId.value;
+  dragId.value = null;
+  if (!id || target?.id === id) return;
+  const parentId = isSmartFolder(target) ? target.id : target?.parentId || null;
+  if (!canMoveSmartNode(nodes.value, id, parentId)) return;
+  let next = moveSmartNode(nodes.value, id, parentId);
+  if (target && !isSmartFolder(target)) {
+    const node = next.find((n) => n.id === id);
+    next = next.filter((n) => n.id !== id);
+    next.splice(
+      next.findIndex((n) => n.id === target.id),
+      0,
+      node,
+    );
   }
-});
-
-onBeforeUnmount(() => {
-  smartCountsDisposed = true;
-  ++smartCountRequest;
-  unlistenSmartCounts.forEach(stop => stop());
-  document.removeEventListener('pointerdown', handleReorderOutsidePointerDown, true);
-});
-
-function onDragStart() {
-  uiStore.removeInputHandler('SmartAlbumListDrag');
-  uiStore.pushInputHandler('SmartAlbumListDrag');
+  libConfig.smartAlbums = next;
 }
-
-function onDragEnd() {
-  setTimeout(() => uiStore.removeInputHandler('SmartAlbumListDrag'), 0);
-  libConfig.smartAlbums = [...customSmartAlbums.value];
-}
-
-function clickEditSmartAlbum(smartAlbum: any) {
-  editingSmartAlbum.value = smartAlbum;
-  showEditDialog.value = true;
-}
-
-function closeEditDialog() {
-  showEditDialog.value = false;
-  editingSmartAlbum.value = null;
-}
-
-function saveSmartAlbum(smartAlbum: any) {
-  const albums = [...(libConfig.smartAlbums || [])];
-  const index = albums.findIndex((item: any) => item.id === smartAlbum.id);
-  if (index >= 0) {
-    albums[index] = smartAlbum;
-  } else {
-    albums.push(smartAlbum);
-  }
-  libConfig.smartAlbums = albums;
-  libConfig.smartAlbum.type = 'custom';
-  libConfig.smartAlbum.id = smartAlbum.id;
-  closeEditDialog();
-}
-
-function clickDeleteSmartAlbum(smartAlbum: any) {
-  deletingSmartAlbum.value = smartAlbum;
-  showDeleteDialog.value = true;
-}
-
-function closeDeleteDialog() {
-  showDeleteDialog.value = false;
-  deletingSmartAlbum.value = null;
-}
-
-function confirmDeleteSmartAlbum() {
-  const smartAlbum = deletingSmartAlbum.value;
-  if (!smartAlbum) return;
-  libConfig.smartAlbums = (libConfig.smartAlbums || []).filter((item: any) => item.id !== smartAlbum.id);
-  if (libConfig.smartAlbum.type === 'custom' && libConfig.smartAlbum.id === smartAlbum.id) {
-    libConfig.smartAlbum.type = 'system';
+function confirmDelete() {
+  const id = deleting.value.id;
+  libConfig.smartAlbums = removeSmartNode(nodes.value, id);
+  if (libConfig.smartAlbum.id === id) {
+    libConfig.smartAlbum.type = "system";
     libConfig.smartAlbum.id = null;
   }
-  closeDeleteDialog();
+  deleting.value = null;
 }
+let request = 0;
+let disposed = false;
+let countTimer: ReturnType<typeof setTimeout> | undefined;
+let coverRequest = 0;
+const stops: (() => void)[] = [];
+let clock: ReturnType<typeof setInterval> | undefined;
+let counting = false;
+let countAgain = false;
+function scheduleCounts() {
+  if (countTimer) return;
+  countTimer = setTimeout(() => {
+    countTimer = undefined;
+    void refreshCounts();
+  }, 600);
+}
+async function refreshCounts() {
+  if (counting) {
+    countAgain = true;
+    return;
+  }
+  counting = true;
+  const token = ++request;
+  const library = libConfig._libraryId;
+  const albums = nodes.value.filter((n) => !isSmartFolder(n));
+  let cursor = 0;
+  async function worker() {
+    while (cursor < albums.length) {
+      const album = albums[cursor++];
+      const signature = smartResultSignature(album);
+      try {
+        const result = await getSmartQueryCountAndSum({
+          ...smartQueryParams(album),
+          folderSort: config.settings.folderSort,
+          calendarSort: config.settings.calendarSort,
+        });
+        if (disposed || token !== request || library !== libConfig._libraryId)
+          return;
+        libConfig.smartAlbums = nodes.value.map((n) =>
+          n.id === album.id && smartResultSignature(n) === signature
+            ? { ...n, count: Number(result[0]) }
+            : n,
+        );
+        delete countErrors.value[album.id];
+      } catch (error) {
+        if (
+          !disposed &&
+          token === request &&
+          library === libConfig._libraryId &&
+          smartResultSignature(nodes.value.find((n) => n.id === album.id)) ===
+            signature
+        ) {
+          countErrors.value[album.id] = String(error);
+          libConfig.smartAlbums = nodes.value.map((n) =>
+            n.id === album.id ? { ...n, count: null } : n,
+          );
+        }
+      }
+    }
+  }
+  try {
+    await Promise.all([worker(), worker()]);
+  } finally {
+    counting = false;
+    if (countAgain && !disposed) {
+      countAgain = false;
+      scheduleCounts();
+    }
+  }
+}
+watch(
+  () =>
+    JSON.stringify(
+      nodes.value
+        .filter((n) => !isSmartFolder(n))
+        .map((n) => [n.id, smartResultSignature(n)])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    ),
+  () => {
+    request++;
+    scheduleCounts();
+  },
+  { immediate: true },
+);
+watch(
+  () => libConfig._libraryId,
+  () => {
+    request++;
+    countErrors.value = {};
+    showEdit.value = false;
+    nameDialog.value = null;
+    moving.value = null;
+    deleting.value = null;
+    dragId.value = null;
+    coverUrls.value = {};
+    scheduleCounts();
+  },
+);
+watch(() => config.settings.ai?.semanticProfile, scheduleCounts);
+watch(() => useUIStore().countUpdateTick, scheduleCounts);
+watch(
+  () =>
+    JSON.stringify([
+      libConfig._libraryId,
+      config.settings.thumbnailSize,
+      nodes.value
+        .filter((n) => !isSmartFolder(n))
+        .map((n) => [n.id, n.coverFileId])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    ]),
+  async () => {
+    const token = ++coverRequest;
+    const library = libConfig._libraryId;
+    const entries = await Promise.all(
+      nodes.value
+        .filter((n) => !isSmartFolder(n) && n.coverFileId)
+        .map(async (n) => {
+          try {
+            return [
+              n.id,
+              isWin
+                ? getThumbnailDataUrl(
+                    await getFileThumbById(
+                      n.coverFileId,
+                      config.settings.thumbnailSize,
+                      false,
+                    ),
+                    "",
+                    false,
+                    config.settings.thumbnailSize,
+                  )
+                : getThumbUrl(
+                    n.coverFileId,
+                    false,
+                    config.settings.thumbnailSize,
+                  ),
+            ];
+          } catch {
+            return [n.id, ""];
+          }
+        }),
+    );
+    if (!disposed && token === coverRequest && library === libConfig._libraryId)
+      coverUrls.value = Object.fromEntries(entries);
+  },
+  { immediate: true },
+);
+onMounted(async () => {
+  clock = setInterval(() => {
+    if (
+      nodes.value.some(
+        (n) => !isSmartFolder(n) && hasTimeSmartRules(n.query?.rules || []),
+      )
+    )
+      scheduleCounts();
+  }, 60000);
+  for (const eventName of [
+    "semantic-index-changed",
+    "album-updated",
+    "index_finished",
+    "index_progress",
+    "smart-album-index-progress",
+    "face-person-changed",
+    "face_index_finished",
+    "location-resolution-progress",
+    "map-location-changed",
+    "refresh-content",
+  ]) {
+    const stop = await listen(eventName, (event: any) => {
+      const library = event.payload?.libraryId || event.payload?.library_id;
+      if (library && library !== libConfig._libraryId) return;
+      if(eventName==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;
+      if(eventName==='album-updated'&&!event.payload?.filtersChanged)return;
+      scheduleCounts();
+    });
+    if (disposed) {
+      stop();
+      return;
+    }
+    stops.push(stop);
+  }
+});
+onBeforeUnmount(() => {
+  disposed = true;
+  request++;
+  coverRequest++;
+  clearTimeout(countTimer);
+  clearInterval(clock);
+  stops.forEach((stop) => stop());
+});
 </script>

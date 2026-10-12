@@ -45,6 +45,7 @@ mod t_motion_photo;
 mod t_pasteboard;
 mod t_protocol;
 mod t_similar;
+mod t_smart_album;
 mod t_sqlite;
 mod t_thumbnail_rebuild;
 mod t_storage;
@@ -287,6 +288,9 @@ async fn main() {
             t_cmds::get_library_visible_counts,
             t_cmds::get_query_file_position,
             // smart album
+            t_cmds::get_smart_album_status,
+            t_cmds::start_smart_album_index,
+            t_cmds::stop_smart_album_index,
             t_cmds::get_smart_query_count_and_sum,
             t_cmds::get_smart_query_time_line,
             t_cmds::get_smart_query_files,

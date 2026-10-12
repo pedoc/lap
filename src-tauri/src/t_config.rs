@@ -82,6 +82,10 @@ pub struct SmartAlbumQueryState {
     pub r#match: String,
     #[serde(default)]
     pub rules: Vec<SmartAlbumRuleState>,
+    #[serde(default)]
+    pub include_file_ids: Vec<i64>,
+    #[serde(default)]
+    pub exclude_file_ids: Vec<i64>,
 }
 
 fn default_smart_album_query_version() -> i32 {
@@ -98,6 +102,8 @@ impl Default for SmartAlbumQueryState {
             version: default_smart_album_query_version(),
             r#match: default_smart_album_match(),
             rules: Vec::new(),
+            include_file_ids: Vec::new(),
+            exclude_file_ids: Vec::new(),
         }
     }
 }
@@ -127,6 +133,12 @@ pub struct SmartAlbumGroupState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomSmartAlbumState {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default = "default_smart_folder_expanded")]
+    pub expanded: bool,
     pub id: String,
     pub name: String,
     #[serde(default)]
@@ -148,6 +160,8 @@ pub struct CustomSmartAlbumState {
     #[serde(default)]
     pub updated_at: i64,
 }
+
+fn default_smart_folder_expanded() -> bool { true }
 
 fn default_smart_album_source() -> String {
     "rules".to_string()

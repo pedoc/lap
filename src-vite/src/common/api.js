@@ -262,68 +262,17 @@ export async function getCurrentLibraryState() {
   return null;
 }
 
-export async function getSmartQueryCountAndSum(params) {
-  try {
-    return await invoke('get_smart_query_count_and_sum', { params });
-  } catch (error) {
-    console.error('Failed to get smart query count and sum:', error);
-  }
-  return null;
-}
-
-export async function getSmartQueryTimeLine(params) {
-  try {
-    return await invoke('get_smart_query_time_line', { params });
-  } catch (error) {
-    console.error('Failed to get smart query timeline:', error);
-  }
-  return null;
-}
-
-export async function getSmartQueryFiles(params, offset, limit) {
-  try {
-    return await invoke('get_smart_query_files', { params, offset, limit });
-  } catch (error) {
-    console.error('Failed to get smart query files:', error);
-  }
-  return null;
-}
-
-export async function getSmartGroupedQueryRows(params, offset, limit) {
-  try {
-    return await invoke('get_smart_grouped_query_rows', { params, offset, limit });
-  } catch (error) {
-    console.error('Failed to get smart grouped query rows:', error);
-  }
-  return null;
-}
-
-export async function getSmartGroupFileIds(params, groupId) {
-  try {
-    return await invoke('get_smart_group_file_ids', { params, groupId });
-  } catch (error) {
-    console.error('Failed to get smart group file ids:', error);
-  }
-  return null;
-}
-
-export async function getSmartQueryFileIds(params) {
-  try {
-    return await invoke('get_smart_query_file_ids', { params });
-  } catch (error) {
-    console.error('Failed to get smart query file ids:', error);
-  }
-  return null;
-}
-
-export async function getSmartQueryFilePosition(params, fileId) {
-  try {
-    return await invoke('get_smart_query_file_position', { params, fileId });
-  } catch (error) {
-    console.error('Failed to get smart query file position:', error);
-  }
-  return null;
-}
+// Smart query failures must remain distinct from valid empty results.
+export const getSmartQueryCountAndSum = params => invoke('get_smart_query_count_and_sum', { params });
+export const getSmartQueryTimeLine = params => invoke('get_smart_query_time_line', { params });
+export const getSmartQueryFiles = (params, offset, limit) => invoke('get_smart_query_files', { params, offset, limit });
+export const getSmartGroupedQueryRows = (params, offset, limit) => invoke('get_smart_grouped_query_rows', { params, offset, limit });
+export const getSmartGroupFileIds = (params, groupId) => invoke('get_smart_group_file_ids', { params, groupId });
+export const getSmartQueryFileIds = params => invoke('get_smart_query_file_ids', { params });
+export const getSmartQueryFilePosition = (params, fileId) => invoke('get_smart_query_file_position', { params, fileId });
+export const getSmartAlbumStatus = params => invoke('get_smart_album_status', { params });
+export const startSmartAlbumIndex = libraryId => invoke('start_smart_album_index', { libraryId });
+export const stopSmartAlbumIndex = (libraryId, jobId) => invoke('stop_smart_album_index', { libraryId, jobId });
 
 // albums
 
