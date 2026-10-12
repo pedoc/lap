@@ -1140,7 +1140,7 @@ export async function copyFile(filePath, newFolderPath, conflictPolicy = 'keep_b
 // delete a file
 export async function deleteFile(fileId, filePath) {
   try {
-    return await invoke('delete_file', { fileId, filePath });
+    return await invoke('delete_file', { libraryId:libConfig._libraryId, fileId, filePath });
   } catch (error) {
     console.error('deleteFile error:', error);
     throw error;
@@ -1150,7 +1150,7 @@ export async function deleteFile(fileId, filePath) {
 // delete a file permanently
 export async function deleteFilePermanently(fileId, filePath) {
   try {
-    return await invoke('delete_file_permanently', { fileId, filePath });
+    return await invoke('delete_file_permanently', { libraryId:libConfig._libraryId, fileId, filePath });
   } catch (error) {
     console.error('deleteFilePermanently error:', error);
     throw error;
@@ -1168,7 +1168,7 @@ export async function deleteDbFile(fileId) {
 
 export async function batchDeleteFiles(files, permanently = false) {
   try {
-    return await invoke('batch_delete_files', { files, permanently });
+    return await invoke('batch_delete_files', { libraryId:libConfig._libraryId, files, permanently });
   } catch (error) {
     console.error('batchDeleteFiles error:', error);
     throw error;
@@ -2092,3 +2092,15 @@ export async function getPersonThumbnail(personId) {
 export async function listAlbumSubfolders(path) {
   return invoke('list_album_subfolders', { path });
 }
+
+// Photo visibility and application-managed Recently Deleted. Always scope mutations to a library.
+export const getMediaOverview = libraryId => invoke('get_media_overview',{libraryId});
+export const getHiddenMedia = (libraryId,offset,limit) => invoke('get_hidden_media',{libraryId,offset,limit});
+export const getDeletedMedia = (libraryId,offset,limit) => invoke('get_deleted_media',{libraryId,offset,limit});
+export const setMediaHidden = (libraryId,fileIds,hidden) => invoke('set_media_hidden',{libraryId,fileIds,hidden});
+export const restoreDeletedMedia = (libraryId,groupIds) => invoke('restore_deleted_media',{libraryId,groupIds});
+export const purgeDeletedMedia = (libraryId,groupIds) => invoke('purge_deleted_media',{libraryId,groupIds});
+
+export const getPrivateMediaPreview = (libraryId,fileId) => invoke('get_private_media_preview',{libraryId,fileId});
+
+export const deleteHiddenMedia = (libraryId,fileIds) => invoke('delete_hidden_media',{libraryId,fileIds});

@@ -57,6 +57,7 @@
 
         <!-- file type options -->
         <DropDownSelect
+          v-if="!(config.main.sidebarIndex===SIDEBAR.LIBRARY && libConfig.library.item===LIB_ITEM.MEDIA)"
           :icon="IconFilter"
           :options="fileTypeOptions"
           :multiSelect="true"
@@ -582,6 +583,7 @@
     @resolve="resolveFileConflict"
   />
 
+  <MessageBox v-if="showHideMsgbox" :isLoading="hideBusy" :title="$t('media_lifecycle.hide')" :message="$t('media_lifecycle.hide_confirm')" :okText="$t('media_lifecycle.hide')" :cancelText="$t('msgbox.cancel')" @ok="confirmHide" @cancel="showHideMsgbox=false;pendingHide=null" />
   <!-- move to trash -->
   <MessageBox
     v-if="showTrashMsgbox"
@@ -796,6 +798,8 @@ import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFil
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
 import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, isSmartFolder } from '@/common/smartAlbums';
+import { setMediaHidden } from '@/common/api';
+import { mediaTypeRules } from '@/common/mediaLifecycle';
 import { useFileMenuItems } from '@/common/fileMenu';
 import { faceSelectionIds } from '@/common/faceUi';
 import { indexFaces } from '@/common/api';
@@ -2088,6 +2092,13 @@ const fileConflictDialog = ref({
   allowReplace: true,
 });
 let fileConflictResolver: ((result: { policy: FileConflictPolicy; applyAll: boolean }) => void) | null = null;
+const hideBusy=ref(false);const showHideMsgbox=ref(false);const pendingHide=ref<{libraryId:string;ids:number[]}|null>(null);
+async function confirmHide(){
+  const request=pendingHide.value;if(!request||hideBusy.value)return;hideBusy.value=true;
+  try{await setMediaHidden(request.libraryId,request.ids,true);}catch(error){if(request.libraryId===libConfig._libraryId)toast.error(String(error));}
+  finally{hideBusy.value=false;showHideMsgbox.value=false;pendingHide.value=null;}
+}
+watch(()=>libConfig._libraryId,()=>{showHideMsgbox.value=false;pendingHide.value=null;});
 const showTrashMsgbox = ref(false);
 const isTrashDeleting = ref(false);
 const showTrashFailedMsgbox = ref(false);
@@ -2358,7 +2369,7 @@ const openTrashMsgbox = (reclaimBytes = 0, groupKey = '', fileIds: number[] = []
   dedupReclaimBytes.value = Math.max(0, reclaimBytes);
   dedupTrashGroupKey.value = groupKey || '';
   dedupDeleteFileIds.value = Array.isArray(fileIds) ? [...new Set(fileIds)] : [];
-  deletePermanently.value = permanentDeleteChecked.value;
+  deletePermanently.value = false;
   showTrashMsgbox.value = true;
 };
 
@@ -3397,7 +3408,7 @@ watch(()=>uiStore.countUpdateTick,()=>{if(activeSmartAlbum.value)queueSmartRefre
 watch(()=>activeSmartAlbum.value?.name, name=>{if(name && tempViewMode.value==='none')contentTitle.value=name;});
 onMounted(async()=>{
   smartClock=setInterval(()=>{if(activeSmartAlbum.value&&hasTimeSmartRules(activeSmartAlbum.value.query?.rules||[]))queueSmartRefresh();},60000);
-  for(const name of ['semantic-index-changed','smart-album-index-progress','index_progress','index_finished','face-person-changed','face_index_finished','location-resolution-progress','map-location-changed']) {
+  for(const name of ['media-lifecycle-changed','files-deleted','semantic-index-changed','smart-album-index-progress','index_progress','index_finished','face-person-changed','face_index_finished','location-resolution-progress','map-location-changed']) {
     const stop=await listen(name,(event:any)=>{const library=event.payload?.libraryId||event.payload?.library_id;if(library&&library!==libConfig._libraryId)return;if(name==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;queueSmartRefresh();});
     if(smartEventsDisposed){stop();return;}smartEventStops.push(stop);
   }
@@ -3697,7 +3708,10 @@ const currentTitleIcon = computed(() => {
           case SIDEBAR.LIBRARY:
             switch (libConfig.library.item) {
               case LIB_ITEM.ALL: return IconFiles;
-              case LIB_ITEM.FAV: return IconHeartFilled;
+              case LIB_ITEM.MEDIA:
+              case LIB_ITEM.HIDDEN:
+              case LIB_ITEM.DELETED: return IconFiles;
+      case LIB_ITEM.FAV: return IconHeartFilled;
               case LIB_ITEM.RATINGS: return libConfig.rating.item > 0 || libConfig.rating.item === RATE.ALL ? IconStarFilled : IconStar;
               case LIB_ITEM.CULLING:
                 return libConfig.culling.item === CULLING.PICK
@@ -4353,6 +4367,7 @@ function handleItemAction(payload: { action: string, index: number }) {
   if (index >= 0) selectedItemIndex.value = index; // Panel actions have no thumbnail index.
   if (currentOriginalsUnavailable() && requiresOriginalAction(action)) return;
 
+  if(action==='hide-media'){const ids=selectMode.value?Array.from(selectedFileIds):[Number(fileList.value[selectedItemIndex.value]?.id)].filter(id=>id>0);if(ids.length){pendingHide.value={libraryId:libConfig._libraryId,ids};showHideMsgbox.value=true;}return;}
   if (action === 'regenerate-thumbnails') { void rebuildSelectedThumbnails(); return; }
 
   if (action.startsWith('rating-')) {
@@ -5940,6 +5955,14 @@ onMounted( async() => {
   });
 
   // listen for external refresh requests (e.g. from folder context menu)
+  const stopMedia=await listen('media-lifecycle-changed',(event:any)=>{
+    if(event.payload?.library_id!==libConfig._libraryId)return;
+    libConfig.clearLazySidebarCounts();
+    const blocked=new Set((event.payload?.file_ids||[]).map(Number));
+    libConfig.smartAlbums=(libConfig.smartAlbums||[]).map((a:any)=>blocked.has(Number(a.coverFileId))?{...a,coverFileId:null,count:null}:a);
+    if(config.main.sidebarIndex===SIDEBAR.LIBRARY && [LIB_ITEM.HIDDEN,LIB_ITEM.DELETED].includes(libConfig.library.item))return;
+    rememberFocusedFileForPresentationRefresh();void updateContent(true);
+  });smartEventStops.push(stopMedia);
   unlistenRefreshContent = await listen('refresh-content', () => {
     // A manual folder refresh must bypass the mtime-sync debounce; otherwise
     // revisiting an already selected folder only reloads stale DB rows.
@@ -7787,6 +7810,15 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
 
   if(newIndex === SIDEBAR.LIBRARY) {
     switch ((libConfig.library as any).item) {
+      case LIB_ITEM.MEDIA: {
+        const type=String(libConfig.library.smartId||'image');
+        contentTitle.value=t('media_lifecycle.title')+' > '+t('media_lifecycle.types.'+type);
+        getSmartFileList({query:{version:2,match:'all',rules:mediaTypeRules(type)},sort:{type:config.search.sortType,order:config.search.sortOrder},group:{type:config.search.groupBy}},requestId);
+        break;
+      }
+      case LIB_ITEM.HIDDEN:
+      case LIB_ITEM.DELETED:
+        showEmptyContent(requestId);break;
       case LIB_ITEM.FAV:
         contentTitle.value = localeMsg.value.favorite.files;
         getFileList({ isFavorite: true }, requestId);

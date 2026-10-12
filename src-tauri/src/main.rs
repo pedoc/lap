@@ -46,6 +46,7 @@ mod t_pasteboard;
 mod t_protocol;
 mod t_similar;
 mod t_smart_album;
+mod t_media_lifecycle;
 mod t_sqlite;
 mod t_thumbnail_rebuild;
 mod t_storage;
@@ -287,6 +288,14 @@ async fn main() {
             t_cmds::get_query_file_ids,
             t_cmds::get_library_visible_counts,
             t_cmds::get_query_file_position,
+            t_media_lifecycle::delete_hidden_media,
+            t_media_lifecycle::get_private_media_preview,
+            t_media_lifecycle::get_media_overview,
+            t_media_lifecycle::get_hidden_media,
+            t_media_lifecycle::get_deleted_media,
+            t_media_lifecycle::set_media_hidden,
+            t_media_lifecycle::restore_deleted_media,
+            t_media_lifecycle::purge_deleted_media,
             // smart album
             t_cmds::get_smart_album_status,
             t_cmds::start_smart_album_index,

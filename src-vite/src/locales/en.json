@@ -917,19 +917,19 @@
       "error": "Failed to rename file."
     },
     "move_to_trash": {
-      "title": "Move to trash",
-      "file_content": "The file '{file}' will be trashed.",
-      "files_content": "{count} selected files will be trashed.",
-      "removable_files_content": "All {count} removable files will be trashed.",
+      "title": "Move to Recently Deleted",
+      "file_content": "The file '{file}' will be Recently Deleteded.",
+      "files_content": "{count} selected files will be Recently Deleteded.",
+      "removable_files_content": "All {count} removable files will be Recently Deleteded.",
       "raw_jpeg_companions_content": "{count} RAW+JPEG companion file(s) will also be deleted.",
-      "folder_content": "The folder '{folder}' will be trashed.",
-      "ok": "Trash",
-      "file_success": "The file '{file}' has been trashed.",
-      "files_success": "{count} selected files have been trashed.",
-      "folder_success": "The folder '{folder}' has been trashed.",
-      "file_error": "Failed to move the file to trash.",
-      "files_error": "Failed to move selected files to trash.",
-      "folder_error": "Failed to move the folder to trash."
+      "folder_content": "The folder '{folder}' will be Recently Deleteded.",
+      "ok": "Recently Deleted",
+      "file_success": "The file '{file}' has been Recently Deleteded.",
+      "files_success": "{count} selected files have been Recently Deleteded.",
+      "folder_success": "The folder '{folder}' has been Recently Deleteded.",
+      "file_error": "Failed to move the file to Recently Deleted.",
+      "files_error": "Failed to move selected files to Recently Deleted.",
+      "folder_error": "Failed to move the folder to Recently Deleted."
     },
     "permanent_delete": {
       "title": "Delete permanently",
@@ -2126,6 +2126,45 @@
     "landscape": "Landscapes (AI)",
     "unreviewed": "Not reviewed",
     "anniversary": "On this day"
+  }
+},
+  "media_lifecycle": {
+    "partial_failed": "{count} operation(s) failed; see Recently Deleted for the retained recovery record.",
+    "move_deleted": "Move to Recently Deleted",
+    "move_confirm": "Move these hidden originals to Recently Deleted? Their hidden state and metadata are retained; restoring keeps them hidden.",
+  "title": "Media types",
+  "utilities": "Utilities",
+  "hidden": "Hidden",
+  "deleted": "Recently Deleted",
+  "hide": "Hide photo(s)",
+  "unhide": "Unhide",
+  "restore": "Restore selected",
+  "purge": "Permanently delete selected",
+  "select_page": "Select this page",
+  "empty": "No items",
+  "privacy_hint": "Hidden photos are excluded from normal browsing, search, maps and smart albums. This is not file encryption.",
+  "trash_hint": "Originals are retained in .lap-trash on their album disk, with catalog metadata. Nothing is automatically expired. Restore does not overwrite existing files.",
+  "hide_confirm": "Hide these photos from normal library views? Their originals and metadata are preserved; Hidden is not an encrypted vault.",
+  "purge_confirm": "Permanently delete the selected registered recovery files? This cannot be undone. Files outside the recovery area will not be deleted.",
+  "busy": "Processing…",
+  "retry": "Retry",
+  "error": "Operation failed: {error}",
+  "count": "{count} items",
+  "preview": "Preview",
+  "processing_warning": "An interrupted operation is recorded here. Try Restore; originals or recovery copies are kept.",
+  "types": {
+    "image": "Photos",
+    "video": "Videos",
+    "raw": "RAW",
+    "live": "Live / Motion Photos",
+    "raw_pair": "RAW + JPEG pairs",
+    "gif": "GIF images"
+  },
+  "status": {
+    "moving": "Move interrupted / pending",
+    "trashed": "Recoverable",
+    "restoring": "Restore interrupted / pending",
+    "purging": "Permanent deletion interrupted / pending"
   }
 }
 }

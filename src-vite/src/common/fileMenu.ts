@@ -128,6 +128,7 @@ export const useFileMenuItems = (
     const selectionCount = options?.selectionCount?.value ?? 0;
     const unavailable = options?.selectionHasUnavailable?.value === true;
     return [
+      {label:translate('media_lifecycle.hide'),disabled:selectionCount===0,action:createAction('hide-media')},
       ...smartAlbumMenu(),
       {
         label: String(localeMsg.value.menu.file.compare_selected_images || 'Compare selected images'),
@@ -184,6 +185,7 @@ export const useFileMenuItems = (
       || (f.file_type === 3 && f.media_subtype === 'raw_jpeg_pair' && f.live_photo_video_path);
     const unavailable = isOriginalUnavailable(f);
     const items: any[] = [
+      {label:translate('media_lifecycle.hide'),action:createAction('hide-media')},
       ...smartAlbumMenu(),
       {
         label: localeMsg.value.menu.file.view_in_new_window,

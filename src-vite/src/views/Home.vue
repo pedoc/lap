@@ -161,7 +161,8 @@
           <h2 class="text-lg font-medium">{{ $t('library.database_corrupted') }}</h2>
           <p class="text-sm text-base-content/60">{{ $t('library.database_corrupted_hint') }}</p>
         </div>
-        <Content v-else-if="databaseCorrupted === false" ref="contentRef" :key="libraryVersion" :titlebar="activeSidebarButton.text" :libraryEmpty="libraryEmpty"/>
+        <Content v-show="!showMediaUtilities" v-else-if="databaseCorrupted === false" ref="contentRef" :key="libraryVersion" :titlebar="activeSidebarButton.text" :libraryEmpty="libraryEmpty"/>
+        <MediaUtilityView v-if="databaseCorrupted===false && showMediaUtilities" :key="libraryVersion+'-'+libConfig.library.item" :mode="libConfig.library.item==='hidden-media'?'hidden':'deleted'" />
       </div>
     </div>
 
@@ -210,6 +211,7 @@ import Camera from '@/components/Camera.vue';
 
 import TitleBar from '@/components/TitleBar.vue';
 import TButton from '@/components/TButton.vue';
+import MediaUtilityView from '@/components/MediaUtilityView.vue';
 import Content from '@/components/Content.vue';
 import ContextMenu from '@/components/ContextMenu.vue';
 import CollectionTray from '@/components/CollectionTray.vue';
@@ -233,6 +235,7 @@ import {
 
 const isSwitchingLibrary = ref(false);
 const libraryVersion = ref(0);
+const showMediaUtilities=computed(()=>config.main.sidebarIndex===SIDEBAR.LIBRARY && libConfig.activePane!=='collection' && ['hidden-media','deleted-media'].includes(libConfig.library.item));
 const libraryEmpty = ref(false);
 // Mount library components only after the startup corruption check has completed.
 const databaseCorrupted = ref<boolean | null>(null);
@@ -399,7 +402,7 @@ const leftPanelWidth = computed(() =>
 
 const visibleButtons = computed(() =>
   buttons.value
-    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.ALBUM }))
+    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY }))
     .filter(item => !item.hidden)
     .sort((a, b) => a.index - b.index)
 );
@@ -626,7 +629,7 @@ function clickSidebar(index: number) {
   // silently mutate the persisted sidebarIndex and dead-end in a blank pane.
   if (databaseCorrupted.value) return;
   activateMainPanel();
-  if (libraryEmpty.value && index !== SIDEBAR.ALBUM) return;
+  if (libraryEmpty.value && index !== SIDEBAR.ALBUM && index !== SIDEBAR.LIBRARY) return;
   if (config.main.sidebarIndex === index) {
     showPanel.value = !showPanel.value;
   } else {

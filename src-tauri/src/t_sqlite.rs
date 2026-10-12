@@ -1116,12 +1116,13 @@ impl AFolder {
             .collect::<HashSet<_>>();
         let missing_paths = Self::get_paths_by_album_id(album_id)?
             .into_iter()
-            .filter(|path| !seen_paths.contains(path.as_str()) && !album.excludes_path(Path::new(path)))
+            .filter(|path| !seen_paths.contains(path.as_str()) && !Path::new(path).exists() && !album.excludes_path(Path::new(path)))
             .collect::<Vec<_>>();
         let missing_paths = missing_folder_roots(missing_paths);
 
         let mut deleted_count = 0;
         for path in missing_paths {
+            if crate::t_media_lifecycle::folder_has_private(&*open_conn()?,&path)? {continue;}
             deleted_count += Self::delete_folder(&path)?;
         }
 
@@ -1142,6 +1143,7 @@ impl AFolder {
             .filter(|path| {
                 Path::new(path).parent() == Some(Path::new(parent_path))
                     && !seen_paths.contains(path)
+                    && !Path::new(path).exists()
                     && !album.excludes_path(Path::new(path))
             })
             .collect::<Vec<_>>();
@@ -1149,6 +1151,7 @@ impl AFolder {
         let folders = Self::get_all()?;
         let mut deleted_count = 0;
         for path in missing_children {
+            if crate::t_media_lifecycle::folder_has_private(&*open_conn()?,&path)? {continue;}
             let descendant_prefix = format!("{}{}", path, std::path::MAIN_SEPARATOR);
             for folder in folders.iter().filter(|folder| {
                 folder.album_id == album_id
@@ -1162,6 +1165,7 @@ impl AFolder {
                     }
                 }
             }
+            if crate::t_media_lifecycle::folder_has_private(&*open_conn()?,&path)? {continue;}
             deleted_count += Self::delete_folder(&path)?;
         }
         Ok(deleted_count)
@@ -1286,6 +1290,7 @@ impl AFolder {
 
     /// delete a folder and all its child folders and files from db
     pub fn delete_folder(folder_path: &str) -> Result<usize, String> {
+        if crate::t_media_lifecycle::folder_has_deleted(&*open_conn()?,folder_path)? {return Err("Restore or clear Recently Deleted before removing this folder".into());}
         let mut conn = open_conn()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
@@ -3612,8 +3617,8 @@ impl AFile {
         file_path: &str,
     ) -> Result<Option<Self>, String> {
         let sql = format!(
-            "{} WHERE a.folder_id = ?1 AND a.name = ?2",
-            Self::build_base_query()
+            "{} WHERE a.folder_id = ?1 AND a.name = ?2 AND {}",
+            Self::build_base_query(), crate::t_media_lifecycle::retained_predicate("a")
         );
         conn.query_row(
             &sql,
@@ -3649,8 +3654,8 @@ impl AFile {
 
     /// The scan and all query surfaces share the same exclusion rules. Retained
     /// excluded rows are protected from sweep so restoring a rule restores metadata.
-    fn album_scan_predicate(alias: &str) -> String {
-        Self::album_query_predicate(alias)
+    pub(crate) fn album_scan_predicate(alias: &str) -> String {
+        format!("({} AND {})", Self::album_access_predicate(alias), crate::t_media_lifecycle::retained_predicate(alias))
     }
 
     fn album_media_predicate(file: &str, album: &str) -> String {
@@ -3670,7 +3675,8 @@ impl AFile {
 
     // Reuse the base query's existing joins for output visibility.
     fn album_joined_filter_predicate(file: &str, folder: &str, album: &str) -> String {
-        format!("({album}.id IS NOT NULL AND {} AND NOT ({}))",
+        format!("({album}.id IS NOT NULL AND {} AND {} AND NOT ({}))",
+            crate::t_media_lifecycle::normal_predicate(file),
             Self::album_media_predicate(file, album),
             Self::album_folder_excluded_predicate(folder, album))
     }
@@ -3682,7 +3688,10 @@ impl AFile {
             Self::album_joined_filter_predicate(alias, "scope_folder", "scope_album"))
     }
 
-    fn album_query_predicate(alias: &str) -> String {
+    pub(crate) fn album_query_predicate(alias: &str) -> String {
+        format!("({} AND {})",Self::album_access_predicate(alias),crate::t_media_lifecycle::normal_predicate(alias))
+    }
+    fn album_access_predicate(alias: &str) -> String {
         // Materialize excluded folder IDs once per bulk query, not per file.
         format!("(EXISTS (SELECT 1 FROM afolders scope_folder JOIN albums scope_album
             ON scope_album.id = scope_folder.album_id WHERE scope_folder.id = {alias}.folder_id AND {})
@@ -3729,6 +3738,11 @@ impl AFile {
         folder_id: i64, file_path: &str, file_type: i64, last_scan_time: i64,
         raw_info: Option<t_libraw::RawInfo>,
     ) -> Result<(Self, i32), String> {
+        if crate::t_media_lifecycle::is_recovery_path(Path::new(file_path)){return Err("Files in the managed recovery area cannot be imported; restore them in Recently Deleted".into());}
+        if crate::t_media_lifecycle::path_reserved(&*open_conn()?,folder_id,&t_utils::get_file_name(file_path))? {
+            return Err("This original path belongs to an interrupted recovery operation; restore it in Recently Deleted first".into());
+        }
+
         // Check if the file exists
         let existing_file = Self::fetch(folder_id, file_path)?;
         if let Some(mut file) = existing_file {
@@ -3849,7 +3863,9 @@ impl AFile {
         Ok(result)
     }
 
-    pub fn get_files_by_ids(file_ids: &[i64]) -> Result<Vec<Self>, String> {
+    pub fn get_files_by_ids(file_ids: &[i64]) -> Result<Vec<Self>, String> { Self::files_by_ids(file_ids,false) }
+    pub(crate) fn get_files_by_ids_including_private(file_ids: &[i64]) -> Result<Vec<Self>, String> { Self::files_by_ids(file_ids,true) }
+    fn files_by_ids(file_ids: &[i64],include_private:bool) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
         let valid_ids = file_ids
             .iter()
@@ -3863,9 +3879,10 @@ impl AFile {
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
-                "{} WHERE a.id IN ({})",
+                "{} WHERE a.id IN ({}) AND {}",
                 Self::build_base_query(),
                 placeholders,
+                if include_private {"1".to_string()} else {crate::t_media_lifecycle::normal_predicate("a")},
             );
             let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
             let rows = stmt
@@ -4498,7 +4515,7 @@ impl AFile {
         let Some(video_id) = file.live_photo_video_id.filter(|id| *id > 0) else {
             return Ok(Vec::new());
         };
-        Self::get_files_by_ids(&[video_id])
+        Self::get_files_by_ids_including_private(&[video_id])
     }
 
     pub fn pair_raw_jpeg_in_folder(folder_id: i64) -> Result<usize, String> {
@@ -4525,6 +4542,7 @@ impl AFile {
         }
         let mut updates = Vec::new();
         for file in &files {
+            if !file.album_visible {continue;}
             if !t_common::RAW_IMGS.iter().any(|raw| raw.eq_ignore_ascii_case(&ext(&file.name))) { continue; }
             let (Some(id), Some(file_stem)) = (file.id, stem(&file.name)) else { continue; };
             let candidates = companions.get(&file_stem).cloned().unwrap_or_default();
@@ -4580,7 +4598,7 @@ impl AFile {
         let query = format!("DELETE FROM afiles AS a
             WHERE last_scan_time < ?1
             AND folder_id IN (SELECT id FROM afolders WHERE album_id = ?2)
-            AND {}", Self::album_scan_predicate("a"));
+            AND {} AND {}", Self::album_scan_predicate("a"),crate::t_media_lifecycle::normal_predicate("a"));
         let result = tx
             .execute(&query, params![current_scan_time, album_id])
             .map_err(|e| e.to_string())?;
@@ -6532,6 +6550,7 @@ impl AFile {
         // 1. Fetch file info to get path
         let file_opt = Self::get_file_info(file_id).map_err(|e| e.to_string())?;
         let file = file_opt.ok_or("File not found")?;
+        if !file.album_visible{return Err("Hidden, deleted or excluded photos cannot be sent to AI inference".into());}
 
         // 2. Check if it's an image
         // file_type: 1 is image, 3 is HEIC
@@ -6602,7 +6621,7 @@ impl AFile {
         let conn = open_conn()?;
         let embeds_blob: Vec<u8> = conn
             .query_row(
-                "SELECT embeds FROM afiles WHERE id = ?1 AND embeds IS NOT NULL",
+                "SELECT embeds FROM afiles WHERE id=?1 AND embeds IS NOT NULL AND NOT EXISTS(SELECT 1 FROM media_states ms WHERE ms.file_id=afiles.id AND (ms.hidden=1 OR ms.deleted_at IS NOT NULL))",
                 params![file_id],
                 |row| row.get(0),
             )
@@ -7341,9 +7360,9 @@ impl AThumb {
             if let Some(key) = thumb.thumb_key.as_ref() {
                 if let Some(file) = AFile::get_file_info(thumb.file_id)? {
                     if let Some(album_id) = file.album_id {
-                        let extension = file
-                            .file_path
-                            .as_deref()
+                        let recorded_name:Option<String>=open_conn()?.query_row("SELECT original_name FROM media_states WHERE file_id=?1",[thumb.file_id],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
+                        let extension = recorded_name.as_deref().or(file
+                            .file_path.as_deref())
                             .is_some_and(t_image::should_use_png_thumbnail)
                             .then_some("png")
                             .unwrap_or("jpg");
@@ -8658,7 +8677,7 @@ impl Person {
         // 1. Determine which face to use
         let get_best_face = || -> Result<i64, rusqlite::Error> {
             conn.query_row(
-                "SELECT id FROM faces WHERE person_id = ?1 ORDER BY (json_extract(bbox, '$.width') * json_extract(bbox, '$.height')) DESC LIMIT 1",
+                &format!("SELECT faces.id FROM faces JOIN afiles a ON a.id=faces.file_id WHERE person_id=?1 AND {} ORDER BY (json_extract(bbox, '$.width') * json_extract(bbox, '$.height')) DESC LIMIT 1",crate::t_media_lifecycle::normal_predicate("a")),
                 params![person_id],
                 |row| row.get(0),
             )
@@ -8668,7 +8687,7 @@ impl Person {
             // Validate that cover_face_id actually belongs to this person
             let is_valid: bool = conn
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM faces WHERE id = ?1 AND person_id = ?2)",
+                    &format!("SELECT EXISTS(SELECT 1 FROM faces JOIN afiles a ON a.id=faces.file_id WHERE faces.id=?1 AND person_id=?2 AND {})",crate::t_media_lifecycle::normal_predicate("a")),
                     params![fid, person_id],
                     |row| row.get(0),
                 )
@@ -8892,7 +8911,7 @@ mod person_visibility_tests {
     use super::*;
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,thumbnail BLOB,hidden INTEGER); CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,visible INTEGER); CREATE TABLE afolders(id INTEGER PRIMARY KEY); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER); INSERT INTO persons VALUES(1,'Alice',NULL,0),(2,'Bob',NULL,1),(3,'No visible media',NULL,0); INSERT INTO afolders VALUES(1); INSERT INTO afiles VALUES(1,1,1),(2,1,1),(3,1,0); INSERT INTO faces VALUES(1,1,1),(2,1,1),(3,2,2),(4,3,3);").unwrap();
+        conn.execute_batch("CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,thumbnail BLOB,hidden INTEGER); CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,visible INTEGER); CREATE TABLE afolders(id INTEGER PRIMARY KEY); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER); INSERT INTO persons VALUES(1,'Alice',NULL,0),(2,'Bob',NULL,1),(3,'No visible media',NULL,0); INSERT INTO afolders VALUES(1); INSERT INTO afiles VALUES(1,1,1),(2,1,1),(3,1,0); INSERT INTO faces VALUES(1,1,1),(2,1,1),(3,2,2),(4,3,3);").unwrap();
         conn
     }
     fn request(hidden: bool) -> PersonPageRequest {
@@ -9088,7 +9107,7 @@ impl Face {
     pub fn get_all_for_clustering() -> Result<Vec<(i64, i64, Option<Vec<u8>>, Option<i64>)>, String> {
         let conn = open_conn()?;
         let mut stmt = conn
-            .prepare("SELECT f.id,f.file_id,f.embedding,f.person_id FROM faces f JOIN afiles a ON a.id=f.file_id LEFT JOIN face_annotations n ON n.id=f.annotation_id WHERE n.id IS NULL OR (n.kind='confirmed' AND n.source_modified_at IS a.modified_at AND n.source_size=a.size)")
+            .prepare(&format!("SELECT f.id,f.file_id,f.embedding,f.person_id FROM faces f JOIN afiles a ON a.id=f.file_id LEFT JOIN face_annotations n ON n.id=f.annotation_id WHERE (n.id IS NULL OR (n.kind='confirmed' AND n.source_modified_at IS a.modified_at AND n.source_size=a.size)) AND {}",crate::t_media_lifecycle::normal_predicate("a")))
             .map_err(|e| e.to_string())?;
 
         let faces = stmt
@@ -9826,6 +9845,8 @@ fn create_db_internal() -> Result<(), String> {
 
     crate::t_map::address_store::cleanup_placeholder_addresses(&conn)?;
 
+    crate::t_media_lifecycle::setup(&conn)?;
+
     // file thumbnail table
     // NOTE: New columns (thumb_key, thumb_mtime, thumb_size, updated_at) are added
     // by migration v3. They are included here so that fresh databases get the full
@@ -10083,7 +10104,7 @@ mod tag_group_query_tests {
             INSERT INTO albums VALUES(1, '/', 7, NULL, '[]');
             CREATE TABLE afolders(id INTEGER PRIMARY KEY, album_id INTEGER, path TEXT, is_excluded_from_search INTEGER);
             INSERT INTO afolders VALUES(1, 1, '/visible', 0), (2, 1, '/excluded', 1);
-            CREATE TABLE afiles(id INTEGER PRIMARY KEY, folder_id INTEGER, live_photo_video_id INTEGER, width INTEGER, height INTEGER);
+            CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY, folder_id INTEGER, live_photo_video_id INTEGER, width INTEGER, height INTEGER);
             INSERT INTO afiles VALUES(1,1,NULL,1000,1000), (2,1,NULL,100,100), (3,1,NULL,1000,1000), (4,2,NULL,1000,1000), (5,1,3,1000,1000), (6,1,NULL,1000,1000);
             ALTER TABLE afiles ADD COLUMN file_type INTEGER DEFAULT 1;
             CREATE TABLE atags(id INTEGER PRIMARY KEY, group_id INTEGER);
@@ -10122,7 +10143,7 @@ mod album_filter_tests {
             INSERT INTO afolders VALUES(1,1,'/photos'),(2,1,'/photos/Exports/nested'),(3,1,'/photos/Exports-old'),
                 (4,1,'/photos/Other/Exports'),(5,1,'/photos/100%_done'),(6,1,'/photos/100XXdone'),
                 (7,1,'/photos/客户/深层'),(8,2,'/other');
-            CREATE TABLE afiles(id INTEGER PRIMARY KEY, folder_id INTEGER, file_type INTEGER,
+            CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY, folder_id INTEGER, file_type INTEGER,
                 width INTEGER, height INTEGER, live_photo_video_id INTEGER, last_scan_time INTEGER DEFAULT 0, rating INTEGER DEFAULT 5);
             INSERT INTO afiles(id,folder_id,file_type,width,height,live_photo_video_id) VALUES
                 (1,1,1,159,159,NULL),(2,1,1,160,100,NULL),(3,1,1,100,160,NULL),(4,1,1,NULL,100,NULL),
@@ -10408,7 +10429,7 @@ mod raw_display_cache_tests {
 #[cfg(test)] mod ai_detection_commit_tests {
     use super::*;
     #[test] fn stale_face_results_are_not_written_to_changed_images() {
-        let c=Connection::open_in_memory().unwrap();c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,has_faces INTEGER,modified_at INTEGER,size INTEGER); CREATE TABLE faces(id INTEGER,file_id INTEGER,bbox TEXT,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,0,20,100);").unwrap();
+        let c=Connection::open_in_memory().unwrap();c.execute_batch("CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,has_faces INTEGER,modified_at INTEGER,size INTEGER); CREATE TABLE faces(id INTEGER,file_id INTEGER,bbox TEXT,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,0,20,100);").unwrap();
         let records=vec![("bbox".into(),vec![1.,2.])];
         assert!(Face::save_scanned_with_conn(&c,1,&records,Some((Some(10),100))).is_err());
         assert_eq!(c.query_row("SELECT has_faces FROM afiles",[],|r|r.get::<_,i64>(0)).unwrap(),0);
@@ -10418,7 +10439,7 @@ mod raw_display_cache_tests {
 
     #[test] fn face_results_and_scan_state_commit_together() {
         let c=Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,has_faces INTEGER,name TEXT); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,bbox TEXT UNIQUE,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,0,'original.jpg');").unwrap();
+        c.execute_batch("CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,has_faces INTEGER,name TEXT); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,bbox TEXT UNIQUE,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,0,'original.jpg');").unwrap();
         let duplicate=vec![("same".to_string(),vec![1.,2.]),("same".to_string(),vec![1.,2.])];
         assert!(Face::save_scanned_with_conn(&c,1,&duplicate,None).is_err());
         assert_eq!(c.query_row("SELECT count(*) FROM faces",[],|r|r.get::<_,i64>(0)).unwrap(),0);

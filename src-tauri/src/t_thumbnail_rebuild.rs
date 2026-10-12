@@ -258,7 +258,7 @@ mod tests {
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         let sep = std::path::MAIN_SEPARATOR;
-        c.execute_batch("CREATE TABLE afolders(id INTEGER PRIMARY KEY,album_id INTEGER,path TEXT);CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER);INSERT INTO afiles VALUES(1,1,1),(2,2,3),(3,3,1),(4,4,1),(5,1,2);").unwrap();
+        c.execute_batch("CREATE TABLE afolders(id INTEGER PRIMARY KEY,album_id INTEGER,path TEXT);CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER);INSERT INTO afiles VALUES(1,1,1),(2,2,3),(3,3,1),(4,4,1),(5,1,2);").unwrap();
         for (id, album, path) in [
             (1, 1, format!("photos{sep}target")),
             (2, 1, format!("photos{sep}target{sep}child")),

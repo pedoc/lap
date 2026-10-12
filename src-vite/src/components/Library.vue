@@ -26,6 +26,10 @@
       </div>
       </template>
 
+      <div class="sidebar-item sidebar-item-hover" @click="mediaExpanded=!mediaExpanded"><IconRight class="w-6 h-6 p-1" :class="mediaExpanded?'rotate-90':''" /><span class="sidebar-item-label">{{ $t('media_lifecycle.title') }}</span></div>
+      <div v-if="mediaExpanded"><div v-for="type in MEDIA_TYPES" :key="type" class="sidebar-item pl-8" :class="libConfig.library.item===LIB_ITEM.MEDIA && libConfig.library.smartId===type?'sidebar-item-selected':'sidebar-item-hover'" @click="selectMedia(type)"><span class="sidebar-item-label">{{ $t('media_lifecycle.types.'+type) }}</span><span class="sidebar-item-count">{{ mediaCounts.media[type] ?? '—' }}</span></div></div>
+      <div class="sidebar-item text-xs text-base-content/40">{{ $t('media_lifecycle.utilities') }}</div>
+      <div v-for="item in [{id:LIB_ITEM.HIDDEN,label:'hidden',count:mediaCounts.hidden},{id:LIB_ITEM.DELETED,label:'deleted',count:mediaCounts.deleted}]" :key="item.id" class="sidebar-item" :class="libConfig.library.item===item.id?'sidebar-item-selected':'sidebar-item-hover'" @click="selectItem(item.id)"><span class="sidebar-item-label">{{ $t('media_lifecycle.'+item.label) }}</span><span class="sidebar-item-count">{{ item.count }}</span></div>
       <div class="sidebar-item sidebar-item-hover" @click="toggleRatings">
         <IconRight
           :class="[
@@ -175,7 +179,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
@@ -184,8 +188,17 @@ import { CULLING, LIB_ITEM, RATE, SIDEBAR, type LibItem } from '@/common/constan
 
 import { IconFiles, IconHeartFilled, IconRight, IconBolt, IconFlag, IconFlagFilled, IconFlagOff, IconStar, IconStarFilled, IconHistory } from '@/common/icons';
 import { SMART_TAG_CATEGORIES } from '@/common/smartTags';
-import { getLibraryVisibleCounts } from '@/common/api';
+import { MEDIA_TYPES } from '@/common/mediaLifecycle';
+import { listen } from '@tauri-apps/api/event';
+import { getMediaOverview, getLibraryVisibleCounts } from '@/common/api';
 
+const mediaCounts=ref<any>({media:{},hidden:0,deleted:0});const mediaExpanded=ref(true);let mediaRequest=0;let mediaDisposed=false;const mediaStops:(()=>void)[]=[];
+async function refreshMedia(){const token=++mediaRequest;const library=libConfig._libraryId;try{const next=await getMediaOverview(library);if(!mediaDisposed&&token===mediaRequest&&library===libConfig._libraryId)mediaCounts.value=next;}catch(error){console.error('Media counts:',error);}}
+function selectMedia(type:string){libConfig.library.item=LIB_ITEM.MEDIA;libConfig.library.smartId=type;libConfig.library.activateTick=Number(libConfig.library.activateTick||0)+1;}
+onMounted(async()=>{void refreshMedia();for(const name of ['media-lifecycle-changed','files-deleted','index_finished']){const stop=await listen(name,()=>{void refreshMedia();void refreshLibraryCounts();});if(mediaDisposed){stop();return;}mediaStops.push(stop);}});
+onBeforeUnmount(()=>{mediaDisposed=true;mediaRequest++;mediaStops.forEach(stop=>stop());});
+watch(()=>libConfig._libraryId,()=>{mediaCounts.value={media:{},hidden:0,deleted:0};void refreshMedia();});
+watch(()=>useUIStore().countUpdateTick,()=>{void refreshMedia();});
 const props = defineProps({
   titlebar: {
     type: String,

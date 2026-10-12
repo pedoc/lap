@@ -15,6 +15,9 @@ export type Sidebar = (typeof SIDEBAR)[keyof typeof SIDEBAR];
 
 // library panel item enum
 export const LIB_ITEM = {
+  MEDIA: 'media-types',
+  HIDDEN: 'hidden-media',
+  DELETED: 'deleted-media',
   ALL: 'all-files',
   FAV: 'favorites',
   TODAY: 'on-this-day',

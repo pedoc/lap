@@ -299,7 +299,7 @@ mod tests {
     use super::*;
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE afiles(id INTEGER PRIMARY KEY,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER,has_faces INTEGER); CREATE TABLE persons(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,created_at INTEGER,cover_face_id INTEGER,thumbnail BLOB); CREATE TABLE faces(id INTEGER PRIMARY KEY AUTOINCREMENT,file_id INTEGER,person_id INTEGER,bbox TEXT,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,100,100,10,100,1),(2,100,100,10,100,1); INSERT INTO persons VALUES(1,'Alice',0,11,X'01'),(2,'Bob',0,12,X'02'),(3,'Untouched',0,NULL,NULL);").unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER,has_faces INTEGER); CREATE TABLE persons(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,created_at INTEGER,cover_face_id INTEGER,thumbnail BLOB); CREATE TABLE faces(id INTEGER PRIMARY KEY AUTOINCREMENT,file_id INTEGER,person_id INTEGER,bbox TEXT,embedding BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,100,100,10,100,1),(2,100,100,10,100,1); INSERT INTO persons VALUES(1,'Alice',0,11,X'01'),(2,'Bob',0,12,X'02'),(3,'Untouched',0,NULL,NULL);").unwrap();
         c.execute(
             "ALTER TABLE afiles ADD COLUMN name TEXT NOT NULL DEFAULT 'test.jpg'",
             [],

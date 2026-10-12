@@ -917,19 +917,19 @@
       "error": "重命名文件失败。"
     },
     "move_to_trash": {
-      "title": "移到废纸篓",
-      "file_content": "文件 '{file}' 将被移到废纸篓。",
-      "files_content": "{count} 个选择的文件将被移到废纸篓。",
-      "removable_files_content": "全部 {count} 个可删除文件将被移到废纸篓。",
+      "title": "移到最近删除",
+      "file_content": "文件 '{file}' 将被移到最近删除。",
+      "files_content": "{count} 个选择的文件将被移到最近删除。",
+      "removable_files_content": "全部 {count} 个可删除文件将被移到最近删除。",
       "raw_jpeg_companions_content": "还将删除 {count} 个 RAW+JPEG 配对文件。",
-      "folder_content": "文件夹 '{folder}' 将被移到废纸篓。",
-      "ok": "移到废纸篓",
-      "file_success": "文件 '{file}' 已移到废纸篓。",
-      "files_success": "{count} 个选择的文件已移到废纸篓。",
-      "folder_success": "文件夹 '{folder}' 已移到废纸篓。",
-      "file_error": "将文件移到废纸篓失败。",
-      "files_error": "将所选文件移到废纸篓失败。",
-      "folder_error": "将文件夹移到废纸篓失败。"
+      "folder_content": "文件夹 '{folder}' 将被移到最近删除。",
+      "ok": "移到最近删除",
+      "file_success": "文件 '{file}' 已移到最近删除。",
+      "files_success": "{count} 个选择的文件已移到最近删除。",
+      "folder_success": "文件夹 '{folder}' 已移到最近删除。",
+      "file_error": "将文件移到最近删除失败。",
+      "files_error": "将所选文件移到最近删除失败。",
+      "folder_error": "将文件夹移到最近删除失败。"
     },
     "permanent_delete": {
       "title": "永久删除",
@@ -2126,6 +2126,45 @@
     "landscape": "风景（AI）",
     "unreviewed": "尚未筛选",
     "anniversary": "往年今日"
+  }
+},
+  "media_lifecycle": {
+    "partial_failed": "有 {count} 项操作未完成，请在“最近删除”查看保留的恢复记录。",
+    "move_deleted": "移入最近删除",
+    "move_confirm": "将这些隐藏的原文件移入最近删除？隐藏状态和元数据会保留，恢复后仍为隐藏状态。",
+  "title": "媒体类型",
+  "utilities": "实用工具",
+  "hidden": "已隐藏",
+  "deleted": "最近删除",
+  "hide": "隐藏照片",
+  "unhide": "取消隐藏",
+  "restore": "恢复所选",
+  "purge": "永久删除所选",
+  "select_page": "选择本页",
+  "empty": "暂无项目",
+  "privacy_hint": "隐藏照片不会出现在普通浏览、搜索、地图和智能相册中；这不是文件加密，原文件仍可在资源管理器访问。",
+  "trash_hint": "原文件保存在原图库磁盘的 .lap-trash 回收区，同时保留图库元数据。不会自动过期清理；恢复不会覆盖已有文件。",
+  "hide_confirm": "将这些照片从普通图库视图隐藏？原文件和元数据会保留。“已隐藏”不是加密保险箱。",
+  "purge_confirm": "永久删除所选项目在软件回收区中登记的文件？此操作不可撤销，不会删除回收区之外的文件。",
+  "busy": "正在处理…",
+  "retry": "重试",
+  "error": "操作失败：{error}",
+  "count": "{count} 项",
+  "preview": "预览",
+  "processing_warning": "这里保留了中断的操作记录。可尝试恢复；原文件或回收副本会保留。",
+  "types": {
+    "image": "照片",
+    "video": "视频",
+    "raw": "RAW",
+    "live": "实况／动态照片",
+    "raw_pair": "RAW＋JPEG 配对",
+    "gif": "GIF 图片"
+  },
+  "status": {
+    "moving": "移入中断／待完成",
+    "trashed": "可恢复",
+    "restoring": "恢复中断／待完成",
+    "purging": "永久删除中断／待完成"
   }
 }
 }

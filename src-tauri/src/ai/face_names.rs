@@ -246,7 +246,7 @@ mod tests {
     use super::*;
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER); INSERT INTO afiles VALUES(1,100,100,10,100),(2,100,100,10,100); CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,created_at INTEGER,cover_face_id INTEGER,thumbnail BLOB); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER,bbox TEXT); INSERT INTO persons VALUES(7,'Alice',0,11,X'0102'),(8,'Bob',0,13,NULL); INSERT INTO faces VALUES(11,1,7,'box'),(12,2,7,'box'),(13,2,8,'box'),(14,1,NULL,'box');").unwrap();
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER); INSERT INTO afiles VALUES(1,100,100,10,100),(2,100,100,10,100); CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,created_at INTEGER,cover_face_id INTEGER,thumbnail BLOB); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER,bbox TEXT); INSERT INTO persons VALUES(7,'Alice',0,11,X'0102'),(8,'Bob',0,13,NULL); INSERT INTO faces VALUES(11,1,7,'box'),(12,2,7,'box'),(13,2,8,'box'),(14,1,NULL,'box');").unwrap();
         let bbox=serde_json::json!({"x":10,"y":10,"width":20,"height":20,"confidence":1,"landmarks":null}).to_string();
         conn.execute("UPDATE faces SET bbox=?1", [bbox]).unwrap();
         conn

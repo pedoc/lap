@@ -258,7 +258,7 @@ mod tests {
     use super::*;
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE afolders(id INTEGER PRIMARY KEY); INSERT INTO afolders VALUES(1); CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,geo_name TEXT,geo_admin1 TEXT,geo_admin2 TEXT,geo_cc TEXT,live_photo_video_id INTEGER); INSERT INTO afiles VALUES(1,1,10,100,30,110,'','','','',NULL),(2,1,10,100,30,110,'','','','',NULL);").unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE afolders(id INTEGER PRIMARY KEY); INSERT INTO afolders VALUES(1); CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,geo_name TEXT,geo_admin1 TEXT,geo_admin2 TEXT,geo_cc TEXT,live_photo_video_id INTEGER); INSERT INTO afiles VALUES(1,1,10,100,30,110,'','','','',NULL),(2,1,10,100,30,110,'','','','',NULL);").unwrap();
         setup(&c).unwrap();
         c
     }

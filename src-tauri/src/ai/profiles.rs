@@ -58,7 +58,7 @@ mod tests {
     use super::*;
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,embeds BLOB,has_faces INTEGER,name TEXT,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,bbox TEXT,embedding BLOB,person_id INTEGER,created_at INTEGER); CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,cover_face_id INTEGER,thumbnail BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,X'01020304',1,'original.jpg',100,100,10,100); INSERT INTO faces VALUES(1,1,NULL,NULL,1,0); INSERT INTO persons VALUES(1,NULL,NULL,NULL,0);").unwrap();
+        c.execute_batch("CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,embeds BLOB,has_faces INTEGER,name TEXT,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER); CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,bbox TEXT,embedding BLOB,person_id INTEGER,created_at INTEGER); CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,cover_face_id INTEGER,thumbnail BLOB,created_at INTEGER); INSERT INTO afiles VALUES(1,X'01020304',1,'original.jpg',100,100,10,100); INSERT INTO faces VALUES(1,1,NULL,NULL,1,0); INSERT INTO persons VALUES(1,NULL,NULL,NULL,0);").unwrap();
         c
     }
     #[test]
@@ -165,7 +165,7 @@ pub fn store_vector(
         .collect::<Vec<_>>();
     let changed = conn
         .execute(
-            "UPDATE afiles SET embeds=?1 WHERE id=?2 AND modified_at IS ?3 AND size=?4",
+            "UPDATE afiles SET embeds=?1 WHERE id=?2 AND modified_at IS ?3 AND size=?4 AND NOT EXISTS(SELECT 1 FROM media_states ms WHERE ms.file_id=afiles.id AND (ms.hidden=1 OR ms.deleted_at IS NOT NULL))",
             params![bytes, file_id, source.0, source.1],
         )
         .map_err(|e| e.to_string())?;

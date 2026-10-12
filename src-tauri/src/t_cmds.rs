@@ -413,6 +413,10 @@ pub fn edit_library(id: &str, name: &str) -> Result<(), String> {
 pub async fn remove_library(id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = FILE_REFRESH_LIBRARY_LOCK.write().map_err(|e| e.to_string())?;
+        let path=crate::t_storage::get_library_db_path(&id)?;
+        if Path::new(&path).exists(){let conn=rusqlite::Connection::open_with_flags(&path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e|e.to_string())?;
+            let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='media_trash_groups')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+            if exists && conn.query_row("SELECT COUNT(*) FROM media_trash_groups",[],|r|r.get::<_,i64>(0)).map_err(|e|e.to_string())?>0 {return Err("Restore or clear Recently Deleted before removing this library".into());}}
         t_config::remove_library(&id)
     }).await.map_err(|e| e.to_string())?
 }
@@ -623,6 +627,7 @@ pub async fn list_album_subfolders(path: String) -> Result<Vec<String>, String> 
 /// remove an album
 #[tauri::command]
 pub async fn remove_album(state: State<'_, IndexCancellation>, id: i64) -> Result<usize, String> {
+    if crate::t_media_lifecycle::has_deleted_in_album(&*crate::t_sqlite::open_conn()?,id)? {return Err("Restore or clear Recently Deleted before removing this album".into());}
     let _removal_guard = t_utils::AlbumRemovalGuard::acquire(id);
     state.0.lock().unwrap().insert(id, true);
     t_utils::wait_for_album_scan_end(id).await?;
@@ -845,6 +850,8 @@ pub fn move_folder(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? || crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,new_folder_path)? {return Err("Restore or clear Recently Deleted before transferring this folder".into());}
+
     let old_album_id = AFolder::fetch(folder_path)?.map(|folder| folder.album_id);
     let moved_thumb_keys = if old_album_id.is_some_and(|album_id| album_id != new_album_id) {
         AThumb::get_thumb_keys_in_subtree(folder_path)?
@@ -885,6 +892,8 @@ pub fn move_folder_outside_library(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? || crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,new_folder_path)? {return Err("Restore or clear Recently Deleted before transferring this folder".into());}
+
     let transfer = t_utils::move_folder_with_policy(
         folder_path,
         new_folder_path,
@@ -913,6 +922,8 @@ pub fn copy_folder(
     new_album_id: i64,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? || crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,new_folder_path)? {return Err("Restore or clear Recently Deleted before transferring this folder".into());}
+
     let transfer = t_utils::copy_folder_with_policy(
         folder_path,
         new_folder_path,
@@ -942,6 +953,7 @@ pub fn copy_folder(
 /// delete a folder (move to trash)
 #[tauri::command]
 pub fn delete_folder(folder_path: &str) -> Result<usize, String> {
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? {return Err("Restore or clear Recently Deleted before deleting this folder".into());}
     // trash the folder
     if t_utils::trash_path(folder_path).is_err() {
         return Ok(0);
@@ -955,6 +967,7 @@ pub fn delete_folder(folder_path: &str) -> Result<usize, String> {
 /// permanently delete a folder (skip trash)
 #[tauri::command]
 pub fn delete_folder_permanently(folder_path: &str) -> Result<usize, String> {
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? {return Err("Restore or clear Recently Deleted before deleting this folder".into());}
     t_utils::delete_folder_permanently(folder_path)?;
 
     AFolder::delete_folder(folder_path)
@@ -2381,17 +2394,19 @@ pub async fn import_clipboard(
 
 /// delete a file
 #[tauri::command]
-pub fn delete_file(file_id: i64, file_path: &str) -> Result<BatchDeleteResult, String> {
-    delete_file_group(file_id, file_path, false)
+pub async fn delete_file(library_id:String,file_id:i64,file_path:String)->Result<BatchDeleteResult,String>{
+    tauri::async_runtime::spawn_blocking(move||crate::t_media_lifecycle::move_to_recently_deleted(vec![BatchDeleteFile{file_id,file_path}],Some(&library_id),false)).await.map_err(|e|e.to_string())?
 }
 
-/// delete a file permanently
+/// Delete an active original permanently, only after explicit frontend confirmation.
 #[tauri::command]
-pub fn delete_file_permanently(
-    file_id: i64,
-    file_path: &str,
-) -> Result<BatchDeleteResult, String> {
-    delete_file_group(file_id, file_path, true)
+pub async fn delete_file_permanently(library_id:String,file_id:i64,file_path:String)->Result<BatchDeleteResult,String>{
+    tauri::async_runtime::spawn_blocking(move||{
+        let _library=FILE_REFRESH_LIBRARY_LOCK.write().map_err(|e|e.to_string())?;
+        if t_config::current_library_id()?!=library_id{return Err("Library changed; deletion stopped".into());}
+        crate::t_media_lifecycle::validate_original(file_id,&file_path,false)?;
+        delete_file_group(file_id,&file_path,true)
+    }).await.map_err(|e|e.to_string())?
 }
 
 fn delete_file_group(
@@ -2399,6 +2414,8 @@ fn delete_file_group(
     file_path: &str,
     permanently: bool,
 ) -> Result<BatchDeleteResult, String> {
+    if !permanently {return crate::t_media_lifecycle::move_to_recently_deleted(vec![BatchDeleteFile{file_id,file_path:file_path.into()}],None,false);}
+
     let component_files = AFile::live_photo_component_files(file_id)?;
     let mut deleted_file_ids = Vec::with_capacity(component_files.len() + 1);
     let mut delete_errors = Vec::new();
@@ -2483,10 +2500,16 @@ pub struct BatchDeleteResult {
 
 #[tauri::command]
 pub async fn batch_delete_files(
+    library_id:String,
     files: Vec<BatchDeleteFile>,
     permanently: bool,
 ) -> Result<BatchDeleteResult, String> {
-    tauri::async_runtime::spawn_blocking(move || delete_files_grouped(files, permanently))
+    tauri::async_runtime::spawn_blocking(move || {
+        if !permanently{return crate::t_media_lifecycle::move_to_recently_deleted(files,Some(&library_id),false);}
+        let _library=FILE_REFRESH_LIBRARY_LOCK.write().map_err(|e|e.to_string())?;
+        if t_config::current_library_id()?!=library_id{return Err("Library changed; deletion stopped".into());}
+        delete_files_grouped(files, true)
+    })
         .await
         .map_err(|e| format!("Failed to run batch delete: {}", e))?
 }
@@ -2497,6 +2520,8 @@ pub(crate) fn delete_files_grouped(
     files: Vec<BatchDeleteFile>,
     permanently: bool,
 ) -> Result<BatchDeleteResult, String> {
+    if !permanently {return crate::t_media_lifecycle::move_to_recently_deleted(files,None,false);}
+
     struct DeleteGroup {
         primary_id: i64,
         primary_path: String,
@@ -2506,6 +2531,7 @@ pub(crate) fn delete_files_grouped(
 
     // Preflight the entire selection before changing disk or catalog entries.
     for file in &files {
+        crate::t_media_lifecycle::validate_original(file.file_id,&file.file_path,false)?;
         if !t_utils::file_accessible(&file.file_path) {
             return Err(format!("original_unavailable: {}", file.file_path));
         }

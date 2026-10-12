@@ -256,7 +256,7 @@ mod tests {
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE afolders(id INTEGER,album_id INTEGER,path TEXT,is_excluded_from_search INTEGER);
-            CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,live_photo_video_id INTEGER,geo_cc TEXT,geo_admin1 TEXT,geo_name TEXT,geo_admin2 TEXT);
+            CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,live_photo_video_id INTEGER,geo_cc TEXT,geo_admin1 TEXT,geo_name TEXT,geo_admin2 TEXT);
             INSERT INTO afolders VALUES(1,1,'visible',0),(2,1,'hidden',1);
             INSERT INTO afiles VALUES(1,1,1,10,100,39,116,NULL,'CN','Beijing','Chaowai',''),(2,1,1,10,100,31,121,NULL,'CN','Shanghai','Xinzhuang',''),
             (3,1,1,10,100,NULL,NULL,NULL,'','','',''),(4,1,1,10,100,999,116,NULL,'','','',''),(5,2,1,10,100,39,116,NULL,'CN','Beijing','Chaowai','');").unwrap();

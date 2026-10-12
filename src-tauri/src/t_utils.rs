@@ -490,7 +490,7 @@ pub fn is_hidden(entry: &walkdir::DirEntry) -> bool {
 /// `Hidden | System` attributes — is still traversed. Hidden filtering applies
 /// only below the root.
 pub fn is_visible_or_root(entry: &walkdir::DirEntry) -> bool {
-    entry.depth() == 0 || !is_hidden(entry)
+    !crate::t_media_lifecycle::is_recovery_path(entry.path()) && (entry.depth() == 0 || !is_hidden(entry))
 }
 
 /// Hidden-file check for `std::fs::DirEntry` (used by fs::read_dir callers).

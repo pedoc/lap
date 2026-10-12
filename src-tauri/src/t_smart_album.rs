@@ -423,7 +423,7 @@ mod tests {
           INSERT INTO albums VALUES(1,'/photos',7,0,'[]');
           CREATE TABLE afolders(id INTEGER PRIMARY KEY,album_id INTEGER,path TEXT,is_excluded_from_search INTEGER);
           INSERT INTO afolders VALUES(1,1,'/photos',0),(2,1,'/photos/private',1);
-          CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,width INTEGER,height INTEGER,live_photo_video_id INTEGER,media_subtype TEXT,modified_at INTEGER,size INTEGER,embeds BLOB,rating INTEGER,name TEXT,taken_date INTEGER);
+          CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,width INTEGER,height INTEGER,live_photo_video_id INTEGER,media_subtype TEXT,modified_at INTEGER,size INTEGER,embeds BLOB,rating INTEGER,name TEXT,taken_date INTEGER);
           INSERT INTO afiles VALUES(1,1,1,100,100,NULL,NULL,10,100,NULL,4,'mountain',NULL),
             (2,1,1,100,100,NULL,NULL,10,100,NULL,1,'pet',NULL),
             (3,1,1,100,100,NULL,NULL,10,100,NULL,5,'unindexed',NULL),

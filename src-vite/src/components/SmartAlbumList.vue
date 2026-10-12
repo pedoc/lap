@@ -577,6 +577,8 @@ onMounted(async () => {
       scheduleCounts();
   }, 60000);
   for (const eventName of [
+    "media-lifecycle-changed",
+    "files-deleted",
     "semantic-index-changed",
     "album-updated",
     "index_finished",
@@ -593,6 +595,7 @@ onMounted(async () => {
       if (library && library !== libConfig._libraryId) return;
       if(eventName==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;
       if(eventName==='album-updated'&&!event.payload?.filtersChanged)return;
+      if(eventName==='files-deleted'){const ids=new Set((event.payload?.fileIds||[]).map(Number));libConfig.smartAlbums=nodes.value.map(n=>ids.has(Number(n.coverFileId))?{...n,coverFileId:null}:n);}
       scheduleCounts();
     });
     if (disposed) {

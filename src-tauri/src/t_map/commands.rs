@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn address_updates_preserve_original_gps_media_and_reject_stale_metadata() {
         let c = rusqlite::Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,geo_name TEXT,geo_admin1 TEXT,geo_admin2 TEXT,geo_cc TEXT,name TEXT); INSERT INTO afiles VALUES(1,10,100,39.908823,116.397470,'Old','','','CN','original.jpg');").unwrap();
+        c.execute_batch("CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,geo_name TEXT,geo_admin1 TEXT,geo_admin2 TEXT,geo_cc TEXT,name TEXT); INSERT INTO afiles VALUES(1,10,100,39.908823,116.397470,'Old','','','CN','original.jpg');").unwrap();
         super::super::address_store::setup(&c).unwrap();
         let location = geo::Location {
             provider: "amap".into(),
