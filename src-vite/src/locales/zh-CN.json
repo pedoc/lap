@@ -1711,6 +1711,7 @@
     "network": {
       "title": "网络",
       "proxy_title": "网络代理",
+      "proxy_dns_hint": "socks5:// 使用本机 DNS（优先 IPv4）；socks5h:// 由代理解析域名。Google 代理测试通过，不代表每个地图服务接口都能连通。",
       "proxy_hint": "为应用的网络请求启用代理，包括资源下载和在线功能。支持 http、https、socks5 协议。",
       "proxy_enabled": "启用代理",
       "save_proxy": "应用",
@@ -1989,6 +1990,7 @@
     "tile_provider": "地图显示服务",
     "geocoder": "地点解析服务",
     "service_scope": "地图显示与地点解析可独立选择。高德、腾讯显示使用官方 SDK，照片 GPS 仍保存为 WGS84。",
+    "existing_locations_hint": "切换地图显示不会更新已保存的地点名称。地点解析是独立服务，使用 Web 服务 Key，而不是地图 JS Key。已有照片可在“地点”面板批量重新解析；导入时解析仅影响后续导入。",
     "console": "申请密钥 / 控制台",
     "custom_hint": "URL 必须包含 {z}、{x}、{y}，可使用 {s}、{token}。署名是纯文本。自建服务请遵守版权及缓存条款。",
     "web_key_hint": "需要 Web 服务 / REST API Key，不是 JavaScript SDK Key。腾讯启用签名校验时还需填写 SK。",
@@ -2023,5 +2025,22 @@
     },
     "sdk_hint": "SDK 显示使用 JavaScript Key；高德另需 securityJsCode。Web 服务 Key 仅用于地点解析。请为本应用配置域名白名单。SDK 的浏览器代理在启动时应用，修改软件代理后须重启；浏览器代理仅支持无认证 HTTP / SOCKS5，本机旧 macOS 构建请使用系统代理。",
     "sdk_loading": "SDK 地图加载中…"
+  },
+  "location_batch": {
+    "title": "批量重新解析地点",
+    "provider": "地点解析服务：{provider}",
+    "alias_hint": "中文名称显示不需要联网重新解析。此任务用于更新图库里保存的地点信息。",
+    "scope": "处理范围",
+    "library_scope": "当前图库中所有有有效 GPS 的照片",
+    "region_scope": "当前选中的地点：{name}",
+    "safe_hint": "仅更新图库数据库中的地点字段，不修改原文件、EXIF 或 GPS。跳过排除搜索的文件夹。",
+    "consent": "我同意将所选照片的 GPS 坐标发送到此在线服务；请求可能消耗 API 配额。",
+    "start": "开始解析",
+    "stop": "停止",
+    "stopping": "正在停止…",
+    "close": "关闭",
+    "progress": "已处理 {completed}/{total} · 成功 {succeeded} · 失败 {failed}",
+    "finished": "解析完成。没有有效 GPS 的照片未处理。",
+    "cancelled": "任务已停止，已完成的结果保留，剩余照片不变。正在执行的网络请求最多需要 15 秒结束。"
   }
 }

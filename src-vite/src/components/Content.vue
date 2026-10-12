@@ -802,6 +802,7 @@ import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialo
 import { thumbnailSelectionScope } from '@/common/thumbnailRebuild';
 const thumbnailRebuildRequest = ref<any>(null);
 import { fileInfoRevision } from '@/common/fileInfoRefresh';
+import { displayLocationFilterLabel } from '@/common/locationNames';
 import IndexRecoveryDialog from '@/components/IndexRecoveryDialog.vue';
 import MoveTo from '@/components/MoveTo.vue';
 import TButton from '@/components/TButton.vue';
@@ -880,6 +881,12 @@ const localeMsg = computed(() => messages.value[locale.value] as any);
 const uiStore = useUIStore();
 
 const contentTitle = ref("");
+// Change only display labels when the UI language changes; keep query keys and photos intact.
+watch(locale, () => {
+  if (config.main.sidebarIndex === SIDEBAR.LOCATION && libConfig.location.admin1) {
+    contentTitle.value = displayLocationFilterLabel(libConfig.location, locale.value);
+  }
+});
 
 const titleSegments = computed(() => {
   if (!contentTitle.value) return [];
@@ -7999,10 +8006,10 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
       showEmptyContent(requestId);
     } else {
       if(libConfig.location.name) {
-        contentTitle.value = `${libConfig.location.admin1} > ${libConfig.location.name}`;
+        contentTitle.value = displayLocationFilterLabel(libConfig.location, locale.value);
         getFileList({ locationAdmin1: libConfig.location.admin1, locationName: libConfig.location.name }, requestId);
       } else {
-        contentTitle.value = `${libConfig.location.admin1}`;
+        contentTitle.value = displayLocationFilterLabel(libConfig.location, locale.value);
         getFileList({ locationAdmin1: libConfig.location.admin1 }, requestId);
       } 
     }

@@ -136,6 +136,7 @@
               {{ $t('settings.network.proxy_enabled') }}
             </label>
             <input v-model="networkProxyUrl" class="input input-bordered input-sm w-full" :disabled="!proxyEnabled" placeholder="http://127.0.0.1:7890" />
+            <p class="text-xs text-base-content/50">{{ $t('settings.network.proxy_dns_hint') }}</p>
             <div class="flex justify-end gap-2">
               <button class="btn btn-outline btn-sm" :disabled="!proxyEnabled || !networkProxyUrl.trim() || isTestingProxy" @click="testNetworkProxyNow">
                 {{ isTestingProxy ? $t('settings.network.testing_proxy') : $t('settings.network.test_proxy') }}

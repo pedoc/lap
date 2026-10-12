@@ -63,7 +63,7 @@ pub async fn resolve_photo_location(
     }).await.map_err(|_|"Address resolution task failed")?
 }
 #[allow(clippy::too_many_arguments)]
-fn update_location(
+pub(super) fn update_location(
     conn: &rusqlite::Connection,
     file_id: i64,
     modified_at: Option<i64>,
@@ -117,4 +117,21 @@ mod tests {
             (39.908823, 116.397470, "original.jpg".into(), "New".into())
         );
     }
+}
+
+#[tauri::command]
+pub async fn resolve_library_locations(
+    app_handle: AppHandle,
+    request: super::batch::Request,
+) -> Result<super::batch::Progress, String> {
+    tauri::async_runtime::spawn_blocking(move || super::batch::run(request, app_handle))
+        .await
+        .map_err(|_| "Location resolution worker failed".to_string())?
+}
+#[tauri::command]
+pub async fn cancel_location_resolution(library_id: String, job_id: String) -> Result<(), String> {
+    // Stop may briefly wait for an in-progress SQLite commit. Never block the WebView thread.
+    tauri::async_runtime::spawn_blocking(move || super::batch::cancel(&library_id, &job_id))
+        .await
+        .map_err(|_| "Location cancellation worker failed".to_string())?
 }

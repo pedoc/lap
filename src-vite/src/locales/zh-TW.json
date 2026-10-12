@@ -1711,6 +1711,7 @@
     "network": {
       "title": "網路",
       "proxy_title": "網路代理",
+      "proxy_dns_hint": "socks5:// 使用本機 DNS（優先 IPv4）；socks5h:// 由代理解析網域。Google 代理測試通過，不代表每個地圖服務介面都能連線。",
       "proxy_hint": "為應用程式的網路請求啟用代理，包括資源下載與線上功能。支援 http、https、socks5 協定。",
       "proxy_enabled": "啟用代理",
       "save_proxy": "套用",
@@ -1989,6 +1990,7 @@
     "tile_provider": "地圖顯示服務",
     "geocoder": "地點解析服務",
     "service_scope": "地圖顯示與地點解析可獨立選擇。高德、騰訊顯示使用官方 SDK，照片 GPS 仍儲存為 WGS84。",
+    "existing_locations_hint": "切換地圖顯示不會更新已儲存的地點名稱。地點解析是獨立服務，使用 Web 服務 Key，而非地圖 JS Key。既有照片可在「地點」面板批次重新解析；匯入時解析僅影響後續匯入。",
     "console": "申請金鑰 / 控制台",
     "custom_hint": "URL 必須包含 {z}、{x}、{y}，可使用 {s}、{token}。署名為純文字。自建服務請遵守版權及快取條款。",
     "web_key_hint": "需要 Web 服務 / REST API Key，不是 JavaScript SDK Key。騰訊啟用簽名校驗時還需填寫 SK。",
@@ -2023,5 +2025,22 @@
     },
     "sdk_hint": "SDK 顯示使用 JavaScript Key；高德另需 securityJsCode。Web 服務 Key 僅用於地點解析。請為本應用設定網域白名單。SDK 瀏覽器代理在啟動時套用，修改軟體代理後須重新啟動；僅支援無認證 HTTP / SOCKS5，舊 macOS 建置請使用系統代理。",
     "sdk_loading": "SDK 地圖載入中…"
+  },
+  "location_batch": {
+    "title": "批次重新解析地點",
+    "provider": "地點解析服務：{provider}",
+    "alias_hint": "中文名稱顯示不需要聯網重新解析。此工作用於更新圖庫中儲存的地點資訊。",
+    "scope": "處理範圍",
+    "library_scope": "目前圖庫中所有具有有效 GPS 的照片",
+    "region_scope": "目前選取的地點：{name}",
+    "safe_hint": "僅更新圖庫資料庫中的地點欄位，不修改原始檔案、EXIF 或 GPS。略過排除搜尋的資料夾。",
+    "consent": "我同意將所選照片的 GPS 座標傳送到此線上服務；請求可能消耗 API 配額。",
+    "start": "開始解析",
+    "stop": "停止",
+    "stopping": "正在停止…",
+    "close": "關閉",
+    "progress": "已處理 {completed}/{total} · 成功 {succeeded} · 失敗 {failed}",
+    "finished": "解析完成。沒有有效 GPS 的照片未處理。",
+    "cancelled": "工作已停止，保留已完成的結果，其餘照片不變。正在執行的網路請求最多需要 15 秒結束。"
   }
 }

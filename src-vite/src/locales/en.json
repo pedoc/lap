@@ -1711,6 +1711,7 @@
     "network": {
       "title": "Network",
       "proxy_title": "Network proxy",
+      "proxy_dns_hint": "socks5:// uses local DNS (IPv4 preferred); socks5h:// resolves hostnames through the proxy. A successful Google proxy test does not guarantee connectivity to every map provider.",
       "proxy_hint": "Use this proxy for Lap HTTP requests and application updates. Supported URL schemes: http, https, socks5.",
       "proxy_enabled": "Enable proxy",
       "save_proxy": "Apply",
@@ -1989,6 +1990,7 @@
     "tile_provider": "Map display service",
     "geocoder": "Location service",
     "service_scope": "Choose display and location services independently. AMap/Tencent display uses official SDKs; photo GPS stays WGS84.",
+    "existing_locations_hint": "Changing map display does not change saved place names. The geocoder is independent and uses a Web service Key, not a JS Key. Re-resolve existing photos from the Locations panel; import-time resolution only affects subsequent imports.",
     "console": "API keys / Console",
     "custom_hint": "URLs require {z}, {x}, {y}; optional {s} and {token} are supported. Attribution is plain text. Follow your provider’s copyright and caching terms.",
     "web_key_hint": "Use a Web Service / REST API key, not a JavaScript SDK key. Tencent also needs the SK if signature checking is enabled.",
@@ -2023,5 +2025,22 @@
     },
     "sdk_hint": "Display requires a JavaScript Key, plus securityJsCode for AMap. Web Service keys are for geocoding only. Authorize this application’s domains. Browser proxy changes require an app restart. Only unauthenticated HTTP/SOCKS5 proxies are supported; older macOS builds should use the system proxy.",
     "sdk_loading": "Loading SDK map…"
+  },
+  "location_batch": {
+    "title": "Resolve locations in bulk",
+    "provider": "Location service: {provider}",
+    "alias_hint": "Chinese display names do not require online resolution. Use this task to update stored location metadata.",
+    "scope": "Scope",
+    "library_scope": "All photos with valid GPS in this library",
+    "region_scope": "Selected location: {name}",
+    "safe_hint": "Only derived location fields in the library database are updated. Original media, EXIF and GPS are unchanged. Hidden/excluded folders are skipped.",
+    "consent": "I agree to send the selected photos’ GPS coordinates to this online service; requests may consume API quota.",
+    "start": "Start resolving",
+    "stop": "Stop",
+    "stopping": "Stopping…",
+    "close": "Close",
+    "progress": "Processed {completed}/{total} · Succeeded {succeeded} · Failed {failed}",
+    "finished": "Resolution finished. Photos without valid GPS were not processed.",
+    "cancelled": "Stopped. Completed results are retained; remaining photos are unchanged. An in-flight request may take up to 15 seconds to stop."
   }
 }

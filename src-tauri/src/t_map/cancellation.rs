@@ -19,6 +19,9 @@ pub struct Ticket {
     signal: Arc<Signal>,
 }
 impl Ticket {
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.signal.cancelled.load(Ordering::Acquire)
+    }
     pub async fn cancelled(&self) {
         if self.signal.cancelled.load(Ordering::Acquire) {
             return;

@@ -78,3 +78,36 @@ const path = convertPathCoordinates([gcj, gcj], 'GCJ02', 'WGS84')
 - `thumbnail_ready` 会跳过分页空槽／占位行；异步元数据返回后再次检查图库和页面请求，避免更新已切换的内容。处理失败有明确日志，不再形成未处理的 Promise 异常。
 - 缩略图协议缓存缺失时在后台工作线程等待现有生成流程，按 URL 请求的尺寸生成，不先报 404 再生成 200px 图片；并发受现有四任务信号量约束，图库锁覆盖读取和缓存写入，不改动原图。
 - 缺失文件／无可用缓存返回 404；无法解码返回 422；图库已切换返回 409；实际读取或工作线程异常返回 500。错误响应带文件 ID 和诊断原因且不缓存。Pinia store 安装与浏览器懒加载提示是开发／浏览器信息，不属于这些错误。
+
+## 地点中文名称与已有图库
+
+- 左侧地点列表、地点筛选标题和照片信息的名称由 `locationNames.js` 提供显示层本地化。中文界面优先使用 GeoNames 中文别名；无可靠别名、同名歧义或其他语言界面保留原名称。不尝试从拼音猜汉字。
+- `location-aliases-zh.json` 当前覆盖中国大陆 8,296 个旧地点键及 46 个行政区名称／别名；不是全球地点的完整中文翻译。数据库中的 `geo_name`／`geo_admin1` 不因显示语言改变，已有图库无需重建、联网或迁移即可使用别名。名称与计数一起排序；搜索同时匹配原名称及中文名称。
+- “地点”面板标题右侧的刷新按钮打开**批量重新解析地点**。默认选择当前选中的地点，也可明确选择当前图库全部有有效 GPS 的照片；没有地点选择时不会隐式扩大一个地点任务。排除搜索的文件夹与 Live Photo／RAW 配对的附属文件不重复处理。
+- 地图显示与地点解析独立。切换底图或解析服务不会自动重写已有地点；导入时在线解析只影响后续导入。在线解析使用 Web 服务 Key，不使用地图 JS Key。
+- 批量任务必须主动启动；在线服务另需确认坐标发送及 API 配额。任务固定图库、服务配置版本与地点范围，串行请求（最多约 4 次／秒），沿用全局代理。只有数据库地点列被更新，原媒体、EXIF、GPS 和人脸结果保持不变。
+- 每个成功结果立即保存，进度事件按图库／任务隔离。停止、切换图库或服务后丢弃未完成响应；网络请求上限为 15 秒。元数据或 GPS 发生变化时保留旧地点并报告错误。连续五项失败会提前停止本次任务以避免持续消耗配额；完成／停止后刷新地点列表，不逐张刷新整个页面。
+
+### 离线中文别名数据的来源与更新
+
+中文别名派生自 [GeoNames](https://www.geonames.org/) 的 `CN.zip`、`alternatenames/CN.zip` 和 `admin1CodesASCII.txt`，依据 GeoNames ID、原名称和经纬度关联旧 `cities.csv`。只采用明确标记为 `zh`／`zh-CN`／`zh-Hans` 且非历史的名称，保留区域作用域和同名歧义检查。
+
+GeoNames 数据许可为 [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/)。本项目对其筛选、关联并生成显示别名表；源数据版权与署名归 GeoNames。输出记录输入文件 SHA-256，原始大文件只缓存于忽略的 `src-tauri/target/geonames`，不随软件发布。
+
+```powershell
+python scripts/build-location-aliases.py --cache src-tauri/target/geonames
+node --experimental-strip-types --test src-vite/tests/locationNames.test.ts src-vite/tests/locationBatch.test.ts
+```
+
+脚本不修改 `cities.csv` 或用户数据库。更新后检查覆盖数量、歧义及回归测试；精确复现时使用输出记录的相同输入文件，而不是不同日期的 GeoNames 每日转储。
+
+## SOCKS5 地点解析连接诊断
+
+- 代理对 Google 可用，不代表对高德 REST 接口也可用。`socks5://` 由本机解析 DNS；当前 reqwest 的 SOCKS 本机解析连接只尝试首个目标地址，代理的 IPv6 路径异常时可能出现 `unexpected EOF during handshake`。
+- `t_network.rs` 对显式 SOCKS5 本机 DNS 的同步／异步客户端使用 IPv4 优先排序，保留全部解析地址与 IPv6-only 目标支持；不改写代理 URL、不静默改用代理 DNS 或直连，也不关闭 TLS 证书校验。`socks5h://` 仍由代理解析，HTTP 代理和本地 API 的直连规则不变。
+- 地点解析错误包含服务主机及底层 DNS／代理／TLS 错误链。请求 URL、API Key、签名、代理凭据与 URL 中的坐标先脱敏再显示；普通回归测试只使用固定假 DNS 和本机 SOCKS 服务，不调用用户账户。
+- 手工诊断可先对不带 Key 的 REST 接口探测：返回 HTTP 200＋`INVALID_USER_KEY` 只证明传输连通，不证明实际 Key 有效。验证真实 Key 必须明确使用固定测试坐标且不更新图库，不自动重跑整个图库。
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml t_network::tests
+```

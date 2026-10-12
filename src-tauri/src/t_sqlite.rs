@@ -2211,7 +2211,7 @@ impl AFile {
 
     /// Exclude files whose folder path is the excluded folder itself or one of its children.
     /// The caller must pass the alias for the file's joined afolders row.
-    fn search_exclusion_condition(folder_alias: &str) -> String {
+    pub(crate) fn search_exclusion_condition(folder_alias: &str) -> String {
         let sep = std::path::MAIN_SEPARATOR.to_string().replace('\'', "''");
         format!(
             "(CASE

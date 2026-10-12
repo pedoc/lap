@@ -5,6 +5,7 @@
       <span class="sidebar-panel-header-title flex-1">
         {{ titlebar }}<template v-if="placeCount > 0"> ({{ placeCount.toLocaleString() }})</template>
       </span>
+      <button type="button" class="btn btn-ghost btn-xs" :title="$t('location_batch.title')" @click="showLocationResolution = true"><IconRefresh class="w-4 h-4" /></button>
       <SortMenuButton v-model="config.settings.locationSort" kind="category" />
     </div>
 
@@ -49,7 +50,7 @@
           <div
             :class="[
               'sidebar-item',
-              libConfig.location.admin1 === location.admin1 && !libConfig.location.name ? 'sidebar-item-selected' : 'sidebar-item-hover',
+              (libConfig.location.cc || '') === location.cc && libConfig.location.admin1 === location.admin1 && !libConfig.location.name ? 'sidebar-item-selected' : 'sidebar-item-hover',
             ]"
             @click="clickLocationAdmin1(location)"
           >
@@ -60,7 +61,7 @@
               ]"
               @click.stop="clickExpandLocation(location)"
             />
-            <span class="sidebar-item-label">{{ location.admin1 + (location.cc ? ', ' + getCountryName(location.cc, locale) : '') }}</span>
+            <span class="sidebar-item-label">{{ location.displayAdmin1 + (location.cc ? ', ' + getCountryName(location.cc, locale) : '') }}</span>
             <span class="sidebar-item-count">{{ location.counts.reduce((a: number, b: number) => a + b, 0).toLocaleString() }}</span>
           </div>
           <ul v-if="(location.is_expanded || hasSearch) && location.names.length > 0">
@@ -68,12 +69,12 @@
               <div
                 :class="[
                   'sidebar-item sidebar-item-compact ml-2',
-                  libConfig.location.name === name ? 'sidebar-item-selected' : 'sidebar-item-hover',
+                  (libConfig.location.cc || '') === location.cc && libConfig.location.admin1 === location.admin1 && libConfig.location.name === name ? 'sidebar-item-selected' : 'sidebar-item-hover',
                 ]"
                 @click="clickLocationName(location, name)"
               >
                 <IconLocation class="mx-1 w-4 h-4 shrink-0" />
-                <span class="sidebar-item-label">{{ name }}</span>
+                <span class="sidebar-item-label">{{ location.displayNames[index] }}</span>
                 <span class="sidebar-item-count">{{ location.counts[index].toLocaleString() }}</span>
               </div>
             </li>
@@ -88,6 +89,7 @@
     </div>
   </div>
 
+  <LocationResolutionDialog v-if="showLocationResolution" :selection="{...libConfig.location}" @cancel="showLocationResolution = false" @resolved="getLocations()" />
 </template>
 
 
@@ -99,8 +101,10 @@ import { config, libConfig } from '@/common/config';
 import { getLocationInfo } from '@/common/api';
 import { SIDEBAR } from '@/common/constants';
 import { getCountryName } from '@/common/utils';
-import { IconLocation, IconRight, IconSearch, IconClose } from '@/common/icons';
+import { IconLocation, IconRight, IconSearch, IconClose, IconRefresh } from '@/common/icons';
 import SortMenuButton from './SortMenuButton.vue';
+import LocationResolutionDialog from './LocationResolutionDialog.vue';
+import { localizedLocationGroups, filterLocationGroups } from '@/common/locationNames';
 
 const props = defineProps({
   titlebar: {
@@ -115,6 +119,7 @@ const localeMsg = computed(() => messages.value[locale.value] as any);
 const locations = ref<any[]>([]);
 const isLoadingLocations = ref(true);
 const search = ref('');
+const showLocationResolution = ref(false);
 const searchInputRef = ref<HTMLInputElement | null>(null);
 const isSearchFocused = ref(false);
 let isLocationMounted = true;
@@ -125,30 +130,14 @@ onUnmounted(() => {
   locationRequestVersion++;
 });
 
-// Backend returns locations already ordered by locationSort. Search mirrors the
-// Tags behavior: a region/country (first-level) match keeps all its places;
+// Sort localized labels without changing the stored filter keys. Search mirrors
+// the Tags behavior: a region/country (first-level) match keeps all its places;
 // otherwise keep the region with only the matching places (and parallel counts).
-const sortedLocations = computed(() => {
-  const q = search.value.trim().toLowerCase();
-  if (!q) return locations.value;
-  const out: any[] = [];
-  for (const loc of locations.value) {
-    const admin1 = String(loc.admin1 || '').toLowerCase();
-    const country = String(getCountryName(loc.cc, locale.value) || '').toLowerCase();
-    if (admin1.includes(q) || country.includes(q)) {
-      out.push(loc);
-      continue;
-    }
-    const names = Array.isArray(loc.names) ? loc.names : [];
-    const counts = Array.isArray(loc.counts) ? loc.counts : [];
-    const keep: number[] = [];
-    names.forEach((n: string, i: number) => { if (String(n).toLowerCase().includes(q)) keep.push(i); });
-    if (keep.length > 0) {
-      out.push({ ...loc, names: keep.map((i) => names[i]), counts: keep.map((i) => counts[i]) });
-    }
-  }
-  return out;
-});
+const displayLocations = computed(() => localizedLocationGroups(locations.value, locale.value, config.settings.locationSort));
+const sortedLocations = computed(() => filterLocationGroups(
+  displayLocations.value,
+  search.value, cc => getCountryName(cc, locale.value),
+));
 const hasSearch = computed(() => !!search.value.trim());
 
 // Header counts the second level (individual places), not the top-level regions.
@@ -214,9 +203,14 @@ function restoreLocationSelection() {
   }
 }
 
+// Rendered/search groups are copies. Expansion must update the reactive stored group.
+function storedLocation(location: any) {
+  return locations.value.find(item => item.cc === location.cc && item.admin1 === location.admin1);
+}
 /// click location icon to expand or collapse names
 function clickExpandLocation(location: any) {
-  location.is_expanded = !location.is_expanded; 
+  const stored = storedLocation(location);
+  if (stored) stored.is_expanded = !stored.is_expanded;
 };
 
 /// click a location to select it
@@ -225,7 +219,8 @@ function clickLocationAdmin1(location: any) {
   (libConfig.location as any).admin1 = location.admin1;
   (libConfig.location as any).name = null;
 
-  location.is_expanded = true;
+  const stored = storedLocation(location);
+  if (stored) stored.is_expanded = true;
 }
 
 /// click a location to select it
@@ -244,9 +239,10 @@ async function getLocations(preserveFilter = false) {
     const fetchedLocations = await getLocationInfo(config.settings.locationSort);
     if (!isLocationMounted || requestVersion !== locationRequestVersion || libraryId !== libConfig._libraryId) return false;
     if (fetchedLocations) {
+      const expanded = new Set(locations.value.filter(item => item.is_expanded).map(item => JSON.stringify([item.cc, item.admin1])));
       locations.value = fetchedLocations.map((location: any) => ({
         ...location,
-        is_expanded: false,
+        is_expanded: expanded.has(JSON.stringify([location.cc, location.admin1])),
       }));
       if (!preserveFilter) restoreLocationSelection();
     }

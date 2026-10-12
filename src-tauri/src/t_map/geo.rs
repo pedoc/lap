@@ -256,7 +256,7 @@ pub fn resolve(settings: &Settings, lat: f64, lon: f64) -> Result<Location, Stri
     let url = request_url(settings, lat, lon)?;
     let client = crate::t_network::blocking_client(15, url.as_str())?;
     let mut builder = client
-        .get(url)
+        .get(url.clone())
         .header(reqwest::header::USER_AGENT, "Lap/0.3 desktop geocoder");
     let cfg = settings.provider(&settings.geocoder)?;
     if !cfg.referer.is_empty() {
@@ -264,9 +264,10 @@ pub fn resolve(settings: &Settings, lat: f64, lon: f64) -> Result<Location, Stri
     }
     let mut response = builder.send().map_err(|e| {
         format!(
-            "{} geocoding request failed: {}",
+            "{} geocoding request failed (host={}): {}",
             settings.geocoder,
-            e.without_url()
+            url.host_str().unwrap_or("unknown"),
+            crate::t_network::request_error(e, url.as_str())
         )
     })?;
     if !response.status().is_success() {

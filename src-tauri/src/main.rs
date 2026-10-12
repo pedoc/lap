@@ -441,6 +441,8 @@ async fn main() {
             t_map::commands::get_map_tile,
             t_map::commands::cancel_map_tile,
             t_map::commands::resolve_photo_location,
+            t_map::commands::resolve_library_locations,
+            t_map::commands::cancel_location_resolution,
             t_cmds::delete_person,
             t_cmds::get_faces_for_file,
             t_cmds::get_person_thumbnail,

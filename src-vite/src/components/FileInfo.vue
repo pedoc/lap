@@ -438,7 +438,7 @@
               <MapView
                 :lat="fileInfo.gps_latitude ? Number(fileInfo.gps_latitude) : 0"
                 :lon="fileInfo.gps_longitude ? Number(fileInfo.gps_longitude) : 0"
-                :label="fileInfo.geo_name || fileInfo.name || 'Lap'"
+                :label="displayPlaceName(fileInfo.geo_cc, fileInfo.geo_admin1, fileInfo.geo_name, locale) || fileInfo.name || 'Lap'"
               />
             </div>
           </div>
@@ -464,6 +464,7 @@ import ImageNavigator from '@/components/ImageNavigator.vue';
 import { ref, nextTick, computed, watch, onBeforeUnmount, onMounted } from 'vue';
 import { listen } from '@tauri-apps/api/event';
 import { useI18n } from 'vue-i18n';
+import { displayRegionName, displayPlaceName } from '@/common/locationNames';
 import { useToast } from '@/common/toast';
 import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
@@ -957,9 +958,9 @@ function formatGeoLocation() {
   if (!info) return "";
 
   const fields = [
-    info.geo_name,
+    displayPlaceName(info.geo_cc, info.geo_admin1, info.geo_name, locale.value),
     info.geo_admin2,
-    info.geo_admin1,
+    displayRegionName(info.geo_cc, info.geo_admin1, locale.value),
     info.geo_cc ? getCountryName(info.geo_cc, locale.value) : info.geo_cc,
   ];
 

@@ -1,4 +1,5 @@
 //! Global map rendering and geocoding providers. Originals/GPS are never rewritten.
+mod batch;
 mod cancellation;
 pub mod commands;
 mod config;

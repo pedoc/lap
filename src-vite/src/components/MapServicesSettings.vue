@@ -9,6 +9,7 @@
       <select v-model="draft.geocoder" class="select select-bordered select-sm max-w-60" :disabled="busy"><option v-for="provider in geoProviders" :key="provider.id" :value="provider.id">{{ provider.name }}</option></select>
     </label>
     <p class="text-xs opacity-60">{{ t('map_services.service_scope') }}</p>
+    <p class="text-xs opacity-60">{{ t('map_services.existing_locations_hint') }}</p>
     <section v-for="provider in activeProviders" :key="provider.id" class="border-t border-base-content/10 pt-2 space-y-2">
       <div class="flex justify-between items-center text-sm font-semibold"><span>{{ provider.name }}</span><button v-if="provider.console" type="button" class="link text-xs" @click="openExternalUrl(provider.console)">{{ t('map_services.console') }}</button></div>
       <label v-for="field in provider.fields" :key="field" class="flex items-center justify-between gap-3 text-xs">
