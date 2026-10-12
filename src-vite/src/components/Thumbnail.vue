@@ -232,6 +232,7 @@
 </template>
 
 <script setup lang="ts">
+import { addressPath } from '@/common/locationNames';
 import { computed, nextTick, ref, watch, toRef, onBeforeUnmount, type CSSProperties, type Component } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
@@ -612,7 +613,7 @@ const getGridLabelText = (file: any, option: number) => {
     case 2: return formatFileSize(file.size) || ' ';
     case 3: return formatDimensionText(file.width, file.height) || ' ';
     case 4: return formatTimestamp(file.taken_date, 'date_time') || ' ';
-    case 5: return file.geo_name || ' ';
+    case 5: return addressPath(file.location) || ' ';
     case 6: return formatCameraInfo(file.e_make, file.e_model) || ' ';
     case 7: return file.e_lens_model || ' ';
     case 8: return formatCaptureSettings(file.e_focal_length, file.e_exposure_time, file.e_f_number, file.e_iso_speed, file.e_exposure_bias) || ' ';

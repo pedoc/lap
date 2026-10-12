@@ -7,6 +7,7 @@
       @dragleave.stop
       @drop.stop
     >
+      <p v-if="locationOptionsError" role="alert" class="mb-2 text-xs text-error break-all">{{ locationOptionsError }}</p>
       <div class="w-full grid grid-cols-[92px_1fr] gap-x-4 gap-y-3 items-start text-xs select-none">
         <div class="h-8 flex items-center text-[10px] uppercase tracking-widest font-bold text-base-content/30">{{ $t('album.smart_edit.name') }}</div>
         <input ref="inputNameRef" v-model="name" type="text" maxlength="255" class="w-full input input-sm text-xs font-semibold" :placeholder="$t('album.smart_edit.validation_name')" />
@@ -147,6 +148,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { locationNodePath } from '@/common/locationNames';
 import { getAllTags, getCameraInfo, getLensInfo, getLocationInfo, getPersons, getSupportedFormatExtensions, listAlbums, listCollections } from '@/common/api';
 import { IconAdd, IconEdit, IconRemove } from '@/common/icons';
 import { useUIStore } from '@/stores/uiStore';
@@ -192,6 +194,7 @@ const collectionOptions = ref<any[]>([]);
 const cameraOptions = ref<any[]>([]);
 const lensOptions = ref<any[]>([]);
 const locationOptions = ref<any[]>([]);
+const locationOptionsError = ref('');
 const extensionOptions = ref<any[]>([]);
 const rules = ref<any[]>([]);
 
@@ -592,7 +595,10 @@ async function loadOptions() {
     listCollections(),
     getCameraInfo(),
     getLensInfo(),
-    getLocationInfo(),
+    getLocationInfo().catch(reason => {
+      locationOptionsError.value = reason?.message || String(reason);
+      return [];
+    }),
   ]);
   tagOptions.value = (tags || []).map((tag: any) => ({ value: tag.id, label: tag.name }));
   personOptions.value = (persons || []).map((person: any) => ({ value: person.id, label: person.name || `Person ${person.id}` }));
@@ -633,15 +639,8 @@ function flattenMakeModelOptions(items: any[]) {
 }
 
 function flattenLocationOptions(items: any[]) {
-  const options: any[] = [];
-  for (const item of items) {
-    if (!item.admin1) continue;
-    options.push({ value: `${item.cc || ''}||${item.admin1}||`, label: item.admin1 });
-    for (const name of item.names || []) {
-      options.push({ value: `${item.cc || ''}||${item.admin1}||${name}`, label: `${item.admin1} › ${name}` });
-    }
-  }
-  return options;
+  const byId = new Map(items.map(node => [node.id,node]));
+  return items.map(node => ({value: String(node.id),label: locationNodePath(node,byId)}));
 }
 
 onMounted(async () => {

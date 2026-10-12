@@ -438,7 +438,7 @@
               <MapView
                 :lat="fileInfo.gps_latitude ? Number(fileInfo.gps_latitude) : 0"
                 :lon="fileInfo.gps_longitude ? Number(fileInfo.gps_longitude) : 0"
-                :label="displayPlaceName(fileInfo.geo_cc, fileInfo.geo_admin1, fileInfo.geo_name, locale) || fileInfo.name || 'Lap'"
+                :label="addressLabel(fileInfo.location) || fileInfo.name || 'Lap'"
               />
             </div>
           </div>
@@ -464,7 +464,7 @@ import ImageNavigator from '@/components/ImageNavigator.vue';
 import { ref, nextTick, computed, watch, onBeforeUnmount, onMounted } from 'vue';
 import { listen } from '@tauri-apps/api/event';
 import { useI18n } from 'vue-i18n';
-import { displayRegionName, displayPlaceName } from '@/common/locationNames';
+import { addressPath, addressLabel, addressSelection } from '@/common/locationNames';
 import { useToast } from '@/common/toast';
 import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
@@ -483,7 +483,6 @@ import {
   formatDuration,
   formatCaptureSettings,
   formatCameraInfo,
-  getCountryName,
   combineFileName,
   isValidFileName,
   getAssetSrc,
@@ -957,20 +956,13 @@ function formatGeoLocation() {
   const info = props.fileInfo;
   if (!info) return "";
 
-  const fields = [
-    displayPlaceName(info.geo_cc, info.geo_admin1, info.geo_name, locale.value),
-    info.geo_admin2,
-    displayRegionName(info.geo_cc, info.geo_admin1, locale.value),
-    info.geo_cc ? getCountryName(info.geo_cc, locale.value) : info.geo_cc,
-  ];
-
-  return fields.filter(Boolean).join(", ");
+  return addressPath(info.location) || addressLabel(info.location);
 }
 
 // Clickable metadata values: jump to the corresponding sidebar view.
 const hasCamera = computed(() => !!(props.fileInfo?.e_make || props.fileInfo?.e_model));
 const hasLens = computed(() => !!props.fileInfo?.e_lens_model);
-const hasLocation = computed(() => !!(props.fileInfo?.geo_cc || props.fileInfo?.geo_admin1 || props.fileInfo?.geo_name));
+const hasLocation = computed(() => !!addressSelection(props.fileInfo?.location).nodeId);
 
 function navigateCamera() {
   if (!hasCamera.value) return;
@@ -984,7 +976,7 @@ function navigateLens() {
 
 function navigateLocation() {
   if (!hasLocation.value) return;
-  emit('navigateMetadata', { type: 'location', cc: props.fileInfo?.geo_cc || null, admin1: props.fileInfo?.geo_admin1 || null, name: props.fileInfo?.geo_name || null });
+  emit('navigateMetadata', { type: 'location', ...addressSelection(props.fileInfo?.location) });
 }
 
 // People recognized in this file (deduplicated by person id).

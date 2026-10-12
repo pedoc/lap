@@ -7,3 +7,6 @@ mod geo;
 mod tiles;
 pub use config::Settings;
 pub use geo::metadata_location;
+
+pub(crate) mod address_store;
+pub use geo::Location;

@@ -1,8 +1,8 @@
-/** Freeze the selected stored keys; empty place selection must never become a library job. */
+/** Invalid node selection must never silently become a whole-library job. */
 export function locationResolutionScope(kind, selection) {
   if (kind === 'library') return {kind: 'library'};
-  if (kind !== 'region' || !selection?.admin1) throw new Error('Select a location first');
-  return {kind:'region', cc:selection.cc || '', admin1:selection.admin1, name:selection.name || null};
+  if (kind !== 'node' || !Number.isSafeInteger(selection?.nodeId) || selection.nodeId <= 0) throw new Error('Select a location first');
+  return {kind:'node', node_id:selection.nodeId};
 }
 export function isLocationProgress(payload, libraryId, jobId) {
   return payload?.libraryId === libraryId && payload?.jobId === jobId;

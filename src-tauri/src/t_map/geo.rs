@@ -9,15 +9,84 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Provider-neutral address. Missing administrative levels stay missing.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressLevel {
+    pub kind: String,
+    pub name: String,
+    pub code: String,
+    pub code_namespace: String,
+    #[serde(default)]
+    pub node_id: Option<i64>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Location {
     pub provider: String,
+    pub language: String,
+    pub hierarchy: Vec<AddressLevel>,
+    pub street: String,
+    pub house_number: String,
+    pub postal_code: String,
+    pub address: String,
+    pub resolved_at: i64,
+    pub precision: String,
+    /// Vetted provider metadata (codes/nearby point); never stores request URLs or keys.
+    #[serde(default)]
+    pub provider_data: Value,
+    // Derived projections for existing metadata consumers, never a second source.
     pub name: String,
     pub admin1: String,
     pub admin2: String,
     pub country_code: String,
-    pub address: String,
+}
+impl Location {
+    fn level(&mut self, kind: &str, name: String, code: String, namespace: &str) {
+        if !name.trim().is_empty() {
+            self.hierarchy.push(AddressLevel {
+                kind: kind.into(),
+                name,
+                code_namespace: if code.is_empty() {
+                    String::new()
+                } else {
+                    namespace.into()
+                },
+                code,
+                node_id: None,
+            });
+        }
+    }
+    fn finish(&mut self) {
+        let get = |kind: &str| {
+            self.hierarchy
+                .iter()
+                .find(|l| l.kind == kind)
+                .map(|l| l.name.clone())
+                .unwrap_or_default()
+        };
+        self.admin1 = get("province");
+        self.admin2 = get("district");
+        self.name = get("city");
+        self.country_code = self
+            .hierarchy
+            .iter()
+            .find(|l| l.kind == "country")
+            .map(|l| l.code.clone())
+            .unwrap_or_default();
+        if self.address.is_empty() {
+            self.address = self
+                .hierarchy
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" > ");
+        }
+        self.resolved_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+    }
 }
 static CACHE: Lazy<Mutex<HashMap<String, (Instant, Location)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -35,24 +104,18 @@ pub fn offline(lat: f64, lon: f64) -> Result<Location, String> {
         .search((lat, lon))
         .ok_or("No offline location found")?;
     let r = &found.record;
-    let address = [
-        r.name.as_str(),
-        r.admin2.as_str(),
-        r.admin1.as_str(),
-        r.cc.as_str(),
-    ]
-    .into_iter()
-    .filter(|value| !value.is_empty())
-    .collect::<Vec<_>>()
-    .join(", ");
-    Ok(Location {
+    let mut location = Location {
         provider: "offline".into(),
-        name: r.name.clone(),
-        admin1: r.admin1.clone(),
-        admin2: r.admin2.clone(),
-        country_code: r.cc.clone(),
-        address,
-    })
+        language: "und".into(),
+        precision: "nearest-place".into(),
+        ..Location::default()
+    };
+    location.level("country", r.cc.clone(), r.cc.clone(), "iso3166-1");
+    location.level("province", r.admin1.clone(), String::new(), "");
+    location.level("district", r.admin2.clone(), String::new(), "");
+    location.level("locality", r.name.clone(), String::new(), "");
+    location.finish();
+    Ok(location)
 }
 /// GPS remains WGS84 in the database. Only the API request input is converted.
 fn gcj02(lat: f64, lon: f64) -> (f64, f64) {
@@ -79,17 +142,12 @@ fn gcj02(lat: f64, lon: f64) -> (f64, f64) {
     )
 }
 fn text(value: &Value) -> String {
-    value
-        .as_str()
-        .map(str::to_string)
-        .or_else(|| {
-            value
-                .as_array()
-                .and_then(|items| items.first())
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_default()
+    match value {
+        Value::String(value) => value.trim().to_owned(),
+        Value::Number(value) => value.to_string(),
+        Value::Array(values) => values.first().map(text).unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 fn successful(value: &Value, expected: i64) -> bool {
     value.as_i64() == Some(expected) || value.as_str().is_some_and(|s| s == expected.to_string())
@@ -158,7 +216,7 @@ fn request_url(settings: &Settings, lat: f64, lon: f64) -> Result<reqwest::Url, 
     }
     Ok(url)
 }
-fn parse(settings: &Settings, value: &Value, fallback: &Location) -> Result<Location, String> {
+fn parse(settings: &Settings, value: &Value) -> Result<Location, String> {
     let (data, component) = match settings.geocoder.as_str() {
         "amap" => {
             if !successful(&value["status"], 1) {
@@ -197,51 +255,154 @@ fn parse(settings: &Settings, value: &Value, fallback: &Location) -> Result<Loca
             "Geocoding service returned an incomplete response; old location was retained".into(),
         );
     }
-    let mut admin1 = text(&component["province"]);
-    let mut name = text(&component["city"]);
-    if name.is_empty() {
-        name = admin1.clone();
-    }
-    let mut admin2 = if settings.geocoder == "tianditu" {
-        text(&component["county"])
-    } else {
-        text(&component["district"])
+    let provider = settings.geocoder.as_str();
+    let mut location = Location {
+        provider: provider.into(),
+        language: "zh-CN".into(),
+        precision: "administrative".into(),
+        ..Location::default()
     };
-    let country = text(&component["country"]);
-    let country_code = if country.len() == 2 && country.chars().all(|c| c.is_ascii_alphabetic()) {
-        country.to_uppercase()
-    } else {
-        fallback.country_code.clone()
-    };
-    let mut address = text(&data["formatted_address"]);
-    if address.is_empty() {
-        address = text(&data["address"]);
+    let mut country = text(
+        &component[if provider == "amap" {
+            "country"
+        } else {
+            "nation"
+        }],
+    );
+    if country.is_empty() {
+        country = text(&component["country"]);
     }
-    if name.is_empty() && address.is_empty() {
+    if country.is_empty() && provider == "tencent" {
+        country = text(&data["ad_info"]["nation"]);
+    }
+    // These domestic providers document China when their response omits country.
+    // Never borrow country/levels from a separate nearest-place lookup.
+    let country_code =
+        if country == "中国" || country == "China" || (country.is_empty() && provider != "tencent")
+        {
+            "CN".to_owned()
+        } else if country.len() == 2 && country.chars().all(|c| c.is_ascii_alphabetic()) {
+            country.to_uppercase()
+        } else {
+            String::new()
+        };
+    location.level(
+        "country",
+        if country.is_empty() && country_code == "CN" {
+            "中国".into()
+        } else {
+            country
+        },
+        country_code.clone(),
+        "iso3166-1",
+    );
+    let codes = if provider == "tencent" {
+        &data["ad_info"]
+    } else {
+        component
+    };
+    location.level(
+        "province",
+        text(&component["province"]),
+        if provider == "tianditu" {
+            text(&component["province_code"])
+        } else {
+            String::new()
+        },
+        "tianditu-admin",
+    );
+    location.level(
+        "city",
+        text(&component["city"]),
+        if provider == "tianditu" {
+            text(&component["city_code"])
+        } else {
+            String::new()
+        },
+        "tianditu-admin",
+    );
+    location.level(
+        "district",
+        text(
+            &component[if provider == "tianditu" {
+                "county"
+            } else {
+                "district"
+            }],
+        ),
+        text(
+            &codes[if provider == "tianditu" {
+                "county_code"
+            } else {
+                "adcode"
+            }],
+        ),
+        if provider == "tianditu" {
+            "tianditu-admin"
+        } else if provider == "amap" || country_code == "CN" {
+            "gb2260"
+        } else {
+            "tencent-adcode"
+        },
+    );
+    let town_name = match provider {
+        "tencent" => text(&data["address_reference"]["town"]["title"]),
+        "tianditu" => text(&component["town"]),
+        _ => text(&component["township"]),
+    };
+    let (town_code, town_namespace) = match provider {
+        "tencent" => (
+            text(&data["address_reference"]["town"]["id"]),
+            "tencent-town",
+        ),
+        "tianditu" => (text(&component["town_code"]), "tianditu-admin"),
+        _ => (text(&component["towncode"]), "amap-towncode"),
+    };
+    location.level("township", town_name, town_code, town_namespace);
+    location.street = if provider == "amap" {
+        text(&component["streetNumber"]["street"])
+    } else {
+        text(
+            &component[if provider == "tianditu" {
+                "road"
+            } else {
+                "street"
+            }],
+        )
+    };
+    location.house_number = if provider == "amap" {
+        text(&component["streetNumber"]["number"])
+    } else {
+        text(&component["street_number"])
+    };
+    location.postal_code = text(&component["postal_code"]);
+    location.address = text(&data["formatted_address"]);
+    if location.address.is_empty() {
+        location.address = text(&data["address"]);
+    }
+    if !location
+        .hierarchy
+        .iter()
+        .any(|level| level.kind != "country")
+        && location.address.is_empty()
+    {
         return Err("Geocoding service returned no address; old location was retained".into());
     }
-    if name.is_empty() {
-        name = fallback.name.clone();
-    }
-    if admin1.is_empty() {
-        admin1 = fallback.admin1.clone();
-    }
-    if admin2.is_empty() {
-        admin2 = fallback.admin2.clone();
-    }
-    Ok(Location {
-        provider: settings.geocoder.clone(),
-        name,
-        admin1,
-        admin2,
-        country_code,
-        address,
-    })
+    location.provider_data = json!({
+        "cityTelephoneCode": if provider=="amap" {text(&component["citycode"])} else {String::new()},
+        "adminCode": text(&codes[if provider=="tianditu" {"county_code"} else {"adcode"}]),
+        "nearbyPoint": if provider=="tianditu" {json!({"lon":data["location"]["lon"].as_f64(),"lat":data["location"]["lat"].as_f64()})} else {Value::Null},
+        "nearbyPointCrs": if provider=="tianditu" {"tianditu-geographic"} else {""}
+    });
+    location.finish();
+    Ok(location)
 }
 pub fn resolve(settings: &Settings, lat: f64, lon: f64) -> Result<Location, String> {
-    let fallback = offline(lat, lon)?;
+    if !valid_coordinates(lat, lon) {
+        return Err("Invalid GPS coordinates".into());
+    }
     if settings.geocoder == "offline" {
-        return Ok(fallback);
+        return offline(lat, lon);
     }
     let key = format!("{}:{lat:.6}:{lon:.6}", settings.revision()?);
     if let Some((created, location)) = CACHE
@@ -286,7 +447,7 @@ pub fn resolve(settings: &Settings, lat: f64, lon: f64) -> Result<Location, Stri
     }
     let value: Value =
         serde_json::from_slice(&bytes).map_err(|_| "Geocoding service returned invalid JSON")?;
-    let location = parse(settings, &value, &fallback)?;
+    let location = parse(settings, &value)?;
     let mut cache = CACHE.lock().map_err(|_| "Geocoding cache unavailable")?;
     if cache.len() >= 1024 {
         cache.retain(|_, (created, _)| created.elapsed() < Duration::from_secs(15 * 60));
@@ -324,16 +485,6 @@ pub fn metadata_location(lat: f64, lon: f64) -> Option<Location> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fallback() -> Location {
-        Location {
-            provider: "offline".into(),
-            name: "Old".into(),
-            admin1: String::new(),
-            admin2: String::new(),
-            country_code: "CN".into(),
-            address: "Old".into(),
-        }
-    }
     #[test]
     fn wgs84_is_only_converted_for_service_input() {
         let (lat, lon) = gcj02(39.908823, 116.397470);
@@ -394,11 +545,83 @@ mod tests {
     fn provider_outputs_are_normalized_without_replacing_original_coordinates() {
         let mut s = Settings::default();
         s.geocoder = "amap".into();
-        let result=parse(&s,&json!({"status":"1","regeocode":{"formatted_address":"北京市东城区","addressComponent":{"province":"北京市","city":[],"district":"东城区","country":"中国"}}}),&fallback()).unwrap();
-        assert_eq!(result.name, "北京市");
+        let result=parse(&s,&json!({"status":"1","regeocode":{"formatted_address":"北京市东城区","addressComponent":{"province":"北京市","city":[],"district":"东城区","country":"中国"}}})).unwrap();
+        assert_eq!(result.name, "");
+        assert!(!result.hierarchy.iter().any(|level| level.kind == "city"));
         assert_eq!(result.country_code, "CN");
         assert_eq!(result.admin2, "东城区");
         assert_eq!(result.provider, "amap");
+    }
+    #[test]
+    fn amap_keeps_town_street_number_and_does_not_treat_phone_code_as_admin_code() {
+        let mut settings = Settings::default();
+        settings.geocoder = "amap".into();
+        let address=parse(&settings,&json!({"status":"1","regeocode":{"formatted_address":"重庆市巴南区鱼洞街道某路8号","addressComponent":{"country":"中国","province":"重庆市","city":[],"district":"巴南区","adcode":"500113","citycode":"023","township":"鱼洞街道","towncode":"500113001000","streetNumber":{"street":"某路","number":"8号"},"unexpected_secret":"must-not-persist"}}})).unwrap();
+        assert_eq!(
+            address
+                .hierarchy
+                .iter()
+                .map(|l| l.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["country", "province", "district", "township"]
+        );
+        assert_eq!(address.hierarchy[2].code_namespace, "gb2260");
+        assert_eq!(address.hierarchy[2].code, "500113");
+        assert_eq!(address.street, "某路");
+        assert_eq!(address.house_number, "8号");
+        assert_eq!(address.provider_data["cityTelephoneCode"], "023");
+        assert!(
+            !serde_json::to_string(&address)
+                .unwrap()
+                .contains("must-not-persist")
+        );
+    }
+    #[test]
+    fn tencent_normalizes_ad_info_and_reference_town_without_filling_missing_levels() {
+        let mut settings = Settings::default();
+        settings.geocoder = "tencent".into();
+        let address=parse(&settings,&json!({"status":0,"result":{"address":"中国上海市闵行区莘庄镇","address_component":{"province":"上海市","city":"上海市","district":"闵行区","street":"某路","street_number":"10号"},"ad_info":{"nation":"中国","adcode":"310112"},"address_reference":{"town":{"id":"310112101","title":"莘庄镇"}}}})).unwrap();
+        assert_eq!(address.hierarchy.last().unwrap().name, "莘庄镇");
+        assert_eq!(
+            address.hierarchy.last().unwrap().code_namespace,
+            "tencent-town"
+        );
+        assert_eq!(address.country_code, "CN");
+        assert_eq!(address.admin2, "闵行区");
+        assert_eq!(address.house_number, "10号");
+    }
+    #[test]
+    fn tianditu_keeps_hierarchy_numeric_codes_and_separates_nearby_coordinates() {
+        let mut settings = Settings::default();
+        settings.geocoder = "tianditu".into();
+        let address=parse(&settings,&json!({"status":0,"result":{"formatted_address":"浙江省杭州市西湖区某路","location":{"lon":120.1,"lat":30.2},"addressComponent":{"nation":"中国","province":"浙江省","province_code":330000,"city":"杭州市","city_code":330100,"county":"西湖区","county_code":330106,"town":"西湖街道","road":"某路"}}})).unwrap();
+        assert_eq!(address.hierarchy[3].code, "330106");
+        assert_eq!(address.street, "某路");
+        assert_eq!(
+            address.provider_data["nearbyPointCrs"],
+            "tianditu-geographic"
+        );
+        assert_eq!(address.provider_data["nearbyPoint"]["lat"], 30.2);
+    }
+    #[test]
+    fn sparse_foreign_result_does_not_mix_chinese_offline_fields() {
+        let mut settings = Settings::default();
+        settings.geocoder = "tencent".into();
+        let address=parse(&settings,&json!({"status":0,"result":{"address":"Tokyo, Japan","address_component":{"nation":"日本","city":"Tokyo","district":"Chiyoda"},"ad_info":{"adcode":"test-foreign-code"}}})).unwrap();
+        assert_eq!(address.admin1, "");
+        assert_eq!(address.country_code, "");
+        assert_eq!(
+            address.hierarchy.last().unwrap().code_namespace,
+            "tencent-adcode"
+        );
+        assert!(!address.hierarchy.iter().any(|level| level.name == "中国"));
+        assert!(
+            parse(
+                &settings,
+                &json!({"status":0,"result":{"address_component":{}}})
+            )
+            .is_err()
+        );
     }
     #[test]
     fn service_errors_do_not_echo_keys_or_become_successful_empty_addresses() {
@@ -407,10 +630,9 @@ mod tests {
         let error = parse(
             &s,
             &json!({"status":"0","infocode":"10001","info":"fake-secret"}),
-            &fallback(),
         )
         .unwrap_err();
         assert!(!error.contains("fake-secret"));
-        assert!(parse(&s, &json!({"status":"1","regeocode":{}}), &fallback()).is_err());
+        assert!(parse(&s, &json!({"status":"1","regeocode":{}})).is_err());
     }
 }

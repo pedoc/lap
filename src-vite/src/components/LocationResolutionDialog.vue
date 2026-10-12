@@ -7,7 +7,7 @@
         {{ t('location_batch.scope') }}
         <select v-model="scopeKind" class="select select-bordered select-sm flex-1">
           <option value="library">{{ t('location_batch.library_scope') }}</option>
-          <option v-if="selection.admin1" value="region">{{ t('location_batch.region_scope', {name: selectionLabel}) }}</option>
+          <option v-if="selection.nodeId" value="node">{{ t('location_batch.region_scope', {name: selectionLabel}) }}</option>
         </select>
       </label>
       <p v-else class="text-xs">{{ scopeKind === 'library' ? t('location_batch.library_scope') : t('location_batch.region_scope', {name: selectionLabel}) }}</p>
@@ -38,16 +38,16 @@ import {useI18n} from 'vue-i18n';
 import {config, libConfig} from '@/common/config';
 import {useUIStore} from '@/stores/uiStore';
 import {serviceName} from '@/common/mapServices';
-import {displayRegionName, displayPlaceName} from '@/common/locationNames';
+import {displayLocationFilterLabel} from '@/common/locationNames';
 import {locationResolutionScope, isLocationProgress} from '@/common/locationBatch';
 import ModalDialog from './ModalDialog.vue';
 const props = defineProps({selection:{type:Object, required:true}}), emit = defineEmits(['cancel','resolved']);
-const {t, locale} = useI18n(), ui = useUIStore();
+const {t} = useI18n(), ui = useUIStore();
 const libraryId = libConfig._libraryId, jobId = crypto.randomUUID(), viewportWidth = window.innerWidth;
 const revision = config.settings.mapServicesRevision || '', provider = config.settings.mapServices?.geocoder || 'offline';
 const selection = {...props.selection};
-const selectionLabel = computed(() => [displayRegionName(selection.cc,selection.admin1,locale.value), displayPlaceName(selection.cc,selection.admin1,selection.name,locale.value)].filter(Boolean).join(' > '));
-const root = ref(null), scopeKind = ref(selection.admin1 ? 'region' : 'library'), consent = ref(false), ready = ref(false);
+const selectionLabel = computed(() => displayLocationFilterLabel(selection));
+const root = ref(null), scopeKind = ref(selection.nodeId ? 'node' : 'library'), consent = ref(false), ready = ref(false);
 const started = ref(false), busy = ref(false), stopping = ref(false), error = ref('');
 const progress = ref({total:0,completed:0,succeeded:0,failed:0,finished:false,cancelled:false,errors:[]});
 const handler = `LocationResolution:${jobId}`;

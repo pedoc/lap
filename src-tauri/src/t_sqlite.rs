@@ -1552,7 +1552,9 @@ pub struct AFile {
     pub gps_longitude: Option<f64>,
     pub gps_altitude: Option<f64>,
 
-    // geo info (from http://www.geonames.org/)
+    // Structured provider address, followed by legacy derived metadata projections.
+    #[serde(default)]
+    pub location: Option<crate::t_map::Location>,
     pub geo_name: Option<String>,   // Location name
     pub geo_admin1: Option<String>, // Administrative district 1
     pub geo_admin2: Option<String>, // Administrative district 2
@@ -2044,8 +2046,8 @@ pub struct QueryParams {
     pub model: String,
     pub lens_make: String,
     pub lens_model: String,
-    pub location_admin1: String,
-    pub location_name: String,
+    #[serde(default)]
+    pub location_node_id: i64,
     pub is_favorite: bool,
     pub rating: i64,
     #[serde(default = "default_culling_flag")]
@@ -2573,15 +2575,16 @@ impl AFile {
         }
 
         // Geocoding based on GPS coordinates from any source
-        let (geo_name, geo_admin1, geo_admin2, geo_cc) =
-            if let (Some(lat), Some(lon)) = (gps_latitude, gps_longitude) {
-                match crate::t_map::metadata_location(lat,lon) {
-                    Some(location) => (Some(location.name),Some(location.admin1),Some(location.admin2),Some(location.country_code)),
-                    None => (None,None,None,None),
-                }
-            } else {
-                (None, None, None, None)
-            };
+        let location = match (gps_latitude, gps_longitude) {
+            (Some(lat), Some(lon)) => crate::t_map::metadata_location(lat, lon),
+            _ => None,
+        };
+        let (geo_name, geo_admin1, geo_admin2, geo_cc) = location.as_ref()
+            .map(|location| (
+                Some(location.name.clone()), Some(location.admin1.clone()),
+                Some(location.admin2.clone()), Some(location.country_code.clone()),
+            ))
+            .unwrap_or((None, None, None, None));
 
         // RAW and TIFF dimensions already match their decoder output.
         let should_swap_dimensions_for_orientation = file_type != 3
@@ -2653,6 +2656,7 @@ impl AFile {
             gps_longitude,
             gps_altitude,
 
+            location,
             geo_name,
             geo_admin1,
             geo_admin2,
@@ -2987,6 +2991,15 @@ impl AFile {
                 self.motion_photo_offset,
             ]
         ).map_err(|e| e.to_string())?;
+        if result > 0 {
+            if let (Some(address), Some(lat), Some(lon)) =
+                (&self.location, self.gps_latitude, self.gps_longitude)
+            {
+                crate::t_map::address_store::save_import(
+                    &conn, conn.last_insert_rowid(), self.modified_at, self.size, lat, lon, address,
+                )?;
+            }
+        }
         Ok(result)
     }
 
@@ -3051,6 +3064,15 @@ impl AFile {
                 file_id,
             ]
         ).map_err(|e| e.to_string())?;
+        if result > 0 {
+            if let (Some(address), Some(lat), Some(lon)) =
+                (&file.location, file.gps_latitude, file.gps_longitude)
+            {
+                crate::t_map::address_store::save_import(
+                    &conn, file_id, file.modified_at, file.size, lat, lon, address,
+                )?;
+            }
+        }
         Ok(result)
     }
 
@@ -3210,13 +3232,15 @@ impl AFile {
                     ELSE NULL
                 END AS live_photo_video_path,
                 a.motion_photo_offset,
-                {} AS album_visible
+                {} AS album_visible,
+                {} AS location_json
             FROM afiles a
             LEFT JOIN afolders b ON a.folder_id = b.id
             LEFT JOIN albums c ON b.album_id = c.id
             LEFT JOIN afiles lpv ON a.live_photo_video_id = lpv.id
             LEFT JOIN afolders lpf ON lpv.folder_id = lpf.id",
-            Self::album_joined_filter_predicate("a", "b", "c")
+            Self::album_joined_filter_predicate("a", "b", "c"),
+            crate::t_map::address_store::address_json("a")
         )
     }
 
@@ -3268,6 +3292,8 @@ impl AFile {
             gps_latitude: row.get(36)?,
             gps_longitude: row.get(37)?,
             gps_altitude: row.get(38)?,
+            location: row.get::<_, Option<String>>(57)?
+                .and_then(|json| serde_json::from_str(&json).ok()),
             geo_name: row.get(39)?,
             geo_admin1: row.get(40)?,
             geo_admin2: row.get(41)?,
@@ -4693,13 +4719,9 @@ impl AFile {
             }
         }
 
-        if !params.location_admin1.is_empty() {
-            conditions.push("a.geo_admin1 = ?".to_string());
-            sql_params.push(Box::new(params.location_admin1.clone()));
-            if !params.location_name.is_empty() {
-                conditions.push("a.geo_name = ?".to_string());
-                sql_params.push(Box::new(params.location_name.clone()));
-            }
+        if params.location_node_id != 0 {
+            conditions.push(crate::t_map::address_store::predicate("a"));
+            sql_params.push(Box::new(params.location_node_id));
         }
 
         if let (Some(min_lat), Some(max_lat), Some(min_lon), Some(max_lon)) = (
@@ -4866,8 +4888,8 @@ impl AFile {
                 "0".to_string(),
             )),
             GROUP_BY_LOCATION => Some((
-                "CASE WHEN COALESCE(a.geo_name, a.geo_admin1, a.geo_cc, '') = '' THEN 'unknown-location' ELSE COALESCE(a.geo_name, a.geo_admin1, a.geo_cc) END".to_string(),
-                "COALESCE(a.geo_cc, '')".to_string(),
+                crate::t_map::address_store::group_key("a"),
+                "0".to_string(),
             )),
             GROUP_BY_CAMERA => Some((
                 "CASE WHEN TRIM(COALESCE(a.e_make, '') || ' ' || COALESCE(a.e_model, '')) = '' THEN 'unknown-camera' ELSE TRIM(COALESCE(a.e_make, '') || ' ' || COALESCE(a.e_model, '')) END".to_string(),
@@ -5777,18 +5799,10 @@ impl AFile {
                         }
                     }
                     "location" => {
-                        if let Some(cc) = parts.get(0).filter(|v| !v.is_empty()) {
-                            conditions.push("a.geo_cc = ?".to_string());
-                            sql_params.push(Box::new((*cc).to_string()));
-                        }
-                        if let Some(admin1) = parts.get(1).filter(|v| !v.is_empty()) {
-                            conditions.push("a.geo_admin1 = ?".to_string());
-                            sql_params.push(Box::new((*admin1).to_string()));
-                        }
-                        if let Some(name) = parts.get(2).filter(|v| !v.is_empty()) {
-                            conditions.push("a.geo_name = ?".to_string());
-                            sql_params.push(Box::new((*name).to_string()));
-                        }
+                        let id = Self::smart_rule_i64(value).filter(|id|*id>0)
+                            .ok_or_else(|| "Location node id required".to_string())?;
+                        conditions.push(crate::t_map::address_store::predicate("a"));
+                        sql_params.push(Box::new(id));
                     }
                     _ => {}
                 }
@@ -9213,86 +9227,13 @@ impl ALens {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ALocation {
-    pub cc: String,
-    pub admin1: String,
-    pub names: Vec<String>,
-    pub counts: Vec<i64>,
-}
-
+pub type ALocation = crate::t_map::address_store::Node;
 impl ALocation {
-    // get all location admin1 and names from db
     pub fn get_from_db(sort: i64) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
-
-        let query = format!("SELECT COALESCE(a.geo_cc, ''), a.geo_admin1, a.geo_name, count(a.id) as count
-            FROM afiles a
-            JOIN afolders b ON a.folder_id = b.id
-            WHERE COALESCE(a.geo_admin1, '') <> '' AND COALESCE(a.geo_name, '') <> ''
-                AND a.id NOT IN (
-                    SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL
-                ){} AND {}
-            GROUP BY a.geo_cc, a.geo_admin1, a.geo_name
-            ORDER BY a.geo_cc, a.geo_admin1, a.geo_name", AFile::album_filter_sql("a"), AFile::search_exclusion_condition("b"));
-
-        let mut stmt = conn.prepare(query.as_str()).map_err(|e| e.to_string())?;
-
-        let rows = stmt
-            .query_map(params![], |row| {
-                let cc: String = row.get(0)?;
-                let admin1: String = row.get(1)?;
-                let name: String = row.get(2)?;
-                let count: i64 = row.get(3)?;
-                Ok((cc, admin1, name, count))
-            })
-            .map_err(|e| e.to_string())?;
-
-        let mut hash_map: HashMap<(String, String), (Vec<String>, Vec<i64>)> = HashMap::new();
-
-        for row in rows {
-            let (cc, admin1, name, count) = row.map_err(|e| e.to_string())?;
-            let entry = hash_map
-                .entry((cc, admin1))
-                .or_insert_with(|| (Vec::new(), Vec::new()));
-            entry.0.push(name); // Push name to Vec<String>
-            entry.1.push(count); // Push count to Vec<i64>
-        }
-
-        let mut locations: Vec<Self> = hash_map
-            .into_iter()
-            .map(|((cc, admin1), (mut names, mut counts))| {
-                sort_labeled_counts(&mut names, &mut counts, sort);
-                Self {
-                    cc,
-                    admin1,
-                    names,
-                    counts,
-                }
-            })
-            .collect();
-
-        // Sort the locations by admin1
-        match sort {
-            1 => locations.sort_by(|a, b| b.admin1.cmp(&a.admin1)),
-            2 => locations.sort_by(|a, b| {
-                a.counts
-                    .iter()
-                    .sum::<i64>()
-                    .cmp(&b.counts.iter().sum::<i64>())
-                    .then_with(|| a.admin1.cmp(&b.admin1))
-            }),
-            3 => locations.sort_by(|a, b| {
-                b.counts
-                    .iter()
-                    .sum::<i64>()
-                    .cmp(&a.counts.iter().sum::<i64>())
-                    .then_with(|| a.admin1.cmp(&b.admin1))
-            }),
-            _ => locations.sort_by(|a, b| a.admin1.cmp(&b.admin1)),
-        }
-
-        Ok(locations)
+        crate::t_map::address_store::nodes(
+            &conn, &AFile::album_filter_sql("a"), &AFile::search_exclusion_condition("b"), sort,
+        )
     }
 }
 
@@ -9559,6 +9500,8 @@ fn create_db_internal() -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    crate::t_map::address_store::setup(&conn)?;
 
     // folders table
     conn.execute(

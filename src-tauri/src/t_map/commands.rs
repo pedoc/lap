@@ -49,18 +49,54 @@ pub async fn resolve_photo_location(
     file_id: i64,
     revision: String,
 ) -> Result<PhotoLocation, String> {
-    tauri::async_runtime::spawn_blocking(move||{
-        let before={let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.try_read().map_err(|_|"Library is changing")?;if crate::t_config::current_library_id()?!=library_id{return Err("Library changed; reopen photo information".into());}crate::t_sqlite::AFile::get_file_info(file_id)?.ok_or("Photo no longer exists")?};
-        let state=config::load()?;if state.revision!=revision{return Err("Map settings changed; retry address resolution".into());}
-        let(lat,lon)=match(before.gps_latitude,before.gps_longitude){(Some(lat),Some(lon))if geo::valid_coordinates(lat,lon)=>(lat,lon),_=>return Err("Photo has no valid GPS coordinates".into())};
-        let location=geo::resolve(&state.settings,lat,lon)?;
-        let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.try_read().map_err(|_|"Library is changing; old location was retained")?;
-        if crate::t_config::current_library_id()?!=library_id||config::load()?.revision!=revision{return Err("Library/map provider changed; address result was discarded".into());}
-        let conn=crate::t_sqlite::open_conn()?;
-        update_location(&conn,file_id,before.modified_at,before.size,lat,lon,&location)?;
-        let _=app_handle.emit("map-location-changed",serde_json::json!({"library_id":library_id,"file_id":file_id,"geo_name":location.name,"geo_admin1":location.admin1,"geo_admin2":location.admin2,"geo_cc":location.country_code}));
-        Ok(PhotoLocation{file_id,location})
-    }).await.map_err(|_|"Address resolution task failed")?
+    tauri::async_runtime::spawn_blocking(move || {
+        let before = {
+            let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
+                .try_read()
+                .map_err(|_| "Library is changing")?;
+            if crate::t_config::current_library_id()? != library_id {
+                return Err("Library changed; reopen photo information".into());
+            }
+            crate::t_sqlite::AFile::get_file_info(file_id)?.ok_or("Photo no longer exists")?
+        };
+        let state = config::load()?;
+        if state.revision != revision {
+            return Err("Map settings changed; retry address resolution".into());
+        }
+        let (lat, lon) = match (before.gps_latitude, before.gps_longitude) {
+            (Some(lat), Some(lon)) if geo::valid_coordinates(lat, lon) => (lat, lon),
+            _ => return Err("Photo has no valid GPS coordinates".into()),
+        };
+        let location = geo::resolve(&state.settings, lat, lon)?;
+        let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
+            .try_read()
+            .map_err(|_| "Library is changing; old location was retained")?;
+        let _settings_guard = config::SETTINGS_LOCK
+            .read()
+            .map_err(|_| "Map settings unavailable")?;
+        if crate::t_config::current_library_id()? != library_id
+            || config::load()?.revision != revision
+        {
+            return Err("Library/map provider changed; address result was discarded".into());
+        }
+        let conn = crate::t_sqlite::open_conn()?;
+        let location = super::address_store::save(
+            &conn,
+            file_id,
+            before.modified_at,
+            before.size,
+            lat,
+            lon,
+            &location,
+        )?;
+        let _ = app_handle.emit(
+            "map-location-changed",
+            serde_json::json!({"library_id":library_id,"file_id":file_id,"location":location}),
+        );
+        Ok(PhotoLocation { file_id, location })
+    })
+    .await
+    .map_err(|_| "Address resolution task failed")?
 }
 #[allow(clippy::too_many_arguments)]
 pub(super) fn update_location(
@@ -72,14 +108,7 @@ pub(super) fn update_location(
     lon: f64,
     location: &geo::Location,
 ) -> Result<(), String> {
-    let changed=conn.execute("UPDATE afiles SET geo_name=?1,geo_admin1=?2,geo_admin2=?3,geo_cc=?4 WHERE id=?5 AND modified_at IS ?6 AND size=?7 AND gps_latitude IS ?8 AND gps_longitude IS ?9",rusqlite::params![location.name,location.admin1,location.admin2,location.country_code,file_id,modified_at,size,lat,lon]).map_err(|e|e.to_string())?;
-    if changed != 1 {
-        return Err(
-            "Photo metadata/GPS changed during address resolution; old location was retained"
-                .into(),
-        );
-    }
-    Ok(())
+    super::address_store::save(conn, file_id, modified_at, size, lat, lon, location).map(|_| ())
 }
 #[cfg(test)]
 mod tests {
@@ -88,6 +117,7 @@ mod tests {
     fn address_updates_preserve_original_gps_media_and_reject_stale_metadata() {
         let c = rusqlite::Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,geo_name TEXT,geo_admin1 TEXT,geo_admin2 TEXT,geo_cc TEXT,name TEXT); INSERT INTO afiles VALUES(1,10,100,39.908823,116.397470,'Old','','','CN','original.jpg');").unwrap();
+        super::super::address_store::setup(&c).unwrap();
         let location = geo::Location {
             provider: "amap".into(),
             name: "New".into(),
@@ -95,6 +125,7 @@ mod tests {
             admin2: "District".into(),
             country_code: "CN".into(),
             address: "Address".into(),
+            ..Default::default()
         };
         assert!(update_location(&c, 1, Some(11), 100, 39.908823, 116.397470, &location).is_err());
         update_location(&c, 1, Some(10), 100, 39.908823, 116.397470, &location).unwrap();

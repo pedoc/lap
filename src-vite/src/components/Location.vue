@@ -1,257 +1,71 @@
 <template>
-
   <div class="sidebar-panel">
     <div class="sidebar-panel-header">
-      <span class="sidebar-panel-header-title flex-1">
-        {{ titlebar }}<template v-if="placeCount > 0"> ({{ placeCount.toLocaleString() }})</template>
-      </span>
+      <span class="sidebar-panel-header-title flex-1">{{ titlebar }}<template v-if="locations.length"> ({{ locations.length.toLocaleString() }})</template></span>
       <button type="button" class="btn btn-ghost btn-xs" :title="$t('location_batch.title')" @click="showLocationResolution = true"><IconRefresh class="w-4 h-4" /></button>
       <SortMenuButton v-model="config.settings.locationSort" kind="category" />
     </div>
-
-    <!-- search -->
-    <div v-if="locations.length > 0" class="mx-1 mb-2 px-1 shrink-0">
-      <div
-        :class="[
-          'h-8 flex items-center rounded-box transition-colors bg-base-100/40',
-          isSearchFocused ? 'border-2 border-primary' : 'border border-base-content/10 hover:border-base-content/30',
-        ]"
-        @click="searchInputRef?.focus()"
-      >
-        <IconSearch
-          class="ml-2 w-4 h-4 shrink-0"
-          :class="isSearchFocused ? 'text-primary/70' : 'text-base-content/30'"
-        />
-        <input
-          ref="searchInputRef"
-          type="text"
-          v-model="search"
-          :placeholder="$t('menu.location.search')"
-          class="w-full min-w-0 bg-transparent border-none focus:ring-0 px-2 text-sm placeholder-base-content/30 focus:outline-none"
-          maxlength="255"
-          @focus="isSearchFocused = true"
-          @blur="isSearchFocused = false"
-        />
-        <button
-          v-if="search"
-          type="button"
-          class="mr-1 p-1 rounded-box text-base-content/30 hover:text-base-content/70"
-          @click.stop="search = ''; searchInputRef?.focus()"
-        >
-          <IconClose class="w-4 h-4" />
-        </button>
+    <div v-if="locations.length" class="mx-2 mb-2 flex items-center gap-1">
+      <IconSearch class="w-4 h-4 shrink-0 opacity-50" />
+      <input v-model="search" type="search" :placeholder="$t('menu.location.search')" class="input input-sm w-full min-w-0" maxlength="255" />
+    </div>
+    <div v-if="rows.length" class="flex-1 overflow-auto" role="tree">
+      <div v-for="node in rows" :key="node.id" role="treeitem" :aria-level="node.depth + 1" :aria-selected="libConfig.location.nodeId === node.id" :aria-expanded="node.hasChildren ? (expanded.has(node.id) || !!search.trim()) : undefined">
+        <div :class="['sidebar-item', libConfig.location.nodeId === node.id ? 'sidebar-item-selected' : 'sidebar-item-hover']" :style="{paddingLeft: `${node.depth * 14}px`}" :title="node.label" @click="selectNode(node)">
+          <button v-if="node.hasChildren" type="button" class="shrink-0" :aria-label="node.name" @click.stop="toggleNode(node.id)"><IconRight :class="['w-6 h-6 p-1', (expanded.has(node.id) || search.trim()) && 'rotate-90']" /></button>
+          <IconLocation v-else class="w-4 h-4 mx-1 shrink-0" />
+          <span class="sidebar-item-label">{{ node.name }}</span>
+          <span class="sidebar-item-count">{{ node.count.toLocaleString() }}</span>
+        </div>
       </div>
     </div>
-
-    <!-- list view -->
-    <div v-if="sortedLocations.length > 0" class="flex-1 overflow-x-hidden overflow-y-auto">
-      <ul>
-        <li v-for="location in sortedLocations">
-          <div
-            :class="[
-              'sidebar-item',
-              (libConfig.location.cc || '') === location.cc && libConfig.location.admin1 === location.admin1 && !libConfig.location.name ? 'sidebar-item-selected' : 'sidebar-item-hover',
-            ]"
-            @click="clickLocationAdmin1(location)"
-          >
-            <IconRight
-              :class="[
-                'p-1 w-6 h-6 shrink-0 transition-transform',
-                (location.is_expanded || hasSearch) ? 'rotate-90' : ''
-              ]"
-              @click.stop="clickExpandLocation(location)"
-            />
-            <span class="sidebar-item-label">{{ location.displayAdmin1 + (location.cc ? ', ' + getCountryName(location.cc, locale) : '') }}</span>
-            <span class="sidebar-item-count">{{ location.counts.reduce((a: number, b: number) => a + b, 0).toLocaleString() }}</span>
-          </div>
-          <ul v-if="(location.is_expanded || hasSearch) && location.names.length > 0">
-            <li v-for="(name, index) in location.names" class="pl-4">
-              <div
-                :class="[
-                  'sidebar-item sidebar-item-compact ml-2',
-                  (libConfig.location.cc || '') === location.cc && libConfig.location.admin1 === location.admin1 && libConfig.location.name === name ? 'sidebar-item-selected' : 'sidebar-item-hover',
-                ]"
-                @click="clickLocationName(location, name)"
-              >
-                <IconLocation class="mx-1 w-4 h-4 shrink-0" />
-                <span class="sidebar-item-label">{{ location.displayNames[index] }}</span>
-                <span class="sidebar-item-count">{{ location.counts[index].toLocaleString() }}</span>
-              </div>
-            </li>
-          </ul>
-        </li>
-      </ul>
-    </div>
-
-    <!-- Display message if no data are found -->
-    <div v-else-if="!isLoadingLocations" class="mt-2 px-2 flex flex-col items-center justify-center text-base-content/30">
-        <span class="text-sm text-center">{{ search ? $t('tooltip.not_found.location') : $t('tooltip.not_found.location_hint') }}</span>
-    </div>
+    <div v-else-if="!loading" class="mt-2 px-2 text-sm text-center text-base-content/40">{{ search ? $t('tooltip.not_found.location') : $t('tooltip.not_found.location_hint') }}</div>
+    <p v-if="error" role="alert" class="px-2 text-xs text-error break-all">{{ error }}</p>
   </div>
-
-  <LocationResolutionDialog v-if="showLocationResolution" :selection="{...libConfig.location}" @cancel="showLocationResolution = false" @resolved="getLocations()" />
+  <LocationResolutionDialog v-if="showLocationResolution" :selection="{...libConfig.location}" @cancel="showLocationResolution = false" @resolved="getLocations" />
 </template>
-
-
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { fileInfoRevision } from '@/common/fileInfoRefresh';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { config, libConfig } from '@/common/config';
 import { getLocationInfo } from '@/common/api';
-import { SIDEBAR } from '@/common/constants';
-import { getCountryName } from '@/common/utils';
-import { IconLocation, IconRight, IconSearch, IconClose, IconRefresh } from '@/common/icons';
+import { fileInfoRevision } from '@/common/fileInfoRefresh';
+import { visibleLocationRows, locationNodePath, locationNodeChain } from '@/common/locationNames';
+import { IconLocation, IconRight, IconSearch, IconRefresh } from '@/common/icons';
 import SortMenuButton from './SortMenuButton.vue';
 import LocationResolutionDialog from './LocationResolutionDialog.vue';
-import { localizedLocationGroups, filterLocationGroups } from '@/common/locationNames';
-
-const props = defineProps({
-  titlebar: {
-    type: String,
-    required: true
-  }
-});
-
-const { locale, messages } = useI18n(); // get locale for country name translation
-const localeMsg = computed(() => messages.value[locale.value] as any);
-
+defineProps({titlebar: String});
 const locations = ref<any[]>([]);
-const isLoadingLocations = ref(true);
-const search = ref('');
+const expanded = ref(new Set<number>()), search = ref(''), loading = ref(false), error = ref('');
 const showLocationResolution = ref(false);
-const searchInputRef = ref<HTMLInputElement | null>(null);
-const isSearchFocused = ref(false);
-let isLocationMounted = true;
-let locationRequestVersion = 0;
-
-onUnmounted(() => {
-  isLocationMounted = false;
-  locationRequestVersion++;
-});
-
-// Sort localized labels without changing the stored filter keys. Search mirrors
-// the Tags behavior: a region/country (first-level) match keeps all its places;
-// otherwise keep the region with only the matching places (and parallel counts).
-const displayLocations = computed(() => localizedLocationGroups(locations.value, locale.value, config.settings.locationSort));
-const sortedLocations = computed(() => filterLocationGroups(
-  displayLocations.value,
-  search.value, cc => getCountryName(cc, locale.value),
-));
-const hasSearch = computed(() => !!search.value.trim());
-
-// Header counts the second level (individual places), not the top-level regions.
-const placeCount = computed(() =>
-  sortedLocations.value.reduce((sum: number, loc: any) => sum + (Array.isArray(loc.names) ? loc.names.length : 0), 0),
-);
-
-onMounted(async () => {
-  if (locations.value.length === 0) {
-    if (!await getLocations()) return;
-
-    if (locations.value.length === 0) {
-      (libConfig.location as any).cc = null;
-      (libConfig.location as any).admin1 = null;
-      (libConfig.location as any).name = null;
-    }
-    
-    if(libConfig.location.cc && libConfig.location.admin1 && libConfig.location.name) {
-      let location = locations.value.find((location: any) => location.admin1 === libConfig.location.admin1)
-      if(location) {
-        location.is_expanded = true;     // expand selected location
-      } else {
-        (libConfig.location as any).cc = null;
-        (libConfig.location as any).admin1 = null;
-        (libConfig.location as any).name = null;
-      }
-    }
-  }
-});
-
-// Keep the current filter even if its last file moves out of this category.
-watch(fileInfoRevision, async () => {
-  if (libConfig.activePane === 'main' && config.main.sidebarIndex === SIDEBAR.LOCATION) await getLocations(true);
-});
-
-// Only refresh the active view. Inactive panel data is refreshed on re-entry.
-watch(() => [config.settings.locationSort], async () => {
-  if (libConfig.activePane === 'main' && config.main.sidebarIndex === SIDEBAR.LOCATION) await getLocations();
-});
-
-watch(() => [config.main.sidebarIndex, libConfig.activePane], async () => {
-  if (libConfig.activePane === 'main' && config.main.sidebarIndex === SIDEBAR.LOCATION) await getLocations();
-});
-
-function restoreLocationSelection() {
-  if (!libConfig.location.admin1) return;
-
-  const location = locations.value.find((item: any) =>
-    item.admin1 === libConfig.location.admin1 && item.cc === (libConfig.location.cc || '')
-  );
-
-  if (!location) {
-    (libConfig.location as any).cc = null;
-    (libConfig.location as any).admin1 = null;
-    (libConfig.location as any).name = null;
-    return;
-  }
-
-  location.is_expanded = true;
-
-  if (libConfig.location.name && !location.names.includes(libConfig.location.name)) {
-    (libConfig.location as any).name = null;
-  }
+const rows = computed(() => visibleLocationRows(locations.value, expanded.value, search.value, config.settings.locationSort));
+let alive = true, generation = 0;
+function toggleNode(id:number) {
+  const next = new Set(expanded.value); if (next.has(id)) next.delete(id); else next.add(id); expanded.value = next;
 }
-
-// Rendered/search groups are copies. Expansion must update the reactive stored group.
-function storedLocation(location: any) {
-  return locations.value.find(item => item.cc === location.cc && item.admin1 === location.admin1);
+function selectNode(node:any) {
+  Object.assign(libConfig.location, {nodeId:node.id, label:node.label, path:locationNodeChain(node,locations.value)});
+  if (node.hasChildren && !expanded.value.has(node.id)) toggleNode(node.id);
 }
-/// click location icon to expand or collapse names
-function clickExpandLocation(location: any) {
-  const stored = storedLocation(location);
-  if (stored) stored.is_expanded = !stored.is_expanded;
-};
-
-/// click a location to select it
-function clickLocationAdmin1(location: any) {
-  (libConfig.location as any).cc = location.cc;
-  (libConfig.location as any).admin1 = location.admin1;
-  (libConfig.location as any).name = null;
-
-  const stored = storedLocation(location);
-  if (stored) stored.is_expanded = true;
-}
-
-/// click a location to select it
-function clickLocationName(location: any, name: string) {
-  (libConfig.location as any).cc = location.cc;
-  (libConfig.location as any).admin1 = location.admin1;
-  (libConfig.location as any).name = name;
-}
-
-/// get locations from db
-async function getLocations(preserveFilter = false) {
-  const requestVersion = ++locationRequestVersion;
-  const libraryId = libConfig._libraryId;
-  isLoadingLocations.value = true;
+async function getLocations() {
+  const ticket = ++generation, libraryId = libConfig._libraryId;
+  loading.value = true; error.value = '';
   try {
-    const fetchedLocations = await getLocationInfo(config.settings.locationSort);
-    if (!isLocationMounted || requestVersion !== locationRequestVersion || libraryId !== libConfig._libraryId) return false;
-    if (fetchedLocations) {
-      const expanded = new Set(locations.value.filter(item => item.is_expanded).map(item => JSON.stringify([item.cc, item.admin1])));
-      locations.value = fetchedLocations.map((location: any) => ({
-        ...location,
-        is_expanded: expanded.has(JSON.stringify([location.cc, location.admin1])),
-      }));
-      if (!preserveFilter) restoreLocationSelection();
-    }
-    return true;
-  } finally {
-    if (isLocationMounted && requestVersion === locationRequestVersion) {
-      isLoadingLocations.value = false;
-    }
-  }
-};
-
+    const nodes = await getLocationInfo(config.settings.locationSort, libraryId);
+    if (!alive || ticket !== generation || libraryId !== libConfig._libraryId) return;
+    locations.value = nodes || [];
+    const selected = locations.value.find(node => node.id === libConfig.location.nodeId);
+    if (selected) {
+      Object.assign(libConfig.location,{label:locationNodePath(selected,locations.value),path:locationNodeChain(selected,locations.value)});
+      const byId = new Map(locations.value.map(node => [node.id,node]));
+      const next = new Set(expanded.value), visited = new Set();
+      for (let node = selected; node && !visited.has(node.id); node = byId.get(node.parentId)) {visited.add(node.id); next.add(node.id);}
+      expanded.value = next;
+    } else if (libConfig.location.nodeId) Object.assign(libConfig.location,{nodeId:null,label:'',path:[]});
+  } catch (reason:any) {if (alive && ticket === generation) error.value = reason?.message || String(reason);}
+  finally {if (alive && ticket === generation) loading.value = false;}
+}
+watch(fileInfoRevision, getLocations);
+watch(() => libConfig._libraryId, () => {locations.value = []; expanded.value = new Set(); search.value = ''; showLocationResolution.value = false; void getLocations();});
+onMounted(getLocations);
+onUnmounted(() => {alive = false; generation++;});
 </script>

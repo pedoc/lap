@@ -63,10 +63,28 @@ test('settings save the selected services and all vendor parameters with an opti
   await new Promise(resolve=>setImmediate(resolve));api.draft.value.tileProvider='mapbox';api.draft.value.geocoder='amap';api.draft.value.providers.mapbox.token='pk.test';api.draft.value.providers.amap.token='fake-web-service-key';await api.save();
   const saved=calls.find(call=>call.command==='save_map_services');assert.equal(saved.args.expectedRevision,'r1');assert.equal(saved.args.settings.tileProvider,'mapbox');assert.equal(saved.args.settings.geocoder,'amap');assert.equal(config.settings.mapServices.tileProvider,'mapbox');assert.ok(api.saved.value);
 });
-test('late address results never mutate a different photo and request failures retain location metadata', async () => {
-  let complete:(value:any)=>void=()=>{};const file:any={id:7,gps_latitude:0,gps_longitude:0,geo_name:'Old'};const libConfig={_libraryId:'library-a'};const config={settings:{mapServices:{geocoder:'amap'},mapServicesRevision:'r1'}};
-  const api=runInNewContext(`${script('PhotoLocationResolver')}\n;({resolve,hasGps,error,location})`,{...vue,defineProps:()=>({file}),config,libConfig,validGpsCoordinates,serviceName,useI18n:()=>({t:(key:string)=>key}),invoke:async()=>new Promise(resolve=>{complete=resolve;})});
-  assert.ok(api.hasGps.value);const pending=api.resolve();file.id=9;complete({location:{name:'New',admin1:'Province',admin2:'District',countryCode:'CN',provider:'amap',address:'Address'}});await pending;assert.equal(file.geo_name,'Old');assert.equal(api.location.value,null);
+test('late structured address results cannot mutate another photo, GPS snapshot, library or provider', async () => {
+ for (const change of ['photo','gps','library','provider']) {
+  let complete:(value:any)=>void=()=>{};
+  const old={provider:'amap',address:'已保存的地址',hierarchy:[{name:'中国',nodeId:1}]};
+  const file:any={id:7,gps_latitude:0,gps_longitude:0,location:old};
+  const libConfig={_libraryId:'library-a'},config={settings:{mapServices:{geocoder:'amap'},mapServicesRevision:'r1'}};
+  const api=runInNewContext(`${script('PhotoLocationResolver')}
+;({resolve,hasGps,error,location})`,{...vue,defineProps:()=>({file}),config,libConfig,validGpsCoordinates,serviceName,useI18n:()=>({t:(key:string)=>key}),invoke:async()=>new Promise(resolve=>{complete=resolve;})});
+  assert.ok(api.hasGps.value);const pending=api.resolve();
+  if(change==='photo')file.id=9;else if(change==='gps')file.gps_latitude=1;else if(change==='library')libConfig._libraryId='library-b';else config.settings.mapServicesRevision='r2';
+  complete({location:{provider:'amap',address:'新的地址',hierarchy:[{name:'区县',nodeId:3}]}});await pending;
+  assert.equal(file.location,old);assert.equal(api.location.value,null);
+ }
+});
+test('successful resolution assigns the exact saved hierarchy and failures retain it', async()=>{
+ const old={provider:'offline',address:'approximate',hierarchy:[]},resolved={provider:'amap',address:'完整地址',hierarchy:[{name:'中国',nodeId:1},{name:'区县',nodeId:3}]};
+ const file:any={id:7,gps_latitude:0,gps_longitude:0,location:old},libConfig={_libraryId:'library-a'},config={settings:{mapServicesRevision:'r1'}};
+ let fail=false;
+ const api=runInNewContext(`${script('PhotoLocationResolver')}
+;({resolve,error,location})`,{...vue,defineProps:()=>({file}),config,libConfig,validGpsCoordinates,serviceName,useI18n:()=>({t:(key:string)=>key}),invoke:async()=>{if(fail)throw new Error('Network unavailable');return {fileId:7,location:resolved};}});
+ await api.resolve();assert.equal(file.location,resolved);assert.equal(file.location.hierarchy[1].nodeId,3);assert.ok(!('geo_name' in file));
+ fail=true;await api.resolve();assert.equal(file.location,resolved);assert.match(api.error.value,/Network unavailable/);
 });
 test('legacy settings panels are preserved and credentials are omitted from persisted browser state', () => {
   const settings=readFileSync(new URL('../src/views/Settings.vue',import.meta.url),'utf8');assert.ok(settings.includes('SETTINGS_TAB.RAW'));assert.ok(settings.includes('SETTINGS_TAB.IMAGE_VIEW'));assert.ok(settings.includes('<MapServicesSettings />'));

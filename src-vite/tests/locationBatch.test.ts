@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {locationResolutionScope,isLocationProgress} from '../src/common/locationBatch.js';
-import {displayRegionName,displayPlaceName} from '../src/common/locationNames.js';
+import {displayLocationFilterLabel} from '../src/common/locationNames.js';
 const source=readFileSync(new URL('../src/components/LocationResolutionDialog.vue',import.meta.url),'utf8');
 const code=source.match(/<script setup>([\s\S]*?)<\/script>/)![1].replace(/^import .*;\r?\n/gm,'');
 function harness(provider='amap',execute?:any){
  const calls:any[]=[],emits:any[]=[],watches:any[]=[],mounts:any[]=[],unmounts:any[]=[],locks:string[]=[],listeners:any={};
  const libConfig:any={_libraryId:'library-a'},config:any={settings:{mapServices:{geocoder:provider},mapServicesRevision:'r1'}};
- const props:any={selection:{cc:'CN',admin1:'Beijing',name:'Chaowai'}};
+ const props:any={selection:{nodeId:3,label:'中国 > 北京市 > 朝外'}};
  const api=runInNewContext(`${code}\n;({start,stop,close,consent,ready,started,busy,progress,scopeKind})`,{
   defineProps:()=>props,defineEmits:()=> (...args:any[])=>emits.push(args),ref:(value:any)=>({value}),computed:(get:any)=>({get value(){return get();}}),
   watch:(_source:any,fn:any)=>watches.push(fn),onMounted:(fn:any)=>mounts.push(fn),onBeforeUnmount:(fn:any)=>unmounts.push(fn),nextTick:async()=>{},
@@ -17,14 +17,14 @@ function harness(provider='amap',execute?:any){
   listen:async(event:string,fn:any)=>{listeners[event]=fn;return ()=>delete listeners[event];},useI18n:()=>({t:(key:string)=>key,locale:{value:'zh-CN'}}),
   useUIStore:()=>({pushInputHandler:(id:string)=>locks.push(id),removeInputHandler:(id:string)=>locks.splice(locks.indexOf(id),1)}),
   config,libConfig,window:{innerWidth:1000},crypto:{randomUUID:()=> 'test-job'},serviceName:(id:string)=>id,
-  displayRegionName,displayPlaceName,locationResolutionScope,isLocationProgress,
+  displayLocationFilterLabel,locationResolutionScope,isLocationProgress,
  });
  return {api,props,calls,emits,listeners,libConfig,config,watches,locks,mount:()=>mounts[0](),unmount:()=>unmounts[0]()};
 }
 test('empty or unknown place scopes never silently resolve the entire library',()=>{
- for(const input of [null,{}, {admin1:''}])assert.throws(()=>locationResolutionScope('region',input));
- assert.throws(()=>locationResolutionScope('unknown',{admin1:'Beijing'}));
- assert.deepEqual(locationResolutionScope('region',{cc:'CN',admin1:'Beijing',name:'Chaowai'}),{kind:'region',cc:'CN',admin1:'Beijing',name:'Chaowai'});
+ for(const input of [null,{}, {nodeId:0}])assert.throws(()=>locationResolutionScope('node',input));
+ assert.throws(()=>locationResolutionScope('unknown',{nodeId:3}));
+ assert.deepEqual(locationResolutionScope('node',{nodeId:3,label:'中国 > 北京市 > 朝外'}),{kind:'node',node_id:3});
  assert.deepEqual(locationResolutionScope('library',null),{kind:'library'});
 });
 test('online jobs require explicit consent, while offline jobs never require permission to send coordinates',async()=>{
@@ -35,8 +35,8 @@ test('online jobs require explicit consent, while offline jobs never require per
  online.unmount();offline.unmount();
 });
 test('task freezes selection identity and follows exact library, job and map-settings snapshot',async()=>{
- const h=harness();await h.mount();h.api.consent.value=true;h.props.selection.name='Another place';await h.api.start();
- assert.deepEqual(h.calls[0].args.request,{libraryId:'library-a',jobId:'test-job',revision:'r1',scope:{kind:'region',cc:'CN',admin1:'Beijing',name:'Chaowai'},onlineConsent:true});
+ const h=harness();await h.mount();h.api.consent.value=true;h.props.selection.nodeId=4;await h.api.start();
+ assert.deepEqual(h.calls[0].args.request,{libraryId:'library-a',jobId:'test-job',revision:'r1',scope:{kind:'node',node_id:3},onlineConsent:true});
  const stale=harness();await stale.mount();stale.api.consent.value=true;stale.libConfig._libraryId='other';await stale.api.start();assert.equal(stale.calls.length,0);
  const changed=harness();await changed.mount();changed.api.consent.value=true;changed.config.settings.mapServicesRevision='r2';await changed.api.start();assert.equal(changed.calls.length,0);
  h.unmount();stale.unmount();changed.unmount();

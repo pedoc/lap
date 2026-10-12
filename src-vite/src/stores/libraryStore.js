@@ -104,12 +104,8 @@ export const useLibraryStore = defineStore('libraryStore', {
       lensModel: null,        // selected lens model
     },
 
-    /** @type {{ cc: string | null, admin1: string | null, name: string | null }} */
-    location: {
-      cc: null,               // country code
-      admin1: null,           // admin1 (state/province)
-      name: null,             // location name
-    },
+    /** @type {{ nodeId: number | null, label: string, path: Array<{nodeId:number,name:string}> }} */
+    location: {nodeId: null, label: '', path: []},
 
     /** @type {{ id: number | null, name: string | null }} */
     person: {

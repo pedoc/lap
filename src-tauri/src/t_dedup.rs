@@ -258,7 +258,7 @@ fn get_db_conn() -> Result<crate::t_sqlite::PooledConn, String> {
 }
 
 fn get_files_by_sizes(conn: &Connection) -> Result<Vec<AFile>, String> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT a.id, a.folder_id, a.name, a.name_pinyin, a.size, a.file_type, a.format_label,
                 a.created_at, a.modified_at, a.inode, a.taken_date, a.width, a.height, a.duration,
                 a.is_favorite, a.rating, a.rotate, a.comments, a.has_tags, a.has_faces, 
@@ -267,7 +267,8 @@ fn get_files_by_sizes(conn: &Connection) -> Result<Vec<AFile>, String> {
                 a.e_f_number, a.e_focal_length, a.e_iso_speed, a.e_flash, a.e_orientation, 
                 a.gps_latitude, a.gps_longitude, a.gps_altitude, 
                 a.geo_name, a.geo_admin1, a.geo_admin2, a.geo_cc,
-                f.path || '/' || a.name as file_path
+                f.path || '/' || a.name as file_path,
+                {}
          FROM afiles a
          JOIN afolders f ON a.folder_id = f.id
          WHERE a.id NOT IN (
@@ -281,7 +282,7 @@ fn get_files_by_sizes(conn: &Connection) -> Result<Vec<AFile>, String> {
              GROUP BY size
              HAVING COUNT(size) > 1 AND size > 0
          )
-         ORDER BY a.size DESC"
+         ORDER BY a.size DESC", crate::t_map::address_store::address_json("a"))
     ).map_err(|e| e.to_string())?;
 
     let iter = stmt
@@ -327,6 +328,7 @@ fn get_files_by_sizes(conn: &Connection) -> Result<Vec<AFile>, String> {
                 gps_latitude: row.get(36)?,
                 gps_longitude: row.get(37)?,
                 gps_altitude: row.get(38)?,
+                location: row.get::<_, Option<String>>(44)?.and_then(|json|serde_json::from_str(&json).ok()),
                 geo_name: row.get(39)?,
                 geo_admin1: row.get(40)?,
                 geo_admin2: row.get(41)?,

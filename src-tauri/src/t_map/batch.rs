@@ -14,11 +14,7 @@ use tauri::{AppHandle, Emitter};
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Scope {
     Library,
-    Region {
-        cc: String,
-        admin1: String,
-        name: Option<String>,
-    },
+    Node { node_id: i64 },
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -107,25 +103,24 @@ pub fn cancel(library: &str, job: &str) -> Result<(), String> {
     cancellation::cancel(&cancellation_key(library, job)?)
 }
 fn photos(conn: &Connection, scope: &Scope) -> Result<Vec<Photo>, String> {
-    let (cc, admin1, name) = match scope {
-        Scope::Library => (None, None, None),
-        Scope::Region { cc, admin1, name } => {
-            if admin1.trim().is_empty() || name.as_ref().is_some_and(|n| n.is_empty()) {
-                return Err(
-                    "Select a valid place; an empty selection never expands to the library".into(),
-                );
-            }
-            (Some(cc.as_str()), Some(admin1.as_str()), name.as_deref())
+    let node_id = match scope {
+        Scope::Library => None,
+        Scope::Node { node_id } if *node_id > 0 => Some(*node_id),
+        _ => {
+            return Err(
+                "Select a valid location node; invalid selection never expands to the library"
+                    .into(),
+            );
         }
     };
     let sql = format!("SELECT a.id,a.modified_at,a.size,a.gps_latitude,a.gps_longitude FROM afiles a JOIN afolders b ON a.folder_id=b.id
         WHERE a.file_type IN (1,3) AND a.gps_latitude BETWEEN -90 AND 90 AND a.gps_longitude BETWEEN -180 AND 180
         AND a.id NOT IN (SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL)
-        AND (?1 IS NULL OR COALESCE(a.geo_cc,'')=?1) AND (?2 IS NULL OR a.geo_admin1=?2) AND (?3 IS NULL OR a.geo_name=?3)
+        AND (?1 IS NULL OR EXISTS(SELECT 1 FROM file_location_nodes fn JOIN file_locations fl ON fl.file_id=fn.file_id WHERE fn.file_id=a.id AND fn.node_id=?1 AND fl.latitude IS a.gps_latitude AND fl.longitude IS a.gps_longitude))
         AND {} ORDER BY a.id", crate::t_sqlite::AFile::search_exclusion_condition("b"));
     let mut statement = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = statement
-        .query_map(params![cc, admin1, name], |r| {
+        .query_map(params![node_id], |r| {
             Ok(Photo {
                 id: r.get(0)?,
                 modified_at: r.get(1)?,
@@ -312,10 +307,20 @@ mod tests {
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE afolders(id INTEGER,album_id INTEGER,path TEXT,is_excluded_from_search INTEGER);
-            CREATE TABLE afiles(id INTEGER,folder_id INTEGER,file_type INTEGER,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,live_photo_video_id INTEGER,geo_cc TEXT,geo_admin1 TEXT,geo_name TEXT,geo_admin2 TEXT);
+            CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,modified_at INTEGER,size INTEGER,gps_latitude REAL,gps_longitude REAL,live_photo_video_id INTEGER,geo_cc TEXT,geo_admin1 TEXT,geo_name TEXT,geo_admin2 TEXT);
             INSERT INTO afolders VALUES(1,1,'visible',0),(2,1,'hidden',1);
             INSERT INTO afiles VALUES(1,1,1,10,100,39,116,NULL,'CN','Beijing','Chaowai',''),(2,1,1,10,100,31,121,NULL,'CN','Shanghai','Xinzhuang',''),
             (3,1,1,10,100,NULL,NULL,NULL,'','','',''),(4,1,1,10,100,999,116,NULL,'','','',''),(5,2,1,10,100,39,116,NULL,'CN','Beijing','Chaowai','');").unwrap();
+        super::super::address_store::setup(&c).unwrap();
+        // Test node membership, not legacy string projections.
+        let mut address = location();
+        address.name = "Chaowai".into();
+        address.hierarchy = vec![super::super::geo::AddressLevel {
+            kind: "province".into(),
+            name: "北京市".into(),
+            ..Default::default()
+        }];
+        super::super::address_store::save(&c, 1, Some(10), 100, 39., 116., &address).unwrap();
         c
     }
     fn location() -> geo::Location {
@@ -326,6 +331,7 @@ mod tests {
             admin2: String::new(),
             country_code: "CN".into(),
             address: "Test".into(),
+            ..Default::default()
         }
     }
     #[test]
@@ -346,41 +352,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2, 6]
         );
-        assert_eq!(
-            photos(
-                &c,
-                &Scope::Region {
-                    cc: "CN".into(),
-                    admin1: "Beijing".into(),
-                    name: Some("Chaowai".into())
-                }
-            )
-            .unwrap()[0]
-                .id,
-            1
-        );
+        assert_eq!(photos(&c, &Scope::Node { node_id: 1 }).unwrap()[0].id, 1);
+        assert!(photos(&c, &Scope::Node { node_id: 0 }).is_err());
         assert!(
-            photos(
-                &c,
-                &Scope::Region {
-                    cc: String::new(),
-                    admin1: String::new(),
-                    name: None
-                }
-            )
-            .is_err()
-        );
-        assert!(
-            photos(
-                &c,
-                &Scope::Region {
-                    cc: "VN".into(),
-                    admin1: "Beijing".into(),
-                    name: None
-                }
-            )
-            .unwrap()
-            .is_empty()
+            photos(&c, &Scope::Node { node_id: 999 })
+                .unwrap()
+                .is_empty()
         );
     }
     #[test]

@@ -1,40 +1,57 @@
-import aliases from '../assets/location-aliases-zh.json' with {type: 'json'};
-
-const chinese = locale => String(locale || '').toLowerCase().startsWith('zh');
-export function displayRegionName(cc, region, locale) {
-  if (!chinese(locale) || !region) return region || '';
-  return aliases.regions[`${cc}|${region}`] || region;
+/** Address labels always come from persisted provider data, never a transliteration dictionary. */
+export function addressPath(address) {
+  return (address?.hierarchy || []).map(level => level.name).filter(Boolean).join(' > ');
 }
-export function displayPlaceName(cc, region, name, locale) {
-  if (!chinese(locale) || !name) return name || '';
-  return aliases.places[`${cc}|${region}|${name}`] || name;
+export function addressLabel(address) {
+  return address?.address || addressPath(address);
 }
-
-// Stored names remain stable SQL filter keys. Sort display labels and their parallel counts together.
-export function localizedLocationGroups(groups, locale, sort = 0) {
-  const collator = new Intl.Collator(locale || 'en', {numeric: true, sensitivity: 'base'});
-  const order = (a, b) => sort === 2 ? a.count - b.count || collator.compare(a.label, b.label)
-    : sort === 3 ? b.count - a.count || collator.compare(a.label, b.label)
-    : (sort === 1 ? -1 : 1) * collator.compare(a.label, b.label);
-  const result = groups.map(group => {
-    const items = group.names.map((name, index) => ({name, label: displayPlaceName(group.cc, group.admin1, name, locale), count: group.counts[index]})).sort(order);
-    return {...group, displayAdmin1: displayRegionName(group.cc, group.admin1, locale),
-      names: items.map(item => item.name), displayNames: items.map(item => item.label), counts: items.map(item => item.count)};
-  });
-  return result.sort((a, b) => order({label:a.displayAdmin1, count:a.counts.reduce((sum,n)=>sum+n,0)}, {label:b.displayAdmin1, count:b.counts.reduce((sum,n)=>sum+n,0)}));
+export function addressSelection(address) {
+  const levels = address?.hierarchy || [];
+  return {nodeId: levels.at(-1)?.nodeId || null, label: addressPath(address), path: levels.map(level => ({nodeId:level.nodeId,name:level.name}))};
 }
-export function filterLocationGroups(groups, query, countryName) {
-  const q = query.trim().toLowerCase();
-  if (!q) return groups;
-  const includes = value => String(value || '').toLowerCase().includes(q);
-  return groups.flatMap(group => {
-    if ([group.admin1, group.displayAdmin1, countryName(group.cc)].some(includes)) return [group];
-    const indexes = group.names.map((name,index) => includes(name) || includes(group.displayNames[index]) ? index : -1).filter(index => index >= 0);
-    return indexes.length ? [{...group, names:indexes.map(i=>group.names[i]), displayNames:indexes.map(i=>group.displayNames[i]), counts:indexes.map(i=>group.counts[i])}] : [];
-  });
+export function displayLocationFilterLabel(selection) {
+  return selection?.label || '';
 }
-
-export function displayLocationFilterLabel(selection, locale) {
-  return [displayRegionName(selection.cc, selection.admin1, locale),
-    displayPlaceName(selection.cc, selection.admin1, selection.name, locale)].filter(Boolean).join(' > ');
+export function locationNodeChain(node, nodes) {
+  const byId = nodes instanceof Map ? nodes : new Map(nodes.map(item => [item.id, item]));
+  const names = [], visited = new Set();
+  for (let current = node; current && !visited.has(current.id); current = byId.get(current.parentId)) {
+    visited.add(current.id); names.unshift({nodeId:current.id,name:current.name});
+  }
+  return names;
+}
+export function locationNodePath(node, nodes) {
+  return locationNodeChain(node,nodes).map(level => level.name).join(' > ');
+}
+/** Flat visible rows retain arbitrary depth, ancestors of search hits and stable node IDs. */
+export function visibleLocationRows(nodes, expanded = new Set(), search = '', sort = 0) {
+  const children = new Map(), ids = new Set(nodes.map(node => node.id));
+  const byId = new Map(nodes.map(node => [node.id,node]));
+  for (const node of nodes) {
+    const parent = ids.has(node.parentId) ? node.parentId : null;
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(node);
+  }
+  const needle = search.trim().toLocaleLowerCase();
+  const rows = [], visiting = new Set();
+  function walk(parent, depth) {
+    const items = children.get(parent) || [];
+    items.sort((a,b) => {
+      const name = a.name.localeCompare(b.name);
+      return sort === 1 ? -name : sort === 2 ? a.count-b.count || name : sort === 3 ? b.count-a.count || name : name;
+    });
+    for (const node of items) {
+      if (visiting.has(node.id)) continue;
+      const label = locationNodePath(node, byId);
+      const matches = !needle || label.toLocaleLowerCase().includes(needle);
+      const start = rows.length;
+      visiting.add(node.id);
+      rows.push({...node, label, depth, hasChildren: children.has(node.id)});
+      if (needle || expanded.has(node.id)) walk(node.id, depth + 1);
+      visiting.delete(node.id);
+      if (needle && !matches && rows.length === start + 1) rows.pop();
+    }
+  }
+  walk(null, 0);
+  return rows;
 }

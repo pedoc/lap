@@ -1756,14 +1756,14 @@ export async function getLensInfo(sort = 0) {
 // location
 
 // get location info
-export async function getLocationInfo(sort = 0) {
+export async function getLocationInfo(sort = 0, libraryId = libConfig._libraryId) {
   try {
-    const locationInfo = await invoke('get_location_info', { sort });
+    const locationInfo = await invoke('get_location_info', { sort, libraryId: libraryId || null });
     if (locationInfo) {
       return locationInfo;
     }
   } catch (error) {
-    console.error('Failed to get location info:', error);
+    throw error;
   }
   return null;
 }

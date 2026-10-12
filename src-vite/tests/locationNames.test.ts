@@ -1,70 +1,52 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {runInNewContext} from 'node:vm';
-import {stripTypeScriptTypes} from 'node:module';
-import {displayRegionName,displayPlaceName,displayLocationFilterLabel,localizedLocationGroups,filterLocationGroups} from '../src/common/locationNames.js';
-const sample = [{cc:'CN',admin1:'Beijing',names:['Chaowai','Chengbei','Jiugong','Jingshan'],counts:[2,2,1,14],is_expanded:true}];
-test('screenshot locations have genuine Chinese aliases, with raw names as language/missing-data fallback',()=>{
-  for(const [raw,zh] of Object.entries({Chaowai:'朝外',Chengbei:'城北',Datun:'大屯',Jingshan:'景山',Jiugong:'旧宫',Liqiao:'李桥',Qinghe:'清河',Taihu:'台湖',Xiangshan:'香山',Xibeiwang:'西北旺'})){
-    assert.equal(displayPlaceName('CN','Beijing',raw,'zh-CN'),zh);
-    assert.equal(displayPlaceName('CN','Beijing',raw,'en'),raw);
-  }
-  assert.equal(displayRegionName('CN','Beijing','zh-CN'),'北京');
-  assert.equal(displayRegionName('CN','Shaanxi','zh-CN'),'陕西');
-  assert.equal(displayRegionName('CN','Shanxi Sheng','zh-CN'),'山西');
-  assert.equal(displayPlaceName('CN','OtherRegion','Chaowai','zh-CN'),'Chaowai');
-  assert.equal(displayPlaceName('US','Beijing','Chaowai','zh-CN'),'Chaowai');
-  assert.equal(displayPlaceName('CN','Beijing','Unknown','zh-CN'),'Unknown');
-  assert.equal(displayPlaceName('CN','北京市','朝外街道','zh-CN'),'朝外街道');
+import {addressPath,addressLabel,addressSelection,locationNodePath,visibleLocationRows,displayLocationFilterLabel} from '../src/common/locationNames.js';
+const nodes=[
+ {id:1,parentId:null,name:'中国',count:6},
+ {id:2,parentId:1,name:'重庆市',count:4},
+ {id:3,parentId:2,name:'巴南区',count:4},
+ {id:4,parentId:3,name:'鱼洞街道',count:2},
+ {id:5,parentId:1,name:'省乙',count:2},
+ {id:6,parentId:5,name:'鱼洞街道',count:2},
+];
+test('full path and provider address are reused without dictionary, missing city stays absent',()=>{
+ const location={address:'重庆市巴南区鱼洞街道某路8号',hierarchy:[{name:'中国',nodeId:1},{name:'重庆市',nodeId:2},{name:'巴南区',nodeId:3},{name:'鱼洞街道',nodeId:4}]};
+ assert.equal(addressLabel(location),location.address);assert.equal(addressPath(location),'中国 > 重庆市 > 巴南区 > 鱼洞街道');
+ assert.equal(addressSelection(location).nodeId,4);assert.equal(addressSelection(location).path.length,4);
+ assert.equal(addressLabel({...location,address:''}),addressPath(location));assert.equal(addressLabel(null),'');
+ assert.equal(displayLocationFilterLabel(addressSelection(location)),addressPath(location));
+ assert.equal(addressSelection(null).nodeId,null);
 });
-test('Chinese sorting and search preserve SQL keys, photo counts, expansion and immutable input',()=>{
-  const before=structuredClone(sample),groups=localizedLocationGroups(sample,'zh-CN',0);
-  assert.equal(groups[0].admin1,'Beijing');assert.equal(groups[0].displayAdmin1,'北京');assert.deepEqual(sample,before);
-  const chinese=filterLocationGroups(groups,'朝外',()=> '中国');
-  assert.deepEqual(chinese[0].names,['Chaowai']);assert.deepEqual(chinese[0].displayNames,['朝外']);assert.deepEqual(chinese[0].counts,[2]);
-  assert.deepEqual(filterLocationGroups(groups,'Chaowai',()=> '中国'),chinese);
-  assert.equal(filterLocationGroups(groups,'北京',()=> '中国')[0].names.length,4);
-  assert.equal(filterLocationGroups(groups,'中国',()=> '中国')[0].names.length,4);
-  const descending=localizedLocationGroups(sample,'zh-CN',3)[0];
-  assert.equal(descending.names[0],'Jingshan');assert.equal(descending.displayNames[0],'景山');assert.equal(descending.counts[0],14);
-  assert.ok(descending.is_expanded);
+test('same names in separate parent paths retain distinct identities',()=>{
+ assert.equal(locationNodePath(nodes[3],nodes),'中国 > 重庆市 > 巴南区 > 鱼洞街道');
+ assert.equal(locationNodePath(nodes[5],nodes),'中国 > 省乙 > 鱼洞街道');
+ const rows=visibleLocationRows(nodes,new Set(),'鱼洞');
+ assert.deepEqual(rows.map(n=>n.id),[1,2,3,4,5,6]);
+ assert.equal(rows.find(n=>n.id===4)?.depth,3);assert.equal(rows.find(n=>n.id===6)?.depth,2);
+ assert.deepEqual(visibleLocationRows(nodes,new Set(),'不存在'),[]);
 });
-test('selected map title uses Chinese display without mutating persistent location identifiers',()=>{
-  const selected={cc:'CN',admin1:'Beijing',name:'Chaowai'};
-  assert.equal(displayLocationFilterLabel(selected,'zh-CN'),'北京 > 朝外');
-  assert.equal(displayLocationFilterLabel(selected,'en'),'Beijing > Chaowai');
-  assert.deepEqual(selected,{cc:'CN',admin1:'Beijing',name:'Chaowai'});
-  const content=readFileSync(new URL('../src/components/Content.vue',import.meta.url),'utf8');
-  assert.ok(content.includes('displayLocationFilterLabel(libConfig.location, locale.value)'));
-  assert.ok(content.includes('locationAdmin1: libConfig.location.admin1, locationName: libConfig.location.name'));
-  const sidebar=readFileSync(new URL('../src/components/Location.vue',import.meta.url),'utf8');
-  assert.ok(sidebar.includes('{{ location.displayNames[index] }}'));assert.ok(sidebar.includes('clickLocationName(location, name)'));
+test('expand/collapse, sorting and searching do not mutate stored nodes or photo selection',()=>{
+ const original=structuredClone(nodes);
+ assert.deepEqual(visibleLocationRows(nodes).map(n=>n.id),[1]);
+ assert.deepEqual(visibleLocationRows(nodes,new Set([1])).map(n=>n.id),[1,2,5]);
+ assert.deepEqual(visibleLocationRows(nodes,new Set([1]),'',2).map(n=>n.id),[1,5,2]);
+ assert.deepEqual(visibleLocationRows(nodes,new Set(),'重庆').map(n=>n.id),[1,2,3,4]);
+ assert.deepEqual(nodes,original);
 });
-test('offline alias catalog records upstream license and reproducible input digests',()=>{
-  const aliases=JSON.parse(readFileSync(new URL('../src/assets/location-aliases-zh.json',import.meta.url),'utf8'));
-  assert.equal(aliases.source,'GeoNames');assert.equal(aliases.license,'CC BY 4.0');assert.ok(Object.keys(aliases.places).length>8000);
-  for(const hash of Object.values(aliases.inputSha256))assert.match(hash as string,/^[0-9a-f]{64}$/);
+test('all address displays and filters use structured data, not geo strings',()=>{
+ for(const name of ['FileInfo','PhotoLocationResolver','Thumbnail','StatusBar']){
+  const source=readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');
+  assert.ok(source.includes('.location'));assert.doesNotMatch(source,/geo_name|geo_admin1|geo_cc|displayPlaceName/);
+ }
+ const content=readFileSync(new URL('../src/components/Content.vue',import.meta.url),'utf8');assert.match(content,/locationNodeId: libConfig.location.nodeId/);assert.doesNotMatch(content,/locationAdmin1|locationName:/);
+ const sidebar=readFileSync(new URL('../src/components/Location.vue',import.meta.url),'utf8');assert.ok(sidebar.includes('libraryId !== libConfig._libraryId'));assert.ok(sidebar.includes('ticket !== generation'));
 });
 
-test('photo information resolves place aliases against the stored region, not its translated label',()=>{
- const source=readFileSync(new URL('../src/components/FileInfo.vue',import.meta.url),'utf8');
- const start=source.indexOf('function formatGeoLocation()');const end=source.indexOf('// Clickable metadata',start);
- const info={geo_cc:'CN',geo_admin1:'Beijing',geo_admin2:'',geo_name:'Chaowai'};
- const fn=runInNewContext(`${source.slice(start,end)}; formatGeoLocation`,{props:{fileInfo:info},locale:{value:'zh-CN'},displayRegionName,displayPlaceName,getCountryName:()=> '中国'});
- assert.equal(fn(),'朝外, 北京, 中国');assert.equal(info.geo_admin1,'Beijing');assert.equal(info.geo_name,'Chaowai');
-});
-
-test('expanding localized or searched groups updates the reactive original, scoped by country and region',()=>{
- const source=readFileSync(new URL('../src/components/Location.vue',import.meta.url),'utf8');
- const start=source.indexOf('function storedLocation(');const end=source.indexOf('/// get locations from db',start);
- const raw=structuredClone(sample);raw[0].is_expanded=false;
- const other={cc:'US',admin1:'Beijing',names:['Chaowai'],counts:[1],is_expanded:false};
- const libConfig={location:{cc:null,admin1:null,name:null}};
- const api=runInNewContext(`${stripTypeScriptTypes(source.slice(start,end))};({clickExpandLocation,clickLocationAdmin1,clickLocationName})`,{locations:{value:[...raw,other]},libConfig});
- const displayed=localizedLocationGroups(raw,'zh-CN')[0];
- api.clickExpandLocation(displayed);assert.equal(raw[0].is_expanded,true);assert.equal(other.is_expanded,false);
- api.clickExpandLocation(displayed);assert.equal(raw[0].is_expanded,false);
- api.clickLocationAdmin1(displayed);assert.equal(raw[0].is_expanded,true);assert.equal(libConfig.location.admin1,'Beijing');
- api.clickLocationName(displayed,'Chaowai');assert.equal(libConfig.location.name,'Chaowai');
+test('address records are saved for imports and rescans, and aliases are retired',()=>{
+ const source=readFileSync(new URL('../../src-tauri/src/t_sqlite.rs',import.meta.url),'utf8');
+ assert.match(source,/save_import\(\s*&conn,\s*conn.last_insert_rowid\(\)/);
+ assert.match(source,/save_import\(\s*&conn,\s*file_id/);
+ assert.ok(source.includes('address_store::address_json("a")'));assert.ok(source.includes('address_store::group_key("a")'));
+ assert.ok(source.includes('address_store::predicate("a")'));
 });

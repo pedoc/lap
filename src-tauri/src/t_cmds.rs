@@ -3181,8 +3181,29 @@ pub fn get_lens_info(sort: i64) -> Result<Vec<ALens>, String> {
 
 /// get a file's location info
 #[tauri::command]
-pub fn get_location_info(sort: i64) -> Result<Vec<ALocation>, String> {
-    ALocation::get_from_db(sort).map_err(|e| format!("Error while getting location info: {}", e))
+pub async fn get_location_info(
+    sort: i64,
+    library_id: Option<String>,
+) -> Result<Vec<ALocation>, String> {
+    let expected_library = match library_id {
+        Some(id) => id,
+        None => t_config::current_library_id()?,
+    };
+    // Aggregating large libraries must not block the WebView event thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let _library = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|_| "Library unavailable".to_string())?;
+        if t_config::current_library_id()? != expected_library {
+            return Err("Library changed; location query was discarded".into());
+        }
+        let locations = ALocation::get_from_db(sort)
+            .map_err(|e| format!("Error while getting location info: {}", e))?;
+        if t_config::current_library_id()? != expected_library {
+            return Err("Library changed; location query was discarded".into());
+        }
+        Ok(locations)
+    })
+    .await
+    .map_err(|_| "Location query worker failed".to_string())?
 }
 
 #[tauri::command]
