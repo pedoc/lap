@@ -88,6 +88,13 @@ impl Location {
             .as_secs() as i64;
     }
 }
+pub(super) const NO_ADDRESS_ERROR: &str =
+    "Geocoding service returned no address; old location was retained";
+const NO_OFFLINE_ADDRESS_ERROR: &str = "No offline location found";
+/// Stable application-owned error codes, not substring guesses on vendor error messages.
+pub(super) fn is_empty_address_error(error: &str) -> bool {
+    matches!(error, NO_ADDRESS_ERROR | NO_OFFLINE_ADDRESS_ERROR)
+}
 static CACHE: Lazy<Mutex<HashMap<String, (Instant, Location)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 pub fn valid_coordinates(lat: f64, lon: f64) -> bool {
@@ -102,7 +109,7 @@ pub fn offline(lat: f64, lon: f64) -> Result<Location, String> {
     }
     let found = crate::t_utils::GEOCODER
         .search((lat, lon))
-        .ok_or("No offline location found")?;
+        .ok_or(NO_OFFLINE_ADDRESS_ERROR)?;
     let r = &found.record;
     let mut location = Location {
         provider: "offline".into(),
@@ -386,7 +393,7 @@ fn parse(settings: &Settings, value: &Value) -> Result<Location, String> {
         .any(|level| level.kind != "country")
         && location.address.is_empty()
     {
-        return Err("Geocoding service returned no address; old location was retained".into());
+        return Err(NO_ADDRESS_ERROR.into());
     }
     location.provider_data = json!({
         "cityTelephoneCode": if provider=="amap" {text(&component["citycode"])} else {String::new()},

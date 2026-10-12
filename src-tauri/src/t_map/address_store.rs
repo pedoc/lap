@@ -16,7 +16,12 @@ pub fn setup(conn: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS file_location_nodes(
         file_id INTEGER NOT NULL REFERENCES afiles(id) ON DELETE CASCADE,
         node_id INTEGER NOT NULL REFERENCES location_nodes(id), PRIMARY KEY(file_id,node_id));
-        CREATE INDEX IF NOT EXISTS idx_file_location_node ON file_location_nodes(node_id,file_id);",
+        CREATE INDEX IF NOT EXISTS idx_file_location_node ON file_location_nodes(node_id,file_id);
+        CREATE TABLE IF NOT EXISTS location_resolution_failures(
+            file_id INTEGER NOT NULL REFERENCES afiles(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
+            modified_at INTEGER, size INTEGER NOT NULL, attempted_at INTEGER NOT NULL,
+            error TEXT NOT NULL, PRIMARY KEY(file_id,provider));",
     )
     .map_err(|e| e.to_string())
 }
@@ -133,8 +138,38 @@ fn save_inner(
         ],
     )
     .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM location_resolution_failures WHERE file_id=?1 AND provider=?2",
+        params![file_id, address.provider],
+    )
+    .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(address)
+}
+
+/// Durable failed attempts are independent of the last successful address.
+#[allow(clippy::too_many_arguments)]
+pub fn record_failure(
+    conn: &Connection,
+    file_id: i64,
+    modified_at: Option<i64>,
+    size: i64,
+    lat: f64,
+    lon: f64,
+    provider: &str,
+    error: &str,
+) -> Result<(), String> {
+    let error = error.chars().take(2048).collect::<String>();
+    let changed=conn.execute("INSERT INTO location_resolution_failures(file_id,provider,latitude,longitude,modified_at,size,attempted_at,error)
+        SELECT id,?1,?2,?3,modified_at,size,unixepoch(),?4 FROM afiles
+        WHERE id=?5 AND modified_at IS ?6 AND size=?7 AND gps_latitude IS ?2 AND gps_longitude IS ?3
+        ON CONFLICT(file_id,provider) DO UPDATE SET latitude=excluded.latitude,longitude=excluded.longitude,
+        modified_at=excluded.modified_at,size=excluded.size,attempted_at=excluded.attempted_at,error=excluded.error",
+        params![provider,lat,lon,error,file_id,modified_at,size]).map_err(|e|e.to_string())?;
+    if changed != 1 {
+        return Err("Photo metadata/GPS changed; failed-attempt checkpoint was discarded".into());
+    }
+    Ok(())
 }
 
 pub fn save_import(

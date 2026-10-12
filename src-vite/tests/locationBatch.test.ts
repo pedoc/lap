@@ -7,16 +7,17 @@ import {displayLocationFilterLabel} from '../src/common/locationNames.js';
 const source=readFileSync(new URL('../src/components/LocationResolutionDialog.vue',import.meta.url),'utf8');
 const code=source.match(/<script setup>([\s\S]*?)<\/script>/)![1].replace(/^import .*;\r?\n/gm,'');
 function harness(provider='amap',execute?:any){
+ let uuid=0;
  const calls:any[]=[],emits:any[]=[],watches:any[]=[],mounts:any[]=[],unmounts:any[]=[],locks:string[]=[],listeners:any={};
  const libConfig:any={_libraryId:'library-a'},config:any={settings:{mapServices:{geocoder:provider},mapServicesRevision:'r1'}};
  const props:any={selection:{nodeId:3,label:'中国 > 北京市 > 朝外'}};
- const api=runInNewContext(`${code}\n;({start,stop,close,consent,ready,started,busy,progress,scopeKind})`,{
+ const api=runInNewContext(`${code}\n;({start,stop,close,consent,ready,started,busy,progress,scopeKind,mode,remaining})`,{
   defineProps:()=>props,defineEmits:()=> (...args:any[])=>emits.push(args),ref:(value:any)=>({value}),computed:(get:any)=>({get value(){return get();}}),
   watch:(_source:any,fn:any)=>watches.push(fn),onMounted:(fn:any)=>mounts.push(fn),onBeforeUnmount:(fn:any)=>unmounts.push(fn),nextTick:async()=>{},
   invoke:async(command:string,args:any)=>{calls.push({command,args:JSON.parse(JSON.stringify(args))});return execute?execute(command,args):{finished:true,completed:1,total:1,succeeded:1,failed:0,cancelled:false,errors:[]};},
   listen:async(event:string,fn:any)=>{listeners[event]=fn;return ()=>delete listeners[event];},useI18n:()=>({t:(key:string)=>key,locale:{value:'zh-CN'}}),
   useUIStore:()=>({pushInputHandler:(id:string)=>locks.push(id),removeInputHandler:(id:string)=>locks.splice(locks.indexOf(id),1)}),
-  config,libConfig,window:{innerWidth:1000},crypto:{randomUUID:()=> 'test-job'},serviceName:(id:string)=>id,
+  config,libConfig,window:{innerWidth:1000},crypto:{randomUUID:()=> (++uuid===1?'test-job':`test-job-${uuid}`)},serviceName:(id:string)=>id,
   displayLocationFilterLabel,locationResolutionScope,isLocationProgress,
  });
  return {api,props,calls,emits,listeners,libConfig,config,watches,locks,mount:()=>mounts[0](),unmount:()=>unmounts[0]()};
@@ -36,7 +37,7 @@ test('online jobs require explicit consent, while offline jobs never require per
 });
 test('task freezes selection identity and follows exact library, job and map-settings snapshot',async()=>{
  const h=harness();await h.mount();h.api.consent.value=true;h.props.selection.nodeId=4;await h.api.start();
- assert.deepEqual(h.calls[0].args.request,{libraryId:'library-a',jobId:'test-job',revision:'r1',scope:{kind:'node',node_id:3},onlineConsent:true});
+ assert.deepEqual(h.calls[0].args.request,{libraryId:'library-a',jobId:'test-job',revision:'r1',scope:{kind:'node',node_id:3},mode:'unresolved',onlineConsent:true});
  const stale=harness();await stale.mount();stale.api.consent.value=true;stale.libConfig._libraryId='other';await stale.api.start();assert.equal(stale.calls.length,0);
  const changed=harness();await changed.mount();changed.api.consent.value=true;changed.config.settings.mapServicesRevision='r2';await changed.api.start();assert.equal(changed.calls.length,0);
  h.unmount();stale.unmount();changed.unmount();
@@ -66,7 +67,8 @@ test('backend cancellation waits off the WebView thread, while location writes r
  const source=readFileSync(new URL('../../src-tauri/src/t_map/commands.rs',import.meta.url),'utf8');
  const start=source.indexOf('pub async fn cancel_location_resolution');assert.ok(start>=0);assert.ok(source.slice(start).includes('spawn_blocking'));
  const batch=readFileSync(new URL('../../src-tauri/src/t_map/batch.rs',import.meta.url),'utf8');
- assert.ok(batch.includes('file_type IN (1,3)'));assert.ok(batch.includes('current.revision != request.revision'));assert.ok(batch.includes('FILE_REFRESH_LIBRARY_LOCK'));
+ const work=readFileSync(new URL('../../src-tauri/src/t_map/batch_work.rs',import.meta.url),'utf8');
+ assert.ok(work.includes('file_type IN (1,3)'));assert.ok(batch.includes('current.revision != request.revision'));assert.ok(batch.includes('FILE_REFRESH_LIBRARY_LOCK'));
 });
 
 test('proxy settings distinguish local/proxy DNS and geocoding keeps redacted transport causes',()=>{
@@ -76,4 +78,18 @@ test('proxy settings distinguish local/proxy DNS and geocoding keeps redacted tr
   const messages=JSON.parse(readFileSync(new URL(`../src/locales/${locale}.json`,import.meta.url),'utf8'));
   assert.ok(messages.settings.network.proxy_dns_hint.includes('socks5h://'));
  }
+});
+
+test('continue and retry use new job identities and isolate previous terminal progress',async()=>{
+ const result={finished:true,cancelled:true,total:20,completed:5,failed:5,succeeded:0,remaining:15,retryableFailed:5,stopReason:'consecutive_failures'};
+ const h=harness('amap',()=>result);await h.mount();h.api.consent.value=true;await h.api.start();
+ assert.equal(h.calls[0].args.request.mode,'unresolved');assert.equal(h.api.remaining.value,15);
+ await h.api.start('remaining');assert.equal(h.calls[1].args.request.jobId,'test-job-2');assert.equal(h.calls[1].args.request.mode,'remaining');
+ const callback=h.listeners['location-resolution-progress'];callback({payload:{libraryId:'library-a',jobId:'test-job',finished:true,completed:99}});assert.equal(h.api.progress.value.completed,5);
+ await h.api.start('failed');assert.equal(h.calls[2].args.request.jobId,'test-job-3');assert.equal(h.calls[2].args.request.mode,'failed');
+ assert.equal(h.emits.filter((item:any)=>item[0]==='resolved').length,3);h.unmount();
+});
+test('new dialog defaults to unsuccessful-only and offers persistent failed retry and explicit force refresh',async()=>{
+ const h=harness();await h.mount();assert.equal(h.api.mode.value,'unresolved');h.api.consent.value=true;await h.api.start('all');assert.equal(h.calls[0].args.request.mode,'all');
+ assert.match(source,/value="failed"/);assert.match(source,/value="remaining"/);assert.match(source,/location_batch.retry_failed/);assert.match(source,/progress.retryableFailed/);assert.match(source,/location_batch.automatic_stop/);h.unmount();
 });

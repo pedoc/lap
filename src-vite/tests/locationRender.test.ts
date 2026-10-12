@@ -60,3 +60,25 @@ test('photo resolver renders the persisted address and source without making a r
  const html=await renderToString(Vue.createSSRApp(c,{file:{id:10,gps_latitude:30,gps_longitude:110,location}}));
  assert.ok(html.includes(location.address));assert.match(html,/amap/);
 });
+
+test('terminal batch template offers remaining work and keeps failed retry after a successful continuation',async()=>{
+ for(const progress of [
+  {remaining:15,failed:5,retryableFailed:5,stopReason:'consecutive_failures'},
+  {remaining:0,failed:0,retryableFailed:5,stopReason:null},
+  {remaining:0,failed:0,retryableFailed:0,stopReason:null},
+ ]){
+  const c=component('LocationResolutionDialog',{
+   TEST_PROGRESS:{total:20,completed:20-progress.remaining,succeeded:15,skipped:3000,cancelled:!!progress.stopReason,finished:true,errors:[],...progress},
+   config:{settings:{mapServices:{geocoder:'amap'},mapServicesRevision:'r1'}},libConfig:{_libraryId:'test-library'},
+   useI18n:i18n,useUIStore:()=>({pushInputHandler(){},removeInputHandler(){}}),
+   window:{innerWidth:1000},crypto:{randomUUID:()=> 'terminal-test'},serviceName:(id:string)=>id,
+   displayLocationFilterLabel,locationResolutionScope,isLocationProgress,ModalDialog:{template:'<section><slot /></section>'},
+   invoke:async()=>{throw new Error('Render must not send GPS');},listen:async()=>()=>{},
+  },source=>source.replace('const progress = ref(emptyProgress());','const progress = ref(TEST_PROGRESS);').replace('const started = ref(false)','const started = ref(true)'));
+  const html=await renderToString(Vue.createSSRApp(c,{selection:{nodeId:3,label:'中国 > 北京市'}}));
+  assert.equal(html.includes('location_batch.continue'),progress.remaining>0);
+  assert.equal(html.includes('location_batch.retry_failed'),progress.retryableFailed>0);
+  if(progress.stopReason)assert.ok(html.includes('location_batch.automatic_stop'));
+  assert.ok(html.includes('location_batch.skipped'));
+ }
+});
