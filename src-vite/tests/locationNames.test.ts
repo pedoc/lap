@@ -37,7 +37,7 @@ test('expand/collapse, sorting and searching do not mutate stored nodes or photo
 test('all address displays and filters use structured data, not geo strings',()=>{
  for(const name of ['FileInfo','PhotoLocationResolver','Thumbnail','StatusBar']){
   const source=readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');
-  assert.ok(source.includes('.location'));assert.doesNotMatch(source,/geo_name|geo_admin1|geo_cc|displayPlaceName/);
+  assert.ok(source.includes('addressForFile'));assert.doesNotMatch(source,/geo_name|geo_admin1|geo_cc|displayPlaceName/);
  }
  const content=readFileSync(new URL('../src/components/Content.vue',import.meta.url),'utf8');assert.match(content,/locationNodeId: libConfig.location.nodeId/);assert.doesNotMatch(content,/locationAdmin1|locationName:/);
  const sidebar=readFileSync(new URL('../src/components/Location.vue',import.meta.url),'utf8');assert.ok(sidebar.includes('libraryId !== libConfig._libraryId'));assert.ok(sidebar.includes('ticket !== generation'));

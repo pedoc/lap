@@ -31,6 +31,12 @@ export function applyMapServices(store, state) {
 export function validGpsCoordinates(lat, lon) {
   return lat != null && lon != null && lat !== '' && lon !== '' && Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) && Math.abs(Number(lat)) <= 90 && Math.abs(Number(lon)) <= 180;
 }
+export function isPlaceholderGps(lat, lon) {
+  return validGpsCoordinates(lat, lon) && Number(lat) === 0 && Number(lon) === 0;
+}
+export function hasResolvableGps(lat, lon) {
+  return validGpsCoordinates(lat, lon) && !isPlaceholderGps(lat, lon);
+}
 export function serviceName(id) { return MAP_SERVICES.find(service => service.id === id)?.name || id; }
 export function escapeAttribution(value) { return String(value || '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char])); }
 

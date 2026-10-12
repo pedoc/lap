@@ -415,7 +415,7 @@
       </div>
 
       <!-- Map View -->
-      <div v-if="validGpsCoordinates(fileInfo?.gps_latitude, fileInfo?.gps_longitude)"
+      <div v-if="hasResolvableGps(fileInfo?.gps_latitude, fileInfo?.gps_longitude)"
         class="border-t border-base-content/5 px-1 py-4 space-y-3 flex flex-col transition-[flex-grow]" 
         :class="{ 'flex-1 min-h-75 shrink-0': showMapPanel }">
         <div class="flex items-center gap-1 cursor-pointer text-base-content/70 hover:text-base-content shrink-0" @click.stop="toggleMapPanel">
@@ -438,7 +438,7 @@
               <MapView
                 :lat="fileInfo.gps_latitude ? Number(fileInfo.gps_latitude) : 0"
                 :lon="fileInfo.gps_longitude ? Number(fileInfo.gps_longitude) : 0"
-                :label="addressLabel(fileInfo.location) || fileInfo.name || 'Lap'"
+                :label="addressLabel(addressForFile(fileInfo)) || fileInfo.name || 'Lap'"
               />
             </div>
           </div>
@@ -464,7 +464,7 @@ import ImageNavigator from '@/components/ImageNavigator.vue';
 import { ref, nextTick, computed, watch, onBeforeUnmount, onMounted } from 'vue';
 import { listen } from '@tauri-apps/api/event';
 import { useI18n } from 'vue-i18n';
-import { addressPath, addressLabel, addressSelection } from '@/common/locationNames';
+import { addressForFile, addressPath, addressLabel, addressSelection } from '@/common/locationNames';
 import { useToast } from '@/common/toast';
 import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
@@ -508,7 +508,7 @@ import FavoriteRatingControl from '@/components/FavoriteRatingControl.vue';
 import ImageHistogram from '@/components/ImageHistogram.vue';
 import MapView from '@/components/MapView.vue';
 import PhotoLocationResolver from '@/components/PhotoLocationResolver.vue';
-import { validGpsCoordinates } from '@/common/mapServices';
+import { hasResolvableGps } from '@/common/mapServices';
 
 const props = defineProps({
   navigatorViewport: { type: Object, default: null },
@@ -956,13 +956,13 @@ function formatGeoLocation() {
   const info = props.fileInfo;
   if (!info) return "";
 
-  return addressPath(info.location) || addressLabel(info.location);
+  return addressPath(addressForFile(info)) || addressLabel(addressForFile(info));
 }
 
 // Clickable metadata values: jump to the corresponding sidebar view.
 const hasCamera = computed(() => !!(props.fileInfo?.e_make || props.fileInfo?.e_model));
 const hasLens = computed(() => !!props.fileInfo?.e_lens_model);
-const hasLocation = computed(() => !!addressSelection(props.fileInfo?.location).nodeId);
+const hasLocation = computed(() => !!addressSelection(addressForFile(props.fileInfo)).nodeId);
 
 function navigateCamera() {
   if (!hasCamera.value) return;
@@ -976,7 +976,7 @@ function navigateLens() {
 
 function navigateLocation() {
   if (!hasLocation.value) return;
-  emit('navigateMetadata', { type: 'location', ...addressSelection(props.fileInfo?.location) });
+  emit('navigateMetadata', { type: 'location', ...addressSelection(addressForFile(props.fileInfo)) });
 }
 
 // People recognized in this file (deduplicated by person id).

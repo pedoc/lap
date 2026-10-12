@@ -9258,11 +9258,13 @@ impl AGpsMapPoint {
                  FROM afiles a
                  LEFT JOIN afolders b ON a.folder_id = b.id
                  LEFT JOIN albums c ON b.album_id = c.id
-                 {}{} AND a.gps_latitude IS NOT NULL AND a.gps_longitude IS NOT NULL
+                 {}{} AND {}
                  GROUP BY a.id
              )
              GROUP BY ROUND(gps_latitude, 2), ROUND(gps_longitude, 2)",
-            joins, where_clause,
+            joins,
+            where_clause,
+            crate::t_map::address_store::gps_predicate("a"),
         );
         let final_params: Vec<&dyn ToSql> = sql_params.iter().map(|p| p.as_ref()).collect();
         let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
@@ -9709,6 +9711,8 @@ fn create_db_internal() -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    crate::t_map::address_store::cleanup_placeholder_addresses(&conn)?;
 
     // file thumbnail table
     // NOTE: New columns (thumb_key, thumb_mtime, thumb_size, updated_at) are added

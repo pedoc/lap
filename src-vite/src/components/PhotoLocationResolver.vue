@@ -1,9 +1,10 @@
 <template>
-  <div v-if="hasGps" class="flex flex-col gap-1 mt-1 text-xs">
+  <p v-if="placeholderGps" role="status" class="mt-1 text-xs text-warning whitespace-pre-wrap">{{ t('map_services.gps_placeholder') }}</p>
+  <div v-else-if="hasGps" class="flex flex-col gap-1 mt-1 text-xs">
     <button type="button" class="btn btn-xs self-start" :disabled="busy" @click.stop="resolve">{{ busy ? t('map_services.resolving') : t('map_services.resolve') }}</button>
     <span class="opacity-50">{{ t('map_services.geocoder') }}: {{ serviceName(config.settings.mapServices?.geocoder || 'offline') }}</span>
-    <span v-if="location || file.location" class="text-base-content/70">{{ (location || file.location).address }} · {{ serviceName((location || file.location).provider) }}</span>
-    <span v-if="error" role="alert" class="text-error whitespace-pre-wrap">{{ error }}</span>
+    <span v-if="savedLocation" class="text-base-content/70">{{ savedLocation.address }} · {{ serviceName(savedLocation.provider) }}</span>
+    <span v-if="error" role="alert" class="text-error whitespace-pre-wrap">{{ formatLocationError(error,t) }}</span>
   </div>
 </template>
 <script setup>
@@ -11,11 +12,15 @@ import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
-import { validGpsCoordinates, serviceName } from '@/common/mapServices';
+import { hasResolvableGps, isPlaceholderGps, serviceName } from '@/common/mapServices';
+import { addressForFile } from '@/common/locationNames';
+import { formatLocationError } from '@/common/geocodingDiagnostics';
 const props = defineProps({ file: { type: Object, required: true } });
 const { t } = useI18n();
-const hasGps = computed(() => Number(props.file.id) > 0 && validGpsCoordinates(props.file.gps_latitude, props.file.gps_longitude));
+const hasGps = computed(() => Number(props.file.id) > 0 && hasResolvableGps(props.file.gps_latitude, props.file.gps_longitude));
+const placeholderGps = computed(() => Number(props.file.id) > 0 && isPlaceholderGps(props.file.gps_latitude, props.file.gps_longitude));
 const busy = ref(false), error = ref(''), location = ref(null);
+const savedLocation = computed(() => location.value || addressForFile(props.file));
 let generation = 0, alive = true;
 watch(() => [props.file.id, props.file.gps_latitude, props.file.gps_longitude, libConfig._libraryId, config.settings.mapServicesRevision], () => { generation++; location.value = null; error.value = ''; busy.value = false; });
 onBeforeUnmount(() => { alive = false; generation++; });

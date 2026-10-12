@@ -44,9 +44,9 @@
           <span>{{ formatCaptureSettings(currentFile?.e_focal_length, currentFile?.e_exposure_time, currentFile?.e_f_number, currentFile?.e_iso_speed, currentFile?.e_exposure_bias) }}</span>
         </div>
 
-        <div v-if="addressPath(currentFile?.location)" class="flex items-center gap-1 shink-0">
+        <div v-if="addressPath(addressForFile(currentFile))" class="flex items-center gap-1 shink-0">
           <IconLocation class="t-icon-size-xs" />
-          <span>{{ addressPath(currentFile?.location) }}</span>
+          <span>{{ addressPath(addressForFile(currentFile)) }}</span>
         </div>
       </template>
     </div>
@@ -65,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { addressPath } from '@/common/locationNames';
+import { addressPath, addressForFile } from '@/common/locationNames';
 import { computed } from 'vue';
 import {
   formatFileSize,

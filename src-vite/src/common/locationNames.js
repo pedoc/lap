@@ -1,4 +1,8 @@
+import { hasResolvableGps } from './mapServices.js';
 /** Address labels always come from persisted provider data, never a transliteration dictionary. */
+export function addressForFile(file) {
+  return hasResolvableGps(file?.gps_latitude, file?.gps_longitude) ? file?.location : null;
+}
 export function addressPath(address) {
   return (address?.hierarchy || []).map(level => level.name).filter(Boolean).join(' > ');
 }

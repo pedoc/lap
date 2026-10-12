@@ -36,6 +36,7 @@ pub struct Progress {
     pub job_id: String,
     pub total: usize,
     pub skipped: usize,
+    pub placeholder_gps: usize,
     pub remaining: usize,
     pub retryable_failed: usize,
     pub stop_reason: Option<String>,
@@ -63,6 +64,7 @@ pub(super) struct Selection {
     pub items: Vec<Photo>,
     pub skipped: usize,
     pub failed_count: usize,
+    pub placeholder_gps: usize,
 }
 pub(super) fn select_photos(
     conn: &Connection,
@@ -109,9 +111,14 @@ pub(super) fn select_photos(
         items: Vec::new(),
         skipped: 0,
         failed_count: 0,
+        placeholder_gps: 0,
     };
     for row in rows {
         let (photo, success, failed) = row.map_err(|e| e.to_string())?;
+        if geo::placeholder_coordinates(photo.lat, photo.lon) {
+            selection.placeholder_gps += 1;
+            continue;
+        }
         if failed {
             selection.failed_count += 1;
         }
@@ -684,5 +691,37 @@ mod tests {
         assert!(result.cancelled);
         assert_eq!(result.completed, 0);
         assert_eq!(writes.get(), 0);
+    }
+    #[test]
+    fn placeholder_photos_never_enter_network_or_retry_queue_but_single_zero_axis_is_kept() {
+        let c = db();
+        c.execute_batch("INSERT INTO afiles VALUES(6,1,1,10,100,0,0,NULL,'','','',''),(7,1,1,10,100,0,10,NULL,'','','',''),(8,1,1,10,100,10,0,NULL,'','','','');").unwrap();
+        for mode in [Mode::All, Mode::Unresolved, Mode::Remaining, Mode::Failed] {
+            let selection = select_photos(&c, &Scope::Library, mode, "amap").unwrap();
+            assert_eq!(selection.placeholder_gps, 1);
+            assert!(!selection.items.iter().any(|item| item.id == 6));
+        }
+        let selection = select_photos(&c, &Scope::Library, Mode::All, "amap").unwrap();
+        assert!(selection.items.iter().any(|item| item.id == 7));
+        assert!(selection.items.iter().any(|item| item.id == 8));
+        let progress = Progress {
+            placeholder_gps: selection.placeholder_gps,
+            ..Default::default()
+        };
+        let result = process(
+            selection.items,
+            progress,
+            || false,
+            |lat, lon| {
+                assert!(!geo::placeholder_coordinates(lat, lon));
+                Ok(location())
+            },
+            |_, _| Ok(()),
+            |_, _| Ok(()),
+            |_| {},
+        );
+        assert_eq!(result.placeholder_gps, 1);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.total, 4);
     }
 }

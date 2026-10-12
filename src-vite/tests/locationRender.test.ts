@@ -7,6 +7,9 @@ import {parse,compileScript} from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import {renderToString} from 'vue/server-renderer';
 import {visibleLocationRows,locationNodePath,locationNodeChain,displayLocationFilterLabel} from '../src/common/locationNames.js';
+import {hasResolvableGps,isPlaceholderGps} from '../src/common/mapServices.js';
+import {addressForFile} from '../src/common/locationNames.js';
+import {formatLocationError} from '../src/common/geocodingDiagnostics.js';
 import {locationResolutionScope,isLocationProgress} from '../src/common/locationBatch.js';
 
 function component(name:string,context:any,transform:(s:string)=>string=s=>s) {
@@ -41,7 +44,7 @@ test('real bulk dialog renders consent only for online services and exposes both
    config:{settings:{mapServices:{geocoder:provider},mapServicesRevision:'r1'}},libConfig:{_libraryId:'test-library'},
    useI18n:i18n,useUIStore:()=>({pushInputHandler(){},removeInputHandler(){}}),
    window:{innerWidth:1000},crypto:{randomUUID:()=> 'render-job'},serviceName:(id:string)=>id,
-   displayLocationFilterLabel,locationResolutionScope,isLocationProgress,ModalDialog:{template:'<section><slot /></section>'},
+   displayLocationFilterLabel,formatLocationError,locationResolutionScope,isLocationProgress,ModalDialog:{template:'<section><slot /></section>'},
    invoke:async()=>{throw new Error('Render must not resolve locations');},listen:async()=>()=>{},
   });
   const html=await renderToString(Vue.createSSRApp(c,{selection:{nodeId:3,label:'中国 > 北京市 > 朝外'}}));
@@ -54,7 +57,7 @@ test('photo resolver renders the persisted address and source without making a r
  const location={provider:'amap',address:'重庆市巴南区鱼洞街道某路8号',hierarchy:[{name:'中国',nodeId:1},{name:'重庆市',nodeId:2},{name:'巴南区',nodeId:3}]};
  const c=component('PhotoLocationResolver',{
   config:{settings:{mapServices:{geocoder:'amap'},mapServicesRevision:'r1'}},libConfig:{_libraryId:'test-library'},
-  useI18n:i18n,validGpsCoordinates:()=>true,serviceName:(id:string)=>id,
+  useI18n:i18n,hasResolvableGps,isPlaceholderGps,addressForFile,formatLocationError,serviceName:(id:string)=>id,
   invoke:async()=>{throw new Error('Rendering saved data must not send GPS');},
  });
  const html=await renderToString(Vue.createSSRApp(c,{file:{id:10,gps_latitude:30,gps_longitude:110,location}}));
@@ -72,7 +75,7 @@ test('terminal batch template offers remaining work and keeps failed retry after
    config:{settings:{mapServices:{geocoder:'amap'},mapServicesRevision:'r1'}},libConfig:{_libraryId:'test-library'},
    useI18n:i18n,useUIStore:()=>({pushInputHandler(){},removeInputHandler(){}}),
    window:{innerWidth:1000},crypto:{randomUUID:()=> 'terminal-test'},serviceName:(id:string)=>id,
-   displayLocationFilterLabel,locationResolutionScope,isLocationProgress,ModalDialog:{template:'<section><slot /></section>'},
+   displayLocationFilterLabel,formatLocationError,locationResolutionScope,isLocationProgress,ModalDialog:{template:'<section><slot /></section>'},
    invoke:async()=>{throw new Error('Render must not send GPS');},listen:async()=>()=>{},
   },source=>source.replace('const progress = ref(emptyProgress());','const progress = ref(TEST_PROGRESS);').replace('const started = ref(false)','const started = ref(true)'));
   const html=await renderToString(Vue.createSSRApp(c,{selection:{nodeId:3,label:'中国 > 北京市'}}));
@@ -81,4 +84,14 @@ test('terminal batch template offers remaining work and keeps failed retry after
   if(progress.stopReason)assert.ok(html.includes('location_batch.automatic_stop'));
   assert.ok(html.includes('location_batch.skipped'));
  }
+});
+
+test('real placeholder photo template warns, hides guessed address and offers no online action',async()=>{
+ const c=component('PhotoLocationResolver',{
+  config:{settings:{mapServices:{geocoder:'amap'},mapServicesRevision:'r1'}},libConfig:{_libraryId:'test-library'},
+  useI18n:i18n,hasResolvableGps,isPlaceholderGps,addressForFile,formatLocationError,serviceName:(id:string)=>id,
+  invoke:async()=>{throw new Error('Placeholder GPS must never be transmitted');},
+ });
+ const html=await renderToString(Vue.createSSRApp(c,{file:{id:1,gps_latitude:0,gps_longitude:0,location:{address:'Bogus nearest city',provider:'offline'}}}));
+ assert.match(html,/map_services.gps_placeholder/);assert.ok(!html.includes('Bogus nearest city'));assert.ok(!html.includes('<button'));
 });

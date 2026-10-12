@@ -67,6 +67,7 @@ pub async fn resolve_photo_location(
             (Some(lat), Some(lon)) if geo::valid_coordinates(lat, lon) => (lat, lon),
             _ => return Err("Photo has no valid GPS coordinates".into()),
         };
+        geo::require_resolvable_coordinates(lat, lon)?;
         let location = geo::resolve(&state.settings, lat, lon)?;
         let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .try_read()

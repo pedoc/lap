@@ -6,7 +6,9 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { MAP_SERVICES, serviceFields, defaultMapServices, migrateLegacyMapServices, applyMapServices, validGpsCoordinates, escapeAttribution, serviceName } from '../src/common/mapServices.js';
+import { MAP_SERVICES, serviceFields, defaultMapServices, migrateLegacyMapServices, applyMapServices, validGpsCoordinates, hasResolvableGps, isPlaceholderGps, escapeAttribution, serviceName } from '../src/common/mapServices.js';
+import { addressForFile } from '../src/common/locationNames.js';
+import { formatLocationError } from '../src/common/geocodingDiagnostics.js';
 import { getMapTheme, createTileLayerGroup } from '../src/common/mapProviders.js';
 
 test('display/geocoding capabilities are separated and provider choices roundtrip without legacy normalization', () => {
@@ -67,10 +69,10 @@ test('late structured address results cannot mutate another photo, GPS snapshot,
  for (const change of ['photo','gps','library','provider']) {
   let complete:(value:any)=>void=()=>{};
   const old={provider:'amap',address:'已保存的地址',hierarchy:[{name:'中国',nodeId:1}]};
-  const file:any={id:7,gps_latitude:0,gps_longitude:0,location:old};
+  const file:any={id:7,gps_latitude:0,gps_longitude:10,location:old};
   const libConfig={_libraryId:'library-a'},config={settings:{mapServices:{geocoder:'amap'},mapServicesRevision:'r1'}};
   const api=runInNewContext(`${script('PhotoLocationResolver')}
-;({resolve,hasGps,error,location})`,{...vue,defineProps:()=>({file}),config,libConfig,validGpsCoordinates,serviceName,useI18n:()=>({t:(key:string)=>key}),invoke:async()=>new Promise(resolve=>{complete=resolve;})});
+;({resolve,hasGps,error,location})`,{...vue,defineProps:()=>({file}),config,libConfig,validGpsCoordinates,hasResolvableGps,isPlaceholderGps,addressForFile,formatLocationError,serviceName,useI18n:()=>({t:(key:string)=>key}),invoke:async()=>new Promise(resolve=>{complete=resolve;})});
   assert.ok(api.hasGps.value);const pending=api.resolve();
   if(change==='photo')file.id=9;else if(change==='gps')file.gps_latitude=1;else if(change==='library')libConfig._libraryId='library-b';else config.settings.mapServicesRevision='r2';
   complete({location:{provider:'amap',address:'新的地址',hierarchy:[{name:'区县',nodeId:3}]}});await pending;
@@ -79,10 +81,10 @@ test('late structured address results cannot mutate another photo, GPS snapshot,
 });
 test('successful resolution assigns the exact saved hierarchy and failures retain it', async()=>{
  const old={provider:'offline',address:'approximate',hierarchy:[]},resolved={provider:'amap',address:'完整地址',hierarchy:[{name:'中国',nodeId:1},{name:'区县',nodeId:3}]};
- const file:any={id:7,gps_latitude:0,gps_longitude:0,location:old},libConfig={_libraryId:'library-a'},config={settings:{mapServicesRevision:'r1'}};
+ const file:any={id:7,gps_latitude:0,gps_longitude:10,location:old},libConfig={_libraryId:'library-a'},config={settings:{mapServicesRevision:'r1'}};
  let fail=false;
  const api=runInNewContext(`${script('PhotoLocationResolver')}
-;({resolve,error,location})`,{...vue,defineProps:()=>({file}),config,libConfig,validGpsCoordinates,serviceName,useI18n:()=>({t:(key:string)=>key}),invoke:async()=>{if(fail)throw new Error('Network unavailable');return {fileId:7,location:resolved};}});
+;({resolve,error,location})`,{...vue,defineProps:()=>({file}),config,libConfig,validGpsCoordinates,hasResolvableGps,isPlaceholderGps,addressForFile,formatLocationError,serviceName,useI18n:()=>({t:(key:string)=>key}),invoke:async()=>{if(fail)throw new Error('Network unavailable');return {fileId:7,location:resolved};}});
  await api.resolve();assert.equal(file.location,resolved);assert.equal(file.location.hierarchy[1].nodeId,3);assert.ok(!('geo_name' in file));
  fail=true;await api.resolve();assert.equal(file.location,resolved);assert.match(api.error.value,/Network unavailable/);
 });

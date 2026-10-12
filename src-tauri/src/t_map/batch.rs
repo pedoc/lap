@@ -109,6 +109,7 @@ pub fn run(request: Request, app: AppHandle) -> Result<Progress, String> {
         (state, selection)
     };
     initial.skipped = selection.skipped;
+    initial.placeholder_gps = selection.placeholder_gps;
     initial.retryable_failed = selection.failed_count;
     let online = state.settings.geocoder != "offline";
     let checkpoint = |photo: &Photo, location: Option<&geo::Location>, error: Option<&str>| {

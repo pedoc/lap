@@ -28,12 +28,13 @@
       <template v-if="started">
         <progress class="progress progress-primary w-full" :value="progress.completed" :max="Math.max(1, progress.total)" />
         <p class="text-xs" aria-live="polite">{{ t('location_batch.progress', progress) }}</p>
+        <p v-if="progress.placeholderGps" class="text-xs text-warning">{{ t('location_batch.placeholder_skipped', {count:progress.placeholderGps}) }}</p>
         <p v-if="progress.skipped" class="text-xs opacity-70">{{ t('location_batch.skipped', {count:progress.skipped}) }}</p>
         <p v-if="progress.finished && remaining > 0" class="text-xs">{{ t('location_batch.remaining', {count:remaining}) }}</p>
         <p v-if="progress.finished" class="text-xs">{{ t(progress.stopReason === 'consecutive_failures' ? 'location_batch.automatic_stop' : progress.cancelled ? 'location_batch.cancelled' : 'location_batch.finished') }}</p>
-        <p v-for="message in progress.errors" :key="message" class="text-xs text-error break-all">{{ message }}</p>
+        <p v-for="message in progress.errors" :key="message" class="text-xs text-error break-all">{{ formatLocationError(message,t) }}</p>
       </template>
-      <p v-if="error" role="alert" class="text-xs text-error whitespace-pre-wrap">{{ error }}</p>
+      <p v-if="error" role="alert" class="text-xs text-error whitespace-pre-wrap">{{ formatLocationError(error,t) }}</p>
       <div class="flex gap-2 flex-wrap justify-end">
         <button v-if="!started" type="button" class="btn btn-sm btn-primary" :disabled="!ready || busy || (provider !== 'offline' && !consent)" @click="start()">{{ t('location_batch.start') }}</button>
         <button v-if="started && progress.finished && !busy && remaining > 0" type="button" class="btn btn-sm btn-primary" @click="start('remaining')">{{ t('location_batch.continue') }}</button>
@@ -52,6 +53,7 @@ import {useI18n} from 'vue-i18n';
 import {config, libConfig} from '@/common/config';
 import {useUIStore} from '@/stores/uiStore';
 import {serviceName} from '@/common/mapServices';
+import {formatLocationError} from '@/common/geocodingDiagnostics';
 import {displayLocationFilterLabel} from '@/common/locationNames';
 import {locationResolutionScope, isLocationProgress} from '@/common/locationBatch';
 import ModalDialog from './ModalDialog.vue';
@@ -65,7 +67,7 @@ const selectionLabel = computed(() => displayLocationFilterLabel(selection));
 const root = ref(null), scopeKind = ref(selection.nodeId ? 'node' : 'library'), consent = ref(false), ready = ref(false);
 const mode = ref('unresolved');
 const started = ref(false), busy = ref(false), stopping = ref(false), error = ref('');
-const emptyProgress = () => ({total:0,completed:0,succeeded:0,failed:0,skipped:0,remaining:0,retryableFailed:0,stopReason:null,finished:false,cancelled:false,errors:[]});
+const emptyProgress = () => ({total:0,completed:0,succeeded:0,failed:0,skipped:0,placeholderGps:0,remaining:0,retryableFailed:0,stopReason:null,finished:false,cancelled:false,errors:[]});
 const progress = ref(emptyProgress());
 const remaining = computed(() => Math.max(0, progress.value.remaining ?? progress.value.total - progress.value.completed));
 const handler = `LocationResolution:${jobId}`;

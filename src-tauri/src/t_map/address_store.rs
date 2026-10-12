@@ -25,22 +25,41 @@ pub fn setup(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())
 }
+/// Usable for photo location features, not a mathematical definition of valid latitude/longitude.
+pub fn gps_predicate(alias: &str) -> String {
+    format!(
+        "{alias}.gps_latitude BETWEEN -90 AND 90 AND {alias}.gps_longitude BETWEEN -180 AND 180 AND NOT ({alias}.gps_latitude=0 AND {alias}.gps_longitude=0)"
+    )
+}
+/// Only discard derived results from zero-zero snapshots; preserve media and raw GPS.
+pub fn cleanup_placeholder_addresses(conn: &Connection) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch("DELETE FROM file_location_nodes WHERE file_id IN (SELECT fl.file_id FROM file_locations fl JOIN afiles a ON a.id=fl.file_id WHERE fl.latitude=0 AND fl.longitude=0 AND a.gps_latitude=0 AND a.gps_longitude=0);
+        DELETE FROM file_locations WHERE latitude=0 AND longitude=0 AND file_id IN (SELECT id FROM afiles WHERE gps_latitude=0 AND gps_longitude=0);
+        DELETE FROM location_resolution_failures WHERE latitude=0 AND longitude=0 AND file_id IN (SELECT id FROM afiles WHERE gps_latitude=0 AND gps_longitude=0);
+        UPDATE afiles SET geo_name=NULL,geo_admin1=NULL,geo_admin2=NULL,geo_cc=NULL WHERE gps_latitude=0 AND gps_longitude=0 AND (geo_name IS NOT NULL OR geo_admin1 IS NOT NULL OR geo_admin2 IS NOT NULL OR geo_cc IS NOT NULL);")
+        .map_err(|e|e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
 /// Membership includes every recorded ancestor and rejects stale coordinates.
 pub fn predicate(alias: &str) -> String {
     format!(
-        "EXISTS (SELECT 1 FROM file_location_nodes fln JOIN file_locations fl ON fl.file_id=fln.file_id WHERE fln.file_id={alias}.id AND fln.node_id=? AND fl.latitude IS {alias}.gps_latitude AND fl.longitude IS {alias}.gps_longitude)"
+        "EXISTS (SELECT 1 FROM file_location_nodes fln JOIN file_locations fl ON fl.file_id=fln.file_id WHERE fln.file_id={alias}.id AND fln.node_id=? AND fl.latitude IS {alias}.gps_latitude AND fl.longitude IS {alias}.gps_longitude AND {gps})",
+        gps = gps_predicate(alias)
     )
 }
 
 /// The same GPS-snapshot rule is used by details, grouped lists and duplicate views.
 pub fn address_json(alias: &str) -> String {
     format!(
-        "(SELECT fl.address_json FROM file_locations fl WHERE fl.file_id={alias}.id AND fl.latitude IS {alias}.gps_latitude AND fl.longitude IS {alias}.gps_longitude)"
+        "(SELECT fl.address_json FROM file_locations fl WHERE fl.file_id={alias}.id AND fl.latitude IS {alias}.gps_latitude AND fl.longitude IS {alias}.gps_longitude AND {gps})",
+        gps = gps_predicate(alias)
     )
 }
 pub fn group_key(alias: &str) -> String {
     format!(
-        "COALESCE((SELECT json_array(COALESCE((SELECT group_concat(json_extract(value,'$.name'),' > ') FROM json_each(fl.address_json,'$.hierarchy')),json_extract(fl.address_json,'$.address')),json_extract(fl.address_json,'$.hierarchy[#-1].nodeId')) FROM file_locations fl WHERE fl.file_id={alias}.id AND fl.latitude IS {alias}.gps_latitude AND fl.longitude IS {alias}.gps_longitude),'unknown-location')"
+        "COALESCE((SELECT json_array(COALESCE((SELECT group_concat(json_extract(value,'$.name'),' > ') FROM json_each(fl.address_json,'$.hierarchy')),json_extract(fl.address_json,'$.address')),json_extract(fl.address_json,'$.hierarchy[#-1].nodeId')) FROM file_locations fl WHERE fl.file_id={alias}.id AND fl.latitude IS {alias}.gps_latitude AND fl.longitude IS {alias}.gps_longitude AND {gps}),'unknown-location')",
+        gps = gps_predicate(alias)
     )
 }
 
@@ -67,6 +86,7 @@ fn save_inner(
     address: &Location,
     preserve_existing: bool,
 ) -> Result<Location, String> {
+    super::geo::require_resolvable_coordinates(lat, lon)?;
     // Reserve the writer before validating the snapshot; avoid read-to-write WAL races.
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
@@ -159,6 +179,7 @@ pub fn record_failure(
     provider: &str,
     error: &str,
 ) -> Result<(), String> {
+    super::geo::require_resolvable_coordinates(lat, lon)?;
     let error = error.chars().take(2048).collect::<String>();
     let changed=conn.execute("INSERT INTO location_resolution_failures(file_id,provider,latitude,longitude,modified_at,size,attempted_at,error)
         SELECT id,?1,?2,?3,modified_at,size,unixepoch(),?4 FROM afiles
@@ -213,7 +234,7 @@ pub fn nodes(
         JOIN file_locations fl ON fl.file_id=fln.file_id JOIN afiles a ON a.id=fl.file_id
         JOIN afolders b ON b.id=a.folder_id WHERE fl.latitude IS a.gps_latitude AND fl.longitude IS a.gps_longitude
         AND a.id NOT IN(SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL)
-        {album_filter} AND {exclusion} GROUP BY n.id ORDER BY {order}");
+        {album_filter} AND {exclusion} AND {gps} GROUP BY n.id ORDER BY {order}",gps=gps_predicate("a"));
     let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
     stmt.query_map([], |r| {
         Ok(Node {
@@ -393,5 +414,79 @@ mod tests {
             .unwrap();
         assert!(json.is_none());
         assert_eq!(key, "unknown-location");
+    }
+    #[test]
+    fn zero_zero_cleanup_discards_only_wrong_derived_data_and_preserves_media_gps_tags_faces() {
+        let c = db();
+        c.execute_batch("ALTER TABLE afiles ADD COLUMN name TEXT DEFAULT 'original.jpg'; ALTER TABLE afiles ADD COLUMN user_tag TEXT DEFAULT 'user-tag'; ALTER TABLE afiles ADD COLUMN has_faces INTEGER DEFAULT 1;").unwrap();
+        let saved = save(&c, 2, Some(10), 100, 30., 110., &address("有效地址")).unwrap();
+        c.execute_batch("UPDATE afiles SET gps_latitude=0,gps_longitude=0,geo_name='Wrong nearest city',geo_cc='GH' WHERE id=1;").unwrap();
+        let wrong = serde_json::to_string(&address("错误近邻")).unwrap();
+        c.execute("INSERT INTO file_locations VALUES(1,0,0,?1)", [wrong])
+            .unwrap();
+        c.execute_batch("INSERT INTO file_location_nodes SELECT 1,id FROM location_nodes; INSERT INTO location_resolution_failures VALUES(1,'amap',0,0,10,100,0,'old failure');").unwrap();
+        let json_query = format!(
+            "SELECT {},{} FROM afiles a WHERE a.id=1",
+            address_json("a"),
+            group_key("a")
+        );
+        let (before, group): (Option<String>, String) = c
+            .query_row(&json_query, [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert!(before.is_none());
+        assert_eq!(group, "unknown-location");
+        assert!(save(&c, 1, Some(10), 100, 0., 0., &address("Wrong")).is_err());
+        assert!(
+            record_failure(&c, 1, Some(10), 100, 0., 0., "amap", "no request allowed").is_err()
+        );
+        cleanup_placeholder_addresses(&c).unwrap();
+        cleanup_placeholder_addresses(&c).unwrap();
+        let values=c.query_row("SELECT gps_latitude,gps_longitude,name,user_tag,has_faces,geo_name FROM afiles WHERE id=1",[],|r|Ok((r.get::<_,f64>(0)?,r.get::<_,f64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,Option<String>>(5)?))).unwrap();
+        assert_eq!(
+            values,
+            (0., 0., "original.jpg".into(), "user-tag".into(), 1, None)
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM file_locations WHERE file_id=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM location_resolution_failures WHERE file_id=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        let json: String = c
+            .query_row(
+                "SELECT address_json FROM file_locations WHERE file_id=2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Location>(&json).unwrap(), saved);
+        c.execute(
+            "UPDATE afiles SET gps_latitude=0,gps_longitude=0 WHERE id=2",
+            [],
+        )
+        .unwrap();
+        cleanup_placeholder_addresses(&c).unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM file_locations WHERE file_id=2",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        ); // Keep an earlier nonzero GPS success, hidden while GPS is unusable.
+        assert!(nodes(&c, "", "1", 0).unwrap().is_empty());
     }
 }

@@ -90,10 +90,13 @@ impl Location {
 }
 pub(super) const NO_ADDRESS_ERROR: &str =
     "Geocoding service returned no address; old location was retained";
+pub(super) const PLACEHOLDER_GPS_ERROR: &str = "LAP_GPS_PLACEHOLDER: GPS (0,0) may be a placeholder; address resolution was skipped and original GPS was retained";
+pub(super) const NO_ADDRESS_DIAGNOSTIC_PREFIX: &str = "LAP_GEOCODE_NO_ADDRESS:";
 const NO_OFFLINE_ADDRESS_ERROR: &str = "No offline location found";
 /// Stable application-owned error codes, not substring guesses on vendor error messages.
 pub(super) fn is_empty_address_error(error: &str) -> bool {
     matches!(error, NO_ADDRESS_ERROR | NO_OFFLINE_ADDRESS_ERROR)
+        || error.starts_with(NO_ADDRESS_DIAGNOSTIC_PREFIX)
 }
 static CACHE: Lazy<Mutex<HashMap<String, (Instant, Location)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -103,10 +106,23 @@ pub fn valid_coordinates(lat: f64, lon: f64) -> bool {
         && (-90.0..=90.0).contains(&lat)
         && (-180.0..=180.0).contains(&lon)
 }
-pub fn offline(lat: f64, lon: f64) -> Result<Location, String> {
+pub(super) fn placeholder_coordinates(lat: f64, lon: f64) -> bool {
+    lat == 0.0 && lon == 0.0
+}
+pub(super) fn require_resolvable_coordinates(lat: f64, lon: f64) -> Result<(), String> {
     if !valid_coordinates(lat, lon) {
         return Err("Invalid GPS coordinates".into());
     }
+    if placeholder_coordinates(lat, lon) {
+        return Err(PLACEHOLDER_GPS_ERROR.into());
+    }
+    Ok(())
+}
+fn within_gcj02_reference_area(lat: f64, lon: f64) -> bool {
+    (72.004..=137.8347).contains(&lon) && (0.8293..=55.8271).contains(&lat)
+}
+pub fn offline(lat: f64, lon: f64) -> Result<Location, String> {
+    require_resolvable_coordinates(lat, lon)?;
     let found = crate::t_utils::GEOCODER
         .search((lat, lon))
         .ok_or(NO_OFFLINE_ADDRESS_ERROR)?;
@@ -126,7 +142,7 @@ pub fn offline(lat: f64, lon: f64) -> Result<Location, String> {
 }
 /// GPS remains WGS84 in the database. Only the API request input is converted.
 fn gcj02(lat: f64, lon: f64) -> (f64, f64) {
-    if !(72.004..=137.8347).contains(&lon) || !(0.8293..=55.8271).contains(&lat) {
+    if !within_gcj02_reference_area(lat, lon) {
         return (lat, lon);
     }
     let pi = std::f64::consts::PI;
@@ -229,7 +245,7 @@ fn parse(settings: &Settings, value: &Value) -> Result<Location, String> {
             if !successful(&value["status"], 1) {
                 return Err(format!(
                     "AMap geocoding rejected the request (code {}). Check the Web Service key, IP restrictions and quota.",
-                    text(&value["infocode"])
+                    diagnostic_status(&value["infocode"]).unwrap_or_else(|| "unknown".into())
                 ));
             }
             (&value["regeocode"], &value["regeocode"]["addressComponent"])
@@ -404,10 +420,70 @@ fn parse(settings: &Settings, value: &Value) -> Result<Location, String> {
     location.finish();
     Ok(location)
 }
-pub fn resolve(settings: &Settings, lat: f64, lon: f64) -> Result<Location, String> {
-    if !valid_coordinates(lat, lon) {
-        return Err("Invalid GPS coordinates".into());
+fn diagnostic_status(value: &Value) -> Option<String> {
+    if let Some(number) = value.as_i64() {
+        return Some(number.to_string());
     }
+    value
+        .as_str()
+        .filter(|text| {
+            !text.is_empty() && text.len() <= 12 && text.bytes().all(|c| c.is_ascii_digit())
+        })
+        .map(str::to_owned)
+}
+fn empty_address_diagnostic(
+    settings: &Settings,
+    value: &Value,
+    lat: f64,
+    lon: f64,
+    http_status: u16,
+) -> String {
+    let provider = settings.geocoder.as_str();
+    let (data, component) = match provider {
+        "amap" => (&value["regeocode"], &value["regeocode"]["addressComponent"]),
+        "tencent" => (&value["result"], &value["result"]["address_component"]),
+        _ => (&value["result"], &value["result"]["addressComponent"]),
+    };
+    let levels = [
+        (
+            "country",
+            if provider == "amap" {
+                "country"
+            } else {
+                "nation"
+            },
+        ),
+        ("province", "province"),
+        ("city", "city"),
+        (
+            "district",
+            if provider == "tianditu" {
+                "county"
+            } else {
+                "district"
+            },
+        ),
+        (
+            "township",
+            if provider == "tianditu" {
+                "town"
+            } else {
+                "township"
+            },
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(kind, field)| (!text(&component[field]).is_empty()).then_some(kind))
+    .collect::<Vec<_>>();
+    let summary = json!({"version":1,"provider":provider,"httpStatus":http_status,
+        "apiStatus":diagnostic_status(&value["status"]),"apiCode":diagnostic_status(&value["infocode"]),
+        "addressComponentPresent":component.is_object(),"formattedAddressPresent":!text(&data["formatted_address"]).is_empty() || !text(&data["address"]).is_empty(),
+        "availableLevels":levels,"outsideGcj02ReferenceArea":provider=="amap" && !within_gcj02_reference_area(lat,lon)});
+    // No request URL, credential, original photo coordinates, vendor messages or raw response.
+    format!("{NO_ADDRESS_DIAGNOSTIC_PREFIX}{summary}\n")
+}
+pub fn resolve(settings: &Settings, lat: f64, lon: f64) -> Result<Location, String> {
+    require_resolvable_coordinates(lat, lon)?;
     if settings.geocoder == "offline" {
         return offline(lat, lon);
     }
@@ -454,7 +530,13 @@ pub fn resolve(settings: &Settings, lat: f64, lon: f64) -> Result<Location, Stri
     }
     let value: Value =
         serde_json::from_slice(&bytes).map_err(|_| "Geocoding service returned invalid JSON")?;
-    let location = parse(settings, &value)?;
+    let location = parse(settings, &value).map_err(|error| {
+        if error == NO_ADDRESS_ERROR {
+            empty_address_diagnostic(settings, &value, lat, lon, response.status().as_u16())
+        } else {
+            error
+        }
+    })?;
     let mut cache = CACHE.lock().map_err(|_| "Geocoding cache unavailable")?;
     if cache.len() >= 1024 {
         cache.retain(|_, (created, _)| created.elapsed() < Duration::from_secs(15 * 60));
@@ -641,5 +723,61 @@ mod tests {
         .unwrap_err();
         assert!(!error.contains("fake-secret"));
         assert!(parse(&s, &json!({"status":"1","regeocode":{}})).is_err());
+    }
+    #[test]
+    fn zero_zero_is_suspected_placeholder_but_equator_and_prime_meridian_remain_usable() {
+        assert!(valid_coordinates(0., 0.));
+        for point in [(0., 0.), (-0., 0.), (0., -0.)] {
+            assert_eq!(
+                require_resolvable_coordinates(point.0, point.1).unwrap_err(),
+                PLACEHOLDER_GPS_ERROR
+            );
+            assert_eq!(
+                offline(point.0, point.1).unwrap_err(),
+                PLACEHOLDER_GPS_ERROR
+            );
+            assert_eq!(
+                resolve(&Settings::default(), point.0, point.1).unwrap_err(),
+                PLACEHOLDER_GPS_ERROR
+            );
+        }
+        assert!(require_resolvable_coordinates(0., 10.).is_ok());
+        assert!(require_resolvable_coordinates(10., 0.).is_ok());
+        assert!(require_resolvable_coordinates(f64::NAN, 10.).is_err());
+    }
+    #[test]
+    fn empty_response_diagnostic_preserves_status_and_shape_without_credentials_or_photo_gps() {
+        let mut settings = Settings::default();
+        settings.geocoder = "amap".into();
+        settings.providers.get_mut("amap").unwrap().token = "private-token".into();
+        let value = json!({"status":"1","infocode":"10000","info":"private-token","regeocode":{"formatted_address":[],"addressComponent":{"country":[],"province":[],"city":[],"district":[],"unknown_secret":"private-token"}}});
+        let diagnostic = empty_address_diagnostic(&settings, &value, 35., 140., 200);
+        assert!(is_empty_address_error(&diagnostic));
+        assert!(!diagnostic.contains("private-token"));
+        assert!(!diagnostic.contains("location="));
+        let summary: Value = serde_json::from_str(
+            diagnostic
+                .strip_prefix(NO_ADDRESS_DIAGNOSTIC_PREFIX)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(summary["httpStatus"], 200);
+        assert_eq!(summary["apiStatus"], "1");
+        assert_eq!(summary["apiCode"], "10000");
+        assert_eq!(summary["addressComponentPresent"], true);
+        assert_eq!(summary["formattedAddressPresent"], false);
+        assert_eq!(summary["outsideGcj02ReferenceArea"], true);
+        assert!(summary.get("latitude").is_none());
+        assert!(summary.get("longitude").is_none());
+        let bad_code = empty_address_diagnostic(
+            &settings,
+            &json!({"status":"1","infocode":"private-token","regeocode":{"addressComponent":{}}}),
+            39.,
+            116.,
+            200,
+        );
+        assert!(!bad_code.contains("private-token"));
+        assert!(is_empty_address_error(&bad_code));
     }
 }
