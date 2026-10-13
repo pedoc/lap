@@ -93,6 +93,7 @@ videojs.addLanguage('zh-CN', zhCN);
 
 const props = defineProps({
   originalUnavailable: { type: Boolean, default: false },
+  readOnly: { type: Boolean, default: false },
   fileId: { type: Number, default: 0 },
   thumbnailSrc: { type: String, default: '' },
   filePath: { type: String, required: false },
@@ -143,7 +144,7 @@ const loadAttemptCleanups: Array<(() => void) | null> = [null, null];
 const externalVideoApp = computed(() => config.defaultExternalApp('video'));
 const externalVideoAppPath = computed(() => String(externalVideoApp.value?.path || '').trim());
 const externalVideoAppName = computed(() => String(externalVideoApp.value?.name || '').trim());
-const canOpenExternalApp = computed(() => !props.originalUnavailable && !!(props.filePath && externalVideoAppPath.value));
+const canOpenExternalApp = computed(() => !props.readOnly && !props.originalUnavailable && !!(props.filePath && externalVideoAppPath.value));
 const externalOpenLabel = computed(() => {
   if (externalVideoAppName.value) {
     return $t('video.errors.open_in_external_app_named', { app: externalVideoAppName.value }) || `Open in ${externalVideoAppName.value}`;
@@ -155,7 +156,7 @@ const loadingLabel = computed(() => (
 ));
 
 async function openInExternalApp() {
-  if (props.originalUnavailable || !props.filePath || !externalVideoAppPath.value) return;
+  if (props.readOnly || props.originalUnavailable || !props.filePath || !externalVideoAppPath.value) return;
   await openFileWithApp(props.filePath, externalVideoAppPath.value);
 }
 

@@ -75,7 +75,12 @@
         {{ $t('media_lifecycle.retry') }}
       </button>
     </p>
-    <details v-if="recoveryIssues.length" class="text-xs text-warning"><summary>{{ $t('media_recovery.review') }}</summary><p class="whitespace-pre-wrap break-all">{{ recoveryIssues.join('\n') }}</p></details>
+    <details v-if="recoveryIssues.length" class="text-xs text-warning">
+      <summary>{{ $t('media_recovery.review') }}</summary>
+      <p class="whitespace-pre-wrap break-all">
+        {{ recoveryIssues.join('\n') }}
+      </p>
+    </details>
     <p v-if="busy" class="text-sm">
       <span class="loading loading-spinner loading-sm"></span>
       {{ $t('media_lifecycle.busy') }}
@@ -100,13 +105,20 @@
             @change="toggle(item.id)"
           /><span class="text-xs break-all">{{ item.name }}</span></label
         >
-        <img
-          v-if="item.previewUrl"
-          :src="item.previewUrl"
-          class="mt-2 w-full h-32 object-contain bg-base-100 rounded-box"
-          :alt="item.name"
-          @click="preview = item"
-        />
+        <button class="w-full mt-2" :disabled="!!busy" @click="preview = item">
+          <img
+            v-if="item.previewUrl"
+            :src="item.previewUrl"
+            class="mt-2 w-full h-32 object-contain bg-base-100 rounded-box"
+            :alt="item.name"
+          />
+          <span
+            v-else
+            class="flex h-32 items-center justify-center text-xs bg-base-100 rounded-box"
+            >{{ $t('private_viewer.no_thumbnail') }}</span
+          >
+          <span class="text-xs">{{ $t('private_viewer.open') }}</span>
+        </button>
         <template v-if="mode === 'deleted'"
           ><p class="text-xs mt-2">
             {{ new Date(item.createdAt * 1000).toLocaleString() }} ·
@@ -179,13 +191,21 @@
       "
       @cancel="confirmPurge = false"
     />
-    <ModalDialog
+    <PrivateMediaViewer
       v-if="preview"
-      :title="preview.name"
-      :width="600"
-      @cancel="preview = null"
-      ><img :src="preview.previewUrl" class="max-h-[70vh] object-contain"
-    /></ModalDialog>
+      :library-id="libConfig._libraryId"
+      :file-id="preview.fileId"
+      :mode="mode"
+      :group-id="mode === 'deleted' ? preview.id : undefined"
+      :name="preview.name"
+      :preview-url="preview.previewUrl"
+      :index="page * 40 + items.findIndex((i) => i.id === preview.id)"
+      :total="total"
+      :navigation-busy="!!busy"
+      @previous="navigatePreview(-1)"
+      @next="navigatePreview(1)"
+      @close="preview = null"
+    />
   </section>
 </template>
 <script setup lang="ts">
@@ -203,19 +223,14 @@ import {
   getPrivateMediaPreview,
 } from '@/common/api';
 import { mediaOperationErrors } from '@/common/mediaLifecycle';
-import {
-  getThumbUrl,
-  getThumbnailDataUrl,
-  isWin,
-  formatFileSize,
-} from '@/common/utils';
+import { formatFileSize } from '@/common/utils';
 import MessageBox from './MessageBox.vue';
-import ModalDialog from './ModalDialog.vue';
+import PrivateMediaViewer from './PrivateMediaViewer.vue';
 const { t } = useI18n();
 const props = defineProps<{ mode: 'hidden' | 'deleted' }>();
 const items = ref<any[]>([]);
 const total = ref(0);
-const recoveryIssues=ref<string[]>([]);
+const recoveryIssues = ref<string[]>([]);
 const page = ref(0);
 const selected = ref(new Set<string | number>());
 const busy = ref('');
@@ -238,7 +253,8 @@ function selectPage() {
       ? new Set()
       : new Set(items.value.map((i) => i.id));
 }
-async function load() {
+async function load(keepPreview = false) {
+  if (!keepPreview) preview.value = null;
   const token = ++request;
   const library = libConfig._libraryId;
   const mode = props.mode;
@@ -255,19 +271,25 @@ async function load() {
             name: file.name,
             fileId: file.id,
           }))
-        : result.items.map((group: any) => ({
-            id: group.id,
-            name: group.manifest.members[0]?.originalName || group.id,
-            fileId: group.manifest.primaryId,
-            createdAt: group.createdAt,
-            status: group.status,
-            error: group.error,
-            size: group.manifest.members.reduce(
-              (n: number, m: any) => n + m.size,
-              0,
-            ),
-            originalPath: group.manifest.members[0]?.originalPath,
-          }));
+        : result.items.map((group: any) => {
+            const primary =
+              group.manifest.members.find(
+                (member: any) => member.fileId === group.manifest.primaryId,
+              ) || group.manifest.members[0];
+            return {
+              id: group.id,
+              name: primary?.originalName || group.id,
+              fileId: group.manifest.primaryId,
+              createdAt: group.createdAt,
+              status: group.status,
+              error: group.error,
+              size: group.manifest.members.reduce(
+                (n: number, m: any) => n + m.size,
+                0,
+              ),
+              originalPath: primary?.originalPath,
+            };
+          });
     const hydrated = await Promise.all(
       rows.map(async (item: any) => {
         try {
@@ -287,28 +309,53 @@ async function load() {
       library !== libConfig._libraryId ||
       mode !== props.mode
     )
-      return;
-    recoveryIssues.value=result.recovery?.issues||[];
+      return false;
+    recoveryIssues.value = result.recovery?.issues || [];
     items.value = hydrated;
     total.value = result.total;
     selected.value = new Set();
-    if (preview.value && !items.value.some((i) => i.id === preview.value.id))
-      preview.value = null;
+    if (!keepPreview) preview.value = null;
     if (page.value > 0 && !rows.length) {
       page.value--;
       void load();
+      return false;
     }
+    return true;
   } catch (reason) {
     if (!disposed && token === request) error.value = String(reason);
+    return false;
   } finally {
     if (token === request) busy.value = '';
   }
+}
+async function navigatePreview(direction: number) {
+  if (busy.value || !preview.value) return;
+  const index =
+    items.value.findIndex((i) => i.id === preview.value.id) + direction;
+  const position = page.value * 40 + index;
+  if (position < 0 || position >= total.value) return;
+  if (index >= 0 && index < items.value.length) {
+    preview.value = items.value[index];
+    return;
+  }
+  const current = preview.value;
+  const library = libConfig._libraryId;
+  const mode = props.mode;
+  const previousPage = page.value;
+  page.value = Math.floor(position / 40);
+  const loaded = await load(true);
+  if (disposed || library !== libConfig._libraryId || mode !== props.mode)
+    return;
+  if (!loaded) page.value = previousPage;
+  else if (preview.value === current)
+    preview.value = items.value[position % 40] || null;
 }
 async function perform(action: 'unhide' | 'restore' | 'purge' | 'delete') {
   if (busy.value || !selected.value.size) return;
   const library = libConfig._libraryId;
   const mode = props.mode;
   const ids = [...selected.value];
+  preview.value = null;
   busy.value = action;
   error.value = '';
   try {
@@ -353,14 +400,17 @@ watch(
 );
 onMounted(async () => {
   const stop = await listen('media-lifecycle-changed', (event: any) => {
-    if (event.payload?.library_id === libConfig._libraryId && !busy.value)
-      void load();
+    if (event.payload?.library_id === libConfig._libraryId) {
+      preview.value = null;
+      if (!busy.value) void load();
+    }
   });
   if (disposed) stop();
   else stops.push(stop);
 });
 onBeforeUnmount(() => {
   disposed = true;
+  preview.value = null;
   request++;
   stops.forEach((stop) => stop());
 });

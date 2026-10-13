@@ -140,7 +140,7 @@ pub struct OperationResult {
     pub errors: Vec<(String, String)>,
 }
 
-fn fingerprint(path: &Path) -> Result<(u64, String), String> {
+pub(crate) fn fingerprint(path: &Path) -> Result<(u64, String), String> {
     let meta =
         fs::symlink_metadata(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
     if !meta.is_file() || meta.file_type().is_symlink() {

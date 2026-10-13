@@ -81,7 +81,7 @@ function harness(overrides: any = {}) {
     source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1],
   ).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
   const api = runInNewContext(
-    `${script}\n;({load,perform,items,total,selected,busy,error,preview,confirmPurge,confirmMove,toggle,selectPage});`,
+    `${script}\n;({load,perform,items,total,page,selected,busy,error,preview,confirmPurge,confirmMove,toggle,selectPage,navigatePreview});`,
     ctx,
   );
   return { api, ctx, calls, watches };
@@ -212,7 +212,7 @@ test('actual utility template exposes restore/purge confirmations and distinguis
     ...h.ctx,
     ...imports,
     MessageBox: { template: '<aside />' },
-    ModalDialog: { template: '<aside />' },
+    PrivateMediaViewer: { template: '<aside />' },
   });
   for (const mode of ['hidden', 'deleted']) {
     const app = Vue.createSSRApp(component, { mode });
@@ -277,4 +277,108 @@ test('ordinary deletion never defaults to permanent and all frontend delete call
       api,
       new RegExp(`invoke\\('${command}', \\{ libraryId:libConfig._libraryId`),
     );
+});
+
+test('private browsing crosses pagination in both directions using fresh rows', async () => {
+  const h = harness({
+    getHiddenMedia: async (_library: string, offset: number) => ({
+      files: Array.from({ length: offset === 0 ? 40 : 1 }, (_, i) => ({
+        id: offset + i + 1,
+        name: `${offset + i + 1}.jpg`,
+      })),
+      total: 41,
+    }),
+  });
+  h.ctx.props.mode = 'hidden';
+  await h.api.load();
+  h.api.preview.value = h.api.items.value[39];
+  await h.api.navigatePreview(1);
+  assert.equal(h.api.page.value, 1);
+  assert.equal(h.api.preview.value.fileId, 41);
+  await h.api.navigatePreview(-1);
+  assert.equal(h.api.page.value, 0);
+  assert.equal(h.api.preview.value.fileId, 40);
+  h.api.preview.value = h.api.items.value[0];
+  await h.api.navigatePreview(-1);
+  assert.equal(h.api.preview.value.fileId, 1);
+});
+test('failed navigation keeps the current page instead of pairing a new page with old rows', async () => {
+  const h = harness({
+    getHiddenMedia: async (_library: string, offset: number) => {
+      if (offset) throw Error('disk unavailable');
+      return {
+        files: Array.from({ length: 40 }, (_, i) => ({
+          id: i + 1,
+          name: `${i}.jpg`,
+        })),
+        total: 41,
+      };
+    },
+  });
+  h.ctx.props.mode = 'hidden';
+  await h.api.load();
+  h.api.preview.value = h.api.items.value[39];
+  await h.api.navigatePreview(1);
+  assert.equal(h.api.page.value, 0);
+  assert.equal(h.api.preview.value.fileId, 40);
+  assert.match(h.api.error.value, /disk unavailable/);
+});
+test('a closed viewer is not reopened by a delayed cross-page navigation', async () => {
+  let resolve: any;
+  const h = harness({
+    getHiddenMedia: async (_library: string, offset: number) =>
+      offset
+        ? new Promise((r) => (resolve = r))
+        : {
+            files: Array.from({ length: 40 }, (_, i) => ({
+              id: i + 1,
+              name: `${i}.jpg`,
+            })),
+            total: 41,
+          },
+  });
+  h.ctx.props.mode = 'hidden';
+  await h.api.load();
+  h.api.preview.value = h.api.items.value[39];
+  const pending = h.api.navigatePreview(1);
+  h.api.preview.value = null;
+  resolve({ files: [{ id: 41, name: '41.jpg' }], total: 41 });
+  await pending;
+  assert.equal(h.api.preview.value, null);
+});
+
+test('recovery viewer labels the registered primary, not the first companion in the manifest', async () => {
+  const h = harness({
+    getDeletedMedia: async () => ({
+      items: [
+        {
+          id: 'group',
+          createdAt: 1,
+          status: 'trashed',
+          manifest: {
+            primaryId: 1,
+            members: [
+              {
+                fileId: 2,
+                originalName: 'paired.mov',
+                originalPath: '/photos/paired.mov',
+                size: 20,
+              },
+              {
+                fileId: 1,
+                originalName: 'primary.jpg',
+                originalPath: '/photos/primary.jpg',
+                size: 10,
+              },
+            ],
+          },
+        },
+      ],
+      total: 1,
+    }),
+  });
+  await h.api.load();
+  assert.equal(h.api.items.value[0].name, 'primary.jpg');
+  assert.equal(h.api.items.value[0].originalPath, '/photos/primary.jpg');
+  assert.equal(h.api.items.value[0].fileId, 1);
 });

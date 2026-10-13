@@ -2104,3 +2104,6 @@ export const purgeDeletedMedia = (libraryId,groupIds) => invoke('purge_deleted_m
 export const getPrivateMediaPreview = (libraryId,fileId) => invoke('get_private_media_preview',{libraryId,fileId});
 
 export const deleteHiddenMedia = (libraryId,fileIds) => invoke('delete_hidden_media',{libraryId,fileIds});
+
+export const readPrivateMedia = (libraryId, fileId, mode, groupId, companion = false, rawOptions = {}) =>
+  invoke('read_private_media', { libraryId, fileId, mode, groupId, companion, rawOptions });

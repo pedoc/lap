@@ -48,6 +48,7 @@ mod t_similar;
 mod t_smart_album;
 mod t_media_recovery;
 mod t_media_lifecycle;
+mod t_private_media;
 mod t_sqlite;
 mod t_thumbnail_rebuild;
 mod t_storage;
@@ -291,6 +292,7 @@ async fn main() {
             t_cmds::get_query_file_position,
             t_media_lifecycle::delete_hidden_media,
             t_media_lifecycle::get_private_media_preview,
+            t_private_media::read_private_media,
             t_media_lifecycle::get_media_overview,
             t_media_lifecycle::get_hidden_media,
             t_media_lifecycle::get_deleted_media,

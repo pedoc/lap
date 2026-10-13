@@ -2171,5 +2171,25 @@
   "backup_scope": "This backup contains databases, configuration and recovery journals, not original or .lap-trash media files. Back up the album disks separately.",
   "review": "Recovery / database preflight",
   "review_required": "Recovery metadata needs review; automatic file operations are disabled."
-}
+},
+  "private_viewer": {
+    "previous": "Previous ←",
+    "next": "Next →",
+    "close": "Close Esc",
+    "readonly": "Read-only; visibility and deletion state stay unchanged. Local decoding only; no uploads. Arrow keys navigate, wheel or ± zoom, 0 resets.",
+    "primary": "Primary image",
+    "live_video": "Live Photo video",
+    "pair": "Paired JPEG",
+    "embedded": "Embedded preview",
+    "rendered": "Local render",
+    "bright": "Auto brightness",
+    "fit": "Fit to window",
+    "failed": "Cannot read original media: {error}",
+    "cache_only": "Showing only a cached thumbnail; this does not confirm the original is available.",
+    "no_preview": "No preview available. Review the diagnostics above and retry.",
+    "no_thumbnail": "No cached thumbnail; try opening the original",
+    "open": "Open read-only",
+    "local_decode_failed": "The local browser cannot display this original; online decoding was not attempted.",
+    "cache_failed": "The cached thumbnail cannot be displayed either."
+  }
 }

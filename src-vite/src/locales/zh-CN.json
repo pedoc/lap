@@ -2171,5 +2171,25 @@
   "backup_scope": "此备份包含数据库、配置和恢复清单，不包含原图或 .lap-trash 中的媒体文件。请另行备份图库磁盘；清单不能替代媒体备份。",
   "review": "回收区／数据库核对报告",
   "review_required": "恢复清单与数据库不一致，自动文件操作已禁用，请先核对。"
-}
+},
+  "private_viewer": {
+    "previous": "上一项 ←",
+    "next": "下一项 →",
+    "close": "关闭 Esc",
+    "readonly": "只读浏览，不改变隐藏或删除状态；仅本地读取和解码，不上传至在线服务。方向键切换，滚轮或 ± 缩放，0 复位。",
+    "primary": "主图",
+    "live_video": "实况配套视频",
+    "pair": "配套 JPEG",
+    "embedded": "内嵌预览",
+    "rendered": "本地渲染",
+    "bright": "自动增亮",
+    "fit": "适合窗口",
+    "failed": "原媒体读取失败：{error}",
+    "cache_only": "当前仅显示已有缩略图，不代表原文件可用。",
+    "no_preview": "暂无可用预览。请查看上方诊断后重试。",
+    "no_thumbnail": "尚无缓存缩略图，可尝试打开原媒体",
+    "open": "只读打开",
+    "local_decode_failed": "本地浏览器无法显示原图；未尝试在线解码。",
+    "cache_failed": "缓存缩略图也无法显示。"
+  }
 }
