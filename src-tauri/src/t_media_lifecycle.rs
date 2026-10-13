@@ -881,10 +881,13 @@ pub async fn get_media_overview(library_id: String) -> Result<Overview, String> 
 }
 #[tauri::command]
 pub async fn get_hidden_media(
+    window: tauri::WebviewWindow,
     library_id: String,
     offset: i64,
     limit: i64,
+    session_token: Option<String>,
 ) -> Result<HiddenPage, String> {
+    let owner=window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .read()
@@ -892,17 +895,23 @@ pub async fn get_hidden_media(
         if crate::t_config::current_library_id()? != library_id {
             return Err("Library changed".into());
         }
-        hidden_page(offset, limit)
+        let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;
+        let result=hidden_page(offset, limit);
+        crate::t_private_lock::recheck(&permit)?;
+        result
     })
     .await
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn get_deleted_media(
+    window: tauri::WebviewWindow,
     library_id: String,
     offset: i64,
     limit: i64,
+    session_token: Option<String>,
 ) -> Result<TrashPage, String> {
+    let owner=window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .read()
@@ -910,18 +919,24 @@ pub async fn get_deleted_media(
         if crate::t_config::current_library_id()? != library_id {
             return Err("Library changed".into());
         }
-        trash_page(offset, limit)
+        let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;
+        let result=trash_page(offset, limit);
+        crate::t_private_lock::recheck(&permit)?;
+        result
     })
     .await
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn set_media_hidden(
+    window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     library_id: String,
     file_ids: Vec<i64>,
     hidden: bool,
+    session_token: Option<String>,
 ) -> Result<(), String> {
+    let owner=window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .write()
@@ -929,10 +944,12 @@ pub async fn set_media_hidden(
         if crate::t_config::current_library_id()? != library_id {
             return Err("Library changed".into());
         }
+        let permit=if !hidden {Some(crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?)} else {None};
         let mut affected = Vec::new();
         for id in &file_ids {
             affected.extend(component_ids(*id)?);
         }
+        if let Some(permit)=&permit {crate::t_private_lock::recheck(permit)?;}
         hide(file_ids, hidden)?;
         let _ = app.emit(
             "media-lifecycle-changed",
@@ -952,10 +969,13 @@ pub async fn set_media_hidden(
 }
 #[tauri::command]
 pub async fn restore_deleted_media(
+    window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     library_id: String,
     group_ids: Vec<String>,
+    session_token: Option<String>,
 ) -> Result<OperationResult, String> {
+    let owner=window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .write()
@@ -963,7 +983,9 @@ pub async fn restore_deleted_media(
         if crate::t_config::current_library_id()? != library_id {
             return Err("Library changed".into());
         }
+        let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;
         let result = operate(group_ids, false)?;
+        crate::t_private_lock::recheck(&permit)?;
         event(&app, &library_id);
         Ok(result)
     })
@@ -972,10 +994,13 @@ pub async fn restore_deleted_media(
 }
 #[tauri::command]
 pub async fn purge_deleted_media(
+    window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     library_id: String,
     group_ids: Vec<String>,
+    session_token: Option<String>,
 ) -> Result<OperationResult, String> {
+    let owner=window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .write()
@@ -983,7 +1008,9 @@ pub async fn purge_deleted_media(
         if crate::t_config::current_library_id()? != library_id {
             return Err("Library changed".into());
         }
+        let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;
         let result = operate(group_ids, true)?;
+        crate::t_private_lock::recheck(&permit)?;
         event(&app, &library_id);
         Ok(result)
     })
@@ -993,13 +1020,16 @@ pub async fn purge_deleted_media(
 
 #[tauri::command]
 pub async fn get_private_media_preview(
+    window: tauri::WebviewWindow,
     library_id: String,
     file_id: i64,
+    session_token: Option<String>,
 ) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move||{let _library=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;if crate::t_config::current_library_id()?!=library_id{return Err("Library changed".into());}let conn=t_sqlite::open_conn()?;
+    let owner=window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move||{let _library=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;if crate::t_config::current_library_id()?!=library_id{return Err("Library changed".into());}let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;let conn=t_sqlite::open_conn()?;
     let private:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND (hidden=1 OR deleted_at IS NOT NULL))",[file_id],|r|r.get(0)).map_err(|e|e.to_string())?;
     if !private{return Err("Photo is no longer in this private view".into());}
-    Ok(crate::t_sqlite::AThumb::fetch(file_id)?.and_then(|t|t.thumb_data_base64).map(|bytes|format!("data:image/{};base64,{}",if bytes.starts_with("iVBORw0KGgo"){"png"}else{"jpeg"},bytes)))
+    let result=crate::t_sqlite::AThumb::fetch(file_id)?.and_then(|t|t.thumb_data_base64).map(|bytes|format!("data:image/{};base64,{}",if bytes.starts_with("iVBORw0KGgo"){"png"}else{"jpeg"},bytes));crate::t_private_lock::recheck(&permit)?;Ok(result)
     }).await.map_err(|e|e.to_string())?
 }
 
@@ -1575,13 +1605,21 @@ mod tests {
 
 #[tauri::command]
 pub async fn delete_hidden_media(
+    window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     library_id: String,
     file_ids: Vec<i64>,
+    session_token: Option<String>,
 ) -> Result<crate::t_cmds::BatchDeleteResult, String> {
+    let owner=window.label().to_string();
     tauri::async_runtime::spawn_blocking(move||{
-        let files={let _scope=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;if crate::t_config::current_library_id()?!=library_id{return Err("Library changed".into());}let conn=t_sqlite::open_conn()?;let mut files=Vec::new();
-            for id in file_ids{let hidden:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND hidden=1 AND deleted_at IS NULL)",[id],|r|r.get(0)).map_err(|e|e.to_string())?;if !hidden{return Err("This selection is no longer in Hidden".into());}let file=AFile::get_file_info(id)?.ok_or("Photo no longer exists")?;files.push(crate::t_cmds::BatchDeleteFile{file_id:id,file_path:file.file_path.ok_or("Original path missing")?});}files};
+        let files={let _scope=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;if crate::t_config::current_library_id()?!=library_id{return Err("Library changed".into());}let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;let conn=t_sqlite::open_conn()?;let mut files=Vec::new();
+            for id in file_ids{let hidden:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND hidden=1 AND deleted_at IS NULL)",[id],|r|r.get(0)).map_err(|e|e.to_string())?;if !hidden{return Err("This selection is no longer in Hidden".into());}let file=AFile::get_file_info(id)?.ok_or("Photo no longer exists")?;files.push(crate::t_cmds::BatchDeleteFile{file_id:id,file_path:file.file_path.ok_or("Original path missing")?});}crate::t_private_lock::recheck(&permit)?;files};
         let result=move_to_recently_deleted(files,Some(&library_id),true)?;event(&app,&library_id);Ok(result)
     }).await.map_err(|e|e.to_string())?
+}
+
+/// Ordinary thumbnail / preview protocols never serve hidden or deleted records.
+pub(crate) fn is_private_file(file_id:i64)->Result<bool,String> {
+    t_sqlite::open_conn()?.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND (hidden=1 OR deleted_at IS NOT NULL))",[file_id],|r|r.get(0)).map_err(|e|e.to_string())
 }

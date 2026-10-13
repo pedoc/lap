@@ -73,6 +73,7 @@
 </template>
 
 <script setup lang="ts">
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
@@ -84,6 +85,7 @@ import { openFileWithApp } from '@/common/api';
 import zhCN from 'video.js/dist/lang/zh-CN.json';
 import {
   prepareVideo,
+  preparePrivateVideo,
   cancelVideoPrepare,
   isWebViewVideoPlaybackDisabled,
   type VideoPrepareMode,
@@ -94,6 +96,8 @@ videojs.addLanguage('zh-CN', zhCN);
 const props = defineProps({
   originalUnavailable: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
+  privateTicket: { type: String, default: '' },
+  privateUrl: { type: String, default: '' },
   fileId: { type: Number, default: 0 },
   thumbnailSrc: { type: String, default: '' },
   filePath: { type: String, required: false },
@@ -575,14 +579,16 @@ const loadVideo = async (filePath: string) => {
   const loadPrepared = async (force: VideoPrepareMode = null) => {
     startCompatibilityProcessing(currentLoadId);
     try {
-      const result = await prepareVideo(filePath, playerId, force, backendRequestId);
+      const result = props.privateTicket
+        ? await preparePrivateVideo(props.privateTicket, playerId, force, backendRequestId)
+        : await prepareVideo(filePath, playerId, force, backendRequestId);
       if (currentLoadId !== currentLoadingId) return;
-      const playbackSrc = isLinux ? result.url : getAssetSrc(result.url);
+      const playbackSrc = props.privateTicket || isLinux ? result.url : getAssetSrc(result.url);
 
       player.reset();
       player.src({
         src: playbackSrc,
-        type: result.action === 'remux' ? 'video/mp4' : (result.url.endsWith('.webm') ? 'video/webm' : 'video/mp4'),
+        type: result.mime || (result.action === 'remux' ? 'video/mp4' : (result.url.endsWith('.webm') ? 'video/webm' : 'video/mp4')),
       });
 
       let preparedAttemptSettled = false;
@@ -642,8 +648,8 @@ const loadVideo = async (filePath: string) => {
     resetCompatibilityProcessing();
     player.reset();
     const source = type
-      ? { src: getAssetSrc(filePath), type }
-      : { src: getAssetSrc(filePath) };
+      ? { src: (props.privateTicket ? props.privateUrl || convertFileSrc(props.privateTicket, 'private-media') : getAssetSrc(filePath)), type }
+      : { src: (props.privateTicket ? props.privateUrl || convertFileSrc(props.privateTicket, 'private-media') : getAssetSrc(filePath)) };
     player.src(source);
 
     let directLoadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -932,7 +938,7 @@ onBeforeUnmount(() => {
   });
 });
 
-watch(() => [props.filePath, props.originalUnavailable], ([newPath]) => {
+watch(() => [props.filePath, props.originalUnavailable, props.privateTicket], ([newPath]) => {
   if (newPath) loadVideo(String(newPath));
 });
 

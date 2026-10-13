@@ -21,6 +21,26 @@ function harness(overrides: any = {}) {
     ...Vue,
     ...media,
     useI18n: () => ({ t: (key: string) => key }),
+    usePrivateAccess: () => ({
+      canRead: Vue.ref(true),
+      sessionToken: Vue.ref(null),
+      generation: Vue.ref(0),
+      state: {
+        ready: true,
+        enabled: false,
+        locked: false,
+        idleMinutes: 5,
+        lockOnBlur: true,
+        retryAfter: 0,
+        busy: false,
+        error: '',
+      },
+      scopeChanged() {},
+      lockNow() {},
+      configure() {},
+      unlock() {},
+      refresh() {},
+    }),
     props,
     libConfig,
     Set,
@@ -81,7 +101,7 @@ function harness(overrides: any = {}) {
     source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1],
   ).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
   const api = runInNewContext(
-    `${script}\n;({load,perform,items,total,page,selected,busy,error,preview,confirmPurge,confirmMove,toggle,selectPage,navigatePreview});`,
+    `${script}\n;({load,perform,items,total,page,selected,busy,error,preview,confirmPurge,confirmMove,toggle,selectPage,navigatePreview,access,invalidatePrivate});`,
     ctx,
   );
   return { api, ctx, calls, watches };
@@ -212,6 +232,7 @@ test('actual utility template exposes restore/purge confirmations and distinguis
     ...h.ctx,
     ...imports,
     MessageBox: { template: '<aside />' },
+    PrivateLockPanel: { template: '<div />' },
     PrivateMediaViewer: { template: '<aside />' },
   });
   for (const mode of ['hidden', 'deleted']) {
@@ -381,4 +402,89 @@ test('recovery viewer labels the registered primary, not the first companion in 
   assert.equal(h.api.items.value[0].name, 'primary.jpg');
   assert.equal(h.api.items.value[0].originalPath, '/photos/primary.jpg');
   assert.equal(h.api.items.value[0].fileId, 1);
+});
+
+test('locked utility never invokes private reads or batch mutations', async () => {
+  const h = harness();
+  h.api.access.canRead.value = false;
+  h.api.toggle('group');
+  assert.equal(await h.api.load(), false);
+  for (const action of ['restore', 'purge', 'delete', 'unhide'])
+    await h.api.perform(action);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.api.items.value.length, 0);
+});
+test('locking while a private thumbnail is loading clears names, selection and preview and rejects its late response', async () => {
+  let resolve: any;
+  const h = harness({
+    getPrivateMediaPreview: () => new Promise((r) => (resolve = r)),
+  });
+  const pending = h.api.load();
+  for (let i = 0; !resolve && i < 10; i++) await new Promise(setImmediate);
+  assert.equal(typeof resolve, 'function');
+  h.api.preview.value = { id: 'private' };
+  h.api.selected.value = new Set(['private']);
+  h.api.access.canRead.value = false;
+  h.api.access.generation.value++;
+  h.api.invalidatePrivate();
+  resolve('data:image/jpeg;base64,secret');
+  await pending;
+  assert.equal(h.api.items.value.length, 0);
+  assert.equal(h.api.selected.value.size, 0);
+  assert.equal(h.api.preview.value, null);
+});
+test('a batch result from the previous unlock cannot publish private diagnostics after re-unlocking', async () => {
+  let resolve: any;
+  const h = harness({
+    restoreDeletedMedia: () => new Promise((r) => (resolve = r)),
+  });
+  await h.api.load();
+  h.api.toggle('group');
+  const pending = h.api.perform('restore');
+  h.api.access.generation.value++;
+  h.api.invalidatePrivate();
+  h.api.access.sessionToken.value = 'new-session';
+  resolve({ succeeded: [], errors: [['private-name', 'private-path']] });
+  await pending;
+  assert.equal(h.api.error.value, '');
+  assert.equal(h.api.items.value.length, 0);
+});
+test('the actual locked utility template omits all private images, metadata and destructive controls', async () => {
+  const { descriptor } = parse(source);
+  let code = stripTypeScriptTypes(
+    compileScript(descriptor, { id: 'locked-utility', inlineTemplate: true })
+      .content,
+  );
+  const imports: any = {};
+  code = code
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_m, names) => {
+      for (const name of names.split(',')) {
+        const [original, alias] = name.trim().split(/\s+as\s+/);
+        imports[alias || original] = (Vue as any)[original];
+      }
+      return '';
+    })
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '')
+    .replace('export default', 'const component=');
+  const h = harness();
+  const access = h.ctx.usePrivateAccess();
+  access.canRead.value = false;
+  access.state.enabled = true;
+  access.state.locked = true;
+  const component = runInNewContext(`${code}\n;component`, {
+    ...h.ctx,
+    ...imports,
+    usePrivateAccess: () => access,
+    PrivateLockPanel: { template: '<p>LOCKED</p>' },
+    PrivateMediaViewer: { template: '<img src="secret" />' },
+    MessageBox: { template: '<aside />' },
+  });
+  const app = Vue.createSSRApp(component, { mode: 'deleted' });
+  app.config.globalProperties.$t = (key: string) => key;
+  const html = await renderToString(app);
+  assert.match(html, /LOCKED/);
+  assert.doesNotMatch(
+    html,
+    /<img|<video|media_lifecycle.purge|media_lifecycle.restore|originalPath/,
+  );
 });

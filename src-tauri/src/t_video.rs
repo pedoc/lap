@@ -51,10 +51,10 @@ pub fn init_ffmpeg_path(app: &AppHandle) {
 }
 
 /// Get video url for different platforms
-fn platform_video_url(file_path: &str) -> Result<String, String> {
+fn platform_video_url(file_path: &str, _source_path: &str, _library: &str) -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
-        crate::t_http::make_video_stream_url(file_path)
+        crate::t_http::make_video_stream_url(file_path,_source_path,_library)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1154,7 +1154,7 @@ pub async fn cancel_video_prepare(
     Ok(())
 }
 
-/// Prepares a video for playback with a single probe and an optimized retry loop.
+/// Prepares ordinary media using the existing platform transport.
 #[tauri::command]
 pub async fn prepare_video(
     app: AppHandle,
@@ -1164,6 +1164,33 @@ pub async fn prepare_video(
     force: Option<String>,
     request_id: Option<u64>,
 ) -> Result<VideoPrepareResult, String> {
+    prepare_video_impl(app,state,file_path,player_id,force,request_id,false).await
+}
+
+/// Private conversion must never register an unguarded Linux HTTP stream.
+pub(crate) async fn prepare_video_local(
+    app: AppHandle,
+    state: tauri::State<'_, VideoManager>,
+    file_path: String,
+    player_id: String,
+    force: Option<String>,
+    request_id: Option<u64>,
+) -> Result<VideoPrepareResult, String> {
+    prepare_video_impl(app,state,file_path,player_id,force,request_id,true).await
+}
+
+/// Prepares a video for playback with a single probe and an optimized retry loop.
+async fn prepare_video_impl(
+    app: AppHandle,
+    state: tauri::State<'_, VideoManager>,
+    file_path: String,
+    player_id: String,
+    force: Option<String>,
+    request_id: Option<u64>,
+    private_playback: bool,
+) -> Result<VideoPrepareResult, String> {
+    let source_library=crate::t_config::current_library_id()?;
+    let video_url = |path: &str| if private_playback { Ok(path.to_string()) } else { platform_video_url(path,&file_path,&source_library) };
     if is_mpeg_program_stream(&file_path) {
         return Err(EXTERNAL_PLAYER_REQUIRED_ERROR.to_string());
     }
@@ -1225,7 +1252,7 @@ pub async fn prepare_video(
 
     if action == VideoAction::Direct && !force_process && !force_compatible {
         let result = VideoPrepareResult {
-            url: platform_video_url(&file_path)?,
+            url: video_url(&file_path)?,
             action: VideoAction::Direct,
         };
         finish_video_request(&state, &player_id, request_id).await;
@@ -1265,7 +1292,7 @@ pub async fn prepare_video(
     if let Ok(meta) = tokio::fs::metadata(&output_path).await {
         if meta.len() > 32 * 1024 && (force.is_none() || force_compatible) {
             let result = VideoPrepareResult {
-                url: platform_video_url(output_path.to_string_lossy().as_ref())?,
+                url: video_url(output_path.to_string_lossy().as_ref())?,
                 action: current_action,
             };
             finish_video_request(&state, &player_id, request_id).await;
@@ -1420,7 +1447,7 @@ pub async fn prepare_video(
                 let _ = tokio::fs::remove_file(&tmp_path).await;
                 finish_video_request(&state, &player_id, request_id).await;
                 return Ok(VideoPrepareResult {
-                    url: platform_video_url(output_path.to_string_lossy().as_ref())?,
+                    url: video_url(output_path.to_string_lossy().as_ref())?,
                     action: current_action,
                 });
             }
@@ -1435,7 +1462,7 @@ pub async fn prepare_video(
                 });
                 finish_video_request(&state, &player_id, request_id).await;
                 return Ok(VideoPrepareResult {
-                    url: platform_video_url(output_path.to_string_lossy().as_ref())?,
+                    url: video_url(output_path.to_string_lossy().as_ref())?,
                     action: current_action,
                 });
             }

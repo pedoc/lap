@@ -16,6 +16,7 @@ function harness(overrides: any = {}) {
   const calls: any[] = [];
   const events: any[] = [];
   const props = Vue.reactive({
+    sessionToken: 'test-session',
     libraryId: 'lib',
     fileId: 1,
     mode: 'deleted',
@@ -43,11 +44,12 @@ function harness(overrides: any = {}) {
     onMounted: () => {},
     onBeforeUnmount: (cb: any) => unmounts.push(cb),
     useI18n: () => ({ t: (key: string) => key }),
-    getAssetSrc: (path: string) => `asset:${path}`,
+    convertFileSrc: (ticket: string) => `private:${ticket}`,
     readPrivateMedia: async (...args: any[]) => {
       calls.push(args);
       return {
-        path: '/trash/0-photo.jpg',
+        path: 'ticket-1',
+        ticket: 'ticket-1',
         name: 'photo.jpg',
         fileType: 1,
         rotate: 0,
@@ -79,7 +81,7 @@ test('private viewer asks backend by identity and view, never by arbitrary path'
   ]);
   assert.equal(h.calls[0][5].preferPair, false);
   assert.equal(h.calls[0][5].mode, 'embedded');
-  assert.equal(h.api.imageUrl.value, 'asset:/trash/0-photo.jpg');
+  assert.equal(h.api.imageUrl.value, 'private:ticket-1');
 });
 test('late reads cannot replace a newer photo or resurrect an unmounted viewer', async () => {
   const pending: any[] = [];
@@ -227,12 +229,13 @@ async function render(fixture: any, error = '', previewUrl = '') {
 }
 test('actual viewer template renders validated full image with read-only controls and no destructive actions', async () => {
   const html = await render({
-    path: '/trash/full.jpg',
+    path: 'full-ticket',
+    ticket: 'full-ticket',
     fileType: 1,
     rotate: 90,
     companionType: 2,
   });
-  assert.match(html, /src="asset:\/trash\/full.jpg"/);
+  assert.match(html, /src="private:full-ticket"/);
   assert.match(html, /rotate\(90deg\)/);
   assert.match(html, /private_viewer.live_video/);
   assert.match(html, /role="dialog"/);
@@ -255,11 +258,13 @@ test('actual viewer template renders RAW policy controls even when local decode 
 });
 test('actual viewer template uses existing video playback with explicit read-only mode', async () => {
   const html = await render({
-    path: '/trash/video.mov',
+    path: 'video-ticket',
+    ticket: 'video-ticket',
+    name: 'video.mov',
     fileType: 2,
     rotate: 0,
   });
-  assert.match(html, /data-path="\/trash\/video.mov"/);
+  assert.match(html, /data-path="video.mov"/);
   assert.match(html, /data-readonly="true"/);
   const video = readFileSync(
     new URL('../src/components/Video.vue', import.meta.url),

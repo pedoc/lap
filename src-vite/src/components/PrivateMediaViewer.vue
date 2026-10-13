@@ -115,8 +115,10 @@
           ></span>
           <Video
             v-else-if="media?.fileType === 2"
-            :key="media.path"
-            :file-path="media.path"
+            :key="media.ticket || media.name"
+            :file-path="media.name || name"
+            :private-ticket="media.ticket || ''"
+            :private-url="media.streamUrl || ''"
             :rotate="media.rotate"
             :thumbnail-src="previewUrl"
             :read-only="true"
@@ -155,9 +157,10 @@ import {
 import { useI18n } from 'vue-i18n';
 import { libConfig } from '@/common/config';
 import { readPrivateMedia } from '@/common/api';
-import { getAssetSrc } from '@/common/utils';
+import { convertFileSrc } from '@tauri-apps/api/core';
 const Video = defineAsyncComponent(() => import('./Video.vue'));
 const props = defineProps<{
+  sessionToken: string | null;
   libraryId: string;
   fileId: number;
   mode: 'hidden' | 'deleted';
@@ -174,6 +177,8 @@ const dialog = ref<HTMLElement | null>(null);
 type PrivateMedia = {
   name: string;
   path: string;
+  ticket?: string | null;
+  streamUrl?: string | null;
   imageData?: string | null;
   fileType: number;
   rotate: number;
@@ -203,7 +208,9 @@ const imageUrl = computed(() =>
         ? ''
         : props.previewUrl
       : media.value && media.value.fileType !== 2
-        ? media.value.imageData || getAssetSrc(media.value.path)
+        ? media.value.ticket
+          ? convertFileSrc(media.value.ticket, 'private-media')
+          : media.value.imageData || ''
         : '',
 );
 function resetView() {
@@ -255,6 +262,7 @@ async function loadMedia() {
   const file = props.fileId;
   const mode = props.mode;
   const group = props.groupId;
+  const session = props.sessionToken;
   const isCurrent = () =>
     !disposed &&
     token === request &&
@@ -262,7 +270,8 @@ async function loadMedia() {
     library === props.libraryId &&
     file === props.fileId &&
     mode === props.mode &&
-    group === props.groupId;
+    group === props.groupId &&
+    session === props.sessionToken;
   media.value = null;
   error.value = '';
   cacheBroken.value = false;
@@ -276,6 +285,7 @@ async function loadMedia() {
       group ?? null,
       companion.value,
       { mode: rawMode.value, autoBright: autoBright.value, preferPair: false },
+      props.sessionToken,
     );
     if (isCurrent()) {
       media.value = result;
@@ -339,7 +349,13 @@ function onKey(event: KeyboardEvent) {
   }
 }
 watch(
-  () => [props.libraryId, props.fileId, props.mode, props.groupId],
+  () => [
+    props.libraryId,
+    props.fileId,
+    props.mode,
+    props.groupId,
+    props.sessionToken,
+  ],
   () => {
     companion.value = false;
     rawMode.value = 'embedded';
@@ -353,6 +369,7 @@ watch(
     props.fileId,
     props.mode,
     props.groupId,
+    props.sessionToken,
     companion.value,
     rawMode.value,
     autoBright.value,

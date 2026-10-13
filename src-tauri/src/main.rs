@@ -49,6 +49,7 @@ mod t_smart_album;
 mod t_media_recovery;
 mod t_media_lifecycle;
 mod t_private_media;
+mod t_private_lock;
 mod t_sqlite;
 mod t_thumbnail_rebuild;
 mod t_storage;
@@ -64,6 +65,7 @@ async fn main() {
 
     let builder = tauri::Builder::default();
     let builder = t_protocol::register_protocols(builder);
+    let builder = t_private_lock::register_protocol(builder);
 
     let aptabase_enabled = option_env!("APTABASE_KEY")
         .filter(|k| !k.is_empty())
@@ -112,6 +114,7 @@ async fn main() {
         .manage(t_dedup::DedupState::default())
         .manage(t_similar::SimilarState::default())
         .setup(|_app| {
+            t_private_lock::start_auto_lock(_app.handle().clone());
             t_config::set_app_identifier(&_app.config().identifier);
             if let Ok(config) = t_config::load_app_config() {
                 t_webview_proxy::initialize(config.network_proxy_url.clone());
@@ -187,9 +190,15 @@ async fn main() {
                 return;
             }
 
+            if let tauri::WindowEvent::Focused(false) = event {
+                let app=window.app_handle().clone();
+                tauri::async_runtime::spawn_blocking(move || t_private_lock::window_lock(&app,true));
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Prevent the default close so we can decide what to do per platform.
                 api.prevent_close();
+                let app=window.app_handle().clone();
+                tauri::async_runtime::spawn_blocking(move || t_private_lock::window_lock(&app,false));
 
                 // macOS convention: closing the window hides it; the app stays
                 // alive and can be reopened via the Dock icon (handled by
@@ -293,6 +302,12 @@ async fn main() {
             t_media_lifecycle::delete_hidden_media,
             t_media_lifecycle::get_private_media_preview,
             t_private_media::read_private_media,
+            t_private_lock::private_lock_status,
+            t_private_lock::unlock_private_view,
+            t_private_lock::configure_private_lock,
+            t_private_lock::lock_private_view,
+            t_private_lock::touch_private_view,
+            t_private_lock::prepare_private_video,
             t_media_lifecycle::get_media_overview,
             t_media_lifecycle::get_hidden_media,
             t_media_lifecycle::get_deleted_media,

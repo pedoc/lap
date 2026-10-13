@@ -1,10 +1,8 @@
 //! Read-only, local-only access to registered private media. Never trust a UI path.
 use crate::{t_media_lifecycle as lifecycle, t_raw_display::RawDisplayOptions};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tauri::Manager;
 
 #[derive(Debug)]
 struct Source {
@@ -20,6 +18,10 @@ pub struct PrivateMedia {
     name: String,
     path: String,
     image_data: Option<String>,
+    #[serde(skip)]
+    source_bytes: Option<Vec<u8>>,
+    ticket: Option<String>,
+    stream_url: Option<String>,
     file_type: i64,
     rotate: i32,
     companion_type: Option<i64>,
@@ -176,14 +178,10 @@ fn read_on(
     Ok(PrivateMedia {
         name: source.name,
         path: source.path.to_string_lossy().into_owned(),
-        image_data: data.map(|bytes| {
-            let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-                "png"
-            } else {
-                "jpeg"
-            };
-            format!("data:image/{mime};base64,{}", STANDARD.encode(bytes))
-        }),
+        image_data: None,
+        source_bytes: data,
+        ticket: None,
+        stream_url: None,
         file_type: source.file_type,
         rotate: source.rotate,
         companion_type,
@@ -194,14 +192,16 @@ fn read_on(
 
 #[tauri::command]
 pub async fn read_private_media(
-    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     library_id: String,
     file_id: i64,
     mode: String,
     group_id: Option<String>,
     companion: bool,
     raw_options: Option<RawDisplayOptions>,
+    session_token: Option<String>,
 ) -> Result<PrivateMedia, String> {
+    let owner = window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .read()
@@ -209,21 +209,83 @@ pub async fn read_private_media(
         if crate::t_config::current_library_id()? != library_id {
             return Err("Library changed".into());
         }
+        let permit =
+            crate::t_private_lock::authorize(&library_id, session_token.as_deref(), &owner)?;
         let conn = crate::t_sqlite::open_conn()?;
-        let media = read_on(
+        let result = read_on(
             &conn,
             file_id,
             &mode,
             group_id.as_deref(),
             companion,
             raw_options.unwrap_or_default(),
-        )?;
-        // Explicit exact-file grant also covers dot-prefixed recovery directories on Unix.
-        if media.decode_error.is_none() && media.image_data.is_none() {
-            app.state::<tauri::Scopes>()
-                .allow_file(&media.path)
-                .map_err(|e| format!("Private media asset access failed: {e}"))?;
+        );
+        crate::t_private_lock::recheck(&permit)?;
+        let mut media = result?;
+        let mime = if let Some(bytes) = &media.source_bytes {
+            if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                "image/png".into()
+            } else {
+                "image/jpeg".into()
+            }
+        } else if media.file_type == 2 {
+            if media.name.to_lowercase().ends_with(".webm") {
+                "video/webm".into()
+            } else if media.name.to_lowercase().ends_with(".mov") {
+                "video/quicktime".into()
+            } else {
+                "video/mp4".into()
+            }
+        } else {
+            match Path::new(&media.name)
+                .extension()
+                .and_then(|v| v.to_str())
+                .unwrap_or_default()
+                .to_lowercase()
+                .as_str()
+            {
+                "png" => "image/png",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                "avif" => "image/avif",
+                "bmp" => "image/bmp",
+                _ => "image/jpeg",
+            }
+            .into()
+        };
+        if media.decode_error.is_none() {
+            // The companion has the same registration and group as the selected primary.
+            let source_id = if companion {
+                conn.query_row(
+                    "SELECT live_photo_video_id FROM afiles WHERE id=?1",
+                    [file_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?
+            } else {
+                file_id
+            };
+            let ticket = crate::t_private_lock::issue(
+                &permit,
+                crate::t_private_lock::MediaRef {
+                    file_id: source_id,
+                    mode,
+                    group_id,
+                },
+                PathBuf::from(&media.path),
+                media.source_bytes.take(),
+                mime,
+            )?;
+            #[cfg(target_os = "linux")]
+            if media.file_type == 2 {
+                media.stream_url = Some(crate::t_http::make_private_video_stream_url(&ticket)?);
+            }
+            media.path = ticket.clone();
+            media.ticket = Some(ticket);
+        } else {
+            media.path.clear();
         }
+
         Ok(media)
     })
     .await

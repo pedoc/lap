@@ -511,7 +511,11 @@ pub fn load_app_config() -> Result<AppConfig, String> {
         .lock()
         .map_err(|_| "Config lock poisoned".to_string())?;
     let config = load_app_config_locked()?;
-    *CURRENT_LIBRARY_ID.write().map_err(|e| e.to_string())? = Some(config.current_library_id.clone());
+    {
+        let mut active=CURRENT_LIBRARY_ID.write().map_err(|e|e.to_string())?;
+        if active.as_deref()!=Some(config.current_library_id.as_str()) {crate::t_private_lock::library_changed();}
+        *active=Some(config.current_library_id.clone());
+    }
     Ok(config)
 }
 
@@ -587,7 +591,11 @@ fn save_app_config_locked(config: &AppConfig) -> Result<(), String> {
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     write_atomic(&config_path, &content)
         .map_err(|e| format!("Failed to write config file: {}", e))?;
-    *CURRENT_LIBRARY_ID.write().map_err(|e| e.to_string())? = Some(config.current_library_id.clone());
+    {
+        let mut active=CURRENT_LIBRARY_ID.write().map_err(|e|e.to_string())?;
+        if active.as_deref()!=Some(config.current_library_id.as_str()) {crate::t_private_lock::library_changed();}
+        *active=Some(config.current_library_id.clone());
+    }
     Ok(())
 }
 

@@ -143,6 +143,9 @@ fn load_protocol_thumbnail(
 ) -> Result<http::Response<Vec<u8>>, String> {
     // Keep both the database and cache namespace stable, including after queueing.
     crate::t_cmds::with_current_library(library_id, || {
+        if crate::t_media_lifecycle::is_private_file(file_id)? {
+            return Ok(text_response(http::StatusCode::FORBIDDEN,"Use the private viewer"));
+        }
         let Some(file) = t_sqlite::AFile::get_file_info(file_id)? else {
             return Ok(thumbnail_error_response(
                 http::StatusCode::NOT_FOUND,
@@ -306,6 +309,7 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
                 // library lock, configuration IO or SQLite there.
                 let lookup = tauri::async_runtime::spawn_blocking(move || {
                     crate::t_cmds::with_current_library(&library_id, || {
+                        if crate::t_media_lifecycle::is_private_file(file_id)? {return Err("Use the private viewer".into());}
                         let file = t_sqlite::AFile::get_file_info(file_id)?
                             .ok_or_else(|| "File not found".to_string())?;
                         let companion = if !options.prefer_pair {
@@ -315,6 +319,7 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
                         } else {
                             crate::t_raw_display::paired_file(file_id, options)
                         };
+                        if let Some(pair)=&companion {if crate::t_media_lifecycle::is_private_file(pair.id.ok_or("Invalid companion ID")?)? {return Err("Private companion".into());}}
                         Ok((file, companion))
                     })
                 }).await;

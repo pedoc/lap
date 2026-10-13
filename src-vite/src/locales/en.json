@@ -2191,5 +2191,27 @@
     "open": "Open read-only",
     "local_decode_failed": "The local browser cannot display this original; online decoding was not attempted.",
     "cache_failed": "The cached thumbnail cannot be displayed either."
+  },
+  "private_lock": {
+    "title": "Private area app lock",
+    "lock_now": "Lock now",
+    "settings": "App lock settings",
+    "checking": "Checking private access. No media is loaded before authorization.",
+    "locked": "Hidden and Recently Deleted are locked. Enter your password to unlock.",
+    "password": "App lock password",
+    "unlock": "Unlock",
+    "cooldown": "Too many attempts. Retry in {seconds} seconds.",
+    "not_encryption": "An app lock only restricts in-app access. Originals, databases and caches are not encrypted and remain accessible in the file manager.",
+    "enable": "Enable private area app lock",
+    "current_password": "Current password (required to change or disable the lock)",
+    "new_optional": "New password (leave blank to keep the current password)",
+    "new_password": "Set password (8–128 characters)",
+    "confirm_password": "Confirm new password",
+    "idle_minutes": "Automatically lock after inactivity (1–60 minutes)",
+    "on_blur": "Lock when the main window loses focus",
+    "scope": "Applies to every library. Restarting, leaving the private area or switching libraries requires unlocking again. Keep the password safe; it cannot be retrieved. This is not file encryption.",
+    "save": "Save app lock settings",
+    "mismatch": "The new passwords do not match.",
+    "length": "Use a password of 8–128 characters."
   }
 }
