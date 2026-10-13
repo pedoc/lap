@@ -55,6 +55,14 @@ pub fn retained_predicate(alias: &str) -> String {
     )
 }
 pub fn path_reserved(conn: &Connection, folder: i64, name: &str) -> Result<bool, String> {
+    let path: String = conn
+        .query_row("SELECT path FROM afolders WHERE id=?1", [folder], |r| {
+            r.get(0)
+        })
+        .map_err(|e| e.to_string())?;
+    if crate::t_media_restore::planned_path_reserved(conn, &Path::new(&path).join(name))? {
+        return Ok(true);
+    }
     conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states ms JOIN afiles a ON a.id=ms.file_id JOIN media_trash_groups g ON g.id=ms.trash_group WHERE a.folder_id=?1 AND ms.original_name=?2 AND g.status!='trashed')",params![folder,name],|r|r.get(0)).map_err(|e|e.to_string())
 }
 pub fn folder_has_private(conn: &Connection, path: &str) -> Result<bool, String> {
@@ -70,6 +78,9 @@ pub fn folder_has_private(conn: &Connection, path: &str) -> Result<bool, String>
     Ok(false)
 }
 pub fn folder_has_deleted(conn: &Connection, path: &str) -> Result<bool, String> {
+    if crate::t_media_restore::planned_path_reserved(conn, Path::new(path))? {
+        return Ok(true);
+    }
     if is_recovery_path(Path::new(path)) {
         return Ok(true);
     }
@@ -85,6 +96,12 @@ pub fn folder_has_deleted(conn: &Connection, path: &str) -> Result<bool, String>
     Ok(false)
 }
 pub fn has_deleted_in_album(conn: &Connection, album: i64) -> Result<bool, String> {
+    let root: String = conn
+        .query_row("SELECT path FROM albums WHERE id=?1", [album], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if crate::t_media_restore::planned_path_reserved(conn, Path::new(&root))? {
+        return Ok(true);
+    }
     conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states ms JOIN afiles a ON a.id=ms.file_id JOIN afolders f ON f.id=a.folder_id WHERE f.album_id=?1 AND ms.deleted_at IS NOT NULL)",[album],|r|r.get(0)).map_err(|e|e.to_string())
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +120,8 @@ pub struct Manifest {
     pub root: String,
     pub primary_id: i64,
     pub members: Vec<Member>,
+    #[serde(default)]
+    pub restore_plan: Option<crate::t_media_restore::RestorePlan>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -310,7 +329,8 @@ fn set_error(conn: &Connection, id: &str, error: &str) {
         "UPDATE media_trash_groups SET error=?1 WHERE id=?2",
         params![error, id],
     );
-    let _ = crate::t_media_recovery::checkpoint_current(conn, id);
+    // Error text is advisory. Do not publish a possibly stale database snapshot over
+    // a newer recovery journal whose progress was persisted before a failed DB write.
 }
 fn component_ids(primary: i64) -> Result<Vec<i64>, String> {
     let conn = t_sqlite::open_conn()?;
@@ -452,6 +472,7 @@ fn prepare_manifest(conn: &Connection, primary: i64, id: &str) -> Result<Manifes
         }
     }
     Ok(Manifest {
+        restore_plan: None,
         root: root.to_string_lossy().into_owned(),
         primary_id: primary,
         members,
@@ -624,97 +645,15 @@ pub fn move_to_recently_deleted(
     }
     Ok(result)
 }
-fn original_catalog_conflict(conn: &Connection, member: &Member) -> Result<bool, String> {
-    let Some(id) = member.file_id else {
-        return Ok(false);
-    };
-    let comparison = if cfg!(windows) {
-        "a.name=?2 COLLATE NOCASE"
-    } else {
-        "a.name=?2"
-    };
-    conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM afiles a JOIN afiles old ON old.folder_id=a.folder_id WHERE old.id=?1 AND {comparison} AND a.id!=?1)"),params![id,member.original_name],|r|r.get(0)).map_err(|e|e.to_string())
-}
+#[cfg(test)]
 fn restore_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
-    let dir = validate_root(&item.manifest, &item.id)?;
-    if item.status == "review_required" {
-        return Err(
-            "Recovery metadata differs from this database; automatic file operations are disabled"
-                .into(),
-        );
-    }
-    if item.status == "purging" {
-        return Err("Permanent deletion already started; remaining files cannot be treated as a complete photo group".into());
-    }
-    for member in &item.manifest.members {
-        if original_catalog_conflict(conn, member)? {
-            return Err(format!(
-                "Original location has another catalogued photo; move it away before restoring: {}",
-                member.original_path
-            ));
-        }
-        let original = Path::new(&member.original_path);
-        let stored = Path::new(&member.stored_path);
-        if original.exists() {
-            verify(original, member)?;
-        } else {
-            verify(stored, member)?;
-        }
-    }
-    conn.execute(
-        "UPDATE media_trash_groups SET status='restoring',error=NULL WHERE id=?1",
-        [&item.id],
+    crate::t_media_restore::restore(
+        conn,
+        item,
+        &crate::t_media_restore::RestoreOptions::default(),
     )
-    .map_err(|e| e.to_string())?;
-    crate::t_media_recovery::checkpoint_current(conn, &item.id)?;
-    for member in &item.manifest.members {
-        let original = Path::new(&member.original_path);
-        let stored = Path::new(&member.stored_path);
-        if original.exists() {
-            verify(original, member)?;
-            if stored.exists() {
-                verify(stored, member)?;
-                if !stored.starts_with(&dir) {
-                    return Err("Invalid recovery path".into());
-                }
-                validate_root(&item.manifest, &item.id)?;
-                let resolved = stored.canonicalize().map_err(|e| e.to_string())?;
-                if !resolved.starts_with(&dir) {
-                    return Err("Recovery file escaped its registered directory".into());
-                }
-                fs::remove_file(resolved).map_err(|e| e.to_string())?;
-            }
-        } else {
-            fs::create_dir_all(original.parent().ok_or("Original parent missing")?)
-                .map_err(|e| e.to_string())?;
-            validate_root(&item.manifest, &item.id)?;
-            no_replace_move(stored, original, member)?;
-        }
-    }
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    for member in &item.manifest.members {
-        if let Some(id) = member.file_id {
-            let changed = tx
-                .execute(
-                    "UPDATE afiles SET name=?1,last_scan_time=?2 WHERE id=?3",
-                    params![
-                        member.original_name,
-                        chrono::Utc::now().timestamp_millis(),
-                        id
-                    ],
-                )
-                .map_err(|e| e.to_string())?;
-            if changed != 1 {
-                return Err("Original catalog record is missing; files were recovered but metadata needs attention".into());
-            }
-            tx.execute("UPDATE media_states SET deleted_at=NULL,trash_group=NULL,original_name=NULL WHERE file_id=?1",[id]).map_err(|e|e.to_string())?;
-        }
-    }
-    tx.execute("DELETE FROM media_trash_groups WHERE id=?1", [&item.id])
-        .map_err(|e| e.to_string())?;
-    crate::t_media_recovery::checkpoint(&tx, item, Some("restored"))?;
-    tx.commit().map_err(|e| e.to_string())
 }
+
 fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
     let dir = validate_root(&item.manifest, &item.id)?;
     if !matches!(item.status.as_str(), "trashed" | "purging") {
@@ -764,6 +703,13 @@ fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
     tx.commit().map_err(|e| e.to_string())
 }
 pub fn operate(ids: Vec<String>, purge: bool) -> Result<OperationResult, String> {
+    operate_with_options(ids,purge,&crate::t_media_restore::RestoreOptions::default())
+}
+fn operate_with_options(
+    ids: Vec<String>,
+    purge: bool,
+    options: &crate::t_media_restore::RestoreOptions,
+) -> Result<OperationResult, String> {
     let _guard = OPERATIONS.lock().map_err(|e| e.to_string())?;
     let conn = t_sqlite::open_conn()?;
     let mut result = OperationResult::default();
@@ -772,7 +718,7 @@ pub fn operate(ids: Vec<String>, purge: bool) -> Result<OperationResult, String>
             if purge {
                 purge_on(&conn, &item)
             } else {
-                restore_on(&conn, &item)
+                crate::t_media_restore::restore(&conn, &item, options)
             }
         });
         match operation {
@@ -974,6 +920,7 @@ pub async fn restore_deleted_media(
     library_id: String,
     group_ids: Vec<String>,
     session_token: Option<String>,
+    options: Option<crate::t_media_restore::RestoreOptions>,
 ) -> Result<OperationResult, String> {
     let owner=window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
@@ -984,7 +931,7 @@ pub async fn restore_deleted_media(
             return Err("Library changed".into());
         }
         let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;
-        let result = operate(group_ids, false)?;
+        let result = operate_with_options(group_ids,false,&options.unwrap_or_default())?;
         crate::t_private_lock::recheck(&permit)?;
         event(&app, &library_id);
         Ok(result)
@@ -1063,6 +1010,7 @@ mod tests {
              INSERT INTO afiles VALUES(1,1,'photo.jpg',0,5,'keep my comment'),(2,1,'video.mov',0,3,'video');
              INSERT INTO athumbs VALUES(1,X'010203');INSERT INTO persons VALUES(9,'Alice',X'010203',7);INSERT INTO faces VALUES(7,1,9);
              INSERT INTO afile_tags VALUES(1,42);INSERT INTO manual_annotations VALUES(1,'Alice');").unwrap();
+            conn.execute_batch("ALTER TABLE afolders ADD COLUMN name TEXT DEFAULT '';ALTER TABLE afolders ADD COLUMN created_at INTEGER;ALTER TABLE afolders ADD COLUMN modified_at INTEGER;ALTER TABLE afolders ADD COLUMN is_favorite INTEGER DEFAULT 0;ALTER TABLE afolders ADD COLUMN is_excluded_from_search INTEGER DEFAULT 0;ALTER TABLE afolders ADD COLUMN has_subfolders INTEGER;ALTER TABLE afolders ADD COLUMN inode INTEGER;").unwrap();
             setup(&conn).unwrap();
             conn.execute(
                 "UPDATE albums SET path=?1",
@@ -1107,6 +1055,7 @@ mod tests {
             (
                 id,
                 Manifest {
+                    restore_plan: None,
                     root: self.root.to_string_lossy().into_owned(),
                     primary_id: 1,
                     members,
@@ -1526,6 +1475,29 @@ mod tests {
         assert!(!Path::new(&m.members[1].stored_path).exists());
     }
     #[test]
+    fn media_recovery_error_reporting_does_not_downgrade_a_journal_ahead_of_the_database() {
+        let f = Fixture::new();
+        let (id, manifest) = f.plan();
+        f.trash(&id, &manifest);
+        f.conn.execute_batch(
+            "CREATE TRIGGER fail_restore_plan BEFORE UPDATE OF manifest,status ON media_trash_groups BEGIN SELECT RAISE(ABORT,'simulated database write failure'); END;",
+        ).unwrap();
+        let error = restore_on(&f.conn, &load(&f.conn, &id).unwrap()).unwrap_err();
+        assert!(load(&f.conn, &id).unwrap().manifest.restore_plan.is_none());
+        set_error(&f.conn, &id, &error);
+        f.conn
+            .execute_batch("DROP TRIGGER fail_restore_plan;")
+            .unwrap();
+        crate::t_media_recovery::inspect(&f.conn, true).unwrap();
+        let recovered = load(&f.conn, &id).unwrap();
+        assert_eq!(recovered.status, "restoring");
+        assert!(recovered.manifest.restore_plan.is_some());
+        restore_on(&f.conn, &recovered).unwrap();
+        for member in &manifest.members {
+            verify(Path::new(&member.original_path), member).unwrap();
+        }
+    }
+    #[test]
     fn media_lifecycle_pending_moves_cannot_be_permanently_deleted() {
         let f = Fixture::new();
         let (id, m) = f.plan();
@@ -1622,4 +1594,31 @@ pub async fn delete_hidden_media(
 /// Ordinary thumbnail / preview protocols never serve hidden or deleted records.
 pub(crate) fn is_private_file(file_id:i64)->Result<bool,String> {
     t_sqlite::open_conn()?.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND (hidden=1 OR deleted_at IS NOT NULL))",[file_id],|r|r.get(0)).map_err(|e|e.to_string())
+}
+
+#[tauri::command]
+pub async fn preview_deleted_media_restore(
+    window: tauri::WebviewWindow,
+    library_id: String,
+    group_ids: Vec<String>,
+    options: crate::t_media_restore::RestoreOptions,
+    session_token: Option<String>,
+) -> Result<crate::t_media_restore::PreviewResult, String> {
+    let owner = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _scope = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        if crate::t_config::current_library_id()? != library_id {
+            return Err("Library changed".into());
+        }
+        let permit =
+            crate::t_private_lock::authorize(&library_id, session_token.as_deref(), &owner)?;
+        let conn = t_sqlite::open_conn()?;
+        let result = crate::t_media_restore::preview(&conn, &group_ids, &options);
+        crate::t_private_lock::recheck(&permit)?;
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

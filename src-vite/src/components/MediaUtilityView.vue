@@ -39,7 +39,9 @@
         <button
           class="btn btn-sm"
           :disabled="busy || !selected.size"
-          @click="perform(mode === 'hidden' ? 'unhide' : 'restore')"
+          @click="
+            mode === 'hidden' ? perform('unhide') : (restoreDialog = true)
+          "
         >
           {{
             $t(
@@ -186,6 +188,14 @@
           →
         </button>
       </footer>
+      <MediaRestoreDialog
+        v-if="restoreDialog"
+        :library-id="libConfig._libraryId"
+        :session-token="access.sessionToken.value"
+        :group-ids="[...selected].map(String)"
+        @cancel="restoreDialog = false"
+        @restore="restoreSelected"
+      />
       <MessageBox
         v-if="confirmMove"
         :title="$t('media_lifecycle.move_deleted')"
@@ -245,6 +255,7 @@ import {
   getPrivateMediaPreview,
 } from '@/common/api';
 import { usePrivateAccess } from '@/common/privateAccess';
+import MediaRestoreDialog from './MediaRestoreDialog.vue';
 import PrivateLockPanel from './PrivateLockPanel.vue';
 import { mediaOperationErrors } from '@/common/mediaLifecycle';
 import { formatFileSize } from '@/common/utils';
@@ -261,6 +272,7 @@ const busy = ref('');
 const error = ref('');
 const confirmPurge = ref(false);
 const confirmMove = ref(false);
+const restoreDialog = ref(false);
 const preview = ref<any>(null);
 const access = usePrivateAccess(() => libConfig._libraryId, invalidatePrivate);
 const canReadPrivate = access.canRead;
@@ -382,7 +394,15 @@ async function navigatePreview(direction: number) {
   else if (preview.value === current)
     preview.value = items.value[position % 40] || null;
 }
-async function perform(action: 'unhide' | 'restore' | 'purge' | 'delete') {
+function restoreSelected(ids: string[], options: any) {
+  restoreDialog.value = false;
+  selected.value = new Set(ids);
+  void perform('restore', options);
+}
+async function perform(
+  action: 'unhide' | 'restore' | 'purge' | 'delete',
+  restoreOptions: any = null,
+) {
   if (busy.value || !selected.value.size || !canReadPrivate.value) return;
   const accessGeneration = access.generation.value;
   const session = access.sessionToken.value;
@@ -399,7 +419,12 @@ async function perform(action: 'unhide' | 'restore' | 'purge' | 'delete') {
         : action === 'unhide'
           ? await setMediaHidden(library, ids.map(Number), false, session)
           : action === 'restore'
-            ? await restoreDeletedMedia(library, ids.map(String), session)
+            ? await restoreDeletedMedia(
+                library,
+                ids.map(String),
+                session,
+                restoreOptions,
+              )
             : await purgeDeletedMedia(library, ids.map(String), session);
     if (
       disposed ||
@@ -443,6 +468,7 @@ watch(
     selected.value = new Set();
     confirmPurge.value = false;
     confirmMove.value = false;
+    restoreDialog.value = false;
     preview.value = null;
     error.value = '';
     void load();
@@ -461,6 +487,7 @@ function invalidatePrivate() {
   selected.value = new Set();
   preview.value = null;
   confirmMove.value = false;
+  restoreDialog.value = false;
   confirmPurge.value = false;
   error.value = '';
   busy.value = '';

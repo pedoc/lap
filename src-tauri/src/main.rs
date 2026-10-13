@@ -47,6 +47,7 @@ mod t_protocol;
 mod t_similar;
 mod t_smart_album;
 mod t_media_recovery;
+mod t_media_restore;
 mod t_media_lifecycle;
 mod t_private_media;
 mod t_private_lock;
@@ -313,6 +314,7 @@ async fn main() {
             t_media_lifecycle::get_deleted_media,
             t_media_lifecycle::set_media_hidden,
             t_media_lifecycle::restore_deleted_media,
+            t_media_lifecycle::preview_deleted_media_restore,
             t_media_lifecycle::purge_deleted_media,
             // smart album
             t_cmds::get_smart_album_status,

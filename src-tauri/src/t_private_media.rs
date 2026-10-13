@@ -358,6 +358,7 @@ mod tests {
                     .unwrap();
             }
             let manifest = Manifest {
+                restore_plan: None,
                 root: self.root.to_string_lossy().into_owned(),
                 primary_id: 1,
                 members,

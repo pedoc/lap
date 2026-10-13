@@ -2098,7 +2098,7 @@ export const getMediaOverview = libraryId => invoke('get_media_overview',{librar
 export const getHiddenMedia = (libraryId,offset,limit,sessionToken = null) => invoke('get_hidden_media',{libraryId,offset,limit,sessionToken});
 export const getDeletedMedia = (libraryId,offset,limit,sessionToken = null) => invoke('get_deleted_media',{libraryId,offset,limit,sessionToken});
 export const setMediaHidden = (libraryId,fileIds,hidden,sessionToken = null) => invoke('set_media_hidden',{libraryId,fileIds,hidden,sessionToken});
-export const restoreDeletedMedia = (libraryId,groupIds,sessionToken = null) => invoke('restore_deleted_media',{libraryId,groupIds,sessionToken});
+export const restoreDeletedMedia = (libraryId,groupIds,sessionToken = null,options = null) => invoke('restore_deleted_media',{libraryId,groupIds,sessionToken,options});
 export const purgeDeletedMedia = (libraryId,groupIds,sessionToken = null) => invoke('purge_deleted_media',{libraryId,groupIds,sessionToken});
 
 export const getPrivateMediaPreview = (libraryId,fileId,sessionToken = null) => invoke('get_private_media_preview',{libraryId,fileId,sessionToken});
@@ -2107,3 +2107,5 @@ export const deleteHiddenMedia = (libraryId,fileIds,sessionToken = null) => invo
 
 export const readPrivateMedia = (libraryId, fileId, mode, groupId, companion = false, rawOptions = {}, sessionToken = null) =>
   invoke('read_private_media', { libraryId, fileId, mode, groupId, companion, rawOptions, sessionToken });
+
+export const previewDeletedMediaRestore = (libraryId,groupIds,options,sessionToken = null) => invoke('preview_deleted_media_restore',{libraryId,groupIds,options,sessionToken});

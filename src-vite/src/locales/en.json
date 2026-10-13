@@ -2213,5 +2213,23 @@
     "save": "Save app lock settings",
     "mismatch": "The new passwords do not match.",
     "length": "Use a password of 8–128 characters."
-  }
+  },
+  "media_restore": {
+    "title": "Restore photos and companion files",
+    "count": "{count} recovery groups selected",
+    "strategy": "Restore strategy",
+    "original": "Original locations (stop at any conflict)",
+    "rename": "Keep both at original locations (one suffix per group)",
+    "directory": "Restore to a chosen directory (one suffix per group on conflict)",
+    "choose_root": "Choose an existing album root…",
+    "path": "Full destination path inside a registered album",
+    "registered_only": "Choose an existing album root or enter an existing subdirectory. Cross-disk recovery is supported. Add unregistered directories as albums first; no new scan root is created automatically.",
+    "safety": "No strategy overwrites files. RAW/JPEG, Live Photo video and sidecars are restored together, preserving IDs, ratings, tags, collection membership and manual face annotations.",
+    "preview": "Preview restore paths",
+    "resume": "This group has a durable restore plan. Retry continues that plan; new options do not change a group that has already started.",
+    "valid_only": "Restore only the {count} groups that passed preflight. Failed groups remain available for retry.",
+    "recheck": "Preview does not move files. Paths are checked again before execution. New conflicts can change the suffix of an unstarted group or stop recovery; no destination is overwritten.",
+    "cancel": "Cancel",
+    "confirm": "Restore groups that passed preflight"
+}
 }
