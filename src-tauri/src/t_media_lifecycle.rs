@@ -225,6 +225,16 @@ fn no_replace_move(source: &Path, target: &Path, member: &Member) -> Result<(), 
     })?;
     Ok(())
 }
+// Plan paths only after batch deduplication. Existing recovery records are never renumbered.
+fn assign_storage_paths(manifest: &mut Manifest, id: &str) {
+    let directory = Path::new(&manifest.root).join(".lap-trash").join(id);
+    for (index, member) in manifest.members.iter_mut().enumerate() {
+        member.stored_path = directory
+            .join(format!("{index}-{}", member.original_name))
+            .to_string_lossy()
+            .into_owned();
+    }
+}
 fn validate_root(manifest: &Manifest, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "Invalid recovery group ID")?;
     let root = Path::new(&manifest.root)
@@ -557,6 +567,7 @@ pub fn move_to_recently_deleted(
         manifest
             .members
             .retain(|m| paths.insert(m.original_path.clone()));
+        assign_storage_paths(&mut manifest, &id);
         for m in &manifest.members {
             if let Some(file_id) = m.file_id {
                 seen.insert(file_id);
@@ -1092,6 +1103,56 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn media_lifecycle_shared_middle_sidecar_is_renumbered_before_registration() {
+        let f = Fixture::new();
+        let (id, mut manifest) = f.plan();
+        manifest.members.swap(1, 2);
+        assign_storage_paths(&mut manifest, &id);
+        let shared = manifest.members[1].original_path.clone();
+        let mut seen = HashSet::from([shared]);
+        manifest
+            .members
+            .retain(|member| seen.insert(member.original_path.clone()));
+        assert!(validate_root(&manifest, &id).is_err());
+        assign_storage_paths(&mut manifest, &id);
+        assert!(validate_root(&manifest, &id).is_ok());
+        assert!(manifest.members[1].stored_path.ends_with("1-video.mov"));
+        f.trash(&id, &manifest);
+        restore_on(&f.conn, &load(&f.conn, &id).unwrap()).unwrap();
+        assert_eq!(
+            fs::read(f.root.join("photo.jpg")).unwrap(),
+            b"original photo"
+        );
+        assert_eq!(fs::read(f.root.join("video.mov")).unwrap(), b"paired video");
+        assert_eq!(
+            fs::read(f.root.join("photo.AAE")).unwrap(),
+            b"editing sidecar"
+        );
+    }
+    #[test]
+    fn media_lifecycle_empty_and_unchanged_plans_have_stable_storage_names() {
+        let f = Fixture::new();
+        let (id, mut manifest) = f.plan();
+        let original = manifest
+            .members
+            .iter()
+            .map(|m| m.stored_path.clone())
+            .collect::<Vec<_>>();
+        assign_storage_paths(&mut manifest, &id);
+        assert_eq!(
+            original,
+            manifest
+                .members
+                .iter()
+                .map(|m| m.stored_path.clone())
+                .collect::<Vec<_>>()
+        );
+        manifest.members.clear();
+        assign_storage_paths(&mut manifest, &id);
+        assert!(manifest.members.is_empty());
+    }
+
     #[test]
     fn media_lifecycle_real_query_predicates_hide_private_media_but_scan_preserves_hidden() {
         let f = Fixture::new();
