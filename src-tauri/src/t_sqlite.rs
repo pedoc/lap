@@ -1109,6 +1109,7 @@ impl AFolder {
         album_id: i64,
         seen_folders: &[FolderSubfolderState],
     ) -> Result<usize, String> {
+        crate::t_media_recovery::assert_cleanup_safe(&*open_conn()?,album_id)?;
         let album = Album::get_album_by_id(album_id)?;
         let seen_paths = seen_folders
             .iter()
@@ -1137,6 +1138,7 @@ impl AFolder {
         parent_path: &str,
         seen_paths: &HashSet<String>,
     ) -> Result<usize, String> {
+        crate::t_media_recovery::assert_cleanup_safe(&*open_conn()?,album_id)?;
         let album = Album::get_album_by_id(album_id)?;
         let missing_children = Self::get_paths_by_album_id(album_id)?
             .into_iter()
@@ -4593,6 +4595,7 @@ impl AFile {
 
     /// delete unseen files in an album (database only)
     pub fn delete_unseen_in_album(album_id: i64, current_scan_time: i64) -> Result<usize, String> {
+        crate::t_media_recovery::assert_cleanup_safe(&*open_conn()?,album_id)?;
         let mut conn = open_conn()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let query = format!("DELETE FROM afiles AS a
@@ -9846,6 +9849,9 @@ fn create_db_internal() -> Result<(), String> {
     crate::t_map::address_store::cleanup_placeholder_addresses(&conn)?;
 
     crate::t_media_lifecycle::setup(&conn)?;
+
+    // Recovery journals are reconciled before any new scan can sweep catalogue records.
+    crate::t_media_recovery::inspect(&conn,true)?;
 
     // file thumbnail table
     // NOTE: New columns (thumb_key, thumb_mtime, thumb_size, updated_at) are added

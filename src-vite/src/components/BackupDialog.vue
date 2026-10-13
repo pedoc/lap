@@ -10,6 +10,7 @@
         {{ $t('settings.database.backup_select_hint') }}
       </div>
 
+      <p class="text-xs text-warning mb-2">{{ $t('media_recovery.backup_scope') }}</p>
       <!-- Select all -->
       <div class="flex items-center justify-between gap-2 px-1 h-8">
         <label class="flex items-center gap-2 cursor-pointer text-sm text-base-content/70 hover:text-base-content">
@@ -133,6 +134,7 @@ const doBackup = async () => {
     }
 
     const result = await backupDatabases(Array.from(selectedIds.value), destPath);
+    if(result.warnings?.length)toast.warning(result.warnings.join('\n'),{duration:10000});
     toast.success(t('settings.database.backup_success', {
       path: result.filePath,
       size: formatFileSize(result.fileSize),

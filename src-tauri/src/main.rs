@@ -46,6 +46,7 @@ mod t_pasteboard;
 mod t_protocol;
 mod t_similar;
 mod t_smart_album;
+mod t_media_recovery;
 mod t_media_lifecycle;
 mod t_sqlite;
 mod t_thumbnail_rebuild;

@@ -2166,5 +2166,10 @@
     "restoring": "Restore interrupted / pending",
     "purging": "Permanent deletion interrupted / pending"
   }
+},
+  "media_recovery": {
+  "backup_scope": "This backup contains databases, configuration and recovery journals, not original or .lap-trash media files. Back up the album disks separately.",
+  "review": "Recovery / database preflight",
+  "review_required": "Recovery metadata needs review; automatic file operations are disabled."
 }
 }

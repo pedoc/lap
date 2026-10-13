@@ -104,7 +104,7 @@ pub struct Manifest {
     pub primary_id: i64,
     pub members: Vec<Member>,
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrashItem {
     pub id: String,
@@ -125,6 +125,7 @@ pub struct Overview {
 pub struct TrashPage {
     pub items: Vec<TrashItem>,
     pub total: i64,
+    pub recovery: crate::t_media_recovery::Report,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,7 +166,7 @@ fn fingerprint(path: &Path) -> Result<(u64, String), String> {
     }
     Ok((size, format!("{:x}", hash.finalize())))
 }
-fn verify(path: &Path, member: &Member) -> Result<(), String> {
+pub(crate) fn verify(path: &Path, member: &Member) -> Result<(), String> {
     let (size, hash) = fingerprint(path)?;
     if size != member.size || hash != member.hash {
         return Err(format!(
@@ -235,7 +236,7 @@ fn assign_storage_paths(manifest: &mut Manifest, id: &str) {
             .into_owned();
     }
 }
-fn validate_root(manifest: &Manifest, id: &str) -> Result<PathBuf, String> {
+pub(crate) fn validate_root(manifest: &Manifest, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "Invalid recovery group ID")?;
     let root = Path::new(&manifest.root)
         .canonicalize()
@@ -279,7 +280,7 @@ fn validate_root(manifest: &Manifest, id: &str) -> Result<PathBuf, String> {
     }
     Ok(dir)
 }
-fn load(conn: &Connection, id: &str) -> Result<TrashItem, String> {
+pub(crate) fn load(conn: &Connection, id: &str) -> Result<TrashItem, String> {
     conn.query_row(
         "SELECT id,created_at,status,error,manifest FROM media_trash_groups WHERE id=?1",
         [id],
@@ -309,6 +310,7 @@ fn set_error(conn: &Connection, id: &str, error: &str) {
         "UPDATE media_trash_groups SET error=?1 WHERE id=?2",
         params![error, id],
     );
+    let _ = crate::t_media_recovery::checkpoint_current(conn, id);
 }
 fn component_ids(primary: i64) -> Result<Vec<i64>, String> {
     let conn = t_sqlite::open_conn()?;
@@ -506,7 +508,8 @@ fn register_intent(conn: &Connection, id: &str, manifest: &Manifest) -> Result<(
             .filter_map(|m| m.file_id)
             .collect::<Vec<_>>(),
     )?;
-    tx.commit().map_err(|e| e.to_string())
+    tx.commit().map_err(|e| e.to_string())?;
+    crate::t_media_recovery::checkpoint_current(conn, id)
 }
 pub fn validate_original(id: i64, path: &str, allow_hidden: bool) -> Result<(), String> {
     let conn = t_sqlite::open_conn()?;
@@ -611,6 +614,7 @@ pub fn move_to_recently_deleted(
                 [&id],
             )
             .map_err(|e| e.to_string())?;
+            crate::t_media_recovery::checkpoint_current(&conn, &id)?;
             Ok::<_, String>(())
         })();
         if let Err(error) = moved {
@@ -633,6 +637,12 @@ fn original_catalog_conflict(conn: &Connection, member: &Member) -> Result<bool,
 }
 fn restore_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
     let dir = validate_root(&item.manifest, &item.id)?;
+    if item.status == "review_required" {
+        return Err(
+            "Recovery metadata differs from this database; automatic file operations are disabled"
+                .into(),
+        );
+    }
     if item.status == "purging" {
         return Err("Permanent deletion already started; remaining files cannot be treated as a complete photo group".into());
     }
@@ -656,6 +666,7 @@ fn restore_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
         [&item.id],
     )
     .map_err(|e| e.to_string())?;
+    crate::t_media_recovery::checkpoint_current(conn, &item.id)?;
     for member in &item.manifest.members {
         let original = Path::new(&member.original_path);
         let stored = Path::new(&member.stored_path);
@@ -701,6 +712,7 @@ fn restore_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
     }
     tx.execute("DELETE FROM media_trash_groups WHERE id=?1", [&item.id])
         .map_err(|e| e.to_string())?;
+    crate::t_media_recovery::checkpoint(&tx, item, Some("restored"))?;
     tx.commit().map_err(|e| e.to_string())
 }
 fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
@@ -723,6 +735,7 @@ fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
         [&item.id],
     )
     .map_err(|e| e.to_string())?;
+    crate::t_media_recovery::checkpoint_current(conn, &item.id)?;
     for member in &item.manifest.members {
         let stored = Path::new(&member.stored_path);
         if stored.exists() {
@@ -747,6 +760,7 @@ fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
     }
     tx.execute("DELETE FROM media_trash_groups WHERE id=?1", [&item.id])
         .map_err(|e| e.to_string())?;
+    crate::t_media_recovery::checkpoint(&tx, item, Some("purged"))?;
     tx.commit().map_err(|e| e.to_string())
 }
 pub fn operate(ids: Vec<String>, purge: bool) -> Result<OperationResult, String> {
@@ -816,6 +830,7 @@ pub fn hidden_page(offset: i64, limit: i64) -> Result<HiddenPage, String> {
 }
 pub fn trash_page(offset: i64, limit: i64) -> Result<TrashPage, String> {
     let conn = t_sqlite::open_conn()?;
+    let recovery = crate::t_media_recovery::inspect(&conn, true)?;
     let total = conn
         .query_row("SELECT COUNT(*) FROM media_trash_groups", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
@@ -835,6 +850,7 @@ pub fn trash_page(offset: i64, limit: i64) -> Result<TrashPage, String> {
         rows
     };
     Ok(TrashPage {
+        recovery,
         items: ids
             .iter()
             .map(|id| load(&conn, id))
@@ -1151,6 +1167,100 @@ mod tests {
         manifest.members.clear();
         assign_storage_paths(&mut manifest, &id);
         assert!(manifest.members.is_empty());
+    }
+
+    #[test]
+    fn media_recovery_older_database_reattaches_pending_files_without_moving_media() {
+        let f = Fixture::new();
+        let (id, m) = f.plan();
+        f.trash(&id, &m);
+        f.conn.execute_batch("DELETE FROM media_states;DELETE FROM media_trash_groups;UPDATE afiles SET name=CASE id WHEN 1 THEN 'photo.jpg' ELSE 'video.mov' END;").unwrap();
+        let report = crate::t_media_recovery::inspect(&f.conn, true).unwrap();
+        assert_eq!(report.reattached, 1);
+        assert!(!f.root.join("photo.jpg").exists());
+        assert!(Path::new(&m.members[0].stored_path).exists());
+        restore_on(&f.conn, &load(&f.conn, &id).unwrap()).unwrap();
+        assert_eq!(
+            fs::read(f.root.join("photo.jpg")).unwrap(),
+            b"original photo"
+        );
+        assert_eq!(
+            f.conn
+                .query_row("SELECT rating FROM afiles WHERE id=1", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            5
+        );
+    }
+    #[test]
+    fn media_recovery_read_only_preflight_does_not_change_catalogue_or_media() {
+        let f = Fixture::new();
+        let (id, m) = f.plan();
+        f.trash(&id, &m);
+        let path = f.root.join("readonly.db");
+        f.conn
+            .execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])
+            .unwrap();
+        let readonly =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let report = crate::t_media_recovery::inspect(&readonly, false).unwrap();
+        assert_eq!(report.registered, 1);
+        assert!(Path::new(&m.members[0].stored_path).exists());
+        let exported = crate::t_media_recovery::backup_journals(&readonly).unwrap();
+        assert_eq!(exported.len(), 1);
+        assert_eq!(exported[0].0, id);
+    }
+    #[test]
+    fn media_recovery_corrupt_journal_prevents_destructive_scan_cleanup() {
+        let f = Fixture::new();
+        let (id, m) = f.plan();
+        f.trash(&id, &m);
+        let dir = validate_root(&m, &id).unwrap();
+        let journal = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|v| v == "json"))
+            .unwrap();
+        fs::write(journal, b"invalid-json").unwrap();
+        let report = crate::t_media_recovery::inspect(&f.conn, true).unwrap();
+        assert!(!report.issues.is_empty());
+        assert!(crate::t_media_recovery::assert_cleanup_safe(&f.conn, 1).is_err());
+        assert!(Path::new(&m.members[0].stored_path).exists());
+    }
+    #[test]
+    fn media_recovery_unrelated_catalogue_ids_are_not_rebound_or_overwritten() {
+        let f = Fixture::new();
+        let (id, m) = f.plan();
+        f.trash(&id, &m);
+        f.conn.execute_batch("DELETE FROM media_states;DELETE FROM media_trash_groups;UPDATE afiles SET name='different-photo.jpg' WHERE id=1;").unwrap();
+        let report = crate::t_media_recovery::inspect(&f.conn, true).unwrap();
+        assert!(!report.issues.is_empty());
+        assert_eq!(load(&f.conn, &id).unwrap().status, "review_required");
+        assert_eq!(
+            f.conn
+                .query_row("SELECT name FROM afiles WHERE id=1", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "different-photo.jpg"
+        );
+        assert!(restore_on(&f.conn, &load(&f.conn, &id).unwrap()).is_err());
+    }
+    #[test]
+    fn media_recovery_completed_restore_reconciles_stale_database_without_file_io() {
+        let f = Fixture::new();
+        let (id, m) = f.plan();
+        f.trash(&id, &m);
+        restore_on(&f.conn, &load(&f.conn, &id).unwrap()).unwrap();
+        register_intent(&f.conn, &id, &m).unwrap();
+        let old = load(&f.conn, &id).unwrap();
+        crate::t_media_recovery::checkpoint(&f.conn, &old, Some("restored")).unwrap();
+        let report = crate::t_media_recovery::inspect(&f.conn, true).unwrap();
+        assert_eq!(report.reattached, 1);
+        assert!(load(&f.conn, &id).is_err());
+        assert_eq!(
+            fs::read(f.root.join("photo.jpg")).unwrap(),
+            b"original photo"
+        );
     }
 
     #[test]

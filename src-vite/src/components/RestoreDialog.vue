@@ -18,6 +18,8 @@
         <div>{{ $t('settings.database.restore_libraries', { count: parsed.libraries.length, size: formatFileSize(totalBackupSize) }) }}</div>
       </div>
 
+      <p class="text-xs text-warning mb-2">{{ $t('media_recovery.backup_scope') }}</p>
+      <p v-if="parsed.recoveryReports?.length" class="text-xs text-warning whitespace-pre-wrap max-h-20 overflow-auto">{{ parsed.recoveryReports.join('\n') }}</p>
       <!-- Library list -->
       <div class="flex-1 overflow-y-auto border border-base-content/5 bg-base-300/30 shadow-sm rounded-box p-1">
         <div
@@ -184,6 +186,7 @@ const doRestore = async () => {
       }));
 
     const result = await restoreDatabases(backupFullPath.value, selections);
+    if(result.warnings?.length)toast.warning(result.warnings.join('\n'),{duration:10000});
     toast.success(t('settings.database.restore_success', {
       count: result.restoredCount,
       names: result.restoredNames.join(', '),

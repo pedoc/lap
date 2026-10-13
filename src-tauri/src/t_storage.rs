@@ -5,6 +5,7 @@
  * author:  julyx10
  * date:    2026-01-15
  */
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -293,6 +294,7 @@ pub struct BackupResult {
     pub file_size: i64,
     pub library_count: usize,
     pub library_names: Vec<String>,
+    pub warnings:Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -307,6 +309,10 @@ pub struct BackupMetaLibrary {
 pub struct BackupMetaData {
     pub created_at: i64,
     pub libraries: Vec<BackupMetaLibrary>,
+    #[serde(default)]
+    pub includes_media:bool,
+    #[serde(default)]
+    pub recovery_reports:Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -321,6 +327,7 @@ pub struct RestoreSelection {
 pub struct RestoreResult {
     pub restored_count: usize,
     pub restored_names: Vec<String>,
+    pub warnings:Vec<String>,
 }
 
 pub fn get_db_storage_info() -> Result<Vec<DbStorageInfo>, String> {
@@ -370,7 +377,13 @@ pub fn backup_databases(library_ids: &[String], dest_path: &str) -> Result<Backu
         fs::File::create(dest_path).map_err(|e| format!("Failed to create backup file: {}", e))?;
     let mut zip = ZipWriter::new(file);
 
+    let mut warnings=Vec::new();
+    for lib in &selected {let path=get_library_db_path_from_config(&config,&lib.id)?;if Path::new(&path).exists(){let conn=Connection::open_with_flags(&path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e|e.to_string())?;
+        let report=crate::t_media_recovery::inspect(&conn,false)?;warnings.extend(report.issues.into_iter().map(|issue|format!("{}: {issue}",lib.name)));}}
     let backup_info = serde_json::json!({
+        "includesMedia":false,
+        "recoveryReports":warnings,
+        "recoveryScope":"catalogue-and-journals-only",
         "createdAt": SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -425,6 +438,10 @@ pub fn backup_databases(library_ids: &[String], dest_path: &str) -> Result<Backu
             .read_to_end(&mut db_content)
             .map_err(|e| format!("Failed to read database '{}': {}", lib.name, e))?;
 
+        let recovery_conn=Connection::open_with_flags(path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e|e.to_string())?;
+        for (id,journal) in crate::t_media_recovery::backup_journals(&recovery_conn)?{
+            let entry=format!("recovery/{}/{id}.json",sanitize_filename(&lib.name));zip.start_file(entry,FileOptions::<'_,()>::default().compression_method(zip::CompressionMethod::Deflated)).map_err(|e|e.to_string())?;zip.write_all(journal.as_bytes()).map_err(|e|e.to_string())?;
+        }
         let safe_name = sanitize_filename(&lib.name);
         let zip_path = format!("{}.db", safe_name);
 
@@ -448,6 +465,7 @@ pub fn backup_databases(library_ids: &[String], dest_path: &str) -> Result<Backu
         file_size: final_size,
         library_count: library_names.len(),
         library_names,
+        warnings,
     })
 }
 
@@ -504,6 +522,7 @@ pub fn restore_databases(
     }
 
     let mut restored_names = Vec::new();
+    let mut warnings=Vec::new();
     let mut existing_names: std::collections::HashSet<String> =
         config.libraries.iter().map(|l| l.name.clone()).collect();
 
@@ -542,6 +561,10 @@ pub fn restore_databases(
             )
         })?;
 
+        let restored=Connection::open(db_path_obj).map_err(|e|e.to_string())?;
+        crate::t_media_lifecycle::setup(&restored)?;
+        let report=crate::t_media_recovery::inspect(&restored,true)?;
+        warnings.extend(report.issues.into_iter().map(|issue|format!("{final_lib_name}: {issue}")));
         config.libraries.push(new_lib);
         existing_names.insert(final_lib_name.clone());
         restored_names.push(final_lib_name);
@@ -551,6 +574,7 @@ pub fn restore_databases(
     Ok(RestoreResult {
         restored_count: restored_names.len(),
         restored_names,
+        warnings,
     })
 }
 

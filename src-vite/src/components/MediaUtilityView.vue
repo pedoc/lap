@@ -75,6 +75,7 @@
         {{ $t('media_lifecycle.retry') }}
       </button>
     </p>
+    <details v-if="recoveryIssues.length" class="text-xs text-warning"><summary>{{ $t('media_recovery.review') }}</summary><p class="whitespace-pre-wrap break-all">{{ recoveryIssues.join('\n') }}</p></details>
     <p v-if="busy" class="text-sm">
       <span class="loading loading-spinner loading-sm"></span>
       {{ $t('media_lifecycle.busy') }}
@@ -214,6 +215,7 @@ const { t } = useI18n();
 const props = defineProps<{ mode: 'hidden' | 'deleted' }>();
 const items = ref<any[]>([]);
 const total = ref(0);
+const recoveryIssues=ref<string[]>([]);
 const page = ref(0);
 const selected = ref(new Set<string | number>());
 const busy = ref('');
@@ -286,6 +288,7 @@ async function load() {
       mode !== props.mode
     )
       return;
+    recoveryIssues.value=result.recovery?.issues||[];
     items.value = hydrated;
     total.value = result.total;
     selected.value = new Set();
