@@ -1,5 +1,8 @@
 //! PP-OCR DB detector + CTC recognizer. Local-only, no network or original writes.
-use crate::ai::{assets, runtime, types::ResolvedModel};
+use crate::ai::{
+    assets, runtime,
+    types::{Adapter, ResolvedModel},
+};
 use image::{DynamicImage, imageops::FilterType};
 use ndarray::Array4;
 use ort::{inputs, value::Value};
@@ -28,21 +31,20 @@ pub struct PaddleOcr {
 impl PaddleOcr {
     pub fn new(model: &ResolvedModel) -> Result<Self, String> {
         assets::verify(&model.definition)?;
-        let dictionary =
-            std::fs::read_to_string(assets::artifact_path(&model.definition, "charset")?)
-                .map_err(|e| e.to_string())?;
-        let mut alphabet = vec![String::new()];
-        alphabet.extend(
-            dictionary
-                .lines()
-                .map(|line| line.trim_end_matches('\r').to_string()),
-        );
-        alphabet.push(" ".into());
-        if alphabet.len() < 3 || alphabet.len() > 100000 {
-            return Err("Invalid OCR character dictionary".into());
-        }
         let detector = runtime::local_session(model, "ocr_detector")?;
         let recognizer = runtime::local_session(model, "recognizer")?;
+        let dictionary = if model.definition.adapter == Adapter::RapidOcrOnnx {
+            recognizer
+                .metadata()
+                .map_err(|e| e.to_string())?
+                .custom("character")
+                .map_err(|e| e.to_string())?
+                .ok_or("RapidOCR recognizer has no embedded 'character' dictionary")?
+        } else {
+            std::fs::read_to_string(assets::artifact_path(&model.definition, "charset")?)
+                .map_err(|e| e.to_string())?
+        };
+        let alphabet = alphabet_from_dictionary(&dictionary)?;
         if detector.inputs.len() != 1
             || recognizer.inputs.len() != 1
             || detector.outputs.is_empty()
@@ -61,6 +63,24 @@ impl PaddleOcr {
         })
     }
     pub fn probe(&mut self) -> Result<(), String> {
+        let result = self.probe_once();
+        if let Err(error) = &result {
+            if self.retry_on_cpu(error)? {
+                return self.probe_once();
+            }
+        }
+        result
+    }
+    fn retry_on_cpu(&mut self, error: &str) -> Result<bool, String> {
+        if !automatic_gpu_failure(error, &runtime::reports(&self.model)) {
+            return Ok(false);
+        }
+        runtime::force_cpu(&self.model, error);
+        let model = self.model.clone();
+        *self = Self::new(&model)?;
+        Ok(true)
+    }
+    fn probe_once(&mut self) -> Result<(), String> {
         self.recognize(&DynamicImage::new_rgb8(320, 320), &|| Ok(()))?;
         let width = self.model.number("ocr_recognition_width") as usize;
         let input = Array4::<f32>::zeros((1, 3, 48, width));
@@ -68,7 +88,7 @@ impl PaddleOcr {
         let output = self
             .recognizer
             .run(inputs![name=>Value::from_array(input).map_err(|e|e.to_string())?])
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("OCR recognition failed: {e}"))?;
         let (shape, values) = output[0]
             .try_extract_tensor::<f32>()
             .map_err(|e| e.to_string())?;
@@ -79,6 +99,24 @@ impl PaddleOcr {
         Ok(())
     }
     pub fn recognize(
+        &mut self,
+        image: &DynamicImage,
+        cancel: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Document, String> {
+        cancel()?;
+        let result = self.recognize_once(image, cancel);
+        if let Err(error) = &result {
+            // Never turn cancellation, invalid model contracts or explicit GPU errors
+            // into a silent CPU retry. Only the failing automatic GPU stage qualifies.
+            cancel()?;
+            if self.retry_on_cpu(error)? {
+                cancel()?;
+                return self.recognize_once(image, cancel);
+            }
+        }
+        result
+    }
+    fn recognize_once(
         &mut self,
         image: &DynamicImage,
         cancel: &dyn Fn() -> Result<(), String>,
@@ -221,6 +259,34 @@ impl PaddleOcr {
         Ok(Document { text, lines })
     }
 }
+fn alphabet_from_dictionary(dictionary: &str) -> Result<Vec<String>, String> {
+    if dictionary.len() > 4 * 1024 * 1024 {
+        return Err("OCR character dictionary exceeds 4 MiB".into());
+    }
+    let mut alphabet = vec![String::new()];
+    alphabet.extend(
+        dictionary
+            .lines()
+            .map(|line| line.trim_end_matches('\r').to_string()),
+    );
+    alphabet.push(" ".into());
+    if alphabet.len() < 3 || alphabet.len() > 100000 {
+        return Err("Invalid OCR character dictionary".into());
+    }
+    Ok(alphabet)
+}
+fn automatic_gpu_failure(error: &str, reports: &[runtime::SessionReport]) -> bool {
+    let role = if error.starts_with("OCR detection failed:") {
+        "ocr_detector"
+    } else if error.starts_with("OCR recognition failed:") {
+        "recognizer"
+    } else {
+        return false;
+    };
+    reports
+        .iter()
+        .any(|report| report.role == role && report.requested == "auto" && report.selected != "cpu")
+}
 // Axis-aligned DB components: horizontal / upright text. Not document layout understanding.
 fn regions(
     values: &[f32],
@@ -324,6 +390,100 @@ fn decode_ctc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_dictionary_has_ctc_blank_and_trailing_space() {
+        assert_eq!(
+            alphabet_from_dictionary("中\r\n文\r\n").unwrap(),
+            vec!["", "中", "文", " "]
+        );
+        assert!(alphabet_from_dictionary("").is_err());
+    }
+    #[test]
+    fn cpu_retry_requires_failure_of_the_automatic_gpu_stage() {
+        let mut report = runtime::SessionReport {
+            role: "ocr_detector".into(),
+            requested: "auto".into(),
+            selected: "directml".into(),
+            device_id: Some(0),
+            fallback_reason: None,
+            operators: Default::default(),
+        };
+        assert!(automatic_gpu_failure(
+            "OCR detection failed: unsupported operator",
+            &[report.clone()]
+        ));
+        assert!(!automatic_gpu_failure(
+            "OCR recognition failed: unsupported operator",
+            &[report.clone()]
+        ));
+        assert!(!automatic_gpu_failure("OCR stopped", &[report.clone()]));
+        assert!(!automatic_gpu_failure(
+            "OCR recognizer/dictionary mismatch",
+            &[report.clone()]
+        ));
+        report.requested = "directml".into();
+        assert!(!automatic_gpu_failure(
+            "OCR detection failed: driver error",
+            &[report.clone()]
+        ));
+        report.requested = "auto".into();
+        report.selected = "cpu".into();
+        assert!(!automatic_gpu_failure(
+            "OCR detection failed: runtime error",
+            &[report]
+        ));
+    }
+    #[test]
+    #[ignore = "Requires downloaded RapidAI checksum-pinned models and generated local fixture"]
+    fn rapidocr_catalog_models_infer_on_cpu_and_gpu() {
+        let root = std::path::PathBuf::from(std::env::var_os("LAP_AI_TEST_MODEL_ROOT").unwrap());
+        let image = image::open(root.join("ocr-fixture.png")).unwrap();
+        let provider = std::env::var("LAP_OCR_TEST_DEVICE").unwrap_or("cpu".into());
+        for id in ["rapidocr-pp-ocrv4", "rapidocr-pp-ocrv5"] {
+            let mut config = crate::ai::settings::Configuration::default();
+            config
+                .models
+                .get_mut(id)
+                .unwrap()
+                .parameters
+                .insert("device".into(), serde_json::json!(provider));
+            let model = config.resolve(id).unwrap();
+            std::fs::write(
+                assets::directory(&model.definition)
+                    .unwrap()
+                    .join("installed.json"),
+                model.definition.digest(),
+            )
+            .unwrap();
+            runtime::with_profiling(|| {
+                let mut backend = PaddleOcr::new(&model).unwrap();
+                backend.probe().unwrap();
+                let doc = backend.recognize(&image, &|| Ok(())).unwrap();
+                println!(
+                    "{id}/{provider}: {}",
+                    serde_json::to_string_pretty(&doc).unwrap()
+                );
+                assert!(doc.text.contains("LAP"));
+                assert!(doc.text.contains("2026"));
+                assert!(doc.text.contains("中文"));
+            });
+            let reports = runtime::reports(&model);
+            println!("sessions {}", serde_json::to_string(&reports).unwrap());
+            if provider != "cpu" && provider != "auto" {
+                assert!(
+                    reports.iter().all(|r| r.selected == provider),
+                    "explicit GPU must not be substituted"
+                );
+                assert!(
+                    reports.iter().any(|r| r
+                        .operators
+                        .iter()
+                        .any(|(p, n)| p != "CPUExecutionProvider" && *n > 0)),
+                    "GPU registration alone is not execution"
+                );
+            }
+        }
+    }
     #[test]
     fn ctc_blank_resets_duplicate_and_unicode_is_preserved() {
         let a = vec!["".into(), "中".into(), "文".into()];

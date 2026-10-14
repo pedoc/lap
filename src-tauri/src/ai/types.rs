@@ -26,6 +26,7 @@ pub enum Adapter {
     ScrfdArcfaceOnnx,
     JinaEmbeddings,
     PaddleOcrOnnx,
+    RapidOcrOnnx,
 }
 impl Adapter {
     // Bump only the affected adapter when its preprocessing/output contract changes.
@@ -35,6 +36,7 @@ impl Adapter {
             Self::ScrfdArcfaceOnnx => "scrfd-bgr-arcface-crop-v1",
             Self::JinaEmbeddings => "jina-json-jpeg1024-v1",
             Self::PaddleOcrOnnx => "paddle-db-ctc-bgr48-v1",
+            Self::RapidOcrOnnx => "rapidocr-db-ctc-bgr48-embedded-v1",
         }
     }
 }
@@ -293,6 +295,7 @@ impl ModelDefinition {
             (Task::Face, Adapter::ScrfdArcfaceOnnx) => &["detector", "embedding"],
             (Task::Semantic, Adapter::JinaEmbeddings) => &[],
             (Task::Ocr, Adapter::PaddleOcrOnnx) => &["ocr_detector", "recognizer", "charset"],
+            (Task::Ocr, Adapter::RapidOcrOnnx) => &["ocr_detector", "recognizer"],
             _ => return Err("Adapter does not provide this task capability".into()),
         };
         if self.files.len() != roles.len() {
@@ -373,9 +376,17 @@ pub struct ResolvedModel {
 impl ResolvedModel {
     pub fn new(
         definition: ModelDefinition,
-        configuration: ModelConfiguration,
+        mut configuration: ModelConfiguration,
     ) -> Result<Self, String> {
         definition.validate()?;
+        // Execution policy is not a weight revision. Keep old manifests / downloads
+        // intact, prefer acceleration when the user has not explicitly selected a device.
+        if definition.task == Task::Ocr {
+            configuration
+                .parameters
+                .entry("device".into())
+                .or_insert_with(|| json!("auto"));
+        }
         if configuration.endpoint.len() > 4096
             || configuration.remote_model.len() > 256
             || configuration.remote_revision.len() > 256
@@ -481,6 +492,27 @@ mod tests {
             credential_revision: String::new(),
         };
         ResolvedModel::new(def, inst).unwrap()
+    }
+    #[test]
+    fn ocr_defaults_prefer_gpu_without_changing_weights_or_explicit_cpu() {
+        let config = crate::ai::settings::Configuration::default();
+        for id in ["ppocr-v5-zh", "rapidocr-pp-ocrv4", "rapidocr-pp-ocrv5"] {
+            let model = config.resolve(id).unwrap();
+            assert_eq!(model.values["device"], json!("auto"));
+            let mut explicit = model.configuration.clone();
+            explicit.parameters.insert("device".into(), json!("cpu"));
+            explicit
+                .parameters
+                .insert("recognizer_device".into(), json!("cpu"));
+            let cpu = ResolvedModel::new(model.definition.clone(), explicit).unwrap();
+            assert_eq!(cpu.values["device"], json!("cpu"));
+            assert_eq!(model.profile(), cpu.profile());
+            assert_eq!(model.definition.digest(), cpu.definition.digest());
+            if model.definition.adapter == Adapter::RapidOcrOnnx {
+                assert_eq!(model.definition.files.len(), 2);
+                assert!(model.definition.files.iter().all(|f| f.role != "charset"));
+            }
+        }
     }
     #[test]
     fn ocr_profile_covers_detector_recognizer_dictionary_and_thresholds() {

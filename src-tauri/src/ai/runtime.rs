@@ -335,6 +335,12 @@ fn build(
                     .with_dimension_override(name, size)
                     .map_err(|e| e.to_string())?;
             }
+        } else if model.definition.task == super::types::Task::Ocr {
+            for (name, size) in ocr_dimension_overrides(model, role) {
+                builder = builder
+                    .with_dimension_override(name, size)
+                    .map_err(|e| e.to_string())?;
+            }
         } else if role == "vision" {
             for (name, size) in [
                 ("batch_size", 1),
@@ -393,6 +399,51 @@ fn directml_device(runtime: &RuntimeInfo, configured: i32) -> Option<i32> {
     }
 }
 
+fn provider_candidates(desired: &str, forced_cpu: bool) -> Vec<&str> {
+    match (desired, forced_cpu) {
+        ("auto", false) => vec!["cuda", "directml", "coreml", "cpu"],
+        ("auto", true) => vec!["cpu"],
+        _ => vec![desired],
+    }
+}
+fn ocr_dimension_overrides(model: &ResolvedModel, role: &str) -> Vec<(&'static str, i64)> {
+    let (height, width) = match role {
+        "ocr_detector" => {
+            let size = model.number("ocr_detection_size") as i64;
+            (size, size)
+        }
+        "recognizer" => (48, model.number("ocr_recognition_width") as i64),
+        _ => return Vec::new(),
+    };
+    let mut values = vec![
+        ("batch", 1),
+        ("batch_size", 1),
+        ("height", height),
+        ("width", width),
+        ("?", height),
+    ];
+    // Observed symbolic input dimensions in the checksum-pinned official exports.
+    // v4 uses p2o.*, v5 uses DynamicDimension.*. Other contracts safely fail/fallback.
+    for names in [
+        [
+            "p2o.DynamicDimension.0",
+            "p2o.DynamicDimension.1",
+            "p2o.DynamicDimension.2",
+        ],
+        [
+            "DynamicDimension.0",
+            "DynamicDimension.1",
+            "DynamicDimension.2",
+        ],
+    ] {
+        values.push((names[0], 1));
+        values.push((names[1], if role == "recognizer" { width } else { height }));
+        if role == "ocr_detector" {
+            values.push((names[2], width));
+        }
+    }
+    values
+}
 pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle, String> {
     let desired = requested(model, role);
     let runtime = info();
@@ -404,16 +455,12 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
         .with(|mode| mode.get())
         .then(|| std::env::temp_dir().join(format!("lap-ai-profile-{}", uuid::Uuid::new_v4())));
     let mut failures = Vec::new();
-    let candidates = if desired == "auto" {
-        if let Some(reason) = forced {
-            failures.push(reason);
-            vec!["cpu"]
-        } else {
-            vec!["cuda", "directml", "coreml", "cpu"]
+    if desired == "auto" {
+        if let Some(reason) = &forced {
+            failures.push(reason.clone());
         }
-    } else {
-        vec![desired.as_str()]
-    };
+    }
+    let candidates = provider_candidates(&desired, forced.is_some());
     for provider in candidates {
         let Some(info) = runtime.providers.iter().find(|p| p.id == provider) else {
             return Err("Unknown execution provider".into());
@@ -442,6 +489,9 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
         };
         match build(model, role, provider, device, &trace) {
             Ok(session) => {
+                if desired == "auto" && provider == "cpu" && failures.is_empty() {
+                    failures.push("No available GPU execution provider; using CPU".into());
+                }
                 let key = model.session_key();
                 let report = SessionReport {
                     role: role.into(),
@@ -477,6 +527,36 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_provider_order_prefers_acceleration_and_forcing_respects_explicit_gpu() {
+        assert_eq!(
+            provider_candidates("auto", false),
+            vec!["cuda", "directml", "coreml", "cpu"]
+        );
+        assert_eq!(provider_candidates("auto", true), vec!["cpu"]);
+        assert_eq!(provider_candidates("directml", true), vec!["directml"]);
+        assert_eq!(provider_candidates("cpu", false), vec!["cpu"]);
+    }
+    #[test]
+    fn directml_ocr_shapes_match_verified_v4_and_v5_exports() {
+        let model = crate::ai::settings::Configuration::default()
+            .resolve("rapidocr-pp-ocrv4")
+            .unwrap();
+        for (role, h, w) in [("ocr_detector", 960, 960), ("recognizer", 48, 1024)] {
+            let shape = ocr_dimension_overrides(&model, role)
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(shape["?"], h);
+            assert_eq!(shape["height"], h);
+            assert_eq!(shape["width"], w);
+            assert_eq!(shape["p2o.DynamicDimension.0"], 1);
+            assert_eq!(shape["DynamicDimension.0"], 1);
+            assert_eq!(
+                shape["p2o.DynamicDimension.1"],
+                if role == "recognizer" { w } else { h }
+            );
+        }
+    }
     #[test]
     fn explicit_device_is_not_silently_substituted() {
         let config = super::super::settings::Configuration::default();

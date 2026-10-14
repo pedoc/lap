@@ -270,5 +270,70 @@
         "size": 74012
       }
     ]
+  },
+  {
+    "id": "rapidocr-pp-ocrv4",
+    "version": "rapidai-v3.10.0",
+    "name": "RapidOCR · PP-OCRv4 Mobile",
+    "task": "ocr",
+    "adapter": "rapid_ocr_onnx",
+    "embeddingSpace": "rapidocr-ppocrv4-db-ctc",
+    "dimension": 1,
+    "languages": [
+      "zh",
+      "en"
+    ],
+    "license": "Apache-2.0",
+    "description": "RapidAI official PP-OCRv4 Mobile ONNX models. Local Rust DB/CTC adapter with embedded dictionary; no Python runtime or angle classifier.",
+    "defaults": {
+      "device": "auto"
+    },
+    "files": [
+      {
+        "role": "ocr_detector",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv4/det/ch_PP-OCRv4_det_mobile.onnx",
+        "sha256": "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+        "size": 4745517
+      },
+      {
+        "role": "recognizer",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile.onnx",
+        "sha256": "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b",
+        "size": 10857958
+      }
+    ]
+  },
+  {
+    "id": "rapidocr-pp-ocrv5",
+    "version": "rapidai-v3.10.0",
+    "name": "RapidOCR · PP-OCRv5 Mobile",
+    "task": "ocr",
+    "adapter": "rapid_ocr_onnx",
+    "embeddingSpace": "rapidocr-ppocrv5-db-ctc",
+    "dimension": 1,
+    "languages": [
+      "zh",
+      "en",
+      "ja"
+    ],
+    "license": "Apache-2.0",
+    "description": "RapidAI official PP-OCRv5 Mobile ONNX models. Local Rust DB/CTC adapter with embedded dictionary; no Python runtime or angle classifier.",
+    "defaults": {
+      "device": "auto"
+    },
+    "files": [
+      {
+        "role": "ocr_detector",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx",
+        "sha256": "4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae",
+        "size": 4819576
+      },
+      {
+        "role": "recognizer",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx",
+        "sha256": "5825fc7ebf84ae7a412be049820b4d86d77620f204a041697b0494669b1742c5",
+        "size": 16631306
+      }
+    ]
   }
 ]

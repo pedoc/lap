@@ -1,6 +1,6 @@
 // Pure helpers shared by settings and WebView configuration synchronization.
 export function effectiveParameter(definition: any, configuration: any, spec: any) {
-  return configuration.parameters?.[spec.key] ?? definition.defaults?.[spec.key] ?? spec.default;
+  return configuration.parameters?.[spec.key] ?? (definition.task === 'ocr' && spec.key === 'device' ? 'auto' : definition.defaults?.[spec.key] ?? spec.default);
 }
 export function applyAiConfiguration(config: any, view: any) {
   const selected = (task: string) => view.models.find((item: any) => item.definition.id === view.selection[task]);

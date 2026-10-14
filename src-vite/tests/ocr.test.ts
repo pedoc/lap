@@ -6,7 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { applyAiConfiguration } from '../src/common/aiModels.ts';
+import { applyAiConfiguration, effectiveParameter } from '../src/common/aiModels.ts';
 const read = (name: string) => readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
 function harness(name: string, invoke: any = async () => ({})) {
   const watches: any[] = [], mounted: any[] = [], unmount: any[] = [], calls: any[] = [];
@@ -86,4 +86,18 @@ test('hiding/deleting media clears OCR text immediately and invalidates in-fligh
   h.listeners['media-lifecycle-changed']({payload:{libraryId:'A'}});assert.equal(h.api.result.value,null);
   pending[0]({indexed:true,document:{text:'stale private text'}});await old;assert.equal(h.api.result.value,null);
   pending[1]({indexed:false,document:null});await tick();assert.equal(h.api.result.value.indexed,false);
+});
+
+test('OCR device defaults to automatic acceleration, preserving explicit CPU and per-stage choices', () => {
+  const definition={task:'ocr',defaults:{device:'cpu',recognizer_device:'inherit'}};
+  assert.equal(effectiveParameter(definition,{parameters:{}},{key:'device',default:'auto'}),'auto');
+  assert.equal(effectiveParameter(definition,{parameters:{device:'cpu'}},{key:'device',default:'auto'}),'cpu');
+  assert.equal(effectiveParameter(definition,{parameters:{recognizer_device:'cpu'}},{key:'recognizer_device',default:'inherit'}),'cpu');
+  assert.equal(effectiveParameter({...definition,task:'face'},{parameters:{}},{key:'device',default:'auto'}),'cpu');
+});
+test('OCR status preserves actual execution sessions and fallback diagnostics', async () => {
+  const sessions=[{role:'ocr_detector',requested:'auto',selected:'directml',deviceId:0},{role:'recognizer',requested:'auto',selected:'cpu',fallbackReason:'Unsupported GPU operator'}];
+  const h=harness('OcrIndexPanel',async()=>({sessions,status:{running:true}}));await h.api.refresh();
+  assert.equal(h.api.view.value.sessions[0].selected,'directml');assert.equal(h.api.view.value.sessions[1].fallbackReason,'Unsupported GPU operator');
+  assert.match(h.source,/session\.fallbackReason/);assert.match(h.source,/session\.selected/);
 });

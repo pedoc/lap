@@ -39,6 +39,7 @@ pub struct View {
     pub failed: i64,
     pub model_installed: bool,
     pub profile: String,
+    pub sessions: Vec<super::runtime::SessionReport>,
 }
 pub fn is_running() -> bool {
     JOB.lock()
@@ -126,6 +127,7 @@ fn view_on(c: &Connection, library: &str) -> Result<View, String> {
         failed,
         model_installed: super::assets::installed(&model.definition),
         profile,
+        sessions: super::runtime::reports(&model),
     })
 }
 #[tauri::command]
@@ -270,19 +272,7 @@ fn run(
                 orientation,
             ))?;
             check()?;
-            let result = backend.recognize(&image, &check);
-            if let Err(error) = &result {
-                if !job.cancel.load(Ordering::SeqCst)
-                    && super::runtime::used_acceleration(model)
-                    && super::runtime::is_auto(model, "ocr_detector")
-                    && super::runtime::is_auto(model, "recognizer")
-                {
-                    super::runtime::force_cpu(model, error);
-                    backend = PaddleOcr::new(model)?;
-                    return backend.recognize(&image, &check);
-                }
-            }
-            result
+            backend.recognize(&image, &check)
         })();
         match crate::t_utils::FileInfo::new(&path) {
             Ok(after) if after.modified==modified && after.file_size==size => {},

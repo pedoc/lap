@@ -3,6 +3,12 @@
     <h3 class="text-sm font-semibold">{{ t('ocr.index_title') }}</h3>
     <p class="text-xs opacity-60">{{ t('ocr.local_hint') }}</p>
     <p v-if="view" class="text-xs">{{ t('ocr.coverage', { indexed: view.indexed, total: view.eligible, failed: view.failed }) }}</p>
+    <p class="text-xs opacity-60">{{ t('ocr.device_hint') }}</p>
+    <div v-for="session in view?.sessions || []" :key="session.role" class="text-xs">
+      {{ t('settings.ai_models.parameters.' + session.role + '_device') }}:
+      {{ t('settings.ai_models.devices.' + session.requested) }} → {{ t('settings.ai_models.devices.' + session.selected) }}<span v-if="session.deviceId != null"> #{{ session.deviceId }}</span>
+      <p v-if="session.fallbackReason" class="text-warning whitespace-pre-wrap">{{ session.fallbackReason }}</p>
+    </div>
     <p v-if="view && !view.modelInstalled" class="text-xs text-warning">{{ t('ocr.download_first') }}</p>
     <template v-if="view?.status.running">
       <progress class="progress progress-primary w-full" :value="view.status.completed" :max="Math.max(1, view.status.total)"></progress>
