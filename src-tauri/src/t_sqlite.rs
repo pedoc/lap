@@ -4694,10 +4694,12 @@ impl AFile {
         let mut sql_params: Vec<Box<dyn ToSql>> = Vec::new();
 
         if !params.search_file_name.is_empty() {
-            conditions.push("(a.name LIKE ? COLLATE NOCASE OR a.comments LIKE ? COLLATE NOCASE)".to_string());
+            conditions.push(format!("(a.name LIKE ? COLLATE NOCASE OR a.comments LIKE ? COLLATE NOCASE OR {})", crate::ai::ocr::search_predicate()));
             let pattern = format!("%{}%", params.search_file_name);
             sql_params.push(Box::new(pattern.clone()));
             sql_params.push(Box::new(pattern));
+            let literal = params.search_file_name.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            sql_params.push(Box::new(format!("%{literal}%")));
         }
 
         if let Some(condition) = Self::build_file_type_condition(params.search_file_type) {
@@ -10105,6 +10107,8 @@ fn create_db_internal() -> Result<(), String> {
     crate::t_migration::check_and_migrate(&conn)?;
     crate::ai::face_annotations::import_existing(&conn)?;
     crate::t_media_traits::ensure_schema(&conn)?;
+    crate::ai::ocr::ensure_schema(&conn)?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS ai_index_profiles(task TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);").map_err(|e|e.to_string())?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_content_identifier ON afiles(content_identifier)",
         [],

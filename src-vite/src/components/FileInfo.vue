@@ -414,6 +414,8 @@
         </Transition>
       </div>
 
+      <PhotoOcrInfo :file="fileInfo" />
+
       <!-- Map View -->
       <div v-if="hasResolvableGps(fileInfo?.gps_latitude, fileInfo?.gps_longitude)"
         class="border-t border-base-content/5 px-1 py-4 space-y-3 flex flex-col transition-[flex-grow]" 
@@ -459,6 +461,7 @@
 </template>
 
 <script setup lang="ts">
+import PhotoOcrInfo from './PhotoOcrInfo.vue';
 import { applyPersonRename } from '@/common/faceUpdates';
 import ImageNavigator from '@/components/ImageNavigator.vue';
 import { ref, nextTick, computed, watch, onBeforeUnmount, onMounted } from 'vue';

@@ -231,5 +231,44 @@
         "size": 260694151
       }
     ]
+  },
+  {
+    "id": "ppocr-v5-zh",
+    "version": "7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65",
+    "name": "PP-OCRv5 中英日文字识别",
+    "task": "ocr",
+    "adapter": "paddle_ocr_onnx",
+    "embeddingSpace": "ppocr-v5-db-ctc-18385",
+    "dimension": 1,
+    "languages": [
+      "zh",
+      "en",
+      "ja"
+    ],
+    "license": "Apache-2.0",
+    "description": "Local PP-OCRv5 server DB detection + 48px CTC recognition. Horizontal/upright text; no document layout or handwriting guarantee. Models converted by monkt/paddleocr-onnx from PaddleOCR.",
+    "defaults": {
+      "device": "cpu"
+    },
+    "files": [
+      {
+        "role": "ocr_detector",
+        "url": "https://huggingface.co/monkt/paddleocr-onnx/resolve/7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65/detection/v5/det.onnx",
+        "sha256": "61824840edf6e74581898930b8091b1b2318f4b2705a2e8a40ad3de7ac480133",
+        "size": 88030804
+      },
+      {
+        "role": "recognizer",
+        "url": "https://huggingface.co/monkt/paddleocr-onnx/resolve/7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65/languages/chinese/rec.onnx",
+        "sha256": "26fa4f47060f58e25962b9af6beaee05c8182b90e026c4ecc6db165d9dfdc38a",
+        "size": 84468836
+      },
+      {
+        "role": "charset",
+        "url": "https://huggingface.co/monkt/paddleocr-onnx/resolve/7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65/languages/chinese/dict.txt",
+        "sha256": "d1979e9f794c464c0d2e0b70a7fe14dd978e9dc644c0e71f14158cdf8342af1b",
+        "size": 74012
+      }
+    ]
   }
 ]

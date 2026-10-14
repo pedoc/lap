@@ -1,3 +1,4 @@
+pub mod ocr;
 mod clip;
 mod scrfd;
 use super::{

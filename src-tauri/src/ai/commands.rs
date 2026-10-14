@@ -25,6 +25,7 @@ pub struct ConfigurationView {
     pub selection: settings::Selection,
     pub semantic_profile: String,
     pub face_profile: String,
+    pub ocr_profile: String,
     pub runtime: super::runtime::RuntimeInfo,
 }
 pub fn view() -> Result<ConfigurationView, String> {
@@ -64,6 +65,7 @@ pub fn view() -> Result<ConfigurationView, String> {
     Ok(ConfigurationView {
         semantic_profile: config.active(Task::Semantic)?.profile(),
         face_profile: config.active(Task::Face)?.profile(),
+        ocr_profile: config.active(Task::Ocr)?.profile(),
         selection: config.selection,
         models,
         runtime: super::runtime::info(),
@@ -87,7 +89,7 @@ fn require_idle<T>(
     let index_guard = indexing.lock().map_err(|e| e.to_string())?;
     let similar = app.state::<crate::t_similar::SimilarState>();
     let similar_guard = similar.status.lock().map_err(|e| e.to_string())?;
-    if *face_guard || !index_guard.is_empty() || similar_guard.is_scanning {
+    if super::ocr::is_running() || *face_guard || !index_guard.is_empty() || similar_guard.is_scanning {
         return Err(
             "Stop library/face/similarity indexing before changing AI configuration".into(),
         );
@@ -179,7 +181,7 @@ pub async fn save_ai_model(
                     let _ = entry.delete_credential();
                 }
             }
-            for task in [Task::Semantic, Task::Face] {
+            for task in [Task::Semantic, Task::Face, Task::Ocr] {
                 if config.selected(task) == model_id {
                     super::profiles::ensure(task, &resolved.profile())?;
                 }
@@ -323,6 +325,12 @@ fn test_resolved(model: &ResolvedModel) -> Result<Value, String> {
                 return Err("Image and text embedding dimensions differ".into());
             }
             vector.len()
+        }
+        Task::Ocr => {
+            let mut backend=super::adapters::ocr::PaddleOcr::new(model)?;
+            backend.probe()?;
+            backend.recognize(&image::DynamicImage::new_rgb8(640,320), &||Ok(()))?;
+            0
         }
         Task::Face => {
             use super::capabilities::{FaceDetector, FaceEmbedder};

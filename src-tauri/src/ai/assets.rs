@@ -38,11 +38,10 @@ pub fn artifact_path(model: &ModelDefinition, role: &str) -> Result<PathBuf, Str
     if !model.files.iter().any(|f| f.role == role) {
         return Err(format!("Unknown artifact role: {role}"));
     }
-    Ok(directory(model)?.join(if role == "tokenizer" {
-        "tokenizer.json".to_string()
-    } else {
-        format!("{role}.onnx")
-    }))
+    Ok(directory(model)?.join(artifact_filename(role)))
+}
+fn artifact_filename(role:&str)->String {
+    match role {"tokenizer"=>"tokenizer.json".into(),"charset"=>"charset.txt".into(),_=>format!("{role}.onnx")}
 }
 pub fn installed(model: &ModelDefinition) -> bool {
     if model.adapter == Adapter::JinaEmbeddings {
@@ -148,11 +147,7 @@ pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), Stri
             _=cancelled.changed()=>return Err("Download canceled".into()),
         };
         let expected = response.content_length();
-        let path = staging.join(if artifact.role == "tokenizer" {
-            "tokenizer.json".to_string()
-        } else {
-            format!("{}.onnx", artifact.role)
-        });
+        let path = staging.join(artifact_filename(&artifact.role));
         let mut file = tokio::fs::File::create(&path)
             .await
             .map_err(|e| e.to_string())?;
@@ -263,5 +258,11 @@ mod directory_tests {
         let path = temp_path();
         assert!(prepare_directory_at(&model, &path).is_err());
         assert!(!path.exists());
+    }
+}
+
+#[cfg(test)] mod ocr_artifact_tests {
+    #[test] fn dictionary_download_and_runtime_use_the_same_name() {
+        assert_eq!(super::artifact_filename("charset"),"charset.txt");assert_eq!(super::artifact_filename("tokenizer"),"tokenizer.json");assert_eq!(super::artifact_filename("ocr_detector"),"ocr_detector.onnx");
     }
 }

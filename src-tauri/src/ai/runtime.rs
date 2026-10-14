@@ -320,7 +320,7 @@ fn build(
     #[cfg(test)]
     eprintln!("GPU debug: registered {provider}/{role}");
     if provider == "directml" {
-        if role == "detector" {
+        if role == "detector" && model.definition.task == super::types::Task::Face {
             if model
                 .values
                 .get("detector_adaptive_size")

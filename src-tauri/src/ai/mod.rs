@@ -11,6 +11,7 @@ pub mod face_names;
 pub mod face_review;
 pub mod hardware;
 pub mod profiles;
+pub mod ocr;
 pub mod persons;
 pub mod remote;
 pub mod runtime;
@@ -66,6 +67,7 @@ mod smoke_tests {
                         definition.dimension
                     );
                 }
+                Task::Ocr => { let mut backend=super::adapters::ocr::PaddleOcr::new(&model).unwrap(); backend.recognize(&image::DynamicImage::new_rgb8(320,320), &||Ok(())).unwrap(); }
                 Task::Face => {
                     let mut adapter = crate::t_face::FaceEngine::new();
                     adapter.load_model(model).unwrap();
@@ -176,6 +178,7 @@ mod smoke_tests {
                             definition.dimension
                         );
                     }
+                    Task::Ocr => { let mut backend=super::adapters::ocr::PaddleOcr::new(&model)?; backend.recognize(&image::DynamicImage::new_rgb8(320,320), &||Ok(()))?; }
                     Task::Face => {
                         let mut backend = crate::t_face::FaceEngine::new();
                         backend.load_model(model.clone())?;
@@ -220,6 +223,7 @@ mod smoke_tests {
                         .parameters
                         .insert("device".into(), serde_json::json!("auto"));
                     match definition.task {
+                        Task::Ocr => { let mut backend=super::adapters::ocr::PaddleOcr::new(&automatic).unwrap(); backend.recognize(&image::DynamicImage::new_rgb8(320,320), &||Ok(())).unwrap(); }
                         Task::Semantic => {
                             let mut backend = crate::t_ai::build_embedder(&automatic).unwrap();
                             assert_eq!(
@@ -314,7 +318,7 @@ mod smoke_tests {
         let bytes = png.into_inner();
         for definition in super::settings::builtins()
             .into_iter()
-            .filter(|d| d.adapter != super::types::Adapter::JinaEmbeddings)
+            .filter(|d| d.adapter != super::types::Adapter::JinaEmbeddings && d.task != super::types::Task::Ocr)
         {
             let configuration = super::settings::Configuration::default();
             let mut cpu = configuration.resolve(&definition.id).unwrap();
@@ -325,6 +329,7 @@ mod smoke_tests {
             assert_eq!(cpu.profile(), gpu.profile());
             let output = |model: &super::types::ResolvedModel| -> Vec<f32> {
                 match definition.task {
+                    super::types::Task::Ocr => unreachable!("OCR does not provide embedding vectors"),
                     super::types::Task::Semantic => {
                         let mut backend = crate::t_ai::build_embedder(model).unwrap();
                         backend.encode_image(&bytes).unwrap()

@@ -7,12 +7,14 @@ use std::collections::BTreeMap;
 pub enum Task {
     Semantic,
     Face,
+    Ocr,
 }
 impl Task {
     pub fn key(self) -> &'static str {
         match self {
             Self::Semantic => "semantic",
             Self::Face => "face",
+            Self::Ocr => "ocr",
         }
     }
 }
@@ -23,6 +25,7 @@ pub enum Adapter {
     ClipOnnx,
     ScrfdArcfaceOnnx,
     JinaEmbeddings,
+    PaddleOcrOnnx,
 }
 impl Adapter {
     // Bump only the affected adapter when its preprocessing/output contract changes.
@@ -31,6 +34,7 @@ impl Adapter {
             Self::ClipOnnx => "clip-rgb224-v1",
             Self::ScrfdArcfaceOnnx => "scrfd-bgr-arcface-crop-v1",
             Self::JinaEmbeddings => "jina-json-jpeg1024-v1",
+            Self::PaddleOcrOnnx => "paddle-db-ctc-bgr48-v1",
         }
     }
 }
@@ -160,6 +164,7 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
         for role in match task {
             Task::Semantic => ["text", "vision"],
             Task::Face => ["detector", "embedding"],
+            Task::Ocr => ["ocr_detector", "recognizer"],
         } {
             p.push(ParameterSpec {
                 key: format!("{role}_device"),
@@ -188,6 +193,15 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
             ParameterSpec::number("smart_tag_threshold", 0.25, 0., 1., 0.01, false),
             ParameterSpec::number("grouping_threshold", 0.93, 0., 1., 0.01, false),
         ]),
+        Task::Ocr => p.extend([
+            ParameterSpec::number("ocr_detection_size", 960., 320., 2048., 32., true),
+            ParameterSpec::number("ocr_recognition_width", 1024., 320., 2048., 32., true),
+            ParameterSpec::number("ocr_pixel_threshold", 0.3, 0.05, 0.95, 0.05, true),
+            ParameterSpec::number("ocr_box_threshold", 0.6, 0.05, 0.95, 0.05, true),
+            ParameterSpec::number("ocr_confidence", 0.5, 0., 1., 0.05, true),
+            ParameterSpec::number("ocr_unclip_ratio", 1.5, 0., 3., 0.1, true),
+            ParameterSpec::number("ocr_max_regions", 300., 1., 2000., 1., true),
+        ]),
         Task::Face => p.extend([
             ParameterSpec::number("detector_size", 640., 320., 1280., 32., true),
             ParameterSpec::number("detection_threshold", 0.65, 0.01, 1., 0.01, true),
@@ -199,6 +213,9 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
             ParameterSpec::number("cluster_min_samples", 1., 1., 100., 1., false),
             ParameterSpec::number("cluster_iterations", 20., 1., 200., 1., false),
         ]),
+    }
+    if task == Task::Ocr {
+        p.push(ParameterSpec {key:"ocr_color".into(),kind:"choice".into(),default:json!("bgr"),min:0.,max:0.,step:0.,options:vec![json!("bgr"),json!("rgb")],affects_index:true,reload_session:true});
     }
     if task == Task::Face {
         for (key, default, options) in [
@@ -275,6 +292,7 @@ impl ModelDefinition {
             (Task::Semantic, Adapter::ClipOnnx) => &["vision", "text", "tokenizer"],
             (Task::Face, Adapter::ScrfdArcfaceOnnx) => &["detector", "embedding"],
             (Task::Semantic, Adapter::JinaEmbeddings) => &[],
+            (Task::Ocr, Adapter::PaddleOcrOnnx) => &["ocr_detector", "recognizer", "charset"],
             _ => return Err("Adapter does not provide this task capability".into()),
         };
         if self.files.len() != roles.len() {
@@ -414,7 +432,7 @@ impl ResolvedModel {
             .definition
             .files
             .iter()
-            .filter(|f| self.definition.task == Task::Face || f.role == "vision")
+            .filter(|f| self.definition.task != Task::Semantic || f.role == "vision")
             .map(|f| (&f.role, &f.sha256))
             .collect::<Vec<_>>();
         let bytes=serde_json::to_vec(&json!({"schema":1,"adapter":self.definition.adapter,"adapterRevision":self.definition.adapter.revision(),"space":self.definition.embedding_space,"dimension":self.definition.dimension,"artifacts":artifacts,"values":values,"endpoint":self.configuration.endpoint,"remoteModel":self.configuration.remote_model,"remoteRevision":self.configuration.remote_revision})).unwrap();
@@ -463,6 +481,13 @@ mod tests {
             credential_revision: String::new(),
         };
         ResolvedModel::new(def, inst).unwrap()
+    }
+    #[test]
+    fn ocr_profile_covers_detector_recognizer_dictionary_and_thresholds() {
+        let config=crate::ai::settings::Configuration::default();let a=config.resolve("ppocr-v5-zh").unwrap();
+        for role in ["ocr_detector","recognizer","charset"] {let mut b=a.clone();b.definition.files.iter_mut().find(|f|f.role==role).unwrap().sha256="a".repeat(64);assert_ne!(a.profile(),b.profile());}
+        let mut b=a.clone();b.values.insert("ocr_confidence".into(),json!(0.8));assert_ne!(a.profile(),b.profile());
+        let mut b=a.clone();b.values.insert("device".into(),json!("auto"));assert_eq!(a.profile(),b.profile());
     }
     #[test]
     fn builtin_contracts_are_valid() {

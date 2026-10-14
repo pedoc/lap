@@ -275,7 +275,7 @@
   "search": {
     "title": "搜索",
     "similar_images": "相关照片",
-    "image_search_placeholder": "搜索图片、文件名或备注",
+    "image_search_placeholder": "搜索文件名、备注或图片文字",
     "matches": "匹配结果",
     "unknown_location": "未知位置",
     "unknown_camera": "未知相机",
@@ -1731,6 +1731,7 @@
       "proxy_test_success": "通过代理成功访问 Google。"
     },
     "ai_models": {
+      "ocr": "文字识别",
       "title": "AI 模型",
       "intro": "每类任务选择一个全局模型，所有图库共用；每个模型独立保存参数。",
       "semantic": "图文语义检索",
@@ -1767,6 +1768,17 @@
       "reset_warning": "全局使用此模型？不兼容的自动 AI 结果会重建。人工确认的人物、姓名和人脸标注会保留；原文件发生变化的区域需要重新复核。不会修改原始媒体文件。",
       "delete_confirm": "移除此未启用的自定义模型及其配置？不会删除已下载的模型文件。",
       "parameters": {
+        "ocr_detection_size": "文字检测输入尺寸",
+        "ocr_recognition_width": "文字行最大输入宽度",
+        "ocr_pixel_threshold": "文字像素阈值",
+        "ocr_box_threshold": "文字区域阈值",
+        "ocr_confidence": "文字置信度阈值",
+        "ocr_unclip_ratio": "文字框扩展比例",
+        "ocr_max_regions": "单图最大文字区域数",
+        "ocr_color": "文字模型通道顺序",
+        "ocr_detector_device": "文字检测执行设备",
+        "recognizer_device": "文字识别执行设备",
+
         "threads": "每个模型会话的 CPU 线程数",
         "semantic_threshold": "语义检索阈值（标准）",
         "related_threshold": "相关图片阈值",
@@ -2269,4 +2281,25 @@
     "details": "查看失败详情",
     "private_hint": "详细错误及已登记回收组的重试，请在“已隐藏”或“最近删除”解锁后操作。成功项不会重复执行；错误详情最多显示前 200 项。"
   }
+,
+  "ocr": {
+  "index_title": "图片文字索引（OCR）",
+  "local_hint": "仅本地处理普通可见照片；不上传原图，不处理已隐藏／最近删除。识别后可通过顶部普通搜索查找图片中的文字。",
+  "coverage": "已索引 {indexed} / {total} 张，失败 {failed} 张",
+  "download_first": "请先在模型目录中下载文字识别模型。",
+  "progress": "{completed} / {total}，成功 {succeeded}，失败 {failed}",
+  "resume": "继续索引／重试失败",
+  "rebuild": "重新索引全部",
+  "stop": "停止",
+  "stopping": "正在停止…",
+  "rebuild_confirm": "重新识别所有普通可见照片？现有结果会逐张替换，不修改原文件。",
+  "limits": "当前适配器面向横排／正向文字，支持中英日文，不保证手写、艺术字、倾斜或复杂版式效果。模型／参数变化后需为对应版本建立索引。停止在当前推理返回后生效。",
+  "recognizing": "识别中…",
+  "photo_title": "图片文字（OCR）",
+  "recognize": "识别／重试",
+  "photo_hint": "使用全局已保存的文字识别模型，仅在本机处理。后台任务进度可在设置 → AI 模型 → 文字识别中查看。",
+  "not_indexed": "当前模型尚未索引此照片。",
+  "empty": "已识别，未发现达到置信度阈值的文字。",
+  "line_confidence": "查看逐行置信度"
+}
 }

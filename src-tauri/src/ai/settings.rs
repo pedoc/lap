@@ -13,12 +13,16 @@ const CONFIG_VERSION: u32 = 2;
 pub struct Selection {
     pub semantic: String,
     pub face: String,
+    #[serde(default = "default_ocr")]
+    pub ocr: String,
 }
+fn default_ocr() -> String { "ppocr-v5-zh".into() }
 impl Default for Selection {
     fn default() -> Self {
         Self {
             semantic: "clip-b32".into(),
             face: "buffalo-s".into(),
+            ocr: default_ocr(),
         }
     }
 }
@@ -96,6 +100,7 @@ impl Configuration {
         match task {
             Task::Semantic => &self.selection.semantic,
             Task::Face => &self.selection.face,
+            Task::Ocr => &self.selection.ocr,
         }
     }
     pub fn active(&self, task: Task) -> Result<ResolvedModel, String> {
@@ -120,6 +125,7 @@ impl Configuration {
         match task {
             Task::Semantic => self.selection.semantic = model_id.into(),
             Task::Face => self.selection.face = model_id.into(),
+            Task::Ocr => self.selection.ocr = model_id.into(),
         }
         Ok(())
     }
@@ -138,7 +144,7 @@ impl Configuration {
         if self.models.keys().any(|id| !ids.contains(id)) {
             return Err("Configuration references an unknown model".into());
         }
-        for task in [Task::Semantic, Task::Face] {
+        for task in [Task::Semantic, Task::Face, Task::Ocr] {
             self.active(task)?;
         }
         Ok(())
@@ -150,7 +156,7 @@ impl Configuration {
 fn decode(source: &str, legacy_library: Option<&str>) -> Result<Configuration, String> {
     let value: serde_json::Value =
         serde_json::from_str(source).map_err(|e| format!("Invalid AI configuration: {e}"))?;
-    let config = match value["version"].as_u64() {
+    let mut config = match value["version"].as_u64() {
         Some(2) => serde_json::from_value::<Configuration>(value)
             .map_err(|e| format!("Invalid AI configuration: {e}"))?,
         Some(1) => {
@@ -161,7 +167,7 @@ fn decode(source: &str, legacy_library: Option<&str>) -> Result<Configuration, S
                 .as_array()
                 .ok_or("Invalid legacy AI settings")?;
             let binding = &value["bindings"][legacy_library.unwrap_or("")];
-            for task in [Task::Semantic, Task::Face] {
+            for task in [Task::Semantic, Task::Face, Task::Ocr] {
                 let id = binding[task.key()]
                     .as_str()
                     .unwrap_or(config.selected(task));
@@ -174,6 +180,7 @@ fn decode(source: &str, legacy_library: Option<&str>) -> Result<Configuration, S
                 match task {
                     Task::Semantic => config.selection.semantic = model_id,
                     Task::Face => config.selection.face = model_id,
+                    Task::Ocr => config.selection.ocr = model_id,
                 }
             }
             config.models.clear();
@@ -217,6 +224,8 @@ fn decode(source: &str, legacy_library: Option<&str>) -> Result<Configuration, S
         }
         _ => return Err("Unsupported AI configuration version".into()),
     };
+    // New catalog capabilities receive defaults without rewriting existing selections.
+    for definition in builtins() { config.models.entry(definition.id.clone()).or_insert_with(||defaults(&definition)); }
     config.validate()?;
     Ok(config)
 }
@@ -301,7 +310,7 @@ pub fn delete_model(model_id: &str) -> Result<(), String> {
         if builtins().iter().any(|d| d.id == model_id) {
             return Err("Cannot delete a built-in model".into());
         }
-        if [Task::Semantic, Task::Face]
+        if [Task::Semantic, Task::Face, Task::Ocr]
             .iter()
             .any(|task| config.selected(*task) == model_id)
         {
@@ -348,6 +357,11 @@ pub fn mark_tested(model_id: &str, key: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_ocr_catalog_defaults_do_not_break_existing_configuration() {
+        let mut old=serde_json::to_value(Configuration::default()).unwrap();old["selection"].as_object_mut().unwrap().remove("ocr");old["models"].as_object_mut().unwrap().remove("ppocr-v5-zh");
+        let parsed=decode(&old.to_string(),None).unwrap();assert_eq!(parsed.active(Task::Ocr).unwrap().definition.id,"ppocr-v5-zh");assert_eq!(parsed.selected(Task::Face),"buffalo-s");
+    }
     #[test]
     fn model_parameters_are_independent() {
         let mut config = Configuration::default();

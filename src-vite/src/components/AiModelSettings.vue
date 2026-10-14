@@ -2,7 +2,7 @@
   <div class="space-y-3">
     <p class="text-xs opacity-60">{{ t('settings.ai_models.intro') }}</p>
     <div class="flex gap-2">
-      <button v-for="kind in ['semantic', 'face']" :key="kind" class="btn btn-sm" :class="task === kind ? 'btn-primary' : 'btn-ghost'" :disabled="busy" @click="task = kind">
+      <button v-for="kind in ['semantic', 'face', 'ocr']" :key="kind" class="btn btn-sm" :class="task === kind ? 'btn-primary' : 'btn-ghost'" :disabled="busy" @click="task = kind">
         {{ t(`settings.ai_models.${kind}`) }}
       </button>
     </div>
@@ -28,7 +28,7 @@
       </div>
       <div v-if="draft && selectedModel" class="rounded-box border border-base-content/10 p-3 space-y-3">
         <div class="font-semibold text-sm">{{ t('settings.ai_models.configuration') }}: {{ selectedModel.definition.name }}<span class="badge badge-sm ml-2" :class="isActive ? 'badge-primary' : 'badge-ghost'">{{ t(isActive ? 'settings.ai_models.selected' : 'settings.ai_models.inactive') }}</span></div>
-        <div class="text-xs opacity-60">{{ selectedModel.definition.adapter }} · {{ selectedModel.definition.dimension }}D</div>
+        <div class="text-xs opacity-60">{{ selectedModel.definition.adapter }}<span v-if="task !== 'ocr'"> · {{ selectedModel.definition.dimension }}D</span></div>
         <div class="text-xs opacity-60">{{ selectedModel.contractTested ? t('settings.ai_models.contract_verified') : t('settings.ai_models.contract_untested') }}</div>
         <div v-if="isRemote" class="space-y-2">
           <label v-for="field in ['endpoint', 'remoteModel', 'remoteRevision']" :key="field" class="block text-xs">
@@ -75,6 +75,7 @@
         </div>
         <p class="text-xs opacity-50">{{ t('settings.ai_models.save_hint') }}</p>
       </div>
+      <OcrIndexPanel v-if="task === 'ocr'" />
       <div class="rounded-box border border-base-content/10 p-3 space-y-3">
         <div class="font-semibold text-sm">{{ t('settings.ai_models.catalog') }}</div>
         <div v-for="row in modelOptions" :key="row.definition.id" class="border-b border-base-content/10 pb-3 space-y-1">
@@ -102,6 +103,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import OcrIndexPanel from './OcrIndexPanel.vue';
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -211,7 +213,7 @@ async function test() {
     await persist();
     const result: any = await invoke('test_ai_model', { modelId: editingId.value });
     await refresh(editingId.value);
-    toast.success(`${t('settings.ai_models.test_success')} · ${result.runtime} · ${result.dimension}D · ${result.elapsedMs}ms`);
+    toast.success(`${t('settings.ai_models.test_success')} · ${result.runtime} · ${task.value === 'ocr' ? 'OCR' : result.dimension + 'D'} · ${result.elapsedMs}ms`);
   });
 }
 async function activate() {

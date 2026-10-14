@@ -275,7 +275,7 @@
   "search": {
     "title": "Search",
     "similar_images": "Related photos",
-    "image_search_placeholder": "Search images, filenames, or comments",
+    "image_search_placeholder": "Search filenames, comments, or photo text",
     "matches": "Matches",
     "unknown_location": "Unknown location",
     "unknown_camera": "Unknown camera",
@@ -1731,6 +1731,7 @@
       "proxy_test_success": "Google is reachable through the proxy."
     },
     "ai_models": {
+      "ocr": "OCR",
       "title": "AI models",
       "intro": "Choose one global model per task. All libraries share the selection; each model keeps its own parameters.",
       "semantic": "Image/text retrieval",
@@ -1767,6 +1768,17 @@
       "reset_warning": "Use this model globally? Incompatible automatic AI results will be rebuilt. Human-confirmed people, names and face annotations are preserved; regions whose source files changed require review. Original media files are not modified.",
       "delete_confirm": "Remove this inactive custom model and its configuration? Downloaded model files will not be deleted.",
       "parameters": {
+        "ocr_detection_size": "Text detection size",
+        "ocr_recognition_width": "Text recognition width",
+        "ocr_pixel_threshold": "Text pixel threshold",
+        "ocr_box_threshold": "Text region threshold",
+        "ocr_confidence": "Recognition confidence",
+        "ocr_unclip_ratio": "Text region expansion",
+        "ocr_max_regions": "Maximum regions per photo",
+        "ocr_color": "OCR channel order",
+        "ocr_detector_device": "Text detection device",
+        "recognizer_device": "Text recognition device",
+
         "threads": "CPU threads per model session",
         "semantic_threshold": "Semantic search threshold (Standard)",
         "related_threshold": "Related image threshold",
@@ -2269,4 +2281,25 @@
     "details": "View failures",
     "private_hint": "Unlock Hidden or Recently Deleted to view detailed errors or retry registered recovery groups. Successful items are not repeated; details show at most the first 200 failures."
   }
+,
+  "ocr": {
+  "index_title": "Photo text index (OCR)",
+  "local_hint": "Local processing of normally visible photos only. No uploads or hidden/deleted media. Use the regular search box to find indexed text.",
+  "coverage": "Indexed {indexed} / {total} photos; failed {failed}",
+  "download_first": "Download an OCR model in the model catalog first.",
+  "progress": "{completed} / {total}; succeeded {succeeded}; failed {failed}",
+  "resume": "Resume / retry failures",
+  "rebuild": "Reindex all",
+  "stop": "Stop",
+  "stopping": "Stopping…",
+  "rebuild_confirm": "Recognize all normally visible photos again? Results are replaced per photo; originals remain unchanged.",
+  "limits": "This adapter targets horizontal/upright Chinese, English and Japanese text. Handwriting, artistic text, slanted text and complex layouts are not guaranteed. Model/parameter changes require the corresponding index. Stop takes effect after the active inference returns.",
+  "recognizing": "Recognizing…",
+  "photo_title": "Photo text (OCR)",
+  "recognize": "Recognize / retry",
+  "photo_hint": "Uses the saved global OCR model locally. See Settings → AI models → OCR for background progress.",
+  "not_indexed": "This photo has not been indexed with the current model.",
+  "empty": "Indexed; no text met the confidence threshold.",
+  "line_confidence": "Line confidence"
+}
 }

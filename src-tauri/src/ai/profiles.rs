@@ -35,6 +35,7 @@ pub fn ensure_on(conn: &Connection, task: Task, fingerprint: &str) -> Result<boo
                         .map_err(|e| e.to_string())?;
                 }
             }
+            Task::Ocr => { super::ocr::ensure_schema(conn)?; }
             Task::Face => {
                 super::face_annotations::reset_model_results(conn)?;
             }
@@ -176,7 +177,7 @@ pub fn store_vector(
 }
 
 pub fn ensure_selected() -> Result<(), String> {
-    for task in [Task::Semantic, Task::Face] {
+    for task in [Task::Semantic, Task::Face, Task::Ocr] {
         let model = super::settings::active(task)?;
         ensure(task, &model.profile())?;
     }
