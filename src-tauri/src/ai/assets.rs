@@ -40,8 +40,12 @@ pub fn artifact_path(model: &ModelDefinition, role: &str) -> Result<PathBuf, Str
     }
     Ok(directory(model)?.join(artifact_filename(role)))
 }
-fn artifact_filename(role:&str)->String {
-    match role {"tokenizer"=>"tokenizer.json".into(),"charset"=>"charset.txt".into(),_=>format!("{role}.onnx")}
+fn artifact_filename(role: &str) -> String {
+    match role {
+        "tokenizer" => "tokenizer.json".into(),
+        "charset" => "charset.txt".into(),
+        _ => format!("{role}.onnx"),
+    }
 }
 pub fn installed(model: &ModelDefinition) -> bool {
     if model.adapter == Adapter::JinaEmbeddings {
@@ -113,7 +117,38 @@ pub fn cancel(model_id: &str) -> Result<(), String> {
     }
     Ok(())
 }
+const DOWNLOAD_USER_AGENT: &str = concat!("Lap/", env!("CARGO_PKG_VERSION"));
+fn artifact_request(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+    client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, DOWNLOAD_USER_AGENT)
+        .timeout(Duration::from_secs(1800))
+}
+fn artifact_network_error(error: reqwest::Error, artifact: &super::types::Artifact) -> String {
+    let host = reqwest::Url::parse(&artifact.url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "download source".into());
+    format!(
+        "{} from {}: {}",
+        artifact.role,
+        host,
+        crate::t_network::request_error(error, &artifact.url)
+    )
+}
 pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), String> {
+    model.validate()?;
+    let client = crate::t_network::client()?;
+    download_with_client(model, client, move |payload| {
+        let _ = app.emit("ai-model-download-progress", payload);
+    })
+    .await
+}
+async fn download_with_client(
+    model: ModelDefinition,
+    client: reqwest::Client,
+    emit: impl Fn(serde_json::Value) + Send + Sync,
+) -> Result<(), String> {
     model.validate()?;
     if model.adapter == Adapter::JinaEmbeddings {
         return Err("Online API models do not have local artifacts".into());
@@ -134,7 +169,6 @@ pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), Stri
         .await
         .map_err(|e| e.to_string())?;
     let _stage_guard = Stage(staging.clone());
-    let client = crate::t_network::client()?;
     let total: u64 = model.files.iter().map(|f| f.size).sum();
     let mut received = 0u64;
     let mut emitted = Instant::now();
@@ -142,10 +176,16 @@ pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), Stri
         if *cancelled.borrow() {
             return Err("Download canceled".into());
         }
+        emit(
+            json!({"modelId":model.id,"file":artifact.role,"phase":"connecting","progress":if total>0 {received as f64/total as f64*100.}else{0.},"received":received,"total":total}),
+        );
         let mut response = tokio::select! {
-            result=client.get(&artifact.url).timeout(Duration::from_secs(1800)).send()=>result.map_err(|e|e.without_url().to_string())?.error_for_status().map_err(|e|e.without_url().to_string())?,
+            result=artifact_request(&client,&artifact.url).send()=>result.map_err(|e|artifact_network_error(e,artifact))?.error_for_status().map_err(|e|artifact_network_error(e,artifact))?,
             _=cancelled.changed()=>return Err("Download canceled".into()),
         };
+        emit(
+            json!({"modelId":model.id,"file":artifact.role,"phase":"downloading","progress":if total>0 {received as f64/total as f64*100.}else{0.},"received":received,"total":total}),
+        );
         let expected = response.content_length();
         let path = staging.join(artifact_filename(&artifact.role));
         let mut file = tokio::fs::File::create(&path)
@@ -155,7 +195,7 @@ pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), Stri
         let mut written = 0u64;
         loop {
             let chunk = tokio::select! {
-                result=tokio::time::timeout(Duration::from_secs(30),response.chunk())=>result.map_err(|_|"Download stalled for 30 seconds")?.map_err(|e|e.without_url().to_string())?,
+                result=tokio::time::timeout(Duration::from_secs(30),response.chunk())=>result.map_err(|_|format!("{}: Download stalled for 30 seconds",artifact.role))?.map_err(|e|artifact_network_error(e,artifact))?,
                 _=cancelled.changed()=>return Err("Download canceled".into()),
             };
             let Some(chunk) = chunk else {
@@ -171,10 +211,15 @@ pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), Stri
                 } else {
                     index as f64 / model.files.len() as f64 * 100.
                 };
-                let _=app.emit("ai-model-download-progress",json!({"modelId":model.id,"file":artifact.role,"progress":progress,"received":received,"total":total}));
+                emit(
+                    json!({"modelId":model.id,"file":artifact.role,"phase":"downloading","progress":progress,"received":received,"total":total}),
+                );
                 emitted = Instant::now();
             }
         }
+        emit(
+            json!({"modelId":model.id,"file":artifact.role,"phase":"verifying","progress":if total>0 {(received as f64/total as f64*100.).min(99.)}else{0.},"received":received,"total":total}),
+        );
         file.sync_all().await.map_err(|e| e.to_string())?;
         drop(file);
         if written == 0
@@ -191,6 +236,9 @@ pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), Stri
     if *cancelled.borrow() {
         return Err("Download canceled".into());
     }
+    emit(
+        json!({"modelId":model.id,"phase":"installing","progress":99,"received":received,"total":total}),
+    );
     tokio::fs::write(staging.join("installed.json"), model.digest())
         .await
         .map_err(|e| e.to_string())?;
@@ -211,9 +259,8 @@ pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), Stri
     if had_existing {
         let _ = tokio::fs::remove_dir_all(backup).await;
     }
-    let _ = app.emit(
-        "ai-model-download-progress",
-        json!({"modelId":model.id,"progress":100,"received":received,"total":total}),
+    emit(
+        json!({"modelId":model.id,"phase":"complete","progress":100,"received":received,"total":total}),
     );
     Ok(())
 }
@@ -261,8 +308,139 @@ mod directory_tests {
     }
 }
 
-#[cfg(test)] mod ocr_artifact_tests {
-    #[test] fn dictionary_download_and_runtime_use_the_same_name() {
-        assert_eq!(super::artifact_filename("charset"),"charset.txt");assert_eq!(super::artifact_filename("tokenizer"),"tokenizer.json");assert_eq!(super::artifact_filename("ocr_detector"),"ocr_detector.onnx");
+#[cfg(test)]
+mod ocr_artifact_tests {
+    #[test]
+    fn dictionary_download_and_runtime_use_the_same_name() {
+        assert_eq!(super::artifact_filename("charset"), "charset.txt");
+        assert_eq!(super::artifact_filename("tokenizer"), "tokenizer.json");
+        assert_eq!(
+            super::artifact_filename("ocr_detector"),
+            "ocr_detector.onnx"
+        );
+    }
+}
+#[cfg(test)]
+mod download_transport_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    fn read_headers(stream: &mut std::net::TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 1024];
+        while !bytes.ends_with(b"\r\n\r\n") {
+            let n = stream.read(&mut buffer).unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&buffer[..n]);
+            assert!(bytes.len() < 16384);
+        }
+        String::from_utf8(bytes).unwrap()
+    }
+    #[tokio::test]
+    async fn branded_user_agent_survives_cross_origin_download_redirects() {
+        let first = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let second = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let initial = format!("http://{}/model", first.local_addr().unwrap());
+        let next = format!("http://{}/weights", second.local_addr().unwrap());
+        let a = std::thread::spawn(move || {
+            let (mut stream, _) = first.accept().unwrap();
+            let headers = read_headers(&mut stream);
+            assert!(headers.to_ascii_lowercase().contains(&format!(
+                "user-agent: {}",
+                DOWNLOAD_USER_AGENT.to_ascii_lowercase()
+            )));
+            write!(stream,"HTTP/1.1 302 Found\r\nLocation: {next}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let b = std::thread::spawn(move || {
+            let (mut stream, _) = second.accept().unwrap();
+            let headers = read_headers(&mut stream);
+            assert!(headers.to_ascii_lowercase().contains(&format!(
+                "user-agent: {}",
+                DOWNLOAD_USER_AGENT.to_ascii_lowercase()
+            )));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nweights",
+                )
+                .unwrap();
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response = artifact_request(&client, &initial)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.bytes().await.unwrap().as_ref(), b"weights");
+        a.join().unwrap();
+        b.join().unwrap();
+    }
+    #[test]
+    fn download_requests_identify_the_application_without_altering_the_source() {
+        let client = reqwest::Client::new();
+        let url = "https://example.invalid/model.onnx";
+        let request = artifact_request(&client, url).build().unwrap();
+        assert_eq!(
+            request.headers()[reqwest::header::USER_AGENT],
+            DOWNLOAD_USER_AGENT
+        );
+        assert_eq!(request.url().as_str(), url);
+    }
+    #[tokio::test]
+    #[ignore = "Requires live model source, configured proxy if needed, and a workspace-only LAP_AI_TEST_MODEL_ROOT"]
+    async fn actual_model_download_installs_with_the_application_transport() {
+        let root = PathBuf::from(
+            std::env::var_os("LAP_AI_TEST_MODEL_ROOT").expect("explicit workspace model root"),
+        );
+        let workspace_target = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .canonicalize()
+            .unwrap();
+        assert!(
+            root.canonicalize().unwrap().starts_with(workspace_target),
+            "Never write test models outside the workspace target directory"
+        );
+        let id = std::env::var("LAP_MODEL_DOWNLOAD_ID")
+            .unwrap_or_else(|_| "rapidocr-pp-ocrv5-server".into());
+        let model = crate::ai::settings::builtins()
+            .into_iter()
+            .find(|m| m.id == id)
+            .unwrap();
+        let proxy = std::env::var("LAP_MODEL_DOWNLOAD_PROXY").ok();
+        let client = crate::t_network::client_with_proxy(proxy.as_deref()).unwrap();
+        let events = std::sync::Mutex::new(Vec::new());
+        download_with_client(model.clone(), client, |event| {
+            events.lock().unwrap().push(event);
+        })
+        .await
+        .unwrap();
+        assert!(installed(&model));
+        verify(&model).unwrap();
+        let events = events.lock().unwrap();
+        for phase in [
+            "connecting",
+            "downloading",
+            "verifying",
+            "installing",
+            "complete",
+        ] {
+            assert!(
+                events.iter().any(|e| e["phase"] == phase),
+                "missing phase: {phase}"
+            );
+        }
+        assert_eq!(events.last().unwrap()["progress"], 100);
+        assert_eq!(
+            events.last().unwrap()["received"].as_u64().unwrap(),
+            model.files.iter().map(|f| f.size).sum::<u64>()
+        );
+        println!(
+            "{}: downloaded and installed {} checksum-verified files ({} bytes); phase events={}",
+            model.id,
+            model.files.len(),
+            model.files.iter().map(|f| f.size).sum::<u64>(),
+            events.len()
+        );
     }
 }

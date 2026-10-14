@@ -48,3 +48,11 @@ Mobile／Server 是模型规格，不是运行设备限制；两者均可在 PC 
 - ONNX 转换：[monkt/paddleocr-onnx](https://huggingface.co/monkt/paddleocr-onnx)，固定提交 `7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65`。
 - RapidAI 模型：[RapidOCR](https://github.com/RapidAI/RapidOCR)，依据其提交 `7cfd3d9ef786a2e538ca30df700325e72e85b5f5` 的 `default_models.yaml`，下载官方 ModelScope `v3.10.0` 发布，核对官方 SHA-256。v4 字典为 6623 个字符，v5 为 18383 个字符；CTC 另加空白与空格类别。
 - 文件、大小、校验和与下载地址记录在 `src-tauri/src/ai/catalog.json`。测试模型和自建中英文图片仅放在忽略的 `src-tauri/target/ocr-validation/`，不提交、不捆绑。
+
+
+## 下载状态与故障提示
+
+- 下载会在对应模型条目旁显示连接、接收文件、校验和安装阶段，包含进度、接收字节及文件角色；成功、失败和取消结果不会因进度条结束而立即消失。失败还会弹出通知，不需要滚回设置页顶部查找。
+- 模型下载请求使用 Lap／版本号标识，并在 CDN 重定向后保留；部分下载源会拒绝没有 User-Agent 的 GET 请求。HEAD 请求或其他脚本成功，并不代表软件使用的实际下载链路一定可用。
+- 失败提示包含模型、文件角色、来源主机及脱敏的 HTTP／DNS／代理／TLS 原因；请依据条目中的完整错误排查。校验或下载未完成的文件不会标记为已安装。
+- 修改 Rust 下载逻辑后需运行重新编译的后端；开发模式下只刷新前端页面不会更新 HTTP 请求行为。

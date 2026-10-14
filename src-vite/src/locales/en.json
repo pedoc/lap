@@ -2304,5 +2304,21 @@
   "not_indexed": "This photo has not been indexed with the current model.",
   "empty": "Indexed; no text met the confidence threshold.",
   "line_confidence": "Line confidence"
+},
+  "model_download": {
+  "failed": "Failed to download {model}: {error}",
+  "completed": "Model downloaded, verified and installed. Select and activate it above.",
+  "success": "{model} downloaded",
+  "cancelled": "Download cancelled. Incomplete files are not marked as installed.",
+  "cancel_failed": "Could not cancel download: {error}",
+  "unknown_total": "unknown total",
+  "phases": {
+    "connecting": "Connecting to download source…",
+    "downloading": "Downloading model…",
+    "verifying": "Verifying file…",
+    "installing": "Installing model…",
+    "complete": "Download complete; updating model list…",
+    "cancelling": "Cancelling download…"
+  }
 }
 }

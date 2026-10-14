@@ -85,13 +85,23 @@
           <p class="text-[10px] opacity-50">{{ row.definition.license }}</p>
           <div class="flex flex-wrap items-center gap-2 pt-1">
             <span class="text-xs">{{ row.definition.files.length ? (row.installed ? t('settings.ai_models.ready') : t('settings.ai_models.missing')) : t('settings.ai_models.online_service') }}</span>
-            <button v-if="row.definition.files.length" class="btn btn-xs" :disabled="busy" @click="download(row.definition.id)">{{ row.installed ? t('settings.ai_models.reinstall') : t('settings.ai_models.download') }}</button>
+            <button type="button" v-if="row.definition.files.length" class="btn btn-xs" :disabled="busy" @click="download(row.definition.id)">{{ row.installed ? t('settings.ai_models.reinstall') : t('settings.ai_models.download') }}</button>
             <button v-if="row.definition.files.length" class="btn btn-xs" :disabled="busy" @click="openDirectory(row.definition.id)">{{ t('settings.ai_models.open_directory') }}</button>
           </div>
-        </div>
-        <div v-if="downloading" class="space-y-1">
-          <progress class="progress progress-primary w-full" :value="progress" max="100"></progress>
-          <div class="flex justify-between text-xs"><span>{{ progress.toFixed(0) }}%</span><button class="btn btn-xs" @click="cancelDownload">{{ t('settings.ai_models.cancel') }}</button></div>
+          <div v-if="downloadFeedback[row.definition.id]" class="space-y-1 text-xs" aria-live="polite" :data-model-download="row.definition.id">
+            <p v-if="downloadFeedback[row.definition.id].state === 'failed'" role="alert" class="text-error whitespace-pre-wrap">{{ t('model_download.failed', { model: downloadFeedback[row.definition.id].name, error: downloadFeedback[row.definition.id].message }) }}</p>
+            <p v-else-if="downloadFeedback[row.definition.id].state === 'cancelled'" class="opacity-70">{{ t('model_download.cancelled') }}</p>
+            <p v-else-if="downloadFeedback[row.definition.id].state === 'completed'" class="text-success">{{ t('model_download.completed') }}</p>
+            <template v-else>
+              <p>{{ t('model_download.phases.' + downloadFeedback[row.definition.id].phase) }}<span v-if="downloadFeedback[row.definition.id].file"> · {{ downloadFeedback[row.definition.id].file }}</span></p>
+              <progress class="progress progress-primary w-full" :value="downloadFeedback[row.definition.id].progress" max="100"></progress>
+              <div class="flex justify-between items-center gap-2">
+                <span>{{ downloadFeedback[row.definition.id].progress.toFixed(0) }}% · {{ formatModelDownloadBytes(downloadFeedback[row.definition.id].received) }} / {{ downloadFeedback[row.definition.id].total ? formatModelDownloadBytes(downloadFeedback[row.definition.id].total) : t('model_download.unknown_total') }}</span>
+                <button type="button" class="btn btn-xs" :disabled="['cancelling', 'complete'].includes(downloadFeedback[row.definition.id].phase)" @click="cancelDownload">{{ t('settings.ai_models.cancel') }}</button>
+              </div>
+              <p v-if="downloadFeedback[row.definition.id].message" role="alert" class="text-warning whitespace-pre-wrap">{{ downloadFeedback[row.definition.id].message }}</p>
+            </template>
+          </div>
         </div>
       </div>
       <details class="rounded-box border border-base-content/10 p-3">
@@ -104,6 +114,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import { beginModelDownload, applyModelDownloadProgress, modelDownloadError, isModelDownloadCancelled, formatModelDownloadBytes, type ModelDownloadFeedback } from '@/common/aiModelDownloads';
 import OcrIndexPanel from './OcrIndexPanel.vue';
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
@@ -117,7 +128,8 @@ import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, require
 const { t } = useI18n();
 const toast = useToast();
 const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task = ref('semantic');
-const apiKey = ref(''), manifest = ref(''), error = ref(''), downloading = ref(''), progress = ref(0);
+const apiKey = ref(''), manifest = ref(''), error = ref(''), downloading = ref('');
+const downloadFeedback = ref<Record<string, ModelDownloadFeedback>>({});
 const loading = ref(false), busy = ref(false);
 let mounted = true, request = 0;
 const unlisten: Array<() => void> = [];
@@ -241,13 +253,43 @@ async function openDirectory(modelId: string) {
 }
 async function download(modelId: string) {
   await action(async () => {
+    const model = view.value?.models.find((row: any) => row.definition.id === modelId);
+    const feedback = beginModelDownload(aiModelDisplayName(model?.definition) || modelId);
+    downloadFeedback.value[modelId] = feedback;
+    // Mutate the reactive entry, not the raw object used to create it.
+    const state = downloadFeedback.value[modelId];
     downloading.value = modelId;
-    progress.value = 0;
-    try { await invoke('download_ai_model', { modelId }); await refresh(editingId.value); }
-    finally { downloading.value = ''; }
+    try {
+      await invoke('download_ai_model', { modelId });
+      state.state = 'completed'; state.phase = 'complete'; state.progress = 100;
+      toast.success(t('model_download.success', { model: state.name }));
+      await refresh(editingId.value);
+    } catch (e) {
+      if (isModelDownloadCancelled(e)) {
+        state.state = 'cancelled'; state.message = '';
+        toast.info(t('model_download.cancelled'));
+      } else {
+        state.state = 'failed'; state.message = modelDownloadError(e);
+        const message = t('model_download.failed', { model: state.name, error: state.message });
+        toast.error(message, { duration: 6000 });
+        throw new Error(message);
+      }
+    } finally { downloading.value = ''; }
   });
 }
-async function cancelDownload() { await invoke('cancel_ai_model_download', { modelId: downloading.value }); }
+async function cancelDownload() {
+  const modelId = downloading.value, state = downloadFeedback.value[modelId];
+  if (!modelId || !state || state.state !== 'downloading' || state.phase === 'complete') return;
+  const previousPhase = state.phase;
+  state.phase = 'cancelling';
+  try { await invoke('cancel_ai_model_download', { modelId }); }
+  catch (e) {
+    if (state.state !== 'downloading') return;
+    state.phase = previousPhase;
+    state.message = t('model_download.cancel_failed', { error: modelDownloadError(e) });
+    toast.error(state.message);
+  }
+}
 function template() {
   if (!selectedModel.value) return;
   const definition = copy(selectedModel.value.definition);
@@ -265,7 +307,10 @@ watch(task, () => { choose(view.value?.selection[task.value]); });
 onMounted(async () => {
   await refresh();
   const progressListener = await listen('ai-model-download-progress', (event: any) => {
-    if (event.payload.modelId === downloading.value) progress.value = Math.max(0, Math.min(100, Number(event.payload.progress) || 0));
+    if (event.payload?.modelId === downloading.value) {
+      const state = downloadFeedback.value[downloading.value];
+      if (state) applyModelDownloadProgress(state, event.payload);
+    }
   });
   if (!mounted) progressListener(); else unlisten.push(progressListener);
   const configurationListener = await listen('ai-configuration-changed', () => { if (!busy.value) void refresh(editingId.value); });
