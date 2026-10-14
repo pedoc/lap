@@ -808,6 +808,7 @@ pub fn edit_library(id: &str, new_name: &str) -> Result<(), String> {
 
 /// Remove a library (also deletes the database file)
 pub fn remove_library(id: &str) -> Result<(), String> {
+    crate::t_media_jobs::assert_library_idle(id)?;
     let mut config = load_app_config()?;
 
     // Cannot remove the only remaining library

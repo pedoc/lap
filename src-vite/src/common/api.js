@@ -1,3 +1,4 @@
+import { startMediaJob } from './mediaJobs';
 import { setAlbumAccessibility } from '@/common/availability';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -1168,6 +1169,7 @@ export async function deleteDbFile(fileId) {
 
 export async function batchDeleteFiles(files, permanently = false) {
   try {
+    if (!permanently) return { jobId: (await startMediaJob('move', {files})).jobId };
     return await invoke('batch_delete_files', { libraryId:libConfig._libraryId, files, permanently });
   } catch (error) {
     console.error('batchDeleteFiles error:', error);

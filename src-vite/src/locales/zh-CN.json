@@ -2169,7 +2169,7 @@
 },
   "media_recovery": {
   "backup_scope": "此备份包含数据库、配置和恢复清单，不包含原图或 .lap-trash 中的媒体文件。请另行备份图库磁盘；清单不能替代媒体备份。",
-  "review": "回收区／数据库核对报告",
+  "review": "上次回收区／数据库核对报告",
   "review_required": "恢复清单与数据库不一致，自动文件操作已禁用，请先核对。"
 },
   "private_viewer": {
@@ -2231,5 +2231,37 @@
     "recheck": "预览不移动文件。执行前再次核对路径；新的冲突可能改变尚未开始组的自动后缀，或导致停止，不会覆盖目标。",
     "cancel": "取消",
     "confirm": "确认恢复预检通过的组"
-}
+},
+  "media_jobs": {
+    "resume_move": "继续移入最近删除",
+    "action_inspect": "核对恢复清单",
+    "stage_inspecting": "核对恢复清单与文件内容",
+    "recheck": "重新核对恢复清单",
+    "recovery_progress": "恢复组 {member}/{members}",
+    "title": "媒体后台任务",
+    "action_move": "移入最近删除",
+    "action_restore": "恢复媒体",
+    "action_purge": "永久清理回收文件",
+    "stage_queued": "等待开始",
+    "stage_waiting": "等待上一项媒体操作安全结束",
+    "stage_planning": "核对文件与组合关系",
+    "stage_verifying": "校验文件内容",
+    "stage_copying": "复制安全副本",
+    "stage_promoting": "以不覆盖方式确认目标",
+    "stage_cleaning": "清理已校验的来源",
+    "stage_catalogue": "保存目录与恢复状态",
+    "stage_completed": "已完成",
+    "stage_failed": "部分项目未完成",
+    "stage_cancelled": "已停止，未完成项可重试",
+    "stopping": "正在安全停止；已完成的文件组不会回退",
+    "counts": "已处理 {completed}/{total}；成功 {succeeded}，失败 {failed}，跳过 {skipped}",
+    "current": "当前第 {index}/{total} 项",
+    "member_progress": "组内文件 {member}/{members}",
+    "bytes": "当前文件 {done} / {total}",
+    "cancel": "停止任务",
+    "retry": "重试未完成项",
+    "dismiss": "收起已结束任务",
+    "details": "查看失败详情",
+    "private_hint": "详细错误及已登记回收组的重试，请在“已隐藏”或“最近删除”解锁后操作。成功项不会重复执行；错误详情最多显示前 200 项。"
+  }
 }

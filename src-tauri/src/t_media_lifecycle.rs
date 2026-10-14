@@ -1,6 +1,6 @@
 //! Photo visibility and recoverable file deletion. No automatic expiry or original-file overwrite.
 use crate::t_sqlite::{self, AFile};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -108,6 +108,8 @@ pub fn has_deleted_in_album(conn: &Connection, album: i64) -> Result<bool, Strin
 #[serde(rename_all = "camelCase")]
 pub struct Member {
     pub file_id: Option<i64>,
+    #[serde(default)]
+    pub source_inode: Option<u64>,
     pub original_name: String,
     pub original_path: String,
     pub stored_path: String,
@@ -173,13 +175,16 @@ pub(crate) fn fingerprint(path: &Path) -> Result<(u64, String), String> {
     let mut buf = [0u8; 64 * 1024];
     let mut size = 0;
     loop {
+        crate::t_media_jobs::check()?;
         let count = file.read(&mut buf).map_err(|e| e.to_string())?;
         if count == 0 {
             break;
         }
         size += count as u64;
         hash.update(&buf[..count]);
+        crate::t_media_jobs::bytes("verifying", size, meta.len());
     }
+    crate::t_media_jobs::check()?;
     if size != meta.len() {
         return Err(format!("File changed while reading: {}", path.display()));
     }
@@ -195,54 +200,83 @@ pub(crate) fn verify(path: &Path, member: &Member) -> Result<(), String> {
     }
     Ok(())
 }
+pub(crate) fn source_inode(path: &Path) -> Option<u64> {
+    crate::t_utils::FileInfo::new(&path.to_string_lossy())
+        .ok()
+        .map(|f| f.inode)
+        .filter(|id| *id != 0)
+}
 fn no_replace_move(source: &Path, target: &Path, member: &Member) -> Result<(), String> {
+    crate::t_media_jobs::check()?;
     if target.try_exists().map_err(|e| e.to_string())? {
-        return Err(format!(
-            "Destination already exists; nothing was overwritten: {}",
-            target.display()
-        ));
-    }
-    verify(source, member)?;
-    // A hard link is efficient on NTFS/APFS/ext4 and atomically refuses an occupied destination.
-    // Filesystems without links fall back to a create_new copy, never to an overwriting rename.
-    let linked = fs::hard_link(source, target).is_ok();
-    if !linked {
-        let mut input = fs::File::open(source).map_err(|e| e.to_string())?;
-        let mut output = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(target)
-            .map_err(|e| format!("Cannot reserve destination {}: {e}", target.display()))?;
-        let source_time = input
-            .metadata()
-            .map_err(|e| e.to_string())?
-            .modified()
-            .map_err(|e| e.to_string())?;
-        let copy = (|| {
-            std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
-            output
-                .set_times(fs::FileTimes::new().set_modified(source_time))
+        verify(target, member)?;
+        if !source.try_exists().map_err(|e| e.to_string())? {
+            return Ok(());
+        }
+        // A crash after promotion/hard-link creation may leave both names. Only
+        // the recorded original inode can be unlinked; a new same-byte file is not ours.
+        if member.source_inode.is_none() || source_inode(source) != member.source_inode {
+            return Err("Both recovery and original copies exist, but the original identity cannot be proven. No original was removed; review this group before retrying".into());
+        }
+    } else {
+        verify(source, member)?;
+        if fs::hard_link(source, target).is_err() {
+            let parent = target.parent().ok_or("Recovery parent missing")?;
+            if parent.canonicalize().map_err(|e| e.to_string())? != parent {
+                return Err("Recovery parent was redirected".into());
+            }
+            let temporary = parent.join(format!(".lap-move-{}.tmp", uuid::Uuid::new_v4()));
+            let mut input = fs::File::open(source).map_err(|e| e.to_string())?;
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
                 .map_err(|e| e.to_string())?;
-            output.flush().map_err(|e| e.to_string())?;
-            output.sync_all().map_err(|e| e.to_string())?;
-            verify(target, member)?;
-            verify(source, member)
-        })();
-        if let Err(error) = copy {
+            let identity = source_inode(&temporary);
+            let copied = (|| {
+                crate::t_media_jobs::copy(&mut input, &mut output, member.size)?;
+                let modified = input
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .map_err(|e| e.to_string())?;
+                output
+                    .set_times(fs::FileTimes::new().set_modified(modified))
+                    .map_err(|e| e.to_string())?;
+                output
+                    .flush()
+                    .and_then(|_| output.sync_all())
+                    .map_err(|e| e.to_string())?;
+                verify(&temporary, member)?;
+                verify(source, member)?;
+                crate::t_media_jobs::check()?;
+                if parent.canonicalize().map_err(|e| e.to_string())? != parent {
+                    return Err("Recovery parent was redirected".into());
+                }
+                crate::t_media_restore::promote_no_replace(&temporary, target)
+            })();
             drop(output);
-            let _ = fs::remove_file(target);
-            return Err(error);
+            if copied.is_err()
+                && identity.is_some()
+                && source_inode(&temporary) == identity
+                && temporary.canonicalize().is_ok_and(|p| p == temporary)
+            {
+                let _ = fs::remove_file(&temporary);
+            }
+            copied?;
         }
     }
     verify(target, member)?;
-    // Source removal is the final step, after durable verified storage exists.
+    verify(source, member)?;
+    if member.source_inode.is_some() && source_inode(source) != member.source_inode {
+        return Err("Original identity changed; safe recovery copy retained".into());
+    }
     let resolved = source.canonicalize().map_err(|e| e.to_string())?;
     if resolved != source {
-        return Err("Source was redirected while moving; safe copy retained".into());
+        return Err("Source was redirected; safe recovery copy retained".into());
     }
-    fs::remove_file(&resolved).map_err(|e| {
-        format!("Copy is safe in the recovery area, but original removal failed: {e}")
-    })?;
+    crate::t_media_jobs::check()?;
+    fs::remove_file(&resolved)
+        .map_err(|e| format!("Copy is safe in recovery, but original removal failed: {e}"))?;
     Ok(())
 }
 // Plan paths only after batch deduplication. Existing recovery records are never renumbered.
@@ -333,40 +367,46 @@ fn set_error(conn: &Connection, id: &str, error: &str) {
     // a newer recovery journal whose progress was persisted before a failed DB write.
 }
 fn component_ids(primary: i64) -> Result<Vec<i64>, String> {
-    let conn = t_sqlite::open_conn()?;
+    {
+        let conn = t_sqlite::open_conn()?;
+        component_ids_on(&conn, primary)
+    }
+}
+fn component_ids_on(conn: &Connection, primary: i64) -> Result<Vec<i64>, String> {
     let mut ids = vec![primary];
-    let owners = {
-        let mut stmt = conn
-            .prepare("SELECT id FROM afiles WHERE live_photo_video_id=?1")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([primary], |r| r.get::<_, i64>(0))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        rows
-    };
+    let mut statement = conn
+        .prepare("SELECT id FROM afiles WHERE live_photo_video_id=?1")
+        .map_err(|e| e.to_string())?;
+    let owners = statement
+        .query_map([primary], |r| r.get::<_, i64>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     for owner in owners.into_iter().chain(std::iter::once(primary)) {
         if !ids.contains(&owner) {
             ids.push(owner);
         }
-        for file in AFile::live_photo_component_files(owner)? {
-            if let Some(id) = file.id {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
+        let companion: Option<i64> = conn
+            .query_row(
+                "SELECT live_photo_video_id FROM afiles WHERE id=?1",
+                [owner],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+        if let Some(id) = companion.filter(|id| *id > 0) {
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
     }
-    let related = {
-        let mut stmt=conn.prepare("SELECT file_id FROM media_states WHERE visibility_group IN (SELECT visibility_group FROM media_states WHERE file_id=?1)").map_err(|e|e.to_string())?;
-        let rows = stmt
-            .query_map([primary], |r| r.get::<_, i64>(0))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        rows
-    };
+    let mut statement=conn.prepare("SELECT file_id FROM media_states WHERE visibility_group IN (SELECT visibility_group FROM media_states WHERE file_id=?1)").map_err(|e|e.to_string())?;
+    let related = statement
+        .query_map([primary], |r| r.get::<_, i64>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     for id in related {
         if !ids.contains(&id) {
             ids.push(id);
@@ -374,8 +414,61 @@ fn component_ids(primary: i64) -> Result<Vec<i64>, String> {
     }
     Ok(ids)
 }
+fn original_path_on(conn: &Connection, id: i64) -> Result<PathBuf, String> {
+    let (folder, name): (String, String) = conn
+        .query_row(
+            "SELECT f.path,a.name FROM afiles a JOIN afolders f ON f.id=a.folder_id WHERE a.id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| format!("Photo is no longer registered: {e}"))?;
+    Ok(Path::new(&folder).join(name))
+}
+thread_local! {static OPERATION_DEPTH:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
+pub(crate) struct OperationGuard {
+    _mutex: Option<std::sync::MutexGuard<'static, ()>>,
+}
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        OPERATION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+pub(crate) fn try_mutation_guard() -> Result<OperationGuard, String> {
+    if OPERATION_DEPTH.with(|depth| depth.get() > 0) {
+        OPERATION_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        return Ok(OperationGuard { _mutex: None });
+    }
+    let guard = OPERATIONS
+        .try_lock()
+        .map_err(|_| "A media operation is running; stop it before changing files or folders")?;
+    OPERATION_DEPTH.with(|depth| depth.set(1));
+    Ok(OperationGuard {
+        _mutex: Some(guard),
+    })
+}
+fn operation_guard() -> Result<OperationGuard, String> {
+    if OPERATION_DEPTH.with(|depth| depth.get() > 0) {
+        return try_mutation_guard();
+    }
+    loop {
+        crate::t_media_jobs::check()?;
+        match OPERATIONS.try_lock() {
+            Ok(guard) => {
+                OPERATION_DEPTH.with(|depth| depth.set(1));
+                return Ok(OperationGuard {
+                    _mutex: Some(guard),
+                });
+            }
+            Err(std::sync::TryLockError::Poisoned(error)) => return Err(error.to_string()),
+            Err(_) => {
+                crate::t_media_jobs::stage("waiting");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
 pub fn hide(ids: Vec<i64>, hidden: bool) -> Result<(), String> {
-    let _guard = OPERATIONS.lock().map_err(|e| e.to_string())?;
+    let _guard = try_mutation_guard()?;
     let conn = t_sqlite::open_conn()?;
     let mut groups = std::collections::HashMap::new();
     for id in ids {
@@ -408,14 +501,13 @@ fn prepare_manifest(conn: &Connection, primary: i64, id: &str) -> Result<Manifes
     let root = Path::new(&root).canonicalize().map_err(|e| e.to_string())?;
     let mut members = Vec::new();
     let mut seen = HashSet::new();
-    for file_id in component_ids(primary)? {
+    for file_id in component_ids_on(conn, primary)? {
         let deleted:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND deleted_at IS NOT NULL)",[file_id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if deleted {
             return Err("Photo is already in Recently Deleted".into());
         }
-        let file = AFile::get_file_info(file_id)?.ok_or("Photo no longer exists")?;
-        let original = file.file_path.ok_or("Original file path is unavailable")?;
-        let lexical = Path::new(&original);
+        let original = original_path_on(conn, file_id)?;
+        let lexical = original.as_path();
         if fs::symlink_metadata(lexical)
             .map_err(|e| e.to_string())?
             .file_type()
@@ -455,13 +547,18 @@ fn prepare_manifest(conn: &Connection, primary: i64, id: &str) -> Result<Manifes
                 .and_then(|v| v.to_str())
                 .ok_or("Invalid filename")?
                 .to_string();
+            let identity = source_inode(&path);
             let (size, hash) = fingerprint(&path)?;
+            if identity.is_some() && source_inode(&path) != identity {
+                return Err("Original changed during preflight".into());
+            }
             let stored = root.join(".lap-trash").join(id).join(format!(
                 "{}-{}",
                 members.len(),
                 original_name
             ));
             members.push(Member {
+                source_inode: identity,
                 file_id,
                 original_name,
                 original_path: path.to_string_lossy().into_owned(),
@@ -530,33 +627,36 @@ fn register_intent(conn: &Connection, id: &str, manifest: &Manifest) -> Result<(
             .collect::<Vec<_>>(),
     )?;
     tx.commit().map_err(|e| e.to_string())?;
+    crate::t_media_jobs::admitted(id);
     crate::t_media_recovery::checkpoint_current(conn, id)
 }
 pub fn validate_original(id: i64, path: &str, allow_hidden: bool) -> Result<(), String> {
-    let conn = t_sqlite::open_conn()?;
-    let blocked:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND (hidden=1 OR deleted_at IS NOT NULL))",[id],|r|r.get(0)).map_err(|e|e.to_string())?;
-    let deleted: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND deleted_at IS NOT NULL)",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    if (blocked && !allow_hidden) || deleted || is_recovery_path(Path::new(path)) {
+    {
+        let conn = t_sqlite::open_conn()?;
+        validate_original_on(&conn, id, path, allow_hidden)
+    }
+}
+fn validate_original_on(
+    conn: &Connection,
+    id: i64,
+    path: &str,
+    allow_hidden: bool,
+) -> Result<(), String> {
+    let (hidden,deleted):(bool,bool)=conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND hidden=1),EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND deleted_at IS NOT NULL)",[id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
+    if (hidden && !allow_hidden) || deleted || is_recovery_path(Path::new(path)) {
         return Err(
-            "Use Hidden/Recently Deleted actions for this photo; its original was not deleted"
-                .into(),
+            "Use Hidden/Recently Deleted actions for this photo; original was not deleted".into(),
         );
     }
-    let file = AFile::get_file_info(id)?.ok_or("Photo no longer exists in this library")?;
-    let registered = PathBuf::from(file.file_path.ok_or("Original path is missing")?)
+    let registered = original_path_on(conn, id)?
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    if Path::new(path).canonicalize().map_err(|e| e.to_string())? != registered {
-        return Err(
-            "Frontend file path is stale or belongs to another photo/library; deletion stopped"
-                .into(),
-        );
+    if path.is_empty() {
+        if !(allow_hidden && hidden) {
+            return Err("Original path is required".into());
+        }
+    } else if Path::new(path).canonicalize().map_err(|e| e.to_string())? != registered {
+        return Err("Original path is stale or belongs to another photo/library".into());
     }
     Ok(())
 }
@@ -565,56 +665,193 @@ pub fn move_to_recently_deleted(
     expected_library: Option<&str>,
     allow_hidden: bool,
 ) -> Result<crate::t_cmds::BatchDeleteResult, String> {
-    let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
-        .write()
-        .map_err(|e| e.to_string())?;
-    if let Some(library) = expected_library {
-        if crate::t_config::current_library_id()? != library {
-            return Err("Library changed; deletion was not performed".into());
+    let conn = {
+        let _scope = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        if let Some(library) = expected_library {
+            if crate::t_config::current_library_id()? != library {
+                return Err("Library changed; deletion was not performed".into());
+            }
         }
-    }
-    let _guard = OPERATIONS.lock().map_err(|e| e.to_string())?;
-    let conn = t_sqlite::open_conn()?;
-    for file in &files {
-        validate_original(file.file_id, &file.file_path, allow_hidden)?;
-    }
+        t_sqlite::open_conn()?
+    };
+    move_job_on(
+        &conn,
+        files
+            .into_iter()
+            .map(|f| crate::t_media_jobs::Item::File {
+                file_id: f.file_id,
+                file_path: f.file_path,
+            })
+            .collect(),
+        allow_hidden,
+    )
+}
+pub(crate) fn move_job_on(
+    conn: &Connection,
+    items: Vec<crate::t_media_jobs::Item>,
+    allow_hidden: bool,
+) -> Result<crate::t_cmds::BatchDeleteResult, String> {
+    use crate::t_media_jobs::{self as job, Item};
+    let _guard = operation_guard()?;
     let mut plans = Vec::new();
     let mut seen = HashSet::new();
     let mut paths = HashSet::new();
-    // Preflight all selected originals and associated files before any filesystem mutation.
-    for primary in files.iter().map(|f| f.file_id) {
-        if seen.contains(&primary) {
-            continue;
-        }
-        let id = uuid::Uuid::new_v4().to_string();
-        let mut manifest = prepare_manifest(&conn, primary, &id)?;
-        manifest
-            .members
-            .retain(|m| paths.insert(m.original_path.clone()));
-        assign_storage_paths(&mut manifest, &id);
-        for m in &manifest.members {
-            if let Some(file_id) = m.file_id {
-                seen.insert(file_id);
-            }
-        }
-        plans.push((id, manifest));
-    }
     let mut result = crate::t_cmds::BatchDeleteResult {
         failed_count: 0,
         deleted_file_ids: Vec::new(),
         trash_failed_file_ids: Vec::new(),
     };
-    for (id, manifest) in plans {
+    // Resumed groups own their existing companions, including shared AAE paths.
+    for item in &items {
+        job::check()?;
+        if let Item::Group { group_id } = item {
+            if let Ok(group) = load(conn, group_id) {
+                if matches!(group.status.as_str(), "moving" | "trashed")
+                    && validate_root(&group.manifest, group_id).is_ok()
+                {
+                    for member in &group.manifest.members {
+                        paths.insert(member.original_path.clone());
+                        if let Some(id) = member.file_id {
+                            seen.insert(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for item in items {
+        if job::check().is_err() {
+            break;
+        }
+        job::select(item.clone());
+        let prepared = (|| match &item {
+            Item::Inspection => Err("Inspection is not a media move".into()),
+            Item::Group { group_id } => {
+                let stored = match load(conn, group_id) {
+                    Ok(stored) => stored,
+                    Err(error) => {
+                        if crate::t_media_recovery::completed_operation(conn, group_id, false)?
+                            || crate::t_media_recovery::completed_operation(conn, group_id, true)?
+                        {
+                            job::skipped(&item);
+                            return Ok((
+                                String::new(),
+                                Manifest {
+                                    root: String::new(),
+                                    primary_id: 0,
+                                    members: Vec::new(),
+                                    restore_plan: None,
+                                },
+                                true,
+                            ));
+                        }
+                        return Err(error);
+                    }
+                };
+                if stored.status == "trashed" {
+                    for member in &stored.manifest.members {
+                        verify(Path::new(&member.stored_path), member)?;
+                    }
+                    job::complete();
+                    return Ok((String::new(), stored.manifest, true));
+                }
+                if stored.status != "moving" {
+                    return Err("Only an interrupted move can resume moving into recovery".into());
+                }
+                Ok((group_id.clone(), stored.manifest, true))
+            }
+            Item::File { file_id, file_path } => {
+                if seen.contains(file_id) {
+                    job::skipped(&item);
+                    return Ok((
+                        String::new(),
+                        Manifest {
+                            root: String::new(),
+                            primary_id: *file_id,
+                            members: Vec::new(),
+                            restore_plan: None,
+                        },
+                        false,
+                    ));
+                }
+                validate_original_on(conn, *file_id, file_path, allow_hidden)?;
+                let id = uuid::Uuid::new_v4().to_string();
+                let mut manifest = prepare_manifest(conn, *file_id, &id)?;
+                manifest
+                    .members
+                    .retain(|m| paths.insert(m.original_path.clone()));
+                assign_storage_paths(&mut manifest, &id);
+                for m in &manifest.members {
+                    if let Some(id) = m.file_id {
+                        seen.insert(id);
+                    }
+                }
+                Ok((id, manifest, false))
+            }
+        })();
+        match prepared {
+            Ok((id, manifest, registered)) => {
+                if !id.is_empty() {
+                    plans.push((item, id, manifest, registered));
+                }
+            }
+            Err(error) => {
+                if job::check().is_err() {
+                    break;
+                }
+                job::failed(error);
+                result.failed_count += 1;
+                if let Item::File { file_id, .. } = item {
+                    result.trash_failed_file_ids.push(file_id);
+                }
+            }
+        }
+    }
+    for (item, id, manifest, registered) in plans {
+        if job::check().is_err() {
+            break;
+        }
+        job::select(item.clone());
         let prepared = (|| {
             let dir = validate_root(&manifest, &id)?;
-            fs::create_dir_all(&dir).map_err(|e| {
-                format!("Cannot create recovery directory; original files are unchanged: {e}")
-            })?;
+            fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             validate_root(&manifest, &id)?;
-            register_intent(&conn, &id, &manifest)
+            if !registered {
+                // Serialize only catalogue admission with interactive file mutations,
+                // never the expensive hashing/copying of original media.
+                let _admission = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
+                    .read()
+                    .map_err(|e| e.to_string())?;
+                job::check()?;
+                for member in &manifest.members {
+                    if let Some(file_id) = member.file_id {
+                        validate_original_on(conn, file_id, &member.original_path, allow_hidden)?;
+                    }
+                    if member.source_inode.is_some()
+                        && source_inode(Path::new(&member.original_path)) != member.source_inode
+                    {
+                        return Err(
+                            "Original identity changed after preflight; nothing was moved".into(),
+                        );
+                    }
+                }
+                register_intent(conn, &id, &manifest)?;
+            } else {
+                crate::t_media_recovery::checkpoint_current(conn, &id)?;
+            }
+            Ok::<_, String>(())
         })();
         if let Err(error) = prepared {
-            eprintln!("Recently Deleted: {error}");
+            if load(conn, &id).is_ok() {
+                set_error(conn, &id, &error);
+            } else if !registered {
+                if let Ok(directory) = validate_root(&manifest, &id) {
+                    let _ = fs::remove_dir(directory);
+                }
+            }
+            job::failed(error);
             result.failed_count += 1;
             result.trash_failed_file_ids.push(manifest.primary_id);
             continue;
@@ -623,24 +860,32 @@ pub fn move_to_recently_deleted(
             .deleted_file_ids
             .extend(manifest.members.iter().filter_map(|m| m.file_id));
         let moved = (|| {
-            for member in &manifest.members {
+            for (index, member) in manifest.members.iter().enumerate() {
+                job::check()?;
+                job::member(index + 1, manifest.members.len());
+                validate_root(&manifest, &id)?;
                 no_replace_move(
                     Path::new(&member.original_path),
                     Path::new(&member.stored_path),
                     member,
                 )?;
             }
+            job::stage("catalogue");
             conn.execute(
                 "UPDATE media_trash_groups SET status='trashed',error=NULL WHERE id=?1",
                 [&id],
             )
             .map_err(|e| e.to_string())?;
-            crate::t_media_recovery::checkpoint_current(&conn, &id)?;
+            crate::t_media_recovery::checkpoint_current(conn, &id)?;
             Ok::<_, String>(())
         })();
-        if let Err(error) = moved {
-            set_error(&conn, &id, &error);
-            result.failed_count += 1;
+        match moved {
+            Ok(()) => job::complete(),
+            Err(error) => {
+                set_error(conn, &id, &error);
+                job::failed(error);
+                result.failed_count += 1;
+            }
         }
     }
     Ok(result)
@@ -661,7 +906,9 @@ fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
             "This move/recovery is incomplete. Restore it before permanent deletion.".into(),
         );
     }
-    for member in &item.manifest.members {
+    for (index, member) in item.manifest.members.iter().enumerate() {
+        crate::t_media_jobs::member(index + 1, item.manifest.members.len());
+        crate::t_media_jobs::check()?;
         let stored = Path::new(&member.stored_path);
         if stored.exists() {
             verify(stored, member)?;
@@ -675,7 +922,9 @@ fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     crate::t_media_recovery::checkpoint_current(conn, &item.id)?;
-    for member in &item.manifest.members {
+    for (index, member) in item.manifest.members.iter().enumerate() {
+        crate::t_media_jobs::member(index + 1, item.manifest.members.len());
+        crate::t_media_jobs::check()?;
         let stored = Path::new(&member.stored_path);
         if stored.exists() {
             if !stored.starts_with(&dir) {
@@ -687,11 +936,14 @@ fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
             if !resolved.starts_with(&dir) {
                 return Err("Recovery file escaped its registered directory".into());
             }
+            crate::t_media_jobs::stage("cleaning");
+            crate::t_media_jobs::check()?;
             fs::remove_file(resolved).map_err(|e| e.to_string())?;
         }
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    for member in &item.manifest.members {
+    for (index, member) in item.manifest.members.iter().enumerate() {
+        crate::t_media_jobs::member(index + 1, item.manifest.members.len());
         if let Some(id) = member.file_id {
             tx.execute("DELETE FROM afiles WHERE id=?1", [id])
                 .map_err(|e| e.to_string())?;
@@ -702,29 +954,62 @@ fn purge_on(conn: &Connection, item: &TrashItem) -> Result<(), String> {
     crate::t_media_recovery::checkpoint(&tx, item, Some("purged"))?;
     tx.commit().map_err(|e| e.to_string())
 }
-pub fn operate(ids: Vec<String>, purge: bool) -> Result<OperationResult, String> {
-    operate_with_options(ids,purge,&crate::t_media_restore::RestoreOptions::default())
+
+
+pub(crate) fn inspect_job_on(conn: &Connection) -> Result<(), String> {
+    let _guard = operation_guard()?;
+    crate::t_media_jobs::select(crate::t_media_jobs::Item::Inspection);
+    crate::t_media_jobs::stage("inspecting");
+    crate::t_media_recovery::inspect(conn, true)?;
+    crate::t_media_jobs::complete();
+    Ok(())
 }
-fn operate_with_options(
+pub(crate) fn operate_on(
+    conn: &Connection,
     ids: Vec<String>,
     purge: bool,
     options: &crate::t_media_restore::RestoreOptions,
 ) -> Result<OperationResult, String> {
-    let _guard = OPERATIONS.lock().map_err(|e| e.to_string())?;
-    let conn = t_sqlite::open_conn()?;
+    use crate::t_media_jobs as job;
+    let _guard = operation_guard()?;
     let mut result = OperationResult::default();
-    for id in ids.into_iter().collect::<HashSet<_>>() {
-        let operation = load(&conn, &id).and_then(|item| {
+    let mut seen = HashSet::new();
+    for id in ids {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        if job::check().is_err() {
+            break;
+        }
+        job::select(job::Item::group(&id));
+        let operation = (|| {
+            let item = match load(conn, &id) {
+                Ok(item) => item,
+                Err(_) => {
+                    if crate::t_media_recovery::completed_operation(conn, &id, purge)? {
+                        return Ok(());
+                    }
+                    crate::t_media_recovery::inspect(conn, true)?;
+                    if crate::t_media_recovery::completed_operation(conn, &id, purge)? {
+                        return Ok(());
+                    }
+                    load(conn, &id)?
+                }
+            };
             if purge {
-                purge_on(&conn, &item)
+                purge_on(conn, &item)
             } else {
-                crate::t_media_restore::restore(&conn, &item, options)
+                crate::t_media_restore::restore(conn, &item, options)
             }
-        });
+        })();
         match operation {
-            Ok(()) => result.succeeded.push(id),
+            Ok(()) => {
+                result.succeeded.push(id);
+                job::complete();
+            }
             Err(error) => {
-                set_error(&conn, &id, &error);
+                set_error(conn, &id, &error);
+                job::failed(error.clone());
                 result.errors.push((id, error));
             }
         }
@@ -776,7 +1061,9 @@ pub fn hidden_page(offset: i64, limit: i64) -> Result<HiddenPage, String> {
 }
 pub fn trash_page(offset: i64, limit: i64) -> Result<TrashPage, String> {
     let conn = t_sqlite::open_conn()?;
-    let recovery = crate::t_media_recovery::inspect(&conn, true)?;
+    let snapshot = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let conn = &snapshot;
+    let recovery = crate::t_media_recovery::listing_report(&conn)?;
     let total = conn
         .query_row("SELECT COUNT(*) FROM media_trash_groups", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
@@ -804,7 +1091,7 @@ pub fn trash_page(offset: i64, limit: i64) -> Result<TrashPage, String> {
         total,
     })
 }
-fn event(app: &tauri::AppHandle, library: &str) {
+pub(crate) fn event(app: &tauri::AppHandle, library: &str) {
     let _ = app.emit(
         "media-lifecycle-changed",
         serde_json::json!({"library_id":library}),
@@ -922,16 +1209,19 @@ pub async fn restore_deleted_media(
     session_token: Option<String>,
     options: Option<crate::t_media_restore::RestoreOptions>,
 ) -> Result<OperationResult, String> {
-    let owner=window.label().to_string();
+    let owner = window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
-            .write()
+            .read()
             .map_err(|e| e.to_string())?;
         if crate::t_config::current_library_id()? != library_id {
             return Err("Library changed".into());
         }
-        let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;
-        let result = operate_with_options(group_ids,false,&options.unwrap_or_default())?;
+        let permit =
+            crate::t_private_lock::authorize(&library_id, session_token.as_deref(), &owner)?;
+        let conn = t_sqlite::open_conn()?;
+        drop(_library);
+        let result = operate_on(&conn, group_ids, false, &options.unwrap_or_default())?;
         crate::t_private_lock::recheck(&permit)?;
         event(&app, &library_id);
         Ok(result)
@@ -947,16 +1237,24 @@ pub async fn purge_deleted_media(
     group_ids: Vec<String>,
     session_token: Option<String>,
 ) -> Result<OperationResult, String> {
-    let owner=window.label().to_string();
+    let owner = window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
-            .write()
+            .read()
             .map_err(|e| e.to_string())?;
         if crate::t_config::current_library_id()? != library_id {
             return Err("Library changed".into());
         }
-        let permit=crate::t_private_lock::authorize(&library_id,session_token.as_deref(),&owner)?;
-        let result = operate(group_ids, true)?;
+        let permit =
+            crate::t_private_lock::authorize(&library_id, session_token.as_deref(), &owner)?;
+        let conn = t_sqlite::open_conn()?;
+        drop(_library);
+        let result = operate_on(
+            &conn,
+            group_ids,
+            true,
+            &crate::t_media_restore::RestoreOptions::default(),
+        )?;
         crate::t_private_lock::recheck(&permit)?;
         event(&app, &library_id);
         Ok(result)
@@ -1038,6 +1336,7 @@ mod tests {
                 let original = self.root.join(name);
                 let (size, hash) = fingerprint(&original).unwrap();
                 members.push(Member {
+                    source_inode: None,
                     file_id,
                     original_name: name.into(),
                     original_path: original.to_string_lossy().into_owned(),
@@ -1496,6 +1795,199 @@ mod tests {
         for member in &manifest.members {
             verify(Path::new(&member.original_path), member).unwrap();
         }
+    }
+    #[test]
+    fn media_job_cancelled_preflight_releases_the_library_lock_and_preserves_originals() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let f = Fixture::new();
+        f.conn.execute_batch("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER; UPDATE afiles SET live_photo_video_id=2 WHERE id=1;").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let item = crate::t_media_jobs::Item::File {
+            file_id: 1,
+            file_path: f.root.join("photo.jpg").to_string_lossy().into_owned(),
+        };
+        let control =
+            crate::t_media_jobs::test_control(vec![item.clone()], cancel, move |summary| {
+                assert!(crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.try_write().is_ok());
+                if summary.stage == "planning" {
+                    stop.store(true, Ordering::Release);
+                }
+            });
+        crate::t_media_jobs::with_control(control, || move_job_on(&f.conn, vec![item], false))
+            .unwrap();
+        assert_eq!(
+            fs::read(f.root.join("photo.jpg")).unwrap(),
+            b"original photo"
+        );
+        assert_eq!(
+            f.conn
+                .query_row("SELECT COUNT(*) FROM media_trash_groups", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn media_job_resumes_a_hard_link_without_removing_a_new_same_byte_original() {
+        let f = Fixture::new();
+        let (id, mut manifest) = f.plan();
+        for member in &mut manifest.members {
+            member.source_inode = source_inode(Path::new(&member.original_path));
+        }
+        f.stage(&id, &manifest);
+        let first = &manifest.members[0];
+        fs::hard_link(&first.original_path, &first.stored_path).unwrap();
+        move_job_on(&f.conn, vec![crate::t_media_jobs::Item::group(&id)], true).unwrap();
+        for member in &manifest.members {
+            verify(Path::new(&member.stored_path), member).unwrap();
+            assert!(!Path::new(&member.original_path).exists());
+        }
+        let f = Fixture::new();
+        let (id, mut manifest) = f.plan();
+        for member in &mut manifest.members {
+            member.source_inode = source_inode(Path::new(&member.original_path));
+        }
+        f.stage(&id, &manifest);
+        let first = &manifest.members[0];
+        fs::hard_link(&first.original_path, &first.stored_path).unwrap();
+        fs::remove_file(&first.original_path).unwrap();
+        fs::write(&first.original_path, b"original photo").unwrap();
+        let result =
+            move_job_on(&f.conn, vec![crate::t_media_jobs::Item::group(&id)], true).unwrap();
+        assert_eq!(result.failed_count, 1);
+        assert_eq!(fs::read(&first.original_path).unwrap(), b"original photo");
+        assert_eq!(load(&f.conn, &id).unwrap().status, "moving");
+    }
+    #[test]
+    fn media_job_cancelled_cleanup_is_retryable_but_never_restores_a_purging_group() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let f = Fixture::new();
+        let (id, manifest) = f.plan();
+        f.trash(&id, &manifest);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let control = crate::t_media_jobs::test_control(
+            vec![crate::t_media_jobs::Item::group(&id)],
+            cancel,
+            move |summary| {
+                if summary.stage == "cleaning" {
+                    stop.store(true, Ordering::Release);
+                }
+            },
+        );
+        crate::t_media_jobs::with_control(control, || {
+            operate_on(&f.conn, vec![id.clone()], true, &Default::default())
+        })
+        .unwrap();
+        assert_eq!(load(&f.conn, &id).unwrap().status, "purging");
+        assert!(restore_on(&f.conn, &load(&f.conn, &id).unwrap()).is_err());
+        for member in &manifest.members {
+            verify(Path::new(&member.stored_path), member).unwrap();
+        }
+        assert!(
+            operate_on(&f.conn, vec![id.clone()], true, &Default::default())
+                .unwrap()
+                .errors
+                .is_empty()
+        );
+        assert!(load(&f.conn, &id).is_err());
+    }
+    #[test]
+    fn media_job_admission_failure_keeps_the_registered_group_in_its_retry_ledger() {
+        use std::sync::{Arc, atomic::AtomicBool};
+        let f = Fixture::new();
+        f.conn.execute_batch("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER; UPDATE afiles SET live_photo_video_id=2 WHERE id=1; CREATE TRIGGER fail_journal_after_commit AFTER INSERT ON media_trash_groups BEGIN UPDATE media_trash_groups SET manifest=json_set(manifest,'$.root','missing-test-root') WHERE id=NEW.id; END;").unwrap();
+        let item = crate::t_media_jobs::Item::File {
+            file_id: 1,
+            file_path: f.root.join("photo.jpg").to_string_lossy().into_owned(),
+        };
+        let control = crate::t_media_jobs::test_control(
+            vec![item.clone()],
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        );
+        let result = crate::t_media_jobs::with_control(control.clone(), || {
+            move_job_on(&f.conn, vec![item], false)
+        })
+        .unwrap();
+        assert_eq!(result.failed_count, 1);
+        let remaining = crate::t_media_jobs::test_remaining(&control);
+        assert_eq!(remaining.len(), 1);
+        let crate::t_media_jobs::Item::Group { group_id } = &remaining[0] else {
+            panic!("committed admission must retry a group, not an already-private original");
+        };
+        let group_id = group_id.clone();
+        assert_eq!(
+            fs::read(f.root.join("photo.jpg")).unwrap(),
+            b"original photo"
+        );
+        let mut pending = load(&f.conn, &group_id).unwrap();
+        pending.manifest.root = f.root.to_string_lossy().into_owned();
+        f.conn
+            .execute_batch("DROP TRIGGER fail_journal_after_commit;")
+            .unwrap();
+        f.conn
+            .execute(
+                "UPDATE media_trash_groups SET manifest=?1 WHERE id=?2",
+                params![serde_json::to_string(&pending.manifest).unwrap(), group_id],
+            )
+            .unwrap();
+        let resumed = move_job_on(&f.conn, remaining, true).unwrap();
+        assert_eq!(resumed.failed_count, 0);
+        assert!(!f.root.join("photo.jpg").exists());
+        assert_eq!(load(&f.conn, &group_id).unwrap().status, "trashed");
+    }
+    #[test]
+    fn media_job_mutation_admission_is_reentrant_only_on_its_owner_thread() {
+        let outer = try_mutation_guard().unwrap();
+        let inner = try_mutation_guard().unwrap();
+        assert!(
+            std::thread::spawn(|| try_mutation_guard().is_err())
+                .join()
+                .unwrap()
+        );
+        drop(inner);
+        drop(outer);
+        assert!(
+            std::thread::spawn(|| try_mutation_guard().is_ok())
+                .join()
+                .unwrap()
+        );
+    }
+    #[test]
+    fn media_job_foreground_report_reads_do_not_hash_files_or_replay_recovery() {
+        use std::sync::{Arc, atomic::AtomicBool};
+        let f = Fixture::new();
+        let (id, manifest) = f.plan();
+        f.stage(&id, &manifest);
+        crate::t_media_recovery::inspect(&f.conn, true).unwrap();
+        let control = crate::t_media_jobs::test_control(
+            vec![crate::t_media_jobs::Item::Inspection],
+            Arc::new(AtomicBool::new(true)),
+            |_| {},
+        );
+        let report = crate::t_media_jobs::with_control(control.clone(), || {
+            crate::t_media_recovery::listing_report(&f.conn)
+        })
+        .unwrap();
+        assert_eq!(report.registered, 1);
+        assert!(
+            crate::t_media_jobs::with_control(control, || crate::t_media_recovery::inspect(
+                &f.conn, true
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            fs::read(f.root.join("photo.jpg")).unwrap(),
+            b"original photo"
+        );
     }
     #[test]
     fn media_lifecycle_pending_moves_cannot_be_permanently_deleted() {

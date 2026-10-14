@@ -67,6 +67,14 @@
         >
           {{ $t('media_lifecycle.purge') }}
         </button>
+        <button
+          v-if="mode === 'deleted'"
+          class="btn btn-sm"
+          :disabled="!!busy"
+          @click="perform('inspect')"
+        >
+          {{ $t('media_jobs.recheck') }}
+        </button>
       </header>
       <p class="text-xs text-base-content/60">
         {{
@@ -156,6 +164,17 @@
               {{ $t('media_lifecycle.status.' + item.status) }} —
               {{ $t('media_lifecycle.processing_warning') }}
             </p>
+            <button
+              v-if="item.status === 'moving'"
+              class="btn btn-xs mt-1"
+              :disabled="!!busy"
+              @click.stop="
+                selected = new Set([item.id]);
+                perform('resume_move');
+              "
+            >
+              {{ $t('media_jobs.resume_move') }}
+            </button>
             <p v-if="item.error" class="text-xs text-error break-all">
               {{ item.error }}
             </p></template
@@ -256,6 +275,12 @@ import {
 } from '@/common/api';
 import { usePrivateAccess } from '@/common/privateAccess';
 import MediaRestoreDialog from './MediaRestoreDialog.vue';
+import {
+  startMediaJob,
+  bindMediaJobPrivateContext,
+  mediaJobDetailsRequest,
+  getMediaJobFailures,
+} from '@/common/mediaJobs';
 import PrivateLockPanel from './PrivateLockPanel.vue';
 import { mediaOperationErrors } from '@/common/mediaLifecycle';
 import { formatFileSize } from '@/common/utils';
@@ -276,6 +301,71 @@ const restoreDialog = ref(false);
 const preview = ref<any>(null);
 const access = usePrivateAccess(() => libConfig._libraryId, invalidatePrivate);
 const canReadPrivate = access.canRead;
+let pendingJobRefresh = false,
+  jobRefreshScheduled = false;
+function flushJobRefresh() {
+  if (
+    !pendingJobRefresh ||
+    jobRefreshScheduled ||
+    busy.value ||
+    disposed ||
+    !canReadPrivate.value
+  )
+    return;
+  const library = libConfig._libraryId,
+    generation = access.generation.value,
+    mode = props.mode;
+  jobRefreshScheduled = true;
+  queueMicrotask(() => {
+    jobRefreshScheduled = false;
+    if (
+      !disposed &&
+      pendingJobRefresh &&
+      !busy.value &&
+      canReadPrivate.value &&
+      library === libConfig._libraryId &&
+      generation === access.generation.value &&
+      mode === props.mode
+    ) {
+      pendingJobRefresh = false;
+      void load();
+    }
+  });
+}
+
+const unbindJobPrivateContext = bindMediaJobPrivateContext(() => ({
+  libraryId: libConfig._libraryId,
+  canRead: canReadPrivate.value,
+  sessionToken: access.sessionToken.value,
+}));
+watch(mediaJobDetailsRequest, async (id) => {
+  if (!id || !canReadPrivate.value) return;
+  const library = libConfig._libraryId,
+    generation = access.generation.value,
+    session = access.sessionToken.value;
+  try {
+    const failures = await getMediaJobFailures(id, session);
+    if (
+      !disposed &&
+      library === libConfig._libraryId &&
+      canReadPrivate.value &&
+      generation === access.generation.value
+    )
+      error.value = failures.map((f) => f.error).join('\n');
+  } catch (reason) {
+    if (
+      !disposed &&
+      library === libConfig._libraryId &&
+      canReadPrivate.value &&
+      generation === access.generation.value
+    )
+      error.value = String(reason);
+  } finally {
+    if (mediaJobDetailsRequest.value === id)
+      mediaJobDetailsRequest.value = null;
+  }
+});
+
 let request = 0;
 let disposed = false;
 const stops: (() => void)[] = [];
@@ -369,7 +459,10 @@ async function load(keepPreview = false) {
     if (!disposed && token === request) error.value = String(reason);
     return false;
   } finally {
-    if (token === request) busy.value = '';
+    if (token === request) {
+      busy.value = '';
+      flushJobRefresh();
+    }
   }
 }
 async function navigatePreview(direction: number) {
@@ -400,10 +493,15 @@ function restoreSelected(ids: string[], options: any) {
   void perform('restore', options);
 }
 async function perform(
-  action: 'unhide' | 'restore' | 'purge' | 'delete',
+  action: 'unhide' | 'restore' | 'purge' | 'delete' | 'inspect' | 'resume_move',
   restoreOptions: any = null,
 ) {
-  if (busy.value || !selected.value.size || !canReadPrivate.value) return;
+  if (
+    busy.value ||
+    (!selected.value.size && action !== 'inspect') ||
+    !canReadPrivate.value
+  )
+    return;
   const accessGeneration = access.generation.value;
   const session = access.sessionToken.value;
   const library = libConfig._libraryId;
@@ -413,19 +511,36 @@ async function perform(
   busy.value = action;
   error.value = '';
   try {
-    const result =
-      action === 'delete'
-        ? await deleteHiddenMedia(library, ids.map(Number), session)
-        : action === 'unhide'
-          ? await setMediaHidden(library, ids.map(Number), false, session)
-          : action === 'restore'
-            ? await restoreDeletedMedia(
-                library,
-                ids.map(String),
-                session,
-                restoreOptions,
-              )
-            : await purgeDeletedMedia(library, ids.map(String), session);
+    let result: any;
+    if (action === 'unhide')
+      result = await setMediaHidden(library, ids.map(Number), false, session);
+    else {
+      const data =
+        action === 'inspect'
+          ? {}
+          : action === 'resume_move'
+            ? { fromHidden: true, groupIds: ids.map(String) }
+            : action === 'delete'
+              ? {
+                  fromHidden: true,
+                  files: items.value
+                    .filter((i) => selected.value.has(i.id))
+                    .map((i) => ({
+                      fileId: i.id,
+                      filePath: i.file_path || '',
+                    })),
+                }
+              : {
+                  groupIds: ids.map(String),
+                  options: restoreOptions || { mode: 'original' },
+                };
+      await startMediaJob(
+        action === 'delete' || action === 'resume_move' ? 'move' : action,
+        data,
+        session,
+      );
+      result = null;
+    }
     if (
       disposed ||
       library !== libConfig._libraryId ||
@@ -454,8 +569,10 @@ async function perform(
       library === libConfig._libraryId &&
       mode === props.mode &&
       accessGeneration === access.generation.value
-    )
+    ) {
       busy.value = '';
+      flushJobRefresh();
+    }
   }
 }
 watch(
@@ -480,6 +597,7 @@ watch(canReadPrivate, (allowed) => {
   else invalidatePrivate();
 });
 function invalidatePrivate() {
+  pendingJobRefresh = false;
   request++;
   items.value = [];
   total.value = 0;
@@ -496,13 +614,15 @@ onMounted(async () => {
   const stop = await listen('media-lifecycle-changed', (event: any) => {
     if (event.payload?.library_id === libConfig._libraryId) {
       preview.value = null;
-      if (!busy.value) void load();
+      pendingJobRefresh = true;
+      flushJobRefresh();
     }
   });
   if (disposed) stop();
   else stops.push(stop);
 });
 onBeforeUnmount(() => {
+  unbindJobPrivateContext();
   disposed = true;
   preview.value = null;
   request++;

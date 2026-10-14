@@ -216,6 +216,7 @@ fn matches(conn: &Connection, file: &CatalogFile, group: &str) -> Result<bool, S
         root: String::new(),
         primary_id: file.id,
         members: vec![crate::t_media_lifecycle::Member {
+            source_inode: None,
             file_id: Some(file.id),
             original_name: file.name.clone(),
             original_path: String::new(),
@@ -310,6 +311,121 @@ fn reconcile_completed(
     Ok(())
 }
 
+/// Only a validated final identity counts as an idempotent retry success.
+pub(crate) fn completed_operation(
+    conn: &Connection,
+    id: &str,
+    purge: bool,
+) -> Result<bool, String> {
+    uuid::Uuid::parse_str(id).map_err(|_| "Invalid recovery group ID")?;
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM media_trash_groups WHERE id=?1)",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if exists {
+        return Ok(false);
+    }
+    let mut statement = conn
+        .prepare("SELECT path FROM albums")
+        .map_err(|e| e.to_string())?;
+    let roots = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    for root in roots {
+        crate::t_media_jobs::check()?;
+        let Ok(root) = Path::new(&root).canonicalize() else {
+            continue;
+        };
+        let folder = root.join(".lap-trash").join(id);
+        if !folder.try_exists().map_err(|e| e.to_string())? {
+            continue;
+        }
+        let Some(journal) = latest(&folder, id)? else {
+            continue;
+        };
+        if Path::new(&journal.record.manifest.root) != root
+            || crate::t_media_lifecycle::validate_root(&journal.record.manifest, id).is_err()
+        {
+            return Ok(false);
+        }
+        if purge && journal.record.status == "purged" {
+            for member in &journal.record.manifest.members {
+                if Path::new(&member.stored_path)
+                    .try_exists()
+                    .map_err(|e| e.to_string())?
+                {
+                    return Ok(false);
+                }
+                if let Some(file) = member.file_id {
+                    let exists: bool = conn
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM afiles WHERE id=?1)",
+                            [file],
+                            |r| r.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    if exists {
+                        return Ok(false);
+                    }
+                }
+            }
+            return Ok(true);
+        }
+        if !purge
+            && journal.record.status == "restored"
+            && crate::t_media_restore::completed_files_valid(&journal.record)
+        {
+            let files = if journal.restored_files.is_empty() {
+                &journal.files
+            } else {
+                &journal.restored_files
+            };
+            if files.is_empty() {
+                return Ok(false);
+            }
+            for file in files {
+                if !matches(conn, file, id)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Pagination is a bounded SQL read; startup/manual checks and operations verify the files.
+pub(crate) fn listing_report(conn: &Connection) -> Result<Report, String> {
+    let mut report = Report::default();
+    if exists(conn, "media_recovery_report")? {
+        let payload: Option<String> = conn
+            .query_row(
+                "SELECT payload FROM media_recovery_report WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(payload) = payload {
+            report = serde_json::from_str(&payload).unwrap_or_else(|_| Report {
+                issues: vec![
+                    "The last recovery report is unreadable; run recovery inspection again".into(),
+                ],
+                ..Default::default()
+            });
+        }
+    }
+    report.registered = conn
+        .query_row("SELECT COUNT(*) FROM media_trash_groups", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(report)
+}
+
 pub fn inspect(conn: &Connection, repair: bool) -> Result<Report, String> {
     if !exists(conn, "media_trash_groups")? {
         return Ok(Report::default());
@@ -331,6 +447,7 @@ pub fn inspect(conn: &Connection, repair: bool) -> Result<Report, String> {
     };
     let mut scanned = std::collections::HashSet::new();
     for (album, root) in roots {
+        crate::t_media_jobs::check()?;
         let Ok(root) = Path::new(&root).canonicalize() else {
             report.issues.push(format!("Album is offline: {root}"));
             continue;
@@ -349,8 +466,14 @@ pub fn inspect(conn: &Connection, repair: bool) -> Result<Report, String> {
             ));
             continue;
         }
-        for entry in fs::read_dir(&trash).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
+        let entries = fs::read_dir(&trash)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let entry_count = entries.len();
+        for (index, entry) in entries.into_iter().enumerate() {
+            crate::t_media_jobs::check()?;
+            crate::t_media_jobs::member(index + 1, entry_count);
             let id = entry.file_name().to_string_lossy().into_owned();
             if uuid::Uuid::parse_str(&id).is_err()
                 || !entry.file_type().map_err(|e| e.to_string())?.is_dir()
@@ -380,8 +503,10 @@ pub fn inspect(conn: &Connection, repair: bool) -> Result<Report, String> {
                             identity_ok &= matches(conn, file, &id)?;
                         }
                         if !identity_ok && !journal.restored_files.is_empty() {
-                            identity_ok=true;
-                            for file in &journal.restored_files {identity_ok &= matches(conn,file,&id)?;}
+                            identity_ok = true;
+                            for file in &journal.restored_files {
+                                identity_ok &= matches(conn, file, &id)?;
+                            }
                         }
                         if !identity_ok || stored.status == "review_required" {
                             if repair {
@@ -398,19 +523,46 @@ pub fn inspect(conn: &Connection, repair: bool) -> Result<Report, String> {
                             report.issues.push(format!("{id}: registered catalogue identity differs from independent journal"));
                             continue;
                         }
-                        if journal.record.status=="restoring" && journal.record.manifest.restore_plan.is_some() {
-                            let mut old=stored.manifest.clone();old.restore_plan=None;
-                            let mut new=journal.record.manifest.clone();new.restore_plan=None;
-                            if serde_json::to_value(&old).map_err(|e|e.to_string())?!=serde_json::to_value(&new).map_err(|e|e.to_string())? {
-                                report.issues.push(format!("{id}: recovery source identity differs; plan was not imported"));continue;
+                        if journal.record.status == "restoring"
+                            && journal.record.manifest.restore_plan.is_some()
+                        {
+                            let mut old = stored.manifest.clone();
+                            old.restore_plan = None;
+                            let mut new = journal.record.manifest.clone();
+                            new.restore_plan = None;
+                            if serde_json::to_value(&old).map_err(|e| e.to_string())?
+                                != serde_json::to_value(&new).map_err(|e| e.to_string())?
+                            {
+                                report.issues.push(format!(
+                                    "{id}: recovery source identity differs; plan was not imported"
+                                ));
+                                continue;
                             }
-                            crate::t_media_restore::validate_structure(&journal.record.manifest,journal.record.manifest.restore_plan.as_ref().ok_or("Restore plan missing")?)?;
-                            if repair {conn.execute("UPDATE media_trash_groups SET status='restoring',manifest=?1 WHERE id=?2",params![serde_json::to_string(&journal.record.manifest).map_err(|e|e.to_string())?,id]).map_err(|e|e.to_string())?;}
+                            crate::t_media_restore::validate_structure(
+                                &journal.record.manifest,
+                                journal
+                                    .record
+                                    .manifest
+                                    .restore_plan
+                                    .as_ref()
+                                    .ok_or("Restore plan missing")?,
+                            )?;
+                            if repair {
+                                conn.execute("UPDATE media_trash_groups SET status='restoring',manifest=?1 WHERE id=?2",params![serde_json::to_string(&journal.record.manifest).map_err(|e|e.to_string())?,id]).map_err(|e|e.to_string())?;
+                            }
                         }
                         if journal.record.status == "restored" && stored.status != "restored" {
-                            let verified=crate::t_media_restore::completed_files_valid(&journal.record);
+                            let verified =
+                                crate::t_media_restore::completed_files_valid(&journal.record);
                             if verified {
-                                reconcile_completed(conn, &journal, album, &id, &mut report, repair)?;
+                                reconcile_completed(
+                                    conn,
+                                    &journal,
+                                    album,
+                                    &id,
+                                    &mut report,
+                                    repair,
+                                )?;
                             } else if !verified {
                                 report.issues.push(format!(
                                     "{id}: completion journal and media files differ"
@@ -428,14 +580,26 @@ pub fn inspect(conn: &Connection, repair: bool) -> Result<Report, String> {
                     }
 
                     if journal.record.status == "restored" {
-                        let mut identity_ok=!journal.files.is_empty();
-                        for file in &journal.files {identity_ok &= matches(conn,file,&id)?;}
-                        if !identity_ok && !journal.restored_files.is_empty() {identity_ok=true;for file in &journal.restored_files {identity_ok &= matches(conn,file,&id)?;}}
-                        if crate::t_media_restore::completed_files_valid(&journal.record) && identity_ok {
+                        let mut identity_ok = !journal.files.is_empty();
+                        for file in &journal.files {
+                            identity_ok &= matches(conn, file, &id)?;
+                        }
+                        if !identity_ok && !journal.restored_files.is_empty() {
+                            identity_ok = true;
+                            for file in &journal.restored_files {
+                                identity_ok &= matches(conn, file, &id)?;
+                            }
+                        }
+                        if crate::t_media_restore::completed_files_valid(&journal.record)
+                            && identity_ok
+                        {
                             reconcile_completed(conn, &journal, album, &id, &mut report, repair)?;
                             continue;
                         }
-                        report.issues.push(format!("{id}: restored media or catalogue identity differs"));continue;
+                        report.issues.push(format!(
+                            "{id}: restored media or catalogue identity differs"
+                        ));
+                        continue;
                     }
                     let mut matched = Vec::new();
                     for file in &journal.files {
@@ -512,11 +676,21 @@ pub fn inspect(conn: &Connection, repair: bool) -> Result<Report, String> {
             }
         }
     }
+    crate::t_media_jobs::check()?;
+    if repair {
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS media_recovery_report(id INTEGER PRIMARY KEY,payload TEXT NOT NULL)").map_err(|e|e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO media_recovery_report VALUES(1,?1)",
+            [serde_json::to_string(&report).map_err(|e| e.to_string())?],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     Ok(report)
 }
 
 /// Cleanup is refused while an independent journal cannot safely be associated with its catalogue.
 pub fn assert_cleanup_safe(conn: &Connection, album: i64) -> Result<(), String> {
+    let _operation = crate::t_media_lifecycle::try_mutation_guard()?;
     if !exists(conn, "media_recovery_issues")? {
         return Ok(());
     }

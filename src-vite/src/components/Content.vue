@@ -9034,6 +9034,7 @@ const onTrashFile = async (retryItemsOverride: any[] = []) => {
           selectedItems.map(item => ({ fileId: item.id, filePath: item.file_path })),
           permanently,
         );
+        if (result?.jobId) return;
         if (!result) throw new Error(`Failed to ${permanently ? 'permanently delete' : 'trash'} dedup files`);
         const deletedIdSet = new Set(result.deletedFileIds.map((id: any) => Number(id)));
         const deletedItems = selectedItems.filter(item => deletedIdSet.has(Number(item.id)));
@@ -9108,6 +9109,7 @@ const onTrashFile = async (retryItemsOverride: any[] = []) => {
         selectedItems.map(item => ({ fileId: item.id, filePath: item.file_path })),
         permanently,
       );
+      if (result?.jobId) return;
       if (!result) {
         throw new Error(`Failed to ${permanently ? 'permanently delete' : 'trash'} selected files`);
       }
@@ -9146,6 +9148,7 @@ const onTrashFile = async (retryItemsOverride: any[] = []) => {
       const selectedFile = retryItemsOverride[0] || fileList.value[selectedItemIndex.value];
       const deletedFileName = selectedFile?.name || '';
       const result = await deleteFileAlways(selectedFile, permanently);
+      if (result?.jobId) return;
       const deletedIdSet = new Set(result.deletedFileIds.map((id: any) => Number(id)));
       const trashFailedIdSet = new Set(
         Array.isArray(result.trashFailedFileIds)
@@ -9258,7 +9261,8 @@ const onTrashFile = async (retryItemsOverride: any[] = []) => {
 async function deleteFileAlways(file: any, permanently = false) {
   const deletedFile = permanently
     ? await deleteFilePermanently(file.id, file.file_path)
-    : await deleteFile(file.id, file.file_path);
+    : await batchDeleteFiles([{fileId:file.id,filePath:file.file_path}], false);
+  if (deletedFile?.jobId) return deletedFile;
   if (deletedFile && Array.isArray(deletedFile.deletedFileIds)) {
     console.log(`clickDeleteFile - ${permanently ? 'permanently deleted' : 'trashed'} file:`, file.file_path);
     return deletedFile;

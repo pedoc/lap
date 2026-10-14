@@ -349,7 +349,7 @@ fn own_promoted(member: &Member, t: &Target) -> Result<(), String> {
     Ok(())
 }
 /// Same-directory atomic promotion. No pre-check/overwriting-rename race on any supported OS.
-fn promote_no_replace(source: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn promote_no_replace(source: &Path, target: &Path) -> Result<(), String> {
     if source.parent() != target.parent() {
         return Err("Staging file is not in its destination directory".into());
     }
@@ -508,7 +508,7 @@ fn stage(conn: &Connection, item: &mut TrashItem, index: usize) -> Result<(), St
             .map_err(|e| e.to_string())?
             .modified()
             .map_err(|e| e.to_string())?;
-        std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+        crate::t_media_jobs::copy(&mut input, &mut output, member.size)?;
         output
             .set_times(fs::FileTimes::new().set_modified(time))
             .map_err(|e| e.to_string())?;
@@ -542,6 +542,8 @@ fn stage(conn: &Connection, item: &mut TrashItem, index: usize) -> Result<(), St
     if catalog_conflict(conn, Path::new(&t.path), member.file_id)? {
         return Err("Destination catalogue changed before promotion".into());
     }
+    crate::t_media_jobs::check()?;
+    crate::t_media_jobs::stage("promoting");
     promote_no_replace(Path::new(&t.stage), Path::new(&t.path))?;
     // On filesystems without stable IDs the persisted promoted flag is sufficient for the completed step;
     // an uncheckpointed promotion must be reviewed instead of inferring ownership from identical bytes.
@@ -661,6 +663,8 @@ pub(crate) fn restore(
     item.error = None;
     persist(conn, &item)?;
     for i in 0..item.manifest.members.len() {
+        crate::t_media_jobs::check()?;
+        crate::t_media_jobs::member(i + 1, item.manifest.members.len());
         stage(conn, &mut item, i)?;
     }
     let plan = item
@@ -680,6 +684,8 @@ pub(crate) fn restore(
             if source != PathBuf::from(&t.source) {
                 return Err("Recovery source was redirected".into());
             }
+            crate::t_media_jobs::check()?;
+            crate::t_media_jobs::stage("cleaning");
             fs::remove_file(source).map_err(|e| e.to_string())?;
         }
     }
@@ -812,6 +818,7 @@ mod tests {
                 let stored = store.join(format!("{i}-{name}"));
                 fs::rename(&original, &stored).unwrap();
                 members.push(Member {
+                    source_inode: None,
                     file_id: *file_id,
                     original_name: name.to_string(),
                     original_path: path_string(&original),
@@ -1338,5 +1345,77 @@ mod tests {
                 lifecycle::verify(&Path::new(&output).join(&m.original_name), m).unwrap();
             }
         }
+    }
+    #[test]
+    fn a_cancelled_background_restore_keeps_sources_and_continues_its_persisted_plan() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let f = Fixture::new();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let control = crate::t_media_jobs::test_control(
+            vec![crate::t_media_jobs::Item::group(&f.id)],
+            cancel,
+            move |summary| {
+                if summary.stage == "promoting" {
+                    assert!(crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.try_write().is_ok());
+                    stop.store(true, Ordering::Release);
+                }
+            },
+        );
+        assert!(
+            crate::t_media_jobs::with_control(control, || restore(
+                &f.conn,
+                &f.item(),
+                &f.options(RestoreMode::Directory)
+            ))
+            .is_err()
+        );
+        let pending = f.item();
+        assert_eq!(pending.status, "restoring");
+        assert!(pending.manifest.restore_plan.is_some());
+        for member in &f.manifest.members {
+            lifecycle::verify(Path::new(&member.stored_path), member).unwrap();
+        }
+        restore(&f.conn, &f.item(), &f.options(RestoreMode::Rename)).unwrap();
+        for member in &f.manifest.members {
+            lifecycle::verify(&f.destination.join(&member.original_name), member).unwrap();
+        }
+    }
+    #[test]
+    fn retrying_completed_recovery_is_idempotent_and_keeps_new_original_neighbors() {
+        let f = Fixture::new();
+        restore(&f.conn, &f.item(), &f.options(RestoreMode::Directory)).unwrap();
+        fs::write(
+            &f.manifest.members[0].original_path,
+            b"new neighboring original",
+        )
+        .unwrap();
+        let result = crate::t_media_lifecycle::operate_on(
+            &f.conn,
+            vec![f.id.clone()],
+            false,
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.succeeded, vec![f.id.clone()]);
+        assert_eq!(
+            fs::read(&f.manifest.members[0].original_path).unwrap(),
+            b"new neighboring original"
+        );
+        let remaining = crate::t_media_jobs::Item::group(&f.id);
+        assert_eq!(
+            crate::t_media_lifecycle::move_job_on(&f.conn, vec![remaining], true)
+                .unwrap()
+                .failed_count,
+            0
+        );
+        assert_eq!(
+            fs::read(&f.manifest.members[0].original_path).unwrap(),
+            b"new neighboring original"
+        );
     }
 }

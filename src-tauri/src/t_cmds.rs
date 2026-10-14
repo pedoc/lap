@@ -828,6 +828,15 @@ pub fn create_folder(path: &str, folder_name: &str) -> Option<String> {
 /// rename a folder
 #[tauri::command]
 pub fn rename_folder(folder_path: &str, new_folder_name: &str) -> Option<String> {
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard().ok()?;
+    if crate::t_media_lifecycle::folder_has_deleted(
+        &*crate::t_sqlite::open_conn().ok()?,
+        folder_path,
+    )
+    .unwrap_or(true)
+    {
+        return None;
+    }
     let new_folder_path = t_utils::rename_folder(folder_path, new_folder_name);
 
     match new_folder_path {
@@ -850,7 +859,15 @@ pub fn move_folder(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? || crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,new_folder_path)? {return Err("Restore or clear Recently Deleted before transferring this folder".into());}
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)?
+        || crate::t_media_lifecycle::folder_has_deleted(
+            &*crate::t_sqlite::open_conn()?,
+            new_folder_path,
+        )?
+    {
+        return Err("Restore or clear Recently Deleted before transferring this folder".into());
+    }
 
     let old_album_id = AFolder::fetch(folder_path)?.map(|folder| folder.album_id);
     let moved_thumb_keys = if old_album_id.is_some_and(|album_id| album_id != new_album_id) {
@@ -892,7 +909,15 @@ pub fn move_folder_outside_library(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? || crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,new_folder_path)? {return Err("Restore or clear Recently Deleted before transferring this folder".into());}
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)?
+        || crate::t_media_lifecycle::folder_has_deleted(
+            &*crate::t_sqlite::open_conn()?,
+            new_folder_path,
+        )?
+    {
+        return Err("Restore or clear Recently Deleted before transferring this folder".into());
+    }
 
     let transfer = t_utils::move_folder_with_policy(
         folder_path,
@@ -922,7 +947,15 @@ pub fn copy_folder(
     new_album_id: i64,
     conflict_policy: &str,
 ) -> Result<String, String> {
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? || crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,new_folder_path)? {return Err("Restore or clear Recently Deleted before transferring this folder".into());}
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)?
+        || crate::t_media_lifecycle::folder_has_deleted(
+            &*crate::t_sqlite::open_conn()?,
+            new_folder_path,
+        )?
+    {
+        return Err("Restore or clear Recently Deleted before transferring this folder".into());
+    }
 
     let transfer = t_utils::copy_folder_with_policy(
         folder_path,
@@ -953,7 +986,10 @@ pub fn copy_folder(
 /// delete a folder (move to trash)
 #[tauri::command]
 pub fn delete_folder(folder_path: &str) -> Result<usize, String> {
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? {return Err("Restore or clear Recently Deleted before deleting this folder".into());}
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)? {
+        return Err("Restore or clear Recently Deleted before deleting this folder".into());
+    }
     // trash the folder
     if t_utils::trash_path(folder_path).is_err() {
         return Ok(0);
@@ -967,7 +1003,10 @@ pub fn delete_folder(folder_path: &str) -> Result<usize, String> {
 /// permanently delete a folder (skip trash)
 #[tauri::command]
 pub fn delete_folder_permanently(folder_path: &str) -> Result<usize, String> {
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?,folder_path)? {return Err("Restore or clear Recently Deleted before deleting this folder".into());}
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)? {
+        return Err("Restore or clear Recently Deleted before deleting this folder".into());
+    }
     t_utils::delete_folder_permanently(folder_path)?;
 
     AFolder::delete_folder(folder_path)
@@ -1673,6 +1712,9 @@ pub async fn copy_images(
 /// rename a file
 #[tauri::command]
 pub fn rename_file(file_id: i64, file_path: &str, new_name: &str) -> Option<String> {
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard().ok()?;
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK.read().ok()?;
+    crate::t_media_lifecycle::validate_original(file_id, file_path, false).ok()?;
     let sidecar_rename_plan = build_apple_sidecar_rename_plan(file_id, file_path, new_name).ok()?;
     if !preflight_rename_plan(file_path, new_name, &sidecar_rename_plan) {
         return None;
@@ -1738,6 +1780,11 @@ pub fn move_file(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .read()
+        .map_err(|e| e.to_string())?;
+    crate::t_media_lifecycle::validate_original(file_id, file_path, false)?;
     let old_file_info = AFile::get_file_info(file_id).ok().flatten();
     let old_album_id = old_file_info.as_ref().and_then(|file| file.album_id);
     let new_album_id = AFolder::get_by_id(new_folder_id)
@@ -1839,6 +1886,11 @@ pub fn move_file_outside_library(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .read()
+        .map_err(|e| e.to_string())?;
+    crate::t_media_lifecycle::validate_original(file_id, file_path, false)?;
     let policy = t_utils::FileConflictPolicy::from_str(conflict_policy);
     let (primary_target, sidecar_plans) =
         resolve_group_primary_target(Some(file_id), file_path, new_folder_path, policy)?;
@@ -1903,6 +1955,7 @@ pub fn copy_file(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
     let policy = t_utils::FileConflictPolicy::from_str(conflict_policy);
     let (primary_target, sidecar_plans) =
         resolve_group_primary_target(None, file_path, new_folder_path, policy)?;
@@ -2414,7 +2467,17 @@ fn delete_file_group(
     file_path: &str,
     permanently: bool,
 ) -> Result<BatchDeleteResult, String> {
-    if !permanently {return crate::t_media_lifecycle::move_to_recently_deleted(vec![BatchDeleteFile{file_id,file_path:file_path.into()}],None,false);}
+    if !permanently {
+        return crate::t_media_lifecycle::move_to_recently_deleted(
+            vec![BatchDeleteFile {
+                file_id,
+                file_path: file_path.into(),
+            }],
+            None,
+            false,
+        );
+    }
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
 
     let component_files = AFile::live_photo_component_files(file_id)?;
     let mut deleted_file_ids = Vec::with_capacity(component_files.len() + 1);
@@ -2479,6 +2542,7 @@ fn delete_file_group(
 /// delete a file from db
 #[tauri::command]
 pub fn delete_db_file(file_id: i64) -> Result<usize, String> {
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
     // delete the file from db
     AFile::delete(file_id).map_err(|e| format!("Error while deleting file from DB: {}", e))
 }
@@ -2520,7 +2584,10 @@ pub(crate) fn delete_files_grouped(
     files: Vec<BatchDeleteFile>,
     permanently: bool,
 ) -> Result<BatchDeleteResult, String> {
-    if !permanently {return crate::t_media_lifecycle::move_to_recently_deleted(files,None,false);}
+    if !permanently {
+        return crate::t_media_lifecycle::move_to_recently_deleted(files, None, false);
+    }
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
 
     struct DeleteGroup {
         primary_id: i64,
@@ -2531,13 +2598,15 @@ pub(crate) fn delete_files_grouped(
 
     // Preflight the entire selection before changing disk or catalog entries.
     for file in &files {
-        crate::t_media_lifecycle::validate_original(file.file_id,&file.file_path,false)?;
+        crate::t_media_lifecycle::validate_original(file.file_id, &file.file_path, false)?;
         if !t_utils::file_accessible(&file.file_path) {
             return Err(format!("original_unavailable: {}", file.file_path));
         }
         for component in AFile::live_photo_component_files(file.file_id)? {
             if let Some(path) = component.file_path {
-                if !t_utils::file_accessible(&path) { return Err(format!("original_unavailable: {}", path)); }
+                if !t_utils::file_accessible(&path) {
+                    return Err(format!("original_unavailable: {}", path));
+                }
             }
         }
     }

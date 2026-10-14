@@ -2169,7 +2169,7 @@
 },
   "media_recovery": {
   "backup_scope": "This backup contains databases, configuration and recovery journals, not original or .lap-trash media files. Back up the album disks separately.",
-  "review": "Recovery / database preflight",
+  "review": "Last recovery / database reconciliation report",
   "review_required": "Recovery metadata needs review; automatic file operations are disabled."
 },
   "private_viewer": {
@@ -2231,5 +2231,37 @@
     "recheck": "Preview does not move files. Paths are checked again before execution. New conflicts can change the suffix of an unstarted group or stop recovery; no destination is overwritten.",
     "cancel": "Cancel",
     "confirm": "Restore groups that passed preflight"
-}
+},
+  "media_jobs": {
+    "resume_move": "Finish interrupted move",
+    "action_inspect": "Inspect recovery journals",
+    "stage_inspecting": "Inspecting recovery journals and media",
+    "recheck": "Inspect recovery journals again",
+    "recovery_progress": "Recovery group {member}/{members}",
+    "title": "Background media tasks",
+    "action_move": "Move to Recently Deleted",
+    "action_restore": "Restore media",
+    "action_purge": "Permanently clean recovery files",
+    "stage_queued": "Queued",
+    "stage_waiting": "Waiting for another media operation to stop safely",
+    "stage_planning": "Checking files and companion groups",
+    "stage_verifying": "Verifying file contents",
+    "stage_copying": "Copying a safe backup",
+    "stage_promoting": "Committing destination without overwriting",
+    "stage_cleaning": "Cleaning verified sources",
+    "stage_catalogue": "Saving catalogue and recovery state",
+    "stage_completed": "Completed",
+    "stage_failed": "Some items remain unfinished",
+    "stage_cancelled": "Stopped; unfinished items can be retried",
+    "stopping": "Stopping safely; completed file groups will not be rolled back",
+    "counts": "Processed {completed}/{total}; succeeded {succeeded}, failed {failed}, skipped {skipped}",
+    "current": "Item {index}/{total}",
+    "member_progress": "Group member {member}/{members}",
+    "bytes": "Current file {done} / {total}",
+    "cancel": "Stop task",
+    "retry": "Retry unfinished items",
+    "dismiss": "Dismiss finished task",
+    "details": "View failures",
+    "private_hint": "Unlock Hidden or Recently Deleted to view detailed errors or retry registered recovery groups. Successful items are not repeated; details show at most the first 200 failures."
+  }
 }

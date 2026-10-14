@@ -15,6 +15,9 @@ const source = readFileSync(
 function harness(overrides: any = {}) {
   const calls: any[] = [];
   const watches: any[] = [];
+  const details: any[] = [];
+  const mounted: any[] = [];
+  const listeners: Record<string, any> = {};
   const props = Vue.reactive({ mode: 'deleted' });
   const libConfig = Vue.reactive({ _libraryId: 'lib' });
   const ctx: any = {
@@ -51,8 +54,20 @@ function harness(overrides: any = {}) {
     JSON,
     defineProps: () => props,
     defineEmits: () => () => {},
-    watch: (_: any, cb: any) => watches.push(cb),
-    onMounted() {},
+    watch: (source: any, cb: any) => {
+      if (typeof source === 'function') watches.push(cb);
+      else details.push(cb);
+    },
+    onMounted(cb: any) {
+      mounted.push(cb);
+    },
+    queueMicrotask,
+    listen: async (name: string, cb: any) => {
+      listeners[name] = cb;
+      return () => {
+        delete listeners[name];
+      };
+    },
     onBeforeUnmount() {},
     getDeletedMedia: async () => ({
       items: [
@@ -94,6 +109,13 @@ function harness(overrides: any = {}) {
       calls.push(['delete', ...args]);
       return { deleted_file_ids: [1], failed_count: 0 };
     },
+    bindMediaJobPrivateContext: () => () => {},
+    mediaJobDetailsRequest: Vue.ref(null),
+    getMediaJobFailures: async () => [],
+    startMediaJob: async (...args: any[]) => {
+      calls.push(args);
+      return { jobId: 'background' };
+    },
     formatFileSize: () => '100B',
     ...overrides,
   };
@@ -104,7 +126,7 @@ function harness(overrides: any = {}) {
     `${script}\n;({load,perform,items,total,page,selected,busy,error,preview,confirmPurge,confirmMove,toggle,selectPage,navigatePreview,access,invalidatePrivate});`,
     ctx,
   );
-  return { api, ctx, calls, watches };
+  return { api, ctx, calls, watches, details, mounted, listeners };
 }
 for (const type of media.MEDIA_TYPES)
   test(`media category ${type} uses explicit existing metadata rules`, () => {
@@ -156,8 +178,8 @@ test('restore sends exact selected group IDs and current library', async () => {
   h.api.toggle('group');
   await h.api.perform('restore');
   assert.equal(h.calls[0][0], 'restore');
-  assert.equal(h.calls[0][1], 'lib');
-  assert.deepEqual(Array.from(h.calls[0][2]), ['group']);
+  assert.deepEqual(Array.from(h.calls[0][1].groupIds), ['group']);
+  assert.equal(h.calls[0][2], null);
 });
 test('hidden media can be unhidden or moved without first becoming visible', async () => {
   for (const action of ['unhide', 'delete']) {
@@ -166,17 +188,24 @@ test('hidden media can be unhidden or moved without first becoming visible', asy
     await h.api.load();
     h.api.toggle(1);
     await h.api.perform(action);
-    assert.equal(h.calls[0][0], action);
-    assert.deepEqual(Array.from(h.calls[0][2]), [1]);
-    if (action === 'unhide') assert.equal(h.calls[0][3], false);
+    assert.equal(h.calls[0][0], action === 'delete' ? 'move' : action);
+    if (action === 'unhide') {
+      assert.deepEqual(Array.from(h.calls[0][2]), [1]);
+      assert.equal(h.calls[0][3], false);
+    } else {
+      assert.equal(h.calls[0][1].fromHidden, true);
+      assert.deepEqual(
+        Array.from(h.calls[0][1].files.map((f: any) => f.fileId)),
+        [1],
+      );
+    }
   }
 });
-test('failed recovery stays on the page as a readable error', async () => {
+test('a rejected background recovery admission stays on the page as a readable error', async () => {
   const h = harness({
-    restoreDeletedMedia: async () => ({
-      succeeded: [],
-      errors: [['group', 'original location occupied']],
-    }),
+    startMediaJob: async () => {
+      throw Error('original location occupied');
+    },
   });
   await h.api.load();
   h.api.toggle('group');
@@ -436,7 +465,7 @@ test('locking while a private thumbnail is loading clears names, selection and p
 test('a batch result from the previous unlock cannot publish private diagnostics after re-unlocking', async () => {
   let resolve: any;
   const h = harness({
-    restoreDeletedMedia: () => new Promise((r) => (resolve = r)),
+    startMediaJob: () => new Promise((r) => (resolve = r)),
   });
   await h.api.load();
   h.api.toggle('group');
@@ -487,4 +516,64 @@ test('the actual locked utility template omits all private images, metadata and 
     html,
     /<img|<video|media_lifecycle.purge|media_lifecycle.restore|originalPath/,
   );
+});
+
+test('background failure details use the current session and cannot republish paths after locking', async () => {
+  let finish: any;
+  const seen: any[] = [];
+  const h = harness({
+    getMediaJobFailures: (...args: any[]) => {
+      seen.push(args);
+      return new Promise((r) => (finish = r));
+    },
+  });
+  h.api.access.sessionToken.value = 'current-session';
+  const pending = h.details[0]('background-job');
+  assert.deepEqual(seen, [['background-job', 'current-session']]);
+  h.api.access.generation.value++;
+  h.api.access.canRead.value = false;
+  h.api.invalidatePrivate();
+  finish([{ error: '/private/secret.jpg' }]);
+  await pending;
+  assert.equal(h.api.error.value, '');
+});
+test('background failure details remain readable in an unlocked private view', async () => {
+  const h = harness({
+    getMediaJobFailures: async () => [
+      { error: 'recovery disk offline' },
+      { error: 'destination occupied' },
+    ],
+  });
+  await h.details[0]('job');
+  assert.match(
+    h.api.error.value,
+    /recovery disk offline\ndestination occupied/,
+  );
+});
+
+test('a completed job event received during hydration queues one fresh page load instead of being lost', async () => {
+  let first: any,
+    calls = 0;
+  const h = harness({
+    getDeletedMedia: () => {
+      calls++;
+      return calls === 1
+        ? new Promise((r) => (first = r))
+        : Promise.resolve({ items: [], total: 2 });
+    },
+  });
+  await h.mounted[0]();
+  const pending = h.api.load();
+  h.listeners['media-lifecycle-changed']({ payload: { library_id: 'lib' } });
+  first({ items: [], total: 1 });
+  await pending;
+  await new Promise(setImmediate);
+  assert.equal(calls, 2);
+  assert.equal(h.api.total.value, 2);
+});
+test('integrity inspection is explicitly background work and does not require a destructive selection', async () => {
+  const h = harness();
+  await h.api.perform('inspect');
+  assert.equal(h.calls[0][0], 'inspect');
+  assert.equal(Object.keys(h.calls[0][1]).length, 0);
 });
