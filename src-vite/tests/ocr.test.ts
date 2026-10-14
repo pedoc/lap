@@ -6,6 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
+import * as AiModels from '../src/common/aiModels.ts';
 import { applyAiConfiguration, effectiveParameter } from '../src/common/aiModels.ts';
 const read = (name: string) => readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
 function harness(name: string, invoke: any = async () => ({})) {
@@ -100,4 +101,30 @@ test('OCR status preserves actual execution sessions and fallback diagnostics', 
   const h=harness('OcrIndexPanel',async()=>({sessions,status:{running:true}}));await h.api.refresh();
   assert.equal(h.api.view.value.sessions[0].selected,'directml');assert.equal(h.api.view.value.sessions[1].fallbackReason,'Unsupported GPU operator');
   assert.match(h.source,/session\.fallbackReason/);assert.match(h.source,/session\.selected/);
+});
+
+test('quality recommendation is separate from the saved OCR selection', () => {
+  const view={selection:{ocr:'rapidocr-pp-ocrv5'},defaultSelection:{ocr:'rapidocr-pp-ocrv5-server'}};
+  assert.equal(AiModels.isRecommendedAiModel(view,'ocr','rapidocr-pp-ocrv5-server'),true);
+  assert.equal(AiModels.isRecommendedAiModel(view,'ocr','rapidocr-pp-ocrv5'),false);
+  assert.equal(AiModels.isRecommendedAiModel(view,'face','rapidocr-pp-ocrv5-server'),false);
+  assert.equal(view.selection.ocr,'rapidocr-pp-ocrv5');
+});
+test('existing PP-OCRv5 is labelled Server without altering its download manifest', () => {
+  const definition={id:'ppocr-v5-zh',task:'ocr',name:'PP-OCRv5 中英日文字识别'};const before=JSON.stringify(definition);
+  assert.match(AiModels.aiModelDisplayName(definition),/Server/);assert.equal(JSON.stringify(definition),before);
+  assert.equal(AiModels.aiModelDisplayName({id:'custom',task:'ocr',name:'Custom'}),'Custom');assert.equal(AiModels.aiModelDisplayName(null),'');
+});
+test('actual model settings template distinguishes quality recommendation and saved Mobile model', async () => {
+  const source=read('AiModelSettings');const h=harness('OcrIndexPanel');const {descriptor}=parse(source);const imports:any={};
+  const code=stripTypeScriptTypes(compileScript(descriptor,{id:'ocr-quality-models',inlineTemplate:true}).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g,(_m,names)=>{for(const name of names.split(',')){const [original,alias]=name.trim().split(/\s+as\s+/);imports[alias||original]=(Vue as any)[original];}return '';})
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'').replace('export default','const component=');
+  const row=(id:string,name:string)=>({definition:{id,name,task:'ocr',adapter:'rapid_ocr_onnx',dimension:1,files:[{}],license:'Apache-2.0',description:'Local model'},installed:true,builtin:true,configuration:{parameters:{}},values:{},parameters:[],sessions:[]});
+  const view={selection:{ocr:'rapidocr-pp-ocrv5'},defaultSelection:{ocr:'rapidocr-pp-ocrv5-server'},runtime:{devices:[],providers:[]},models:[row('rapidocr-pp-ocrv5-server','RapidOCR · PP-OCRv5 Server'),row('ppocr-v5-zh','PP-OCRv5 中英日文字识别'),row('rapidocr-pp-ocrv5','RapidOCR · PP-OCRv5 Mobile')]};
+  let nulls=0,empties=0;
+  const component=runInNewContext(`${code}\n;component`,{...h.ctx,...imports,...AiModels,watch:()=>{},useToast:()=>({success(){}}),OcrIndexPanel:()=>Vue.h('aside'),ref:(value:any)=>Vue.ref(value===null&&nulls++===0?view:value==='semantic'?'ocr':value===''&&empties++===0?view.selection.ocr:value)});
+  const html=await renderToString(Vue.createSSRApp(component));
+  assert.match(html,/PP-OCRv5 Server/);assert.match(html,/PP-OCRv5 Mobile/);assert.match(html,/PP-OCRv5 中英日文字识别 · Server/);
+  assert.match(html,/ocr.quality_hint/);assert.match(html,/ocr.quality_recommended/);assert.equal(view.selection.ocr,'rapidocr-pp-ocrv5');
 });

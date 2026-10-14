@@ -23,6 +23,7 @@ pub struct ModelView {
 pub struct ConfigurationView {
     pub models: Vec<ModelView>,
     pub selection: settings::Selection,
+    pub default_selection: settings::Selection,
     pub semantic_profile: String,
     pub face_profile: String,
     pub ocr_profile: String,
@@ -67,6 +68,7 @@ pub fn view() -> Result<ConfigurationView, String> {
         face_profile: config.active(Task::Face)?.profile(),
         ocr_profile: config.active(Task::Ocr)?.profile(),
         selection: config.selection,
+        default_selection: settings::Selection::default(),
         models,
         runtime: super::runtime::info(),
     })

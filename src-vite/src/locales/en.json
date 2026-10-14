@@ -2283,6 +2283,8 @@
   }
 ,
   "ocr": {
+  "quality_hint": "Mobile/Server are model sizes, not device restrictions; both run locally on PC. Prefer PP-OCRv5 Server for quality-first desktop use; keep Mobile as a smaller, lower-resource option. Server is not an online service. Evaluate quality on your own photos.",
+  "quality_recommended": "Quality-first recommendation",
   "device_hint": "Automatic prefers GPU by default. Configure detection and recognition devices above. Sessions below show the actual devices used after loading. Automatic CPU fallback reports a reason; explicit GPU failures remain errors.",
   "index_title": "Photo text index (OCR)",
   "local_hint": "Local processing of normally visible photos only. No uploads or hidden/deleted media. Use the regular search box to find indexed text.",

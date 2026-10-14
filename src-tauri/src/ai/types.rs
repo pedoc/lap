@@ -496,7 +496,13 @@ mod tests {
     #[test]
     fn ocr_defaults_prefer_gpu_without_changing_weights_or_explicit_cpu() {
         let config = crate::ai::settings::Configuration::default();
-        for id in ["ppocr-v5-zh", "rapidocr-pp-ocrv4", "rapidocr-pp-ocrv5"] {
+        for id in [
+            "ppocr-v5-zh",
+            "rapidocr-pp-ocrv4",
+            "rapidocr-pp-ocrv5",
+            "rapidocr-pp-ocrv4-server",
+            "rapidocr-pp-ocrv5-server",
+        ] {
             let model = config.resolve(id).unwrap();
             assert_eq!(model.values["device"], json!("auto"));
             let mut explicit = model.configuration.clone();

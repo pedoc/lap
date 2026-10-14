@@ -233,6 +233,71 @@
     ]
   },
   {
+    "id": "rapidocr-pp-ocrv5-server",
+    "version": "rapidai-v3.10.0",
+    "name": "RapidOCR · PP-OCRv5 Server",
+    "task": "ocr",
+    "adapter": "rapid_ocr_onnx",
+    "embeddingSpace": "rapidocr-ppocrv5-server-db-ctc",
+    "dimension": 1,
+    "languages": [
+      "zh",
+      "en",
+      "ja"
+    ],
+    "license": "Apache-2.0",
+    "description": "RapidAI official PP-OCRv5 higher-capacity Server ONNX models for quality-first desktop use. Runs locally on CPU/GPU; not a remote service. Rust DB/CTC adapter with embedded dictionary; no angle classifier.",
+    "defaults": {
+      "device": "auto"
+    },
+    "files": [
+      {
+        "role": "ocr_detector",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_server.onnx",
+        "sha256": "0f8846b1d4bba223a2a2f9d9b44022fbc22cc019051a602b41a7fda9667e4cad",
+        "size": 88118768
+      },
+      {
+        "role": "recognizer",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_server.onnx",
+        "sha256": "e09385400eaaaef34ceff54aeb7c4f0f1fe014c27fa8b9905d4709b65746562a",
+        "size": 84577022
+      }
+    ]
+  },
+  {
+    "id": "rapidocr-pp-ocrv4-server",
+    "version": "rapidai-v3.10.0",
+    "name": "RapidOCR · PP-OCRv4 Server",
+    "task": "ocr",
+    "adapter": "rapid_ocr_onnx",
+    "embeddingSpace": "rapidocr-ppocrv4-server-db-ctc",
+    "dimension": 1,
+    "languages": [
+      "zh",
+      "en"
+    ],
+    "license": "Apache-2.0",
+    "description": "RapidAI official PP-OCRv4 higher-capacity Server ONNX models for quality-first desktop use. Runs locally on CPU/GPU; not a remote service. Rust DB/CTC adapter with embedded dictionary; no angle classifier.",
+    "defaults": {
+      "device": "auto"
+    },
+    "files": [
+      {
+        "role": "ocr_detector",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv4/det/ch_PP-OCRv4_det_server.onnx",
+        "sha256": "cfa39a3f298f6d3fc71789834d15da36d11a6c59b489fc16ea4733728012f786",
+        "size": 113352104
+      },
+      {
+        "role": "recognizer",
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv4/rec/ch_PP-OCRv4_rec_server.onnx",
+        "sha256": "6a2676219be9907c7fc9cf61ebaa843bf2898777def567925b78886fcd90c07a",
+        "size": 90530732
+      }
+    ]
+  },
+  {
     "id": "ppocr-v5-zh",
     "version": "7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65",
     "name": "PP-OCRv5 中英日文字识别",

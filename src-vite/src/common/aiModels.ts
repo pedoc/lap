@@ -47,3 +47,13 @@ export function canActivateSavedModel(model: any) {
   if (model.definition.adapter !== 'jina_embeddings') return true;
   return !!(model.configuration?.allowCloud && model.credentialStored && model.contractTested);
 }
+
+// Presentation aliases do not alter model manifests, download fingerprints or indexes.
+export function aiModelDisplayName(definition: any) {
+  if (!definition) return '';
+  return definition.task === 'ocr' && definition.id === 'ppocr-v5-zh'
+    ? `${definition.name} · Server` : definition.name;
+}
+export function isRecommendedAiModel(view: any, task: string, modelId: string) {
+  return task === 'ocr' && !!modelId && view?.defaultSelection?.ocr === modelId;
+}

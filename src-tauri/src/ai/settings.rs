@@ -16,7 +16,9 @@ pub struct Selection {
     #[serde(default = "default_ocr")]
     pub ocr: String,
 }
-fn default_ocr() -> String { "ppocr-v5-zh".into() }
+fn default_ocr() -> String {
+    "rapidocr-pp-ocrv5-server".into()
+}
 impl Default for Selection {
     fn default() -> Self {
         Self {
@@ -359,8 +361,39 @@ mod tests {
     use super::*;
     #[test]
     fn new_ocr_catalog_defaults_do_not_break_existing_configuration() {
-        let mut old=serde_json::to_value(Configuration::default()).unwrap();old["selection"].as_object_mut().unwrap().remove("ocr");old["models"].as_object_mut().unwrap().remove("ppocr-v5-zh");
-        let parsed=decode(&old.to_string(),None).unwrap();assert_eq!(parsed.active(Task::Ocr).unwrap().definition.id,"ppocr-v5-zh");assert_eq!(parsed.selected(Task::Face),"buffalo-s");
+        let mut old = serde_json::to_value(Configuration::default()).unwrap();
+        old["selection"].as_object_mut().unwrap().remove("ocr");
+        for definition in builtins()
+            .into_iter()
+            .filter(|definition| definition.task == Task::Ocr)
+        {
+            old["models"]
+                .as_object_mut()
+                .unwrap()
+                .remove(&definition.id);
+        }
+        let parsed = decode(&old.to_string(), None).unwrap();
+        assert_eq!(
+            parsed.active(Task::Ocr).unwrap().definition.id,
+            "rapidocr-pp-ocrv5-server"
+        );
+        assert_eq!(parsed.selected(Task::Face), "buffalo-s");
+    }
+    #[test]
+    fn quality_default_does_not_override_saved_ocr_selections() {
+        let fresh = Configuration::default();
+        assert_eq!(fresh.selected(Task::Ocr), "rapidocr-pp-ocrv5-server");
+        for id in [
+            "ppocr-v5-zh",
+            "rapidocr-pp-ocrv4",
+            "rapidocr-pp-ocrv5",
+            "rapidocr-pp-ocrv4-server",
+        ] {
+            let mut saved = Configuration::default();
+            saved.select(Task::Ocr, id).unwrap();
+            let decoded = decode(&serde_json::to_string(&saved).unwrap(), None).unwrap();
+            assert_eq!(decoded.selected(Task::Ocr), id);
+        }
     }
     #[test]
     fn model_parameters_are_independent() {

@@ -6,6 +6,7 @@
         {{ t(`settings.ai_models.${kind}`) }}
       </button>
     </div>
+    <p v-if="task === 'ocr'" class="text-xs opacity-70">{{ t('ocr.quality_hint') }}</p>
     <label v-if="task === 'face'" class="flex gap-2 items-center text-sm">
       <input v-model="config.settings.face.enabled" type="checkbox" class="toggle toggle-sm toggle-primary" />
       {{ t('settings.face_recognition.enable') }}
@@ -17,7 +18,7 @@
         <label class="font-semibold text-sm" for="global-ai-model">{{ t('settings.ai_models.choose_model') }}</label>
         <select id="global-ai-model" class="select select-bordered select-sm w-full" :value="editingId" :disabled="busy || loading" @change="selectModel">
           <option v-for="row in modelOptions" :key="row.definition.id" :value="row.definition.id">
-            {{ row.definition.name }}{{ row.installed ? '' : ` (${t('settings.ai_models.missing')})` }}
+            {{ aiModelDisplayName(row.definition) }}{{ isRecommendedAiModel(view, task, row.definition.id) ? ` · ${t('ocr.quality_recommended')}` : '' }}{{ row.installed ? '' : ` (${t('settings.ai_models.missing')})` }}
           </option>
         </select>
         <div class="flex items-center justify-between gap-2">
@@ -27,7 +28,7 @@
         <p class="text-xs opacity-60">{{ t('settings.ai_models.global_hint') }}</p>
       </div>
       <div v-if="draft && selectedModel" class="rounded-box border border-base-content/10 p-3 space-y-3">
-        <div class="font-semibold text-sm">{{ t('settings.ai_models.configuration') }}: {{ selectedModel.definition.name }}<span class="badge badge-sm ml-2" :class="isActive ? 'badge-primary' : 'badge-ghost'">{{ t(isActive ? 'settings.ai_models.selected' : 'settings.ai_models.inactive') }}</span></div>
+        <div class="font-semibold text-sm">{{ t('settings.ai_models.configuration') }}: {{ aiModelDisplayName(selectedModel.definition) }}<span class="badge badge-sm ml-2" :class="isActive ? 'badge-primary' : 'badge-ghost'">{{ t(isActive ? 'settings.ai_models.selected' : 'settings.ai_models.inactive') }}</span></div>
         <div class="text-xs opacity-60">{{ selectedModel.definition.adapter }}<span v-if="task !== 'ocr'"> · {{ selectedModel.definition.dimension }}D</span></div>
         <div class="text-xs opacity-60">{{ selectedModel.contractTested ? t('settings.ai_models.contract_verified') : t('settings.ai_models.contract_untested') }}</div>
         <div v-if="isRemote" class="space-y-2">
@@ -79,7 +80,7 @@
       <div class="rounded-box border border-base-content/10 p-3 space-y-3">
         <div class="font-semibold text-sm">{{ t('settings.ai_models.catalog') }}</div>
         <div v-for="row in modelOptions" :key="row.definition.id" class="border-b border-base-content/10 pb-3 space-y-1">
-          <div class="text-sm">{{ row.definition.name }}<span v-if="view.selection[task] === row.definition.id" class="badge badge-sm badge-primary ml-2">{{ t('settings.ai_models.selected') }}</span></div>
+          <div class="text-sm">{{ aiModelDisplayName(row.definition) }}<span v-if="isRecommendedAiModel(view, task, row.definition.id)" class="badge badge-sm badge-info ml-2">{{ t('ocr.quality_recommended') }}</span><span v-if="view.selection[task] === row.definition.id" class="badge badge-sm badge-primary ml-2">{{ t('settings.ai_models.selected') }}</span></div>
           <p class="text-xs opacity-60">{{ row.definition.description }}</p>
           <p class="text-[10px] opacity-50">{{ row.definition.license }}</p>
           <div class="flex flex-wrap items-center gap-2 pt-1">
@@ -111,7 +112,7 @@ import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
 import { useToast } from '@/common/toast';
-import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, requiresSelectionRebuild, formatGpuMemory, physicalGpuDevices, canActivateSavedModel } from '@/common/aiModels';
+import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, requiresSelectionRebuild, formatGpuMemory, physicalGpuDevices, canActivateSavedModel, aiModelDisplayName, isRecommendedAiModel } from '@/common/aiModels';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -125,7 +126,7 @@ const modelOptions = computed(() => view.value?.models.filter((row: any) => row.
 const selectedModel = computed(() => modelOptions.value.find((row: any) => row.definition.id === editingId.value));
 const isRemote = computed(() => selectedModel.value?.definition.adapter === 'jina_embeddings');
 const isActive = computed(() => view.value?.selection[task.value] === editingId.value);
-const activeName = computed(() => modelOptions.value.find((row: any) => row.definition.id === view.value?.selection[task.value])?.definition.name || '—');
+const activeName = computed(() => aiModelDisplayName(modelOptions.value.find((row: any) => row.definition.id === view.value?.selection[task.value])?.definition) || '—');
 const copy = (value: any) => JSON.parse(JSON.stringify(value));
 
 function choose(id: string) {

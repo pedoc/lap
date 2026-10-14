@@ -127,3 +127,13 @@
 - 前端构建与全量 389 项 Node 测试通过；Rust 全量串行 334 项通过、12 项条件测试忽略；最新前端产物后的 cargo check 通过。新增策略回归覆盖自动设备优先顺序、显式 CPU／GPU、分阶段错误判定、固定维度、内嵌字典及不改变索引／下载指纹。
 - 两套 RapidOCR 官方模型分别在真实 CPU、显式 DirectML 和自动模式下读取工作区自建中英文图片，三次原生推理测试均通过。自动模式两阶段均选择 DirectML #0，运行时跟踪分别记录检测器 2 个、识别器 3 个 DmlExecutionProvider 执行事件，不以“注册了 GPU”代替实际 GPU 证据。原 PP-OCRv5 CPU 推理另行回归通过。
 - 新增 OCR 模块格式检查与 git diff --check 通过；全库 cargo fmt --check 仍有 build.rs 等既有格式差异，没有重排无关文件；既有 app_handle 未使用告警保留。尚未完成设置页完整桌面点击、大图库及 CUDA／CoreML 平台验证，未停止用户开发进程。
+
+
+### T09 追加：PC 质量优先的 Server 模型
+
+- 补充 RapidAI 官方 PP-OCRv5 Server（约 164.7 MiB）和 PP-OCRv4 Server（约 194.4 MiB），沿用固定 v3.10.0 发布及官方 SHA-256，实际下载、校验、读取输入／输出和内嵌字典通过。Mobile 作为小体积、低资源选项保留，不把 Mobile／Server 当作运行设备限制；所有模型均在本机推理，不需要服务器或云端 API。
+- 未配置过 OCR 时默认选择 PP-OCRv5 Server；推荐项通过 defaultSelection 单独发布，和当前启用模型分开显示，不覆盖已保存的 PP-OCRv5、Mobile 或其他 Server 选择。设置页增加规格提示和质量优先推荐标记。
+- 原有 PP-OCRv5 本来就是 Server：只在界面补充 Server 标识，逐项对照确认既有 11 个模型定义完全不变，不触发旧权重重新下载或已有索引失效。切换到新 Server 仍按对应模型版本继续建立索引；不声称所有照片上 Server 都比 Mobile 准确。
+- 前端构建及全量 392 项 Node 测试通过；覆盖推荐和当前选择分离、旧 Server 显示名不修改定义，以及真实设置模板中 Server 推荐与已保存 Mobile 并存。Rust 全量串行 335 项通过、12 项条件测试忽略；新增默认质量模型及既有选择保留回归，最新前端产物后的 cargo check 通过。
+- 两套 Server 在工作区自建中英文图上分别运行真实 CPU、显式 DirectML、自动模式测试，三次原生推理测试均通过。自动模式两阶段均选择 DirectML #0；v4 检测／识别记录 2／3 个、v5 记录 2／4 个 DmlExecutionProvider 执行事件。本轮仅验证运行契约和样例识别，不以样例置信度作为跨模型准确率排名。
+- 原始用户照片、数据库结构、已选模型及设备偏好不修改。OCR 模块格式检查和 git diff --check 通过；全库 cargo fmt --check 仍有 build.rs 等既有差异，不做无关格式重排，既有 app_handle 未使用告警保留。设置页完整桌面点击、大图库、CUDA／CoreML 仍待实机验收，未停止用户开发进程。

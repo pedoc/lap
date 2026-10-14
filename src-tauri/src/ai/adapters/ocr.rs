@@ -439,7 +439,19 @@ mod tests {
         let root = std::path::PathBuf::from(std::env::var_os("LAP_AI_TEST_MODEL_ROOT").unwrap());
         let image = image::open(root.join("ocr-fixture.png")).unwrap();
         let provider = std::env::var("LAP_OCR_TEST_DEVICE").unwrap_or("cpu".into());
-        for id in ["rapidocr-pp-ocrv4", "rapidocr-pp-ocrv5"] {
+        let known = [
+            "rapidocr-pp-ocrv4",
+            "rapidocr-pp-ocrv5",
+            "rapidocr-pp-ocrv4-server",
+            "rapidocr-pp-ocrv5-server",
+        ];
+        let models = std::env::var("LAP_OCR_TEST_MODELS").unwrap_or_else(|_| known.join(","));
+        let ids = models.split(',').map(str::trim).collect::<Vec<_>>();
+        assert!(
+            !ids.is_empty() && ids.iter().all(|id| known.contains(id)),
+            "Select known OCR fixtures"
+        );
+        for id in ids {
             let mut config = crate::ai::settings::Configuration::default();
             config
                 .models
