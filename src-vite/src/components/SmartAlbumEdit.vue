@@ -298,6 +298,7 @@ const cullingOptions = computed(() => [
 ]);
 
 const mediaSubtypeOptions = computed(() => [
+  ...['animated', 'screenshot', 'burst', 'panorama'].map(value => ({ value, label: t('media_lifecycle.types.' + value) })),
   { value: 'motion_photo', label: t('album.smart_edit.media_subtypes.live_motion_photos') },
   { value: 'raw_jpeg_pair', label: t('album.smart_edit.media_subtypes.raw_jpeg_pair') },
 ]);

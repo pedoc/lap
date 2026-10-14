@@ -50,6 +50,7 @@ mod t_media_recovery;
 mod t_media_restore;
 mod t_media_jobs;
 mod t_media_lifecycle;
+mod t_media_traits;
 mod t_private_media;
 mod t_private_lock;
 mod t_sqlite;

@@ -1030,6 +1030,11 @@ pub fn overview() -> Result<Overview, String> {
         let count=conn.query_row(&format!("SELECT COUNT(*) FROM afiles a JOIN afolders b ON b.id=a.folder_id WHERE {condition} AND {} AND {}{}",AFile::search_exclusion_condition("b"),AFile::live_photo_companion_exclusion_condition(),AFile::album_filter_sql("a")),[],|r|r.get::<_,i64>(0)).map_err(|e|e.to_string())?;
         media.insert(kind.to_string(), count);
     }
+    for kind in crate::t_media_traits::KINDS {
+        let condition = crate::t_media_traits::predicate(kind)?;
+        let count = conn.query_row(&format!("SELECT COUNT(*) FROM afiles a JOIN afolders b ON b.id=a.folder_id WHERE {condition} AND {} AND {}{}", AFile::search_exclusion_condition("b"), AFile::live_photo_companion_exclusion_condition(), AFile::album_filter_sql("a")), [], |row| row.get::<_,i64>(0)).map_err(|e| e.to_string())?;
+        media.insert(kind.to_string(), count);
+    }
     let hidden=conn.query_row("SELECT COUNT(*) FROM media_states WHERE hidden=1 AND deleted_at IS NULL AND file_id NOT IN (SELECT live_photo_video_id FROM afiles WHERE live_photo_video_id IS NOT NULL)",[],|r|r.get(0)).map_err(|e|e.to_string())?;
     let deleted = conn
         .query_row("SELECT COUNT(*) FROM media_trash_groups", [], |r| r.get(0))

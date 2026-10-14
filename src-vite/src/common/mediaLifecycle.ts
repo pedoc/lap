@@ -5,6 +5,10 @@ export const MEDIA_TYPES = [
   'live',
   'raw_pair',
   'gif',
+  'animated',
+  'screenshot',
+  'burst',
+  'panorama',
 ] as const;
 export function mediaTypeRules(type: string) {
   const make = (field: string, operator: string, value: any) => ({
@@ -24,6 +28,11 @@ export function mediaTypeRules(type: string) {
       return [make('media_subtype', 'is', 'motion_photo')];
     case 'raw_pair':
       return [make('media_subtype', 'is', 'raw_jpeg_pair')];
+    case 'animated':
+    case 'screenshot':
+    case 'burst':
+    case 'panorama':
+      return [make('media_subtype', 'is', type)];
     case 'gif':
       return [make('extension', 'is', 'gif')];
     default:

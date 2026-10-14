@@ -3740,6 +3740,17 @@ impl AFile {
         folder_id: i64, file_path: &str, file_type: i64, last_scan_time: i64,
         raw_info: Option<t_libraw::RawInfo>,
     ) -> Result<(Self, i32), String> {
+        let (file, status) = Self::add_to_db_with_raw_info_inner(folder_id, file_path, file_type, last_scan_time, raw_info)?;
+        if let Some(id) = file.id {
+            crate::t_media_traits::refresh(&*open_conn()?, id, Path::new(file_path), file_type, file.modified_at, Some(file.size), file.e_software.as_deref())?;
+        }
+        Ok((file, status))
+    }
+
+    fn add_to_db_with_raw_info_inner(
+        folder_id: i64, file_path: &str, file_type: i64, last_scan_time: i64,
+        raw_info: Option<t_libraw::RawInfo>,
+    ) -> Result<(Self, i32), String> {
         if crate::t_media_lifecycle::is_recovery_path(Path::new(file_path)){return Err("Files in the managed recovery area cannot be imported; restore them in Recently Deleted".into());}
         if crate::t_media_lifecycle::path_reserved(&*open_conn()?,folder_id,&t_utils::get_file_name(file_path))? {
             return Err("This original path belongs to an interrupted recovery operation; restore it in Recently Deleted first".into());
@@ -5590,6 +5601,14 @@ impl AFile {
                 // covers both Apple Live Photos and Android Motion Photos;
                 // "live_photo" maps to the same condition for backward
                 // compatibility with previously saved rules.
+                if crate::t_media_traits::KINDS.contains(&subtype.as_str()) {
+                    let condition = crate::t_media_traits::predicate(&subtype)?;
+                    return match operator {
+                        "is_not" | "neq" | "not_in" => Ok(format!("NOT ({condition})")),
+                        "is" | "eq" | "in" => Ok(condition),
+                        _ => Err(format!("Unsupported media subtype operator: {operator}")),
+                    };
+                }
                 let (positive, negative) = match subtype.as_str() {
                     "live_photo" | "motion_photo" => (
                         "a.media_subtype IN ('live_photo', 'motion_photo')",
@@ -10085,6 +10104,7 @@ fn create_db_internal() -> Result<(), String> {
     // Run schema migrations after base tables are ensured.
     crate::t_migration::check_and_migrate(&conn)?;
     crate::ai::face_annotations::import_existing(&conn)?;
+    crate::t_media_traits::ensure_schema(&conn)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_content_identifier ON afiles(content_identifier)",
         [],

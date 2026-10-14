@@ -2152,13 +2152,18 @@
   "count": "{count} items",
   "preview": "Preview",
   "processing_warning": "An interrupted operation is recorded here. Try Restore; originals or recovery copies are kept.",
+  "classification_hint": "Classified only from explicit frame information or metadata. Unsupported evidence stays unclassified. Rescan existing albums to populate categories.",
   "types": {
     "image": "Photos",
     "video": "Videos",
     "raw": "RAW",
     "live": "Live / Motion Photos",
     "raw_pair": "RAW + JPEG pairs",
-    "gif": "GIF images"
+    "gif": "GIF images",
+    "animated": "Animated images",
+    "screenshot": "Screenshots",
+    "burst": "Burst photos",
+    "panorama": "Panoramas"
   },
   "status": {
     "moving": "Move interrupted / pending",

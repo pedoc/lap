@@ -2152,13 +2152,18 @@
   "count": "{count} 项",
   "preview": "预览",
   "processing_warning": "这里保留了中断的操作记录。可尝试恢复；原文件或回收副本会保留。",
+  "classification_hint": "按明确的文件帧信息或元数据分类；没有可靠依据时不分类。已有图库请重新扫描以补齐分类。",
   "types": {
     "image": "照片",
     "video": "视频",
     "raw": "RAW",
     "live": "实况／动态照片",
     "raw_pair": "RAW＋JPEG 配对",
-    "gif": "GIF 图片"
+    "gif": "GIF 图片",
+    "animated": "动画图片",
+    "screenshot": "屏幕截图",
+    "burst": "连拍照片",
+    "panorama": "全景照片"
   },
   "status": {
     "moving": "移入中断／待完成",
