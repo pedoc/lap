@@ -2285,6 +2285,21 @@
   }
 ,
   "ocr": {
+    "edit_title": "修订文字",
+    "edit_hint": "修改或忽略识别行；人工修订单独保存，换模型或重新识别不会覆盖。忽略的文字不参与搜索，不修改原图。",
+    "edit_provenance": "人工修订，原始识别来自 {model}",
+    "ignore_line": "忽略此行（不参与搜索）",
+    "restore_line": "恢复原文",
+    "model_original": "识别原文",
+    "edit_line": "第 {index} 行",
+    "edit_stale": "照片、模型或识别结果已变化，请保留需要的草稿并关闭后重新打开，避免覆盖新结果。",
+    "reset_manual": "恢复当前模型结果",
+    "reset_manual_confirm": "删除此照片的人工修订并恢复当前模型结果？若当前模型尚未识别，需要重新识别。原图不会改变。",
+    "cancel_edit": "取消",
+    "save_edit": "保存修订",
+    "current_model_result": "查看当前模型原始结果",
+    "manual_label": "人工修订",
+
     "direction": "文字方向",
     "rotation_model": "跟随模型配置",
     "rotation_0": "原始方向",

@@ -6560,18 +6560,23 @@ const getCurrentGroupedQueryRows = async (offset: number, limit: number) => {
 // viewer for every completed image; stable IDs retain thumbnails and selection.
 let ocrRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let ocrRefreshRunning = false, ocrRefreshAgain = false, ocrContentDisposed = false;
-let offOcrContent: (() => void) | undefined;
+let offOcrContent: (() => void) | undefined, offOcrAnnotations: (() => void) | undefined;
 function scheduleOcrContentRefresh() {
   ocrRefreshAgain = true;
   if (ocrRefreshTimer || ocrRefreshRunning) return;
   ocrRefreshTimer = setTimeout(() => { ocrRefreshTimer = undefined; void refreshOcrContent(); }, 900);
 }
 async function refreshOcrContent() {
-  if (ocrContentDisposed || config.main.sidebarIndex !== SIDEBAR.OCR || libConfig.activePane === 'collection' || showQuickView.value) return;
+  if (ocrContentDisposed || ![SIDEBAR.OCR, SIDEBAR.SEARCH].includes(config.main.sidebarIndex) || libConfig.activePane === 'collection' || showQuickView.value) return;
   if (ocrRefreshRunning) return;
   ocrRefreshRunning = true; ocrRefreshAgain = false;
   const requestId = currentContentRequestId;
   try {
+    if (config.main.sidebarIndex === SIDEBAR.SEARCH) {
+      rememberFocusedFileForPresentationRefresh(); captureSelectionForFileListRefresh(); currentThumbRequestId++;
+      await getUnifiedSearchFileList(libConfig.search.searchText, ++currentContentRequestId);
+      return;
+    }
     if (groupedModeActive.value) {
       await refreshGroupedOcrContent(requestId);
       return;
@@ -6655,12 +6660,14 @@ async function refreshGroupedOcrContent(requestId: number) {
   void getFileListThumb(result.rows.map((row: any) => next[Number(row.file_index ?? row.fileIndex)]).filter(Boolean));
 }
 onMounted(async () => {
-  const off = await listen('ocr-index-updated', (event: any) => { if (event.payload?.libraryId === libConfig._libraryId) scheduleOcrContentRefresh(); });
+  const off = await listen('ocr-index-updated', (event: any) => { if (config.main.sidebarIndex === SIDEBAR.OCR && event.payload?.libraryId === libConfig._libraryId) scheduleOcrContentRefresh(); });
   if (ocrContentDisposed) off(); else offOcrContent = off;
+  const annotationOff = await listen('ocr-annotations-changed', (event:any) => { if (event.payload?.libraryId === libConfig._libraryId) scheduleOcrContentRefresh(); });
+  if (ocrContentDisposed) annotationOff(); else offOcrAnnotations = annotationOff;
 });
 watch(showQuickView, open => { if (!open && ocrRefreshAgain) scheduleOcrContentRefresh(); });
 watch(() => [showFilmstripLayout.value, selectedItemIndex.value], () => { if (ocrPreviewDeferred.value) scheduleOcrContentRefresh(); });
-onBeforeUnmount(() => { ocrContentDisposed = true; clearTimeout(ocrRefreshTimer); offOcrContent?.(); });
+onBeforeUnmount(() => { ocrContentDisposed = true; clearTimeout(ocrRefreshTimer); offOcrContent?.(); offOcrAnnotations?.(); });
 
 const getCurrentQueryFileIds = () => {
   if (currentQuerySource.value === 'search') {

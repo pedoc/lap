@@ -2285,6 +2285,21 @@
   }
 ,
   "ocr": {
+    "edit_title": "Edit text",
+    "edit_hint": "Edit or ignore lines. Human edits are stored separately, survive model changes and re-recognition, and never modify the photo. Ignored text is excluded from search.",
+    "edit_provenance": "Human-edited text, originally recognized with {model}",
+    "ignore_line": "Ignore this line (exclude from search)",
+    "restore_line": "Restore original line",
+    "model_original": "Original recognition",
+    "edit_line": "Line {index}",
+    "edit_stale": "The photo, model or recognition changed. Preserve any draft you need, then reopen the editor to avoid overwriting newer results.",
+    "reset_manual": "Use current model result",
+    "reset_manual_confirm": "Remove human edits for this photo and use the current model result? Recognition is needed if that model has no result. The original photo is unchanged.",
+    "cancel_edit": "Cancel",
+    "save_edit": "Save edits",
+    "current_model_result": "View current model output",
+    "manual_label": "Human edit",
+
     "direction": "Text direction",
     "rotation_model": "Use model setting",
     "rotation_0": "Original direction",

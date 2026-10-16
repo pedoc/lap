@@ -58,11 +58,12 @@ watch([activeFocus, document, () => props.ready, compatible], () => {
   lastLocated = focus; emit('locate', bounds);
 });
 onMounted(async () => {
-  for (const name of ['ocr-index-updated', 'ai-configuration-changed', 'media-lifecycle-changed', 'files-deleted']) {
+  for (const name of ['ocr-index-updated', 'ocr-annotations-changed', 'ai-configuration-changed', 'media-lifecycle-changed', 'files-deleted']) {
     const off = await listen(name, (event: any) => {
       if (event.payload?.libraryId && event.payload.libraryId !== libConfig._libraryId) return;
       if (name === 'ocr-index-updated' && event.payload?.fileId && event.payload.fileId !== props.fileId) return;
       if (name === 'media-lifecycle-changed' || name === 'files-deleted' || name === 'ai-configuration-changed') document.value = null;
+      if (name === 'ocr-annotations-changed' && activeFocus.value) ocrFocus.value = null;
       revision.value++;
     });
     if (disposed) off(); else stops.push(off);

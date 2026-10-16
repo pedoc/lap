@@ -1,8 +1,5 @@
 //! Explicit, resumable local OCR indexing. Derived text never changes originals.
-use super::{
-    adapters::ocr::{Document, PaddleOcr},
-    types::Task,
-};
+use super::{adapters::ocr::PaddleOcr, types::Task};
 use crate::t_sqlite::AFile;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -79,29 +76,31 @@ pub fn ensure_schema(c: &Connection) -> Result<(), String> {
         text TEXT NOT NULL DEFAULT '', document TEXT, error TEXT,
         PRIMARY KEY(file_id,profile)
     ); CREATE INDEX IF NOT EXISTS idx_ocr_profile ON ocr_index(profile);
-    CREATE TRIGGER IF NOT EXISTS ocr_index_delete AFTER DELETE ON afiles BEGIN DELETE FROM ocr_index WHERE file_id=OLD.id; END;").map_err(|e|e.to_string())
+    CREATE TRIGGER IF NOT EXISTS ocr_index_delete AFTER DELETE ON afiles BEGIN DELETE FROM ocr_index WHERE file_id=OLD.id; END;").map_err(|e|e.to_string())?;
+    super::ocr_annotations::ensure_schema(c)
 }
 // EXISTS avoids joins changing counts / grouping. The caller must also enforce normal visibility.
-pub fn search_predicate() -> &'static str {
-    "EXISTS (SELECT 1 FROM ocr_index oi JOIN ai_index_profiles op ON op.task='ocr' AND op.fingerprint=oi.profile WHERE oi.file_id=a.id AND oi.modified_at IS a.modified_at AND oi.size=a.size AND oi.error IS NULL AND oi.text LIKE ? ESCAPE '\\' COLLATE NOCASE)"
+pub fn search_predicate() -> String {
+    effective_condition(
+        "(SELECT fingerprint FROM ai_index_profiles WHERE task='ocr')",
+        "error IS NULL AND text LIKE ? ESCAPE '\\' COLLATE NOCASE",
+    )
 }
-// Shared by normal photo pagination, counts, grouping and OCR task selection.
-// An old model / changed source is pending, not an empty or failed result.
+pub(crate) fn effective_condition(profile: &str, condition: &str) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM ({}) AS effective_ocr WHERE {condition})",
+        super::ocr_annotations::effective_rows(profile)
+    )
+}
 pub fn workspace_condition(state: &str) -> String {
-    let valid = "oi.file_id=a.id AND oi.profile=(SELECT fingerprint FROM ai_index_profiles WHERE task='ocr') AND oi.modified_at IS a.modified_at AND oi.size=a.size";
+    let profile = "(SELECT fingerprint FROM ai_index_profiles WHERE task='ocr')";
     match state {
         "all" => "1".into(),
-        "text" => format!(
-            "EXISTS (SELECT 1 FROM ocr_index oi WHERE {valid} AND oi.error IS NULL AND oi.text <> '')"
-        ),
-        "empty" => format!(
-            "EXISTS (SELECT 1 FROM ocr_index oi WHERE {valid} AND oi.error IS NULL AND oi.text = '')"
-        ),
-        "failed" => {
-            format!("EXISTS (SELECT 1 FROM ocr_index oi WHERE {valid} AND oi.error IS NOT NULL)")
-        }
-        "pending" => format!("NOT EXISTS (SELECT 1 FROM ocr_index oi WHERE {valid})"),
-        _ => "0".into(), // Never broaden an unknown filter into the entire library.
+        "text" => effective_condition(profile, "error IS NULL AND text<>''"),
+        "empty" => effective_condition(profile, "error IS NULL AND text=''"),
+        "failed" => effective_condition(profile, "error IS NOT NULL"),
+        "pending" => format!("NOT ({})", effective_condition(profile, "1")),
+        _ => "0".into(),
     }
 }
 // Bind the actual global selection, not a possibly stale per-library marker.
@@ -119,7 +118,11 @@ pub fn workspace_query(state: &str, text: &str) -> (String, Vec<Box<dyn rusqlite
         values.push(Box::new(profile.clone()));
     }
     if !text.is_empty() {
-        condition.push_str(" AND EXISTS (SELECT 1 FROM ocr_index oi WHERE oi.file_id=a.id AND oi.profile=? AND oi.modified_at IS a.modified_at AND oi.size=a.size AND oi.error IS NULL AND oi.text LIKE ? ESCAPE '\\' COLLATE NOCASE)");
+        condition.push_str(" AND ");
+        condition.push_str(&effective_condition(
+            "?",
+            "error IS NULL AND text LIKE ? ESCAPE '\\' COLLATE NOCASE",
+        ));
         values.push(Box::new(profile));
         let text = text
             .replace('\\', "\\\\")
@@ -168,9 +171,12 @@ fn current_status(library: &str) -> Status {
 }
 // One aggregate scan per refresh, rather than one whole-library scan per tab.
 fn coverage_on(c: &Connection, profile: &str) -> Result<(i64, i64, i64, i64, i64), String> {
-    let query = format!("SELECT COUNT(*), COALESCE(SUM(oi.file_id IS NOT NULL AND oi.error IS NULL),0), COALESCE(SUM(oi.error IS NOT NULL),0), COALESCE(SUM(oi.error IS NULL AND oi.text<>''),0), COALESCE(SUM(oi.error IS NULL AND oi.text=''),0)
+    let text = "CASE WHEN ed.file_id IS NOT NULL THEN ed.text ELSE oi.text END";
+    let known = "(ed.file_id IS NOT NULL OR (oi.file_id IS NOT NULL AND oi.error IS NULL))";
+    let query=format!("SELECT COUNT(*),COALESCE(SUM({known}),0),COALESCE(SUM(ed.file_id IS NULL AND oi.error IS NOT NULL),0),COALESCE(SUM({known} AND {text}<>''),0),COALESCE(SUM({known} AND {text}=''),0)
         FROM afiles a JOIN afolders b ON b.id=a.folder_id LEFT JOIN ocr_index oi ON oi.file_id=a.id AND oi.profile=?1 AND oi.modified_at IS a.modified_at AND oi.size=a.size
-        WHERE a.file_type IN (1,3) AND {}", visible());
+        LEFT JOIN ocr_annotations ed ON ed.file_id=a.id AND ed.modified_at IS a.modified_at AND ed.size=a.size
+        WHERE a.file_type IN (1,3) AND {}",visible());
     c.query_row(&query, [profile], |r| {
         Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
     })
@@ -397,21 +403,22 @@ fn store_result(
         SELECT a.id,?2,?3,?4,?5,?6,?7 {} AND a.id=?1 AND a.modified_at IS ?3 AND a.size=?4
         ON CONFLICT(file_id,profile) DO UPDATE SET modified_at=excluded.modified_at,size=excluded.size,text=excluded.text,document=excluded.document,error=excluded.error",base()),params![id,profile,modified,size,text,document,error]).map(|n|n>0).map_err(|e|e.to_string())
 }
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PhotoText {
-    pub indexed: bool,
-    pub document: Option<Document>,
-    pub error: Option<String>,
-}
 #[tauri::command]
-pub async fn get_photo_ocr(library_id: String, file_id: i64) -> Result<PhotoText, String> {
-    tauri::async_runtime::spawn_blocking(move||{
-        let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;check_library(&library_id)?;
-        let c=crate::t_sqlite::open_conn()?;let profile=super::settings::active(Task::Ocr)?.profile();
-        let row=c.query_row(&format!("SELECT oi.document,oi.error FROM ocr_index oi JOIN afiles a ON a.id=oi.file_id JOIN afolders b ON b.id=a.folder_id WHERE a.id=?1 AND oi.profile=?2 AND oi.modified_at IS a.modified_at AND oi.size=a.size AND {}",visible()),params![file_id,profile],|r|Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?))).optional().map_err(|e|e.to_string())?;
-        let (document,error)=row.unwrap_or_default();Ok(PhotoText {indexed:document.is_some(),document:document.map(|d|serde_json::from_str(&d).map_err(|e|e.to_string())).transpose()?,error})
-    }).await.map_err(|e|e.to_string())?
+pub async fn get_photo_ocr(
+    library_id: String,
+    file_id: i64,
+) -> Result<super::ocr_annotations::PhotoText, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        check_library(&library_id)?;
+        let c = crate::t_sqlite::open_conn()?;
+        let profile = super::settings::active(Task::Ocr)?.profile();
+        super::ocr_annotations::view_on(&c, file_id, &profile)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 fn target_ids_on(
     c: &Connection,
@@ -494,7 +501,7 @@ fn summaries_on(
 ) -> Result<Vec<Summary>, String> {
     let ids = serde_json::to_string(ids).map_err(|e| e.to_string())?;
     let sql = format!(
-        "SELECT a.id, oi.text, oi.error FROM afiles a JOIN afolders b ON b.id=a.folder_id LEFT JOIN ocr_index oi ON oi.file_id=a.id AND oi.profile=?2 AND oi.modified_at IS a.modified_at AND oi.size=a.size WHERE a.file_type IN (1,3) AND {} AND a.id IN (SELECT value FROM json_each(?1))",
+        "SELECT a.id,CASE WHEN ed.file_id IS NOT NULL THEN ed.text ELSE oi.text END,CASE WHEN ed.file_id IS NOT NULL THEN NULL ELSE oi.error END FROM afiles a JOIN afolders b ON b.id=a.folder_id LEFT JOIN ocr_index oi ON oi.file_id=a.id AND oi.profile=?2 AND oi.modified_at IS a.modified_at AND oi.size=a.size LEFT JOIN ocr_annotations ed ON ed.file_id=a.id AND ed.modified_at IS a.modified_at AND ed.size=a.size WHERE a.file_type IN (1,3) AND {} AND a.id IN (SELECT value FROM json_each(?1))",
         visible()
     );
     let mut statement = c.prepare(&sql).map_err(|e| e.to_string())?;

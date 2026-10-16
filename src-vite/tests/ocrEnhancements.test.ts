@@ -57,3 +57,34 @@ test('temporary direction override is explicit and never modifies global model c
   assert.equal(h.calls[0][1].rotation,'90');assert.equal(h.ctx.config.settings.ai.ocrProfile,'model-a');
   h.api.rotation.value='model';await h.api.recognize([0,0,1,1]);assert.equal(h.calls.filter(([name])=>name==='extract_ocr_region')[1][1].rotation,null);h.dispose();
 });
+
+function editorHarness(annotation:any=null) {
+  const calls:any[]=[],events:any[]=[],listeners:any={},mounts:any[]=[],unmounts:any[]=[];
+  const source={text:'one\ntwo',lines:[{text:'one',bounds:[0,0,.5,.5]},{text:'two',bounds:[0,.5,.5,.5]}]};
+  const ctx:any={...Vue,crypto:{randomUUID},config:Vue.reactive({settings:{ai:{ocrProfile:'model-a'}}}),libConfig:Vue.reactive({_libraryId:'library-a'}),
+    props:{fileId:7,libraryId:'library-a',result:{profile:'model-a',sourceKey:'x'.repeat(64),document:source,modelDocument:source,annotation}},
+    useI18n:()=>({t}),useUIStore:()=>({pushInputHandler(){},removeInputHandler(){}}),defineProps:()=>ctx.props,defineEmits:()=> (...args:any[])=>events.push(args),
+    invoke:async(...args:any[])=>calls.push(args),ask:async()=>true,listen:async(name:string,cb:any)=>{listeners[name]=cb;return()=>delete listeners[name];},onMounted:(cb:any)=>mounts.push(cb),onBeforeUnmount:(cb:any)=>unmounts.push(cb),
+  };
+  const script=stripTypeScriptTypes(read('OcrTextEditor').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'');
+  const scope=Vue.effectScope();const api:any=scope.run(()=>runInNewContext(`${script};({save,reset,lines,stale,restoreLine,source})`,ctx));
+  return{ctx,api,calls,events,listeners,mount:async()=>{for(const cb of mounts)await cb();},dispose:()=>{unmounts.forEach(cb=>cb());scope.stop();}};
+}
+test('human edit saves only text/ignore overrides with optimistic source and revision guards',async()=>{
+  const h=editorHarness();h.api.lines.value[0].text='correct';h.api.lines.value[1].ignored=true;await h.api.save();
+  assert.equal(h.calls[0][0],'save_ocr_text');assert.equal(h.calls[0][1].sourceKey,'x'.repeat(64));assert.equal(h.calls[0][1].expectedRevision,'');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0][1].lines)),[{text:'correct',ignored:false},{text:'two',ignored:true}]);assert.equal(h.ctx.props.result.document.lines[0].text,'one');assert.equal(h.events[0][0],'saved');h.dispose();
+});
+test('manual editor retains its original model snapshot rather than rebinding new model line numbers',()=>{
+  const h=editorHarness({source:{text:'old model',lines:[{text:'old model',bounds:[0,0,1,1]}]},lines:[{text:'human',ignored:true}],revision:'rev-a'});
+  assert.equal(h.api.lines.value.length,1);assert.equal(h.api.source.text,'old model');h.api.restoreLine(0);assert.equal(h.api.lines.value[0].text,'old model');assert.equal(h.api.lines.value[0].ignored,false);h.dispose();
+});
+test('model/library changes preserve the editor draft but block stale writes and resets',async()=>{
+  const h=editorHarness();h.api.lines.value[0].text='draft';h.ctx.libConfig._libraryId='other';await tick();await h.api.save();
+  assert.equal(h.api.stale.value,true);assert.equal(h.calls.length,0);assert.equal(h.api.lines.value[0].text,'draft');h.dispose();
+});
+test('unrelated indexing progress does not invalidate a human draft; current-file updates do',async()=>{
+  const h=editorHarness();await h.mount();h.listeners['ocr-index-updated']({payload:{libraryId:'library-a',fileId:8}});assert.equal(h.api.stale.value,false);
+  h.listeners['ocr-index-updated']({payload:{libraryId:'library-a',finished:true}});assert.equal(h.api.stale.value,false);
+  h.listeners['ocr-annotations-changed']({payload:{libraryId:'library-a',fileId:7}});assert.equal(h.api.stale.value,true);h.dispose();
+});
