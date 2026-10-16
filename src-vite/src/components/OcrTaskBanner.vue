@@ -1,5 +1,5 @@
 <template>
-  <aside v-if="visible" class="fixed bottom-10 right-4 z-40 w-80 max-w-[calc(100vw-2rem)] rounded-box border border-base-content/15 bg-base-100 shadow-lg p-3 space-y-2" :aria-label="t('ocr.index_title')">
+  <aside v-if="visible" :class="stacked ? '' : 'fixed bottom-10 right-4 z-40 w-80 max-w-[calc(100vw-2rem)]'" class="rounded-box border border-base-content/15 bg-base-100 shadow-lg p-3 space-y-2" :aria-label="t('ocr.index_title')">
     <div class="flex items-center justify-between gap-2">
       <button class="text-sm font-medium text-primary hover:underline" @click="openWorkspace">{{ t('ocr.workspace_title') }} · {{ t(view.status.running ? 'ocr.recognizing' : 'ocr.task_finished') }}</button>
       <button v-if="!view.status.running" class="btn btn-xs btn-ghost" :aria-label="t('ocr.dismiss')" @click="dismissed = view.status.jobId">×</button>
@@ -18,6 +18,7 @@ import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { SIDEBAR } from '@/common/constants';
 import { useOcr } from '@/common/ocr';
+defineProps<{ stacked?: boolean }>();
 const { t } = useI18n();
 const { view, error, busy, stop } = useOcr();
 const dismissed = ref('');

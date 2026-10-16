@@ -75,6 +75,7 @@
     </TransitionGroup>
 
     <OcrImageOverlay :file-id="fileId" :file-version="fileVersion" :width="imageSize[activeImage].width" :height="imageSize[activeImage].height" :x="position[activeImage].x" :y="position[activeImage].y" :zoom="scale[activeImage]" :rotate="imageRotate[activeImage]" :ready="!isLoading && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath" :transition="!noTransition && !isResizingContainer" @locate="locateOcrBounds" />
+    <ObjectImageOverlay :file-id="fileId" :file-version="fileVersion" :width="imageSize[activeImage].width" :height="imageSize[activeImage].height" :x="position[activeImage].x" :y="position[activeImage].y" :zoom="scale[activeImage]" :rotate="imageRotate[activeImage]" :ready="!isLoading && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath" :transition="!noTransition && !isResizingContainer" @locate="locateOcrBounds" />
 
     <!-- All detected faces, including unnamed faces and other people in the photo. -->
     <div v-if="showFaceOverlay && faces.length && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath"
@@ -149,6 +150,7 @@ import { IconError, IconBrightness } from '@/common/icons';
 import ImageNavigator from '@/components/ImageNavigator.vue';
 import FaceNameEditor from '@/components/FaceNameEditor.vue';
 import OcrImageOverlay from '@/components/OcrImageOverlay.vue';
+import ObjectImageOverlay from '@/components/ObjectImageOverlay.vue';
 
 const { t } = useI18n();
 const toast = useToast();

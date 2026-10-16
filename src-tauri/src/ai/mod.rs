@@ -5,6 +5,7 @@ pub mod capabilities;
 pub mod objects_types;
 pub mod media;
 pub mod objects_store;
+pub mod objects_smart;
 pub mod objects_jobs;
 pub mod vision_jobs;
 pub mod commands;

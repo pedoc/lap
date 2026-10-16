@@ -7,6 +7,7 @@ import { parse, compileScript } from "@vue/compiler-sfc";
 import * as Vue from "vue";
 import { renderToString } from "vue/server-renderer";
 import * as helpers from "../src/common/smartAlbums.ts";
+import * as objectHelpers from "../src/common/objectUi.ts";
 import { SMART_TAG_CATEGORIES } from "../src/common/smartTags.ts";
 const source = readFileSync(
   new URL("../src/components/SmartAlbumEdit.vue", import.meta.url),
@@ -24,6 +25,8 @@ function context(overrides: any = {}) {
   const libConfig = Vue.reactive({ _libraryId: "lib" });
   return {
     ...helpers,
+    ...objectHelpers,
+    useObjects: () => ({ view: Vue.ref({classes:[{key:"coco2017-80@1:0",name:"person",supported:true}]}) }),
     ...Vue,
     SMART_TAG_CATEGORIES,
     props,
@@ -406,4 +409,20 @@ test('actual OCR smart rule controls render states, literal input and coverage g
   const editor = renderComponent(source,{SmartAlbumRules:group,SmartAlbumStatus:stub,ModalDialog:{template:'<section><slot /></section>'},TButton:stub,IconAdd:stub,IconEdit:stub,IconRemove:stub},'SmartAlbumEdit.vue');
   const html = await ssr(editor,{...props,smartAlbum:{id:'ocr',name:'Text',query:{match:'all',rules:[{id:'s',field:'ocr_state',operator:'is',value:'pending'},{id:'t',field:'ocr_text',operator:'contains',value:'中文 <script>'}]}}});
   assert.match(html,/value="pending"/);assert.match(html,/value="failed"/);assert.match(html,/maxlength="512"/);assert.match(html,/ocr.smart_hint/);assert.doesNotMatch(html,/<script>/);
+});
+
+test('object smart rules validate classes and counts without starting inference', () => {
+  const h=harness();
+  const count=h.api.makeRule('object_count');
+  assert.equal(count.value.classKey,'coco2017-80@1:0');assert.equal(count.value.count,1);assert.equal(h.api.isRuleValid(count),true);
+  for (const invalid of [-1,1.5,10001,NaN]) {count.value.count=invalid;assert.equal(h.api.isRuleValid(count),false);}
+  count.value.count=0;assert.equal(h.api.isRuleValid(count),true);
+  const state=h.api.makeRule('object_state');assert.equal(state.value,'detected');state.value='partial';assert.equal(h.api.isRuleValid(state),true);state.value='all';assert.equal(h.api.isRuleValid(state),false);
+  const category=h.api.makeRule('object_class');assert.equal(h.api.isRuleValid(category),true);category.value='';assert.equal(h.api.isRuleValid(category),false);
+});
+test('object previews are invalidated by the global detector and saved-result revisions',async()=>{
+  const config=Vue.reactive({search:{sortType:0,sortOrder:1,groupBy:0},settings:{language:'en',ai:{semanticProfile:'semantic',detectionProfile:'objects-a'}}});
+  const h=harness({config});h.api.rules.value=[h.api.makeRule('object_count')];await h.api.previewResults();assert.equal(Boolean(h.api.previewStale.value),false);
+  config.settings.ai.detectionProfile='objects-b';assert.equal(Boolean(h.api.previewStale.value),true);await h.api.previewResults();assert.equal(Boolean(h.api.previewStale.value),false);
+  h.api.ocrPreviewRevision.value++;assert.equal(Boolean(h.api.previewStale.value),true);
 });

@@ -1,5 +1,8 @@
 <template>
-  <OcrTaskBanner />
+  <div class="fixed bottom-10 right-4 z-40 w-80 max-w-[calc(100vw-2rem)] max-h-[70vh] overflow-y-auto space-y-2">
+    <OcrTaskBanner stacked />
+    <ObjectTaskBanner />
+  </div>
   
   <div class="w-screen h-screen flex flex-col overflow-hidden select-none bg-base-300 text-base-content/70">
     <transition name="fade">
@@ -210,6 +213,8 @@ import Calendar from '@/components/Calendar.vue';
 import Location from '@/components/Location.vue';
 import Person from '@/components/Person.vue';
 import ImageText from '@/components/ImageText.vue';
+import ObjectBrowser from '@/components/ObjectBrowser.vue';
+import ObjectTaskBanner from '@/components/ObjectTaskBanner.vue';
 import OcrTaskBanner from '@/components/OcrTaskBanner.vue';
 import Camera from '@/components/Camera.vue';
 
@@ -227,6 +232,7 @@ import {
   IconLocation,
   IconPerson,
   IconFileSearch,
+  IconBox,
   IconCamera,
   IconSearch,
   IconSettings,
@@ -396,6 +402,7 @@ const buttons = computed(() =>  [
   { index: SIDEBAR.PERSON, icon: IconPerson, component: Person, text: localeMsg.value.sidebar.people, hidden: !config.settings.face.enabled },
   { index: SIDEBAR.LOCATION, icon: IconLocation, component: Location, text: localeMsg.value.sidebar.location },
   { index: SIDEBAR.OCR, icon: IconFileSearch, component: ImageText, text: t('ocr.workspace_title') },
+  { index: SIDEBAR.OBJECTS, icon: IconBox, component: ObjectBrowser, text: t('objects.title') },
   { index: SIDEBAR.CAMERA, icon: IconCamera, component: Camera, text: localeMsg.value.sidebar.camera },
 ]);
 
@@ -409,7 +416,7 @@ const leftPanelWidth = computed(() =>
 
 const visibleButtons = computed(() =>
   buttons.value
-    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY && item.index !== SIDEBAR.OCR }))
+    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY && item.index !== SIDEBAR.OCR && item.index !== SIDEBAR.OBJECTS }))
     .filter(item => !item.hidden)
     .sort((a, b) => a.index - b.index)
 );
@@ -636,7 +643,7 @@ function clickSidebar(index: number) {
   // silently mutate the persisted sidebarIndex and dead-end in a blank pane.
   if (databaseCorrupted.value) return;
   activateMainPanel();
-  if (libraryEmpty.value && index !== SIDEBAR.ALBUM && index !== SIDEBAR.LIBRARY && index !== SIDEBAR.OCR) return;
+  if (libraryEmpty.value && index !== SIDEBAR.ALBUM && index !== SIDEBAR.LIBRARY && index !== SIDEBAR.OCR && index !== SIDEBAR.OBJECTS) return;
   if (config.main.sidebarIndex === index) {
     showPanel.value = !showPanel.value;
   } else {

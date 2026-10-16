@@ -211,6 +211,8 @@
 
 <script setup lang="ts">
 import { startOcr } from '@/common/ocr';
+import { startObjectIndex } from '@/common/objects';
+import { objectSelectionIds } from '@/common/objectUi';
 import { getFileThumbById } from '@/common/api';
 import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
 import { thumbnailSelectionScope } from '@/common/thumbnailRebuild';
@@ -1467,6 +1469,16 @@ async function syncTagStates(fileStates: Array<{ file_id: number; has_tags: bool
 }
 
 const thumbnailRebuildRequest = ref<any>(null);
+async function recognizeViewerObjects(force = false) {
+  const libraryId=libConfig._libraryId,target=getFileInfoByPane(getActiveFilePane());
+  try {
+    const ids=objectSelectionIds(target?[target]:[]);
+    if(isOriginalUnavailable(target))throw new Error(t('face_actions.offline'));
+    if(force&&!await ask(t('objects.rebuild_confirm'),{kind:'warning'}))return;
+    if(libraryId!==libConfig._libraryId)return;
+    await startObjectIndex({fileIds:ids,force});toast.info(t('objects.started'));
+  } catch(error:any){toast.error(error?.message||String(error));}
+}
 async function recognizeViewerText(force = false) {
   const libraryId = libConfig._libraryId;
   const target = getFileInfoByPane(getActiveFilePane());
@@ -1498,6 +1510,8 @@ const handleItemAction = async (payload: { action: string }) => {
     case 'regenerate-thumbnails':
       try { thumbnailRebuildRequest.value = { libraryId: libConfig._libraryId, scope: thumbnailSelectionScope([getFileInfoByPane(pane)]) }; } catch (error: any) { toast.error(error?.message || String(error)); }
       break;
+    case 'recognize-objects': await recognizeViewerObjects(); break;
+    case 'rerecognize-objects': await recognizeViewerObjects(true); break;
     case 'recognize-text': await recognizeViewerText(); break;
     case 'rerecognize-text': await recognizeViewerText(true); break;
     case 'detect-faces': await detectViewerFaces(); break;

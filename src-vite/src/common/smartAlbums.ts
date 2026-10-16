@@ -46,6 +46,11 @@ export function hasSemanticRules(rules: SmartRule[]): boolean {
   });
   return result;
 }
+export function hasObjectRules(rules: SmartRule[]): boolean {
+  let result = false;
+  visitSmartRules(rules, rule => { if (['object_state','object_class','object_count'].includes(rule.field)) result = true; });
+  return result;
+}
 export function hasOcrRules(rules: SmartRule[]): boolean {
   let result = false;
   visitSmartRules(rules, rule => { if (['ocr_text', 'ocr_state'].includes(rule.field)) result = true; });
@@ -177,6 +182,8 @@ export function setSmartOverrides(
   };
 }
 export const SMART_TEMPLATES = [
+  "with_objects",
+  "multiple_people",
   "with_text",
   "pending_text",
   "recent_picks",
@@ -197,6 +204,8 @@ export function smartTemplateRules(
     value,
   });
   switch (template) {
+    case "with_objects": return [rule("object_state", "is", "detected")];
+    case "multiple_people": return [rule("object_count", "gte", {classKey:"coco2017-80@1:0",count:2})];
     case "with_text": return [rule("ocr_state", "is", "text")];
     case "pending_text": return [rule("ocr_state", "is", "pending")];
     case "recent_picks":

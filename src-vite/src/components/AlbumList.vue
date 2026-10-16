@@ -271,6 +271,7 @@ import { useI18n } from 'vue-i18n';
 import { VueDraggable } from 'vue-draggable-plus'
 import { listen, emit as tauriEmit } from '@tauri-apps/api/event';
 import { startOcr } from '@/common/ocr';
+import { startObjectIndex } from '@/common/objects';
 import { config, libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
 import {
@@ -712,6 +713,16 @@ const getMoreMenuItems = async (album: any) => {
       icon: isAlbumQueued(album.id) ? IconUpdateOff : IconUpdate,
       disabled: !isAccessible && !isAlbumQueued(album.id),
       action: () => toggleIndexAlbum(album.id)
+    },
+    {
+      label: t('objects.recognize_folder'), icon: IconUpdate, disabled: !isAccessible,
+      action: async () => {
+        if (libraryId !== libConfig._libraryId) return;
+        try {
+          const folder = await fetchFolder(album.path, false, config.settings.folderSort);
+          if (libraryId === libConfig._libraryId && folder?.id > 0) { await startObjectIndex({ folderId: Number(folder.id) }); useToast().success(t('objects.started')); }
+        } catch (e) { if (libraryId === libConfig._libraryId) useToast().error(String(e)); }
+      },
     },
     {
       label: t('ocr.recognize_folder'), icon: IconUpdate, disabled: !isAccessible,

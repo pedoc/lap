@@ -191,6 +191,7 @@ import { config, libConfig } from "@/common/config";
 import {
   hasTimeSmartRules,
   hasOcrRules,
+  hasObjectRules,
   isSmartFolder,
   smartTreeRows,
   smartQueryParams,
@@ -430,7 +431,7 @@ const stops: (() => void)[] = [];
 let clock: ReturnType<typeof setInterval> | undefined;
 let ocrCountTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleOcrCounts() {
-  if (ocrCountTimer || !nodes.value.some(n => hasOcrRules(n.query?.rules || []))) return;
+  if (ocrCountTimer || !nodes.value.some(n => (hasOcrRules(n.query?.rules || []) || hasObjectRules(n.query?.rules || [])))) return;
   ocrCountTimer = setTimeout(() => { ocrCountTimer = undefined; void refreshCounts(true); }, 1500);
 }
 let counting = false;
@@ -450,7 +451,7 @@ async function refreshCounts(onlyOcr = false) {
   counting = true;
   const token = ++request;
   const library = libConfig._libraryId;
-  const albums = nodes.value.filter((n) => !isSmartFolder(n) && (!onlyOcr || hasOcrRules(n.query?.rules || [])));
+  const albums = nodes.value.filter((n) => !isSmartFolder(n) && (!onlyOcr || (hasOcrRules(n.query?.rules || []) || hasObjectRules(n.query?.rules || []))));
   let cursor = 0;
   async function worker() {
     while (cursor < albums.length) {
@@ -526,6 +527,7 @@ watch(
 );
 watch(() => config.settings.ai?.semanticProfile, scheduleCounts);
 watch(() => config.settings.ai?.ocrProfile, scheduleOcrCounts);
+watch(() => config.settings.ai?.detectionProfile, scheduleOcrCounts);
 watch(() => useUIStore().countUpdateTick, scheduleCounts);
 watch(
   () =>
@@ -584,6 +586,8 @@ onMounted(async () => {
       scheduleCounts();
   }, 60000);
   for (const eventName of [
+    "object-index-updated",
+    "object-annotations-changed",
     "ocr-index-updated",
     "ocr-annotations-changed",
     "media-lifecycle-changed",
@@ -602,7 +606,7 @@ onMounted(async () => {
     const stop = await listen(eventName, (event: any) => {
       const library = event.payload?.libraryId || event.payload?.library_id;
       if (library && library !== libConfig._libraryId) return;
-      if (eventName === 'ocr-index-updated' || eventName === 'ocr-annotations-changed') { scheduleOcrCounts(); return; }
+      if (['ocr-index-updated','ocr-annotations-changed','object-index-updated','object-annotations-changed'].includes(eventName)) { scheduleOcrCounts(); return; }
       if(eventName==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;
       if(eventName==='album-updated'&&!event.payload?.filtersChanged)return;
       if(eventName==='files-deleted'){const ids=new Set((event.payload?.fileIds||[]).map(Number));libConfig.smartAlbums=nodes.value.map(n=>ids.has(Number(n.coverFileId))?{...n,coverFileId:null}:n);}

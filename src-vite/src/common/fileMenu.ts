@@ -144,6 +144,11 @@ export const useFileMenuItems = (
         action: createAction('create-montage'),
       },
       {
+        label: translate('objects.recognize_selected'), icon: markRaw(IconFileSearch), disabled: kind !== 'image' || selectionCount === 0, action: createAction('recognize-objects'),
+      },
+      { label: translate('objects.reidentify_selected'), icon: markRaw(IconFileSearch), disabled: kind !== 'image' || selectionCount === 0, action: createAction('rerecognize-objects'),
+      },
+      {
         label: translate('ocr.recognize_selected'), icon: markRaw(IconFileSearch),
         disabled: kind !== 'image' || selectionCount === 0, action: createAction('recognize-text'),
       },
@@ -367,6 +372,11 @@ export const useFileMenuItems = (
         shortcut: shortcut('file.searchSimilar'),
         disabled: !isImage,
         action: createAction('search-similar')
+      },
+      {
+        label: translate('objects.recognize'), icon: markRaw(IconFileSearch), disabled: !isImage, action: createAction('recognize-objects'),
+      },
+      { label: translate('objects.reidentify'), icon: markRaw(IconFileSearch), disabled: !isImage, action: createAction('rerecognize-objects'),
       },
       {
         label: translate('ocr.recognize'), icon: markRaw(IconFileSearch), disabled: !isImage, action: createAction('recognize-text'),

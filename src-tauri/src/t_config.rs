@@ -384,6 +384,25 @@ impl Default for OcrPanelState {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ObjectPanelState {
+    pub state: String,
+    pub class_key: String,
+    pub class_name: String,
+    pub min_count: i64,
+}
+impl Default for ObjectPanelState {
+    fn default() -> Self {
+        Self {
+            state: "all".into(),
+            class_key: String::new(),
+            class_name: String::new(),
+            min_count: 1,
+        }
+    }
+}
+
 /// Per-library state that persists across sessions
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -407,6 +426,8 @@ pub struct LibraryState {
     pub person: PersonState,
     #[serde(default)]
     pub ocr: OcrPanelState,
+    #[serde(default)]
+    pub objects: ObjectPanelState,
     #[serde(default)]
     pub collection: CollectionState,
     pub search: SearchState,

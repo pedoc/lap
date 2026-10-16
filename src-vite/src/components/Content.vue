@@ -50,7 +50,7 @@
           class="min-w-0 overflow-hidden"
           @navigate="handleTitleBreadcrumbNavigate"
         />
-        <span v-if="config.main.sidebarIndex === SIDEBAR.OCR && ocrPreviewDeferred" class="text-xs text-warning shrink-0" :title="t('ocr.preview_pending_hint')">{{ t('ocr.preview_pending') }}</span>
+        <span v-if="[SIDEBAR.OCR, SIDEBAR.OBJECTS].includes(config.main.sidebarIndex) && ocrPreviewDeferred" class="text-xs text-warning shrink-0" :title="t('ocr.preview_pending_hint')">{{ t('ocr.preview_pending') }}</span>
       </div>
 
       <!-- toolbar -->
@@ -58,7 +58,7 @@
 
         <!-- file type options -->
         <DropDownSelect
-          v-if="!(config.main.sidebarIndex===SIDEBAR.LIBRARY && libConfig.library.item===LIB_ITEM.MEDIA)"
+          v-if="config.main.sidebarIndex!==SIDEBAR.OBJECTS && !(config.main.sidebarIndex===SIDEBAR.LIBRARY && libConfig.library.item===LIB_ITEM.MEDIA)"
           :icon="IconFilter"
           :options="fileTypeOptions"
           :multiSelect="true"
@@ -515,6 +515,7 @@
             @navigate-metadata="handleNavigateMetadata"
             @navigate-person="handleNavigatePerson"
             @ocr-focus="!showFilmstripLayout && (showQuickView = true)"
+            @object-focus="!showFilmstripLayout && (showQuickView = true)"
           />
         </div>
       </div>
@@ -786,6 +787,8 @@ import { createEmptyLibraryCounts } from '@/stores/libraryStore';
 import { getAlbumScanState, getAlbumScanIcon, shouldAnimateAlbumScanIcon } from '@/common/scanStatus';
 import { startOcr } from '@/common/ocr';
 import { normalizeOcrState } from '@/common/ocrUi';
+import { startObjectIndex } from '@/common/objects';
+import { normalizeObjectState, objectClassName, objectSelectionIds } from '@/common/objectUi';
 import { CULLING, DATE_SORT, GROUP, LIB_ITEM, RATE, SIDEBAR } from '@/common/constants';
 import { isWin, isMac, isLinux, setTheme, separator,
          formatFileSize, formatDate, getCalendarDateRange, formatFolderBreadcrumb, getThumbnailDataUrl, getAssetSrc, getPreviewUrl,
@@ -802,7 +805,7 @@ import ContextMenu from '@/components/ContextMenu.vue';
 import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFileDragActive, isReturningNativeFileDrag, startNativeFileDrag } from '@/common/nativeDrag';
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
-import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, hasOcrRules, isSmartFolder } from '@/common/smartAlbums';
+import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules, isSmartFolder } from '@/common/smartAlbums';
 import { setMediaHidden } from '@/common/api';
 import { mediaTypeRules } from '@/common/mediaLifecycle';
 import { useFileMenuItems } from '@/common/fileMenu';
@@ -854,6 +857,7 @@ import {
   IconSelection,
   IconInformation,
   IconSearch,
+  IconBox,
   IconPhotoSearch,
   IconPersonSearch,
   IconFolderSearch,
@@ -3410,13 +3414,14 @@ function queueSmartRefresh(){
   smartRefreshTimer=setTimeout(()=>{smartRefreshTimer=undefined;if(isLoading.value){queueSmartRefresh();return;}refreshActiveSmartAlbum();},800);
 }
 watch(()=>config.settings.ai?.semanticProfile,()=>{if(activeSmartAlbum.value && hasSemanticRules(activeSmartAlbum.value.query?.rules || []))queueSmartRefresh();});
+watch(()=>config.settings.ai?.detectionProfile,()=>{if(activeSmartAlbum.value && hasObjectRules(activeSmartAlbum.value.query?.rules || []))queueSmartRefresh();});
 watch(()=>config.settings.ai?.ocrProfile,()=>{if(activeSmartAlbum.value && hasOcrRules(activeSmartAlbum.value.query?.rules || []))queueSmartRefresh();});
 watch(()=>uiStore.countUpdateTick,()=>{if(activeSmartAlbum.value)queueSmartRefresh();});
 watch(()=>activeSmartAlbum.value?.name, name=>{if(name && tempViewMode.value==='none')contentTitle.value=name;});
 onMounted(async()=>{
   smartClock=setInterval(()=>{if(activeSmartAlbum.value&&hasTimeSmartRules(activeSmartAlbum.value.query?.rules||[]))queueSmartRefresh();},60000);
-  for(const name of ['ocr-index-updated','ocr-annotations-changed','media-lifecycle-changed','files-deleted','semantic-index-changed','smart-album-index-progress','index_progress','index_finished','face-person-changed','face_index_finished','location-resolution-progress','map-location-changed']) {
-    const stop=await listen(name,(event:any)=>{const library=event.payload?.libraryId||event.payload?.library_id;if(library&&library!==libConfig._libraryId)return;if((name==='ocr-index-updated'||name==='ocr-annotations-changed')&&(!activeSmartAlbum.value||!hasOcrRules(activeSmartAlbum.value.query?.rules||[])))return;if(name==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;queueSmartRefresh();});
+  for(const name of ['object-index-updated','object-annotations-changed','ocr-index-updated','ocr-annotations-changed','media-lifecycle-changed','files-deleted','semantic-index-changed','smart-album-index-progress','index_progress','index_finished','face-person-changed','face_index_finished','location-resolution-progress','map-location-changed']) {
+    const stop=await listen(name,(event:any)=>{const library=event.payload?.libraryId||event.payload?.library_id;if(library&&library!==libConfig._libraryId)return;if(name.startsWith('object-')&&(!activeSmartAlbum.value||!hasObjectRules(activeSmartAlbum.value.query?.rules||[])))return;if((name==='ocr-index-updated'||name==='ocr-annotations-changed')&&(!activeSmartAlbum.value||!hasOcrRules(activeSmartAlbum.value.query?.rules||[])))return;if(name==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;queueSmartRefresh();});
     if(smartEventsDisposed){stop();return;}smartEventStops.push(stop);
   }
 });
@@ -3742,6 +3747,7 @@ const currentTitleIcon = computed(() => {
                 : IconCalendar;
           case SIDEBAR.TAG: return IconTag;
           case SIDEBAR.OCR: return IconSearch;
+          case SIDEBAR.OBJECTS: return IconBox;
           case SIDEBAR.PERSON: return IconPerson;
           case SIDEBAR.LOCATION: return IconLocation;
           case SIDEBAR.CAMERA: return config.camera.isCamera ? IconCamera : IconCameraAperture;
@@ -4356,6 +4362,17 @@ async function recognizeSelectedText(force = false) {
     toast.success(t('ocr.task_started'));
   } catch (e) { if (libraryId === libConfig._libraryId) toast.error(String(e)); }
 }
+async function recognizeSelectedObjects(force = false) {
+  const libraryId=libConfig._libraryId;
+  try {
+    const files=selectMode.value ? await getActionableSelectedItemsForAction() : [fileList.value[selectedItemIndex.value]].filter(Boolean);
+    const ids=objectSelectionIds(files);
+    if (files.some(isOriginalUnavailable)) throw new Error(t('face_actions.offline'));
+    if(force && !await ask(t('objects.rebuild_confirm'),{kind:'warning'}))return;
+    if(libraryId!==libConfig._libraryId)return;
+    await startObjectIndex({fileIds:ids,force});toast.success(t('objects.started'));
+  } catch(error:any){toast.error(error?.message||String(error));}
+}
 async function rebuildSelectedThumbnails() {
   const libraryId = libConfig._libraryId;
   try {
@@ -4460,6 +4477,8 @@ function handleItemAction(payload: { action: string, index: number }) {
     'add-to-collection': clickAddToCollection,
     'comment': () => showCommentMsgbox.value = true,
     'search-similar': () => enterSimilarSearchMode(fileList.value[selectedItemIndex.value]),
+    'recognize-objects': () => void recognizeSelectedObjects(),
+    'rerecognize-objects': () => void recognizeSelectedObjects(true),
     'recognize-text': () => void recognizeSelectedText(),
     'rerecognize-text': () => void recognizeSelectedText(true),
     'detect-faces': () => void detectSelectedFaces(),
@@ -6209,6 +6228,7 @@ watch(
     smartId: libConfig.library.smartId,
     album: [libConfig.album.id, libConfig.album.folderId, libConfig.album.folderPath, libConfig.album.selected],
     smartAlbum: [libConfig.smartAlbum.type, libConfig.smartAlbum.id],
+    objects: config.main.sidebarIndex === SIDEBAR.OBJECTS ? [libConfig.objects.state, libConfig.objects.classKey, libConfig.objects.minCount, config.settings.ai?.detectionProfile] : null,
     ocr: config.main.sidebarIndex === SIDEBAR.OCR ? [libConfig.ocr.state, libConfig.ocr.text, config.settings.ai?.ocrProfile] : null,
     personId: libConfig.person.id,
     calendar: [config.calendar.view, libConfig.calendar.year, libConfig.calendar.month, libConfig.calendar.date],
@@ -6237,6 +6257,7 @@ watch(
     // Count and cover updates are query outputs, not refresh triggers.
     smartResultSignature(activeSmartAlbum.value), // Only active result-affecting changes reload photos; folders, names, and counters do not.
     libConfig.search.searchText,
+    config.main.sidebarIndex === SIDEBAR.OBJECTS ? JSON.stringify([libConfig.objects, config.settings.ai?.detectionProfile]) : null,
     config.main.sidebarIndex === SIDEBAR.OCR ? `${libConfig.ocr.state}\0${libConfig.ocr.text}` : null,
     [SIDEBAR.OCR, SIDEBAR.SEARCH].includes(config.main.sidebarIndex) ? config.settings.ai?.ocrProfile : null,
     libConfig.rating.item, // rating
@@ -6568,7 +6589,7 @@ function scheduleOcrContentRefresh() {
   ocrRefreshTimer = setTimeout(() => { ocrRefreshTimer = undefined; void refreshOcrContent(); }, 900);
 }
 async function refreshOcrContent() {
-  if (ocrContentDisposed || ![SIDEBAR.OCR, SIDEBAR.SEARCH].includes(config.main.sidebarIndex) || libConfig.activePane === 'collection' || showQuickView.value) return;
+  if (ocrContentDisposed || ![SIDEBAR.OCR, SIDEBAR.SEARCH, SIDEBAR.OBJECTS].includes(config.main.sidebarIndex) || libConfig.activePane === 'collection' || showQuickView.value) return;
   if (ocrRefreshRunning) return;
   ocrRefreshRunning = true; ocrRefreshAgain = false;
   const requestId = currentContentRequestId;
@@ -6668,6 +6689,14 @@ onMounted(async () => {
 });
 watch(showQuickView, open => { if (!open && ocrRefreshAgain) scheduleOcrContentRefresh(); });
 watch(() => [showFilmstripLayout.value, selectedItemIndex.value], () => { if (ocrPreviewDeferred.value) scheduleOcrContentRefresh(); });
+const objectContentStops: Array<() => void> = [];
+onMounted(async () => {
+  for (const name of ['object-index-updated','object-annotations-changed']) {
+    const off = await listen(name,(event:any)=>{if(config.main.sidebarIndex===SIDEBAR.OBJECTS && event.payload?.libraryId===libConfig._libraryId)scheduleOcrContentRefresh();});
+    if(ocrContentDisposed) off(); else objectContentStops.push(off);
+  }
+});
+onBeforeUnmount(()=>objectContentStops.forEach(off=>off()));
 onBeforeUnmount(() => { ocrContentDisposed = true; clearTimeout(ocrRefreshTimer); offOcrContent?.(); offOcrAnnotations?.(); });
 
 const getCurrentQueryFileIds = () => {
@@ -7302,6 +7331,9 @@ async function getFileList(
     personId = 0,
     ocrState = '',
     ocrText = '',
+    objectState = '',
+    objectClass = '',
+    objectMinCount = 1,
     gpsMinLat = null,
     gpsMaxLat = null,
     gpsMinLon = null,
@@ -7346,6 +7378,7 @@ async function getFileList(
     personId,
     ocrState,
     ocrText,
+    objectState, objectClass, objectMinCount,
     gpsMinLat,
     gpsMaxLat,
     gpsMinLon,
@@ -8235,6 +8268,10 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
         }
       });
     }
+  }
+  else if(newIndex === SIDEBAR.OBJECTS) {
+    contentTitle.value = `${t('objects.title')} · ${libConfig.objects.classKey ? objectClassName({key:libConfig.objects.classKey,name:libConfig.objects.className},t) + ' ≥ ' + libConfig.objects.minCount : t('objects.state_' + normalizeObjectState(libConfig.objects.state))}`;
+    getFileList({ searchFileType: 0, objectState: normalizeObjectState(libConfig.objects.state), objectClass: libConfig.objects.classKey || '', objectMinCount: libConfig.objects.minCount || 1 }, requestId);
   }
   else if(newIndex === SIDEBAR.OCR) {
     contentTitle.value = `${t('ocr.workspace_title')} · ${t('ocr.state_' + normalizeOcrState(libConfig.ocr.state))}${libConfig.ocr.text ? ' — ' + libConfig.ocr.text : ''}`;
@@ -10105,6 +10142,7 @@ function normalizeFileTypeMask(mask: number): number {
 }
 
 const emptyFilesMessage = computed(() => {
+  if (config.main.sidebarIndex === SIDEBAR.OBJECTS && libConfig.activePane !== 'collection') return t('objects.no_results');
   if (config.main.sidebarIndex === SIDEBAR.OCR && libConfig.activePane !== 'collection') return t('ocr.no_results');
   if (isCurrentFolderMissing.value) return localeMsg.value.album.folder_unavailable.title;
   if (imageSearchError.value) return localeMsg.value.tooltip.not_found.image_search_failed;
@@ -10127,6 +10165,7 @@ const emptyFilesMessage = computed(() => {
 });
 
 const emptyFilesHint = computed(() => {
+  if (config.main.sidebarIndex === SIDEBAR.OBJECTS && libConfig.activePane !== 'collection') return t('objects.no_results_hint');
   if (config.main.sidebarIndex === SIDEBAR.OCR && libConfig.activePane !== 'collection') return t('ocr.no_results_hint');
   if (isCurrentFolderMissing.value) return localeMsg.value.album.folder_unavailable.description;
   if (imageSearchError.value) return localeMsg.value.tooltip.not_found.image_search_failed_hint;

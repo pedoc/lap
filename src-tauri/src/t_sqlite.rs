@@ -2067,6 +2067,12 @@ pub struct QueryParams {
     pub ocr_state: String,
     #[serde(default)]
     pub ocr_text: String,
+    #[serde(default)]
+    pub object_state: String,
+    #[serde(default)]
+    pub object_class: String,
+    #[serde(default = "default_object_min_count")]
+    pub object_min_count: i64,
     // GPS bounding box filter (e.g. for "photos in this map area")
     #[serde(default)]
     pub gps_min_lat: Option<f64>,
@@ -2078,6 +2084,10 @@ pub struct QueryParams {
     pub gps_max_lon: Option<f64>,
     #[serde(default)]
     pub group_by: i64,
+}
+
+fn default_object_min_count() -> i64 {
+    1
 }
 
 fn default_culling_flag() -> i64 {
@@ -3398,7 +3408,7 @@ impl AFile {
         collection_id: i64,
         params: &QueryParams,
     ) -> Result<(i64, i64), String> {
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let where_clause = Self::append_condition(where_clause, "cf.collection_id = ?");
         let collection_join = " INNER JOIN acollections_files cf ON a.id = cf.file_id";
 
@@ -3431,7 +3441,7 @@ impl AFile {
         offset: i64,
         limit: i64,
     ) -> Result<Vec<Self>, String> {
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let where_clause = Self::append_condition(where_clause, "cf.collection_id = ?");
 
         let mut query = Self::build_base_query();
@@ -3462,7 +3472,7 @@ impl AFile {
         else {
             return Ok(Vec::new());
         };
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let where_clause = Self::append_condition(where_clause, "cf.collection_id = ?");
         let sql = format!(
             "SELECT group_id, group_id AS label, COUNT(*), COALESCE(SUM(size), 0)
@@ -3515,7 +3525,7 @@ impl AFile {
         else {
             return Ok(Vec::new());
         };
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let where_clause = Self::append_condition(where_clause, "cf.collection_id = ?");
 
         let mut query = Self::build_base_query();
@@ -3569,7 +3579,7 @@ impl AFile {
         else {
             return Ok(Vec::new());
         };
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let where_clause = Self::append_condition(where_clause, "cf.collection_id = ?");
         let query = format!(
             "SELECT a.id
@@ -3593,7 +3603,7 @@ impl AFile {
         collection_id: i64,
         params: &QueryParams,
     ) -> Result<Vec<i64>, String> {
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let where_clause = Self::append_condition(where_clause, "cf.collection_id = ?");
         let query = format!(
             "SELECT a.id
@@ -4691,27 +4701,53 @@ impl AFile {
 
     // helper to build search query conditions and params
     // Returns (joins_clause, where_clause, params)
-    fn build_search_query_parts(params: &QueryParams) -> (String, String, Vec<Box<dyn ToSql>>) {
+    fn build_search_query_parts(
+        params: &QueryParams,
+    ) -> Result<(String, String, Vec<Box<dyn ToSql>>), String> {
         let mut joins = Vec::new();
         let mut conditions: Vec<String> =
             vec![Self::live_photo_companion_exclusion_condition().to_string()];
         let mut sql_params: Vec<Box<dyn ToSql>> = Vec::new();
 
+        if !params.object_state.is_empty() || !params.object_class.is_empty() {
+            let (condition, values) = crate::ai::objects_store::workspace_condition(
+                if params.object_state.is_empty() {
+                    "all"
+                } else {
+                    &params.object_state
+                },
+                &params.object_class,
+                params.object_min_count,
+            )?;
+            conditions.push(condition);
+            sql_params.extend(values);
+        }
         if !params.ocr_state.is_empty() || !params.ocr_text.is_empty() {
             conditions.push("a.file_type IN (1,3)".into());
             let (condition, values) = crate::ai::ocr::workspace_query(
-                if params.ocr_state.is_empty() { "all" } else { &params.ocr_state },
+                if params.ocr_state.is_empty() {
+                    "all"
+                } else {
+                    &params.ocr_state
+                },
                 &params.ocr_text,
             );
             conditions.push(format!("({condition})"));
             sql_params.extend(values);
         }
         if !params.search_file_name.is_empty() {
-            conditions.push(format!("(a.name LIKE ? COLLATE NOCASE OR a.comments LIKE ? COLLATE NOCASE OR {})", crate::ai::ocr::search_predicate()));
+            conditions.push(format!(
+                "(a.name LIKE ? COLLATE NOCASE OR a.comments LIKE ? COLLATE NOCASE OR {})",
+                crate::ai::ocr::search_predicate()
+            ));
             let pattern = format!("%{}%", params.search_file_name);
             sql_params.push(Box::new(pattern.clone()));
             sql_params.push(Box::new(pattern));
-            let literal = params.search_file_name.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            let literal = params
+                .search_file_name
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
             sql_params.push(Box::new(format!("%{literal}%")));
         }
 
@@ -4725,7 +4761,9 @@ impl AFile {
             // Match path that starts with search_folder followed by '/' or end of string
             conditions.push("(b.path = ? OR b.path LIKE ? ESCAPE '\\')".to_string());
             sql_params.push(Box::new(params.search_all_subfolders.clone()));
-            sql_params.push(Box::new(subtree_like_pattern(&params.search_all_subfolders)));
+            sql_params.push(Box::new(subtree_like_pattern(
+                &params.search_all_subfolders,
+            )));
         }
 
         if !params.search_folder.is_empty() {
@@ -4845,12 +4883,12 @@ impl AFile {
             String::new()
         };
 
-        (joins_clause, where_clause, sql_params)
+        Ok((joins_clause, where_clause, sql_params))
     }
 
     // get query count and sum
     pub fn get_query_count_and_sum(params: &QueryParams) -> Result<(i64, i64), String> {
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
 
         let sql = if params.person_id > 0 {
             // Use subquery with GROUP BY to handle potential duplicate rows when joining faces
@@ -4875,7 +4913,7 @@ impl AFile {
         offset: i64,
         limit: i64,
     ) -> Result<Vec<Self>, String> {
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
 
         let mut query = Self::build_base_query();
         query.push_str(&joins);
@@ -5023,7 +5061,7 @@ impl AFile {
         else {
             return Ok(Vec::new());
         };
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let sql = format!(
             "SELECT group_id, group_id AS label, COUNT(*), COALESCE(SUM(size), 0)
              FROM (
@@ -5072,7 +5110,7 @@ impl AFile {
         else {
             return Ok(Vec::new());
         };
-        let (joins, where_clause, mut sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, mut sql_params) = Self::build_search_query_parts(params)?;
 
         let mut query = Self::build_base_query();
         query.push_str(&joins);
@@ -5205,7 +5243,7 @@ impl AFile {
         else {
             return Ok(Vec::new());
         };
-        let (joins, where_clause, mut sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, mut sql_params) = Self::build_search_query_parts(params)?;
         let mut query = format!(
             "SELECT a.id
              FROM afiles a
@@ -5251,7 +5289,7 @@ impl AFile {
             return Ok(None);
         };
 
-        let (joins, where_clause, mut sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, mut sql_params) = Self::build_search_query_parts(params)?;
         let mut query = format!(
             "SELECT {group_id_expr}
              FROM afiles a
@@ -5292,7 +5330,7 @@ impl AFile {
     }
 
     pub fn get_query_file_ids(params: &QueryParams) -> Result<Vec<i64>, String> {
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let mut query = format!(
             "SELECT a.id
              FROM afiles a
@@ -5597,6 +5635,11 @@ impl AFile {
         let value = &rule.value;
 
         match field {
+            "object_state" | "object_class" | "object_count" => {
+                let (condition, values) = crate::ai::objects_smart::condition(field, operator, value)?;
+                sql_params.extend(values);
+                Ok(condition)
+            }
             "ocr_text" | "ocr_state" => {
                 let (condition, values) = crate::ai::ocr_smart::condition(field, operator, value)?;
                 sql_params.extend(values);
@@ -6407,7 +6450,7 @@ impl AFile {
             return Ok(None);
         }
 
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
         let mut query = format!(
             "WITH ranked_files AS (
                 SELECT
@@ -6451,7 +6494,7 @@ impl AFile {
             return Ok(Vec::new());
         }
 
-        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = Self::build_search_query_parts(params)?;
 
         // Determine date field and extraction logic based on sort_type
         let (date_field, year_extract, month_extract, date_extract) = match params.sort_type {
@@ -9423,7 +9466,7 @@ pub struct AGpsMapPoint {
 impl AGpsMapPoint {
     pub fn get_map_points_from_db(params: &QueryParams) -> Result<Vec<Self>, String> {
         let conn = open_conn()?;
-        let (joins, where_clause, sql_params) = AFile::build_search_query_parts(params);
+        let (joins, where_clause, sql_params) = AFile::build_search_query_parts(params)?;
         let query = format!(
             "SELECT AVG(gps_latitude) AS lat, AVG(gps_longitude) AS lon, COUNT(*) AS cnt, MIN(id) AS file_id
              FROM (
@@ -10169,7 +10212,7 @@ mod tag_group_query_tests {
         })).unwrap();
         for (filter, expected) in [(160, vec![1_i64, 5]), (0, vec![1_i64, 2, 5])] {
             conn.execute("UPDATE albums SET small_image_filter=?1", params![filter]).unwrap();
-            let (joins, conditions, values) = AFile::build_search_query_parts(&params);
+            let (joins, conditions, values) = AFile::build_search_query_parts(&params).unwrap();
             let mut stmt = conn.prepare(&format!("SELECT a.id FROM afiles a JOIN afolders b ON b.id = a.folder_id {joins} {conditions} ORDER BY a.id")).unwrap();
             let ids: Vec<i64> = stmt.query_map(rusqlite::params_from_iter(values.iter()), |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
             assert_eq!(ids, expected);
@@ -10238,7 +10281,7 @@ mod album_filter_tests {
         }))
         .unwrap();
         let query_ids = |params: &QueryParams| {
-            let (joins, conditions, values) = AFile::build_search_query_parts(params);
+            let (joins, conditions, values) = AFile::build_search_query_parts(params).unwrap();
             let sql = format!(
                 "SELECT a.id FROM afiles a JOIN afolders b ON b.id=a.folder_id {}{} ORDER BY a.id",
                 joins, conditions
@@ -10498,5 +10541,31 @@ mod raw_display_cache_tests {
         Face::save_scanned_with_conn(&c,1,&[],None).unwrap();
         assert_eq!(c.query_row("SELECT count(*) FROM faces",[],|r|r.get::<_,i64>(0)).unwrap(),0);
         let (name,status):(String,i64)=c.query_row("SELECT name,has_faces FROM afiles",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(name,"original.jpg");assert_eq!(status,2);
+    }
+}
+
+#[cfg(test)]
+mod object_query_contract_tests {
+    use super::*;
+    #[test]
+    fn object_queries_preserve_old_defaults_and_report_invalid_counts() {
+        let mut query: QueryParams = serde_json::from_value(serde_json::json!({
+            "searchFileName":"", "searchFileType":0,"sortType":0,"sortOrder":0,
+            "searchAllSubfolders":"","searchFolder":"","startDate":0,"endDate":0,
+            "calendarSort":0,"make":"","model":"","lensMake":"","lensModel":"",
+            "isFavorite":false,"rating":-1,"tagId":0,"personId":0
+        }))
+        .unwrap();
+        assert_eq!(query.object_min_count, 1);
+        assert!(query.object_state.is_empty());
+        assert!(AFile::build_search_query_parts(&query).is_ok());
+        query.object_state = "all".into();
+        for invalid in [0, -1, 10001] {
+            query.object_min_count = invalid;
+            assert!(
+                AFile::build_search_query_parts(&query).is_err(),
+                "Invalid counts must not become successful empty results"
+            );
+        }
     }
 }

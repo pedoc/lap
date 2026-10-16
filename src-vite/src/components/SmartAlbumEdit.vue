@@ -67,6 +67,7 @@
               </div>
             </template>
           </SmartAlbumRules>
+          <p v-if="hasObjectRules(rules)" class="text-xs mt-2 opacity-60">{{ $t('objects.smart_hint') }}</p>
           <p v-if="hasOcrRules(rules)" class="text-xs mt-2 opacity-60">{{ $t('ocr.smart_hint') }}</p>
           <div class="text-xs mt-2 text-base-content/40">{{ $t('album.smart_edit.rules_count',{count:ruleCount,max:maxRules}) }}</div>
         </section>
@@ -101,7 +102,9 @@ import SmartAlbumPhotoPicker from './SmartAlbumPhotoPicker.vue';
 import SmartAlbumRules from './SmartAlbumRules.vue';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
 import { SMART_TAG_CATEGORIES } from '@/common/smartTags';
-import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules, hasOcrRules } from '@/common/smartAlbums';
+import { useObjects } from '@/common/objects';
+import { OBJECT_STATES, objectClassName } from '@/common/objectUi';
+import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules } from '@/common/smartAlbums';
 import { listen } from '@tauri-apps/api/event';
 import { config, libConfig } from '@/common/config';
 import { getSmartQueryCountAndSum, getSmartQueryFiles, getSmartAlbumStatus, getFileThumbById } from '@/common/api';
@@ -125,6 +128,8 @@ const props = defineProps({
 
 const emit = defineEmits(['ok', 'cancel']);
 const { t, locale, messages } = useI18n();
+const { view: objectModelView } = useObjects();
+const objectOptions = computed(() => (objectModelView.value?.classes || []).map((label:any) => ({value:label.key,label:objectClassName(label,t)})));
 const uiStore = useUIStore();
 const localeMsg = computed(() => messages.value[locale.value] as any);
 const inputNameRef = ref<HTMLInputElement | null>(null);
@@ -182,7 +187,7 @@ function queryParams() {
 }
 const ocrPreviewRevision = ref(0);
 const ocrPreviewStops: Array<() => void> = [];
-const previewSignature = computed(() => JSON.stringify([queryParams(), hasOcrRules(rules.value) ? [config.settings.ai?.ocrProfile, ocrPreviewRevision.value] : null]));
+const previewSignature = computed(() => JSON.stringify([queryParams(), hasOcrRules(rules.value) ? [config.settings.ai?.ocrProfile, ocrPreviewRevision.value] : null, hasObjectRules(rules.value) ? [config.settings.ai?.detectionProfile, ocrPreviewRevision.value] : null]));
 const previewStale = computed(() => preview.value && preview.value.signature !== previewSignature.value);
 function applyTemplate() {
   if (!template.value) return;
@@ -332,6 +337,9 @@ const groupOptions = computed(() => {
 });
 
 const fieldOptions = computed(() => [
+  { value: 'object_state', label: t('objects.smart_state') },
+  { value: 'object_class', label: t('objects.smart_class') },
+  { value: 'object_count', label: t('objects.smart_count') },
   { value: 'ocr_text', label: t('ocr.smart_text') },
   { value: 'ocr_state', label: t('ocr.smart_state') },
   { value: 'semantic', label: t('smart_albums.semantic') },
@@ -424,6 +432,9 @@ function getOperatorOptions(field: string) {
   if (['semantic','similar_image'].includes(field)) return [{value:'matches',label:'≥'}, {value:'not_matches',label:'<'}];
   if (field === 'anniversary') return [op('is')];
   if (field === 'name' || field === 'ocr_text') return [op('contains'), op('not_contains')];
+  if (field === 'object_state') return [op('is'),op('is_not')];
+  if (field === 'object_class') return [op('has'),op('not_has')];
+  if (field === 'object_count') return [{value:'eq',label:'='},{value:'gte',label:'≥'},{value:'lte',label:'≤'}];
   if (field === 'ocr_state') return [op('is'), op('is_not')];
   if (['file_type', 'media_subtype', 'extension', 'camera', 'lens', 'location', 'album', 'collection'].includes(field)) return [op('is'), op('is_not')];
   if (field === 'favorite' || field === 'has_gps') return [op('is')];
@@ -450,6 +461,9 @@ function setDefaultRuleValue(rule: any) {
   else if (rule.field === 'similar_image') rule.value = {fileId:null,threshold:0.5};
   else if (rule.field === 'anniversary') rule.value = true;
   else if (rule.field === 'name' || rule.field === 'ocr_text') rule.value = '';
+  else if (rule.field === 'object_state') rule.value = 'detected';
+  else if (rule.field === 'object_class') rule.value = objectOptions.value[0]?.value || '';
+  else if (rule.field === 'object_count') rule.value = {classKey:objectOptions.value[0]?.value || '',count:1};
   else if (rule.field === 'ocr_state') rule.value = 'text';
   else if (rule.field === 'file_type') rule.value = 1;
   else if (rule.field === 'media_subtype') rule.value = 'motion_photo';
@@ -481,6 +495,9 @@ function isRuleValid(rule: any) {
   if(rule.field==='group')return smartChildren(rule).length>0 && smartChildren(rule).every(isRuleValid);
   if(['semantic','similar_image'].includes(rule.field))return Number.isFinite(Number(rule.value?.threshold)) && Number(rule.value.threshold)>=0 && Number(rule.value.threshold)<=1 && (rule.field==='semantic'?Boolean(rule.value?.prompt?.trim()):Number.isSafeInteger(Number(rule.value?.fileId))&&Number(rule.value.fileId)>0);
   if(rule.field==='anniversary')return true;
+  if (rule.field === 'object_state') return ['is','is_not'].includes(rule.operator) && OBJECT_STATES.filter(s=>s!=='all').includes(rule.value);
+  if (rule.field === 'object_class') return ['has','not_has'].includes(rule.operator) && typeof rule.value === 'string' && rule.value.length > 0 && rule.value.length <= 512;
+  if (rule.field === 'object_count') return ['gte','lte','eq'].includes(rule.operator) && typeof rule.value?.classKey === 'string' && rule.value.classKey.length > 0 && rule.value.classKey.length <= 512 && Number.isSafeInteger(rule.value.count) && rule.value.count >= 0 && rule.value.count <= 10000;
   if (rule.field === 'ocr_text') return ['contains','not_contains'].includes(rule.operator) && typeof rule.value === 'string' && rule.value.trim().length > 0 && rule.value.length <= 512;
   if (rule.field === 'ocr_state') return ['is','is_not'].includes(rule.operator) && ['text','pending','empty','failed'].includes(rule.value);
   if (['empty', 'not_empty'].includes(rule.operator)) return true;
@@ -573,6 +590,7 @@ function clickOk() {
 }
 
 function normalizeRuleValue(rule: any) {
+  if (rule.field.startsWith('object_')) return rule.value;
   if (rule.field === 'file_type') return getFileTypeValue(rule.value);
   if (rule.field === 'extension') return getExtensionValue(rule.value);
   if (rule.field === 'size') return normalizeNumericValue(rule.value, 1_000_000);
@@ -781,9 +799,9 @@ watch([tagOptions, personOptions, albumOptions, collectionOptions, cameraOptions
 });
 
 onMounted(async () => {
-  for (const name of ['ocr-index-updated','ocr-annotations-changed']) {
+  for (const name of ['ocr-index-updated','ocr-annotations-changed','object-index-updated','object-annotations-changed']) {
     const off = await listen(name, (event:any) => {
-      if (event.payload?.libraryId && event.payload.libraryId !== libConfig._libraryId || !hasOcrRules(rules.value)) return;
+      if (event.payload?.libraryId && event.payload.libraryId !== libConfig._libraryId || !(name.startsWith('object-') ? hasObjectRules(rules.value) : hasOcrRules(rules.value))) return;
       ocrPreviewRevision.value++;
     });
     if (editDisposed) off(); else ocrPreviewStops.push(off);
@@ -1025,6 +1043,14 @@ const RuleValueControl = defineComponent({
         h('label',{class:'flex items-center gap-2 text-xs'},[t('smart_albums.threshold'),numberInput(props.rule.value.threshold,(e:any)=>{props.rule.value.threshold=Number(e.target.value);},{min:0,max:1,step:0.01})]),
       ]);
       if (['empty', 'not_empty'].includes(props.rule.operator) && !isDateRuleField(props.rule.field)) return h('span', { class: 'text-xs text-base-content/30' }, '-');
+      if (props.rule.field === 'object_state') return selectInput(OBJECT_STATES.filter(s=>s!=='all').map(value=>({value,label:t('objects.state_'+value)})));
+      if (['object_class','object_count'].includes(props.rule.field)) {
+        const selected=props.rule.field==='object_class'?props.rule.value:props.rule.value?.classKey;
+        const options=[{value:'',label:t('objects.select_class')},...objectOptions.value];
+        if(selected && !options.some(o=>o.value===selected))options.push({value:selected,label:selected});
+        const select=h('select',{class:selectClass,value:selected,onChange:(event:any)=>{if(props.rule.field==='object_class')props.rule.value=event.target.value;else props.rule.value.classKey=event.target.value;}},options.map(o=>h('option',{value:o.value},o.label)));
+        return props.rule.field==='object_class'?select:h('div',{class:'flex flex-col gap-2'},[select,numberInput(props.rule.value?.count,(event:any)=>{props.rule.value.count=Number(event.target.value);},{min:0,max:10000,step:1})]);
+      }
       if (props.rule.field === 'ocr_state') return selectInput(['text','pending','empty','failed'].map(value => ({ value, label: t('ocr.state_' + value) })));
       if (props.rule.field === 'ocr_text') return h('input', { class: inputClass, value: props.rule.value, maxlength: 512, placeholder: t('ocr.smart_text_placeholder'), onInput: (event:any) => { props.rule.value = event.target.value; } });
       if (props.rule.field === 'file_type') return fileTypeInput();

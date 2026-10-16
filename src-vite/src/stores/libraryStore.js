@@ -109,6 +109,7 @@ export const useLibraryStore = defineStore('libraryStore', {
 
     /** @type {{ state: 'all' | 'text' | 'pending' | 'empty' | 'failed', text: string }} */
     ocr: { state: 'all', text: '' },
+    objects: { state: 'all', classKey: '', className: '', minCount: 1 },
 
     /** @type {{ id: number | null, name: string | null }} */
     person: {
@@ -266,6 +267,7 @@ export const useLibraryStore = defineStore('libraryStore', {
             location: this.location,
             search: this.search,
             ocr: this.ocr,
+            objects: this.objects,
             destFolder: this.destFolder,
             index: {
               status: this.index.status,
