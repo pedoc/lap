@@ -2283,6 +2283,16 @@
   }
 ,
   "ocr": {
+    "region_select": "Select text region",
+    "region_cancel": "Cancel selection",
+    "region_drag_hint": "Drag to select a text region. Press Esc to cancel.",
+    "region_result": "Region text",
+    "region_temporary": "Temporary extraction only; this does not replace or complete the whole-photo index.",
+    "copy_selected": "Copy selected lines",
+    "copy_line": "Copy line",
+    "region_too_small": "The region is too small. Select a larger area.",
+    "region_busy": "OCR is busy. Stop the current task first.",
+
     "preview_pending": "List update pending",
     "preview_pending_hint": "The current photo no longer matches this filter. To avoid interrupting the preview, the list will sync when you change photos or leave preview.",
     "text_match": "Image text match",

@@ -13,6 +13,19 @@ use std::sync::{
 use tauri::{AppHandle, Emitter};
 
 static JOB: Mutex<Option<Arc<Job>>> = Mutex::new(None);
+static INFERENCE_BUSY: AtomicBool = AtomicBool::new(false);
+pub(crate) struct InferenceLease;
+impl Drop for InferenceLease {
+    fn drop(&mut self) {
+        INFERENCE_BUSY.store(false, Ordering::SeqCst);
+    }
+}
+pub(crate) fn try_inference() -> Result<InferenceLease, String> {
+    INFERENCE_BUSY
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .map(|_| InferenceLease)
+        .map_err(|_| "OCR is busy; stop the current task before starting another".into())
+}
 struct Job {
     cancel: AtomicBool,
     status: Mutex<Status>,
@@ -49,12 +62,14 @@ pub struct View {
     pub sessions: Vec<super::runtime::SessionReport>,
 }
 pub fn is_running() -> bool {
-    JOB.lock()
-        .map(|j| {
-            j.as_ref()
-                .is_some_and(|j| j.status.lock().is_ok_and(|s| s.running))
-        })
-        .unwrap_or(true)
+    INFERENCE_BUSY.load(Ordering::SeqCst)
+        || JOB
+            .lock()
+            .map(|j| {
+                j.as_ref()
+                    .is_some_and(|j| j.status.lock().is_ok_and(|s| s.running))
+            })
+            .unwrap_or(true)
 }
 
 pub fn ensure_schema(c: &Connection) -> Result<(), String> {
@@ -122,13 +137,13 @@ fn visible() -> String {
         AFile::album_query_predicate("a")
     )
 }
-fn base() -> String {
+pub(crate) fn base() -> String {
     format!(
         "FROM afiles a JOIN afolders b ON b.id=a.folder_id WHERE a.file_type IN (1,3) AND {}",
         visible()
     )
 }
-fn check_library(library: &str) -> Result<(), String> {
+pub(crate) fn check_library(library: &str) -> Result<(), String> {
     if crate::t_config::current_library_id()? != library {
         return Err("Library changed; OCR stopped. Resume in the original library".into());
     }
@@ -232,6 +247,7 @@ pub async fn start_ocr_index(
     tauri::async_runtime::spawn_blocking(move||{
         let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
         check_library(&library_id)?;
+        let lease=try_inference()?;
         let model=super::settings::active(Task::Ocr)?;
         super::assets::verify(&model.definition)?;
         let mut slot=JOB.lock().map_err(|e|e.to_string())?;
@@ -241,6 +257,7 @@ pub async fn start_ocr_index(
         let initial=Status {scope:scope.into(),scope_name:folder.as_ref().map(|(_,path)|path.clone()),library_id:library_id.clone(),job_id:uuid::Uuid::new_v4().to_string(),running:true,..Default::default()};
         let job=Arc::new(Job {cancel:AtomicBool::new(false),status:Mutex::new(initial.clone())});*slot=Some(job.clone());drop(slot);
         tauri::async_runtime::spawn_blocking(move||{
+            let _lease = lease;
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||run(&app_handle,&library_id,&model,force,retry_failed,file_ids,folder, &job)));
             if let Ok(mut status)=job.status.lock() {
                 status.running=false;status.stopping=false;

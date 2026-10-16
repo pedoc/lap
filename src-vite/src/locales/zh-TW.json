@@ -1,5 +1,15 @@
 {
   "ocr": {
+    "region_select": "框选文字",
+    "region_cancel": "取消框选",
+    "region_drag_hint": "拖动框选照片中的文字区域，Esc 取消。",
+    "region_result": "区域文字",
+    "region_temporary": "仅临时提取，不替换整图结果，也不计入图库索引。",
+    "copy_selected": "复制选中行",
+    "copy_line": "复制此行",
+    "region_too_small": "选区太小，请重新框选。",
+    "region_busy": "已有文字识别任务运行，请先停止当前任务。",
+
     "preview_pending": "清單待同步",
     "preview_pending_hint": "目前照片已不屬於此篩選。為避免預覽跳圖，切換照片或離開預覽後同步清單。",
     "text_match": "圖片文字符合",

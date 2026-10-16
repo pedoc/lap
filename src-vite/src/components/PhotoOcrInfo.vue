@@ -15,9 +15,12 @@
       <div class="whitespace-pre-wrap break-words select-text text-xs max-h-64 overflow-auto"><template v-for="(part, index) in textSegments(result.document.text, searchQuery)" :key="index"><mark v-if="part.match" class="bg-warning/30 text-base-content">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
       <details class="text-xs" :open="!!searchQuery"><summary class="cursor-pointer">{{ t('ocr.line_confidence') }}</summary>
         <p class="opacity-50 my-1">{{ t('ocr.locate_hint') }}</p>
-        <button v-for="(line, index) in result.document.lines" :key="index" class="block w-full rounded-box px-2 py-1 text-left hover:bg-base-content/5" :class="ocrFocus?.fileId === Number(file.id) && ocrFocus?.line === index ? 'bg-primary/10 text-primary' : ''" @click="focusLine(index)">
+        <div v-for="(line, index) in result.document.lines" :key="index" class="flex items-start gap-1">
+        <button class="block flex-1 min-w-0 rounded-box px-2 py-1 text-left hover:bg-base-content/5" :class="ocrFocus?.fileId === Number(file.id) && ocrFocus?.line === index ? 'bg-primary/10 text-primary' : ''" @click="focusLine(index)">
           <span class="opacity-50 tabular-nums">{{ (line.confidence * 100).toFixed(0) }}% · </span><template v-for="(part, partIndex) in textSegments(line.text, searchQuery)" :key="partIndex"><mark v-if="part.match" class="bg-warning/30 text-base-content">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template>
         </button>
+        <button class="btn btn-xs btn-ghost shrink-0" @click="copyLine(index)">{{ t('ocr.copy_line') }}</button>
+        </div>
       </details>
     </template>
   </section>
@@ -38,6 +41,7 @@ const { view: taskView, busy: taskBusy } = useOcr();
 const copied = ref(false);
 const searchQuery = computed(() => config.main.sidebarIndex === SIDEBAR.OCR ? libConfig.ocr.text || '' : config.main.sidebarIndex === SIDEBAR.SEARCH ? libConfig.search.searchText || '' : '');
 async function copyText() { try { await navigator.clipboard.writeText(result.value?.document?.text || ''); copied.value = true; } catch (e) { error.value = String(e); } }
+async function copyLine(index: number) { try { await navigator.clipboard.writeText(result.value?.document?.lines?.[index]?.text || ''); copied.value = true; } catch (e) { error.value = String(e); } }
 function focusLine(line: number) {
   ocrShowBoxes.value = true;
   ocrFocus.value = { libraryId: libConfig._libraryId, fileId: Number(props.file.id), profile: config.settings.ai?.ocrProfile || '', line };

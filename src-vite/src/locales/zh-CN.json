@@ -2283,6 +2283,16 @@
   }
 ,
   "ocr": {
+    "region_select": "框选文字",
+    "region_cancel": "取消框选",
+    "region_drag_hint": "拖动框选照片中的文字区域，Esc 取消。",
+    "region_result": "区域文字",
+    "region_temporary": "仅临时提取，不替换整图结果，也不计入图库索引。",
+    "copy_selected": "复制选中行",
+    "copy_line": "复制此行",
+    "region_too_small": "选区太小，请重新框选。",
+    "region_busy": "已有文字识别任务运行，请先停止当前任务。",
+
     "preview_pending": "列表待同步",
     "preview_pending_hint": "当前照片已不属于此筛选。为避免预览跳图，切换照片或退出预览后同步列表。",
     "text_match": "图片文字命中",

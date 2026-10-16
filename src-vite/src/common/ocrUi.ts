@@ -46,3 +46,11 @@ export function ocrThumbnailPresentation(summary: { state: string; excerpt?: str
   const showStatus = !!summary && normalizeOcrState(filter) === 'all';
   return { showStatus, visible: !!summary && (showStatus || !!summary.excerpt?.trim()) };
 }
+
+export function ocrSelectionRect(start: { x: number; y: number }, end: { x: number; y: number }) {
+  if (![start.x,start.y,end.x,end.y].every(Number.isFinite)) return null;
+  const clamp = (n: number) => Math.max(0, Math.min(1, n));
+  const x = Math.min(clamp(start.x),clamp(end.x)), y = Math.min(clamp(start.y),clamp(end.y));
+  const w = Math.abs(clamp(end.x)-clamp(start.x)), h = Math.abs(clamp(end.y)-clamp(start.y));
+  return w > 0 && h > 0 ? [x,y,w,h] : null;
+}

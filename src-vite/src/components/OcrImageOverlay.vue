@@ -1,17 +1,19 @@
 <template>
+  <OcrRegionTool v-bind="props" />
   <template v-if="ready && document?.lines?.length">
     <div v-if="ocrShowBoxes && compatible" class="absolute inset-0 pointer-events-none overflow-hidden">
       <div class="absolute" :style="{ width: `${width}px`, height: `${height}px`, transform: `translate(${x}px, ${y}px) scale(${zoom}) rotate(${rotate}deg)`, transition: transition ? 'transform 0.2s ease-out' : 'none' }">
         <button v-for="(line, index) in document.lines" :key="index" class="absolute pointer-events-auto hover:bg-primary/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" :style="ocrFrameStyle(line.bounds, width, height, zoom, selectedLine === index || lineMatches(line.text))" :title="line.text" :aria-label="line.text" @mousedown.stop @dblclick.stop @click.stop="focusLine(index)"></button>
       </div>
     </div>
-    <div class="absolute top-3 right-3 z-30 flex flex-col items-end gap-1" @mousedown.stop @dblclick.stop>
+    <div class="absolute top-3 left-3 z-30 flex flex-col items-end gap-1" @mousedown.stop @dblclick.stop>
       <button class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm" :class="ocrShowBoxes ? 'text-primary' : ''" :aria-pressed="ocrShowBoxes" @click.stop="ocrShowBoxes = !ocrShowBoxes">{{ t('ocr.boxes') }} · {{ document.lines.length }}</button>
       <p v-if="ocrShowBoxes && !compatible" class="max-w-60 rounded-box bg-base-100/90 p-2 text-xs text-warning">{{ t('ocr.geometry_hint') }}</p>
     </div>
   </template>
 </template>
 <script setup lang="ts">
+import OcrRegionTool from './OcrRegionTool.vue';
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';

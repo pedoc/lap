@@ -12,6 +12,7 @@ pub mod face_review;
 pub mod hardware;
 pub mod profiles;
 pub mod ocr;
+pub mod ocr_extract;
 pub mod persons;
 pub mod remote;
 pub mod runtime;
