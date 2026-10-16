@@ -368,6 +368,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release-files/*
-          draft: true
+          draft: false
           prerelease: false
           generate_release_notes: true
