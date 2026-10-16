@@ -369,6 +369,21 @@ pub struct PersonState {
     pub name: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OcrPanelState {
+    pub state: String,
+    pub text: String,
+}
+impl Default for OcrPanelState {
+    fn default() -> Self {
+        Self {
+            state: "all".into(),
+            text: String::new(),
+        }
+    }
+}
+
 /// Per-library state that persists across sessions
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -390,6 +405,8 @@ pub struct LibraryState {
     pub location: LocationState,
     #[serde(default)]
     pub person: PersonState,
+    #[serde(default)]
+    pub ocr: OcrPanelState,
     #[serde(default)]
     pub collection: CollectionState,
     pub search: SearchState,
@@ -1025,4 +1042,20 @@ pub fn reorder_libraries(ids: Vec<String>) -> Result<(), String> {
     save_app_config(&config)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod ocr_panel_tests {
+    use super::*;
+    #[test]
+    fn ocr_navigation_round_trips_without_changing_global_model_selection() {
+        let mut state = serde_json::to_value(LibraryState::default()).unwrap();
+        state["ocr"] = serde_json::json!({"state":"failed","text":"中文"});
+        let restored: LibraryState = serde_json::from_value(state).unwrap();
+        assert_eq!(restored.ocr.state, "failed");
+        assert_eq!(restored.ocr.text, "中文");
+        let defaults: OcrPanelState = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.state, "all");
+        assert!(defaults.text.is_empty());
+    }
 }

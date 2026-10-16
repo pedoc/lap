@@ -1,4 +1,5 @@
 <template>
+  <OcrTaskBanner />
   
   <div class="w-screen h-screen flex flex-col overflow-hidden select-none bg-base-300 text-base-content/70">
     <transition name="fade">
@@ -207,6 +208,8 @@ import Tag from '@/components/Tag.vue';
 import Calendar from '@/components/Calendar.vue';
 import Location from '@/components/Location.vue';
 import Person from '@/components/Person.vue';
+import ImageText from '@/components/ImageText.vue';
+import OcrTaskBanner from '@/components/OcrTaskBanner.vue';
 import Camera from '@/components/Camera.vue';
 
 import TitleBar from '@/components/TitleBar.vue';
@@ -222,6 +225,7 @@ import {
   IconTag,
   IconLocation,
   IconPerson,
+  IconFileSearch,
   IconCamera,
   IconSearch,
   IconSettings,
@@ -271,7 +275,7 @@ const SETTINGS_BASE_WIDTH = 600;
 const SETTINGS_BASE_HEIGHT = 620;
 
 /// i18n
-const { locale, messages } = useI18n();
+const { locale, messages, t } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
 
 const uiStore = useUIStore();
@@ -389,6 +393,7 @@ const buttons = computed(() =>  [
   { index: SIDEBAR.TAG, icon: IconTag, component: Tag, text: localeMsg.value.sidebar.tag },
   { index: SIDEBAR.PERSON, icon: IconPerson, component: Person, text: localeMsg.value.sidebar.people, hidden: !config.settings.face.enabled },
   { index: SIDEBAR.LOCATION, icon: IconLocation, component: Location, text: localeMsg.value.sidebar.location },
+  { index: SIDEBAR.OCR, icon: IconFileSearch, component: ImageText, text: t('ocr.workspace_title') },
   { index: SIDEBAR.CAMERA, icon: IconCamera, component: Camera, text: localeMsg.value.sidebar.camera },
 ]);
 
@@ -402,7 +407,7 @@ const leftPanelWidth = computed(() =>
 
 const visibleButtons = computed(() =>
   buttons.value
-    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY }))
+    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY && item.index !== SIDEBAR.OCR }))
     .filter(item => !item.hidden)
     .sort((a, b) => a.index - b.index)
 );
@@ -453,8 +458,8 @@ const libraryMenuItems = computed(() => {
 
 onMounted(async () => {
   window.addEventListener('keydown', handleHomeKeyDown);
-  unlistenOpenPreferences = await listen('app-open-preferences', () => {
-    void clickSettings();
+  unlistenOpenPreferences = await listen('app-open-preferences', (event: any) => {
+    void clickSettings(event.payload?.aiTask ? SETTINGS_TAB.IMAGE_SEARCH : undefined, event.payload?.aiTask);
   });
   unlistenOpenAbout = await listen('app-open-about', () => {
     void clickSettings(SETTINGS_TAB.ABOUT);
@@ -708,7 +713,7 @@ function handleCollectionMouseMove(event: MouseEvent) {
 }
 
 /// click settings icon
-async function clickSettings(tabIndex?: number) {
+async function clickSettings(tabIndex?: number, aiTask?: string) {
   if (typeof tabIndex === 'number') {
     config.settings.tabIndex = tabIndex;
     await emit('settings-settingsTabIndex-changed', tabIndex);
@@ -725,6 +730,7 @@ async function clickSettings(tabIndex?: number) {
   }
 
   if (settingsWindow) {
+    if (aiTask) await emit('ai-model-task-requested', aiTask);
     try {
       if (isWin && await settingsWindow.isMinimized()) {
         await settingsWindow.unminimize();
@@ -745,7 +751,7 @@ async function clickSettings(tabIndex?: number) {
   }
 
   const options: any = {
-    url: '/settings',
+    url: aiTask ? `/settings?aiTask=${encodeURIComponent(aiTask)}` : '/settings',
     title: 'Settings',
     width: Math.round(SETTINGS_BASE_WIDTH * getSettingsWindowScale()),
     height: Math.round(SETTINGS_BASE_HEIGHT * getSettingsWindowScale()),

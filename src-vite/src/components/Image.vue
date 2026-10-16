@@ -74,6 +74,8 @@
       </div>
     </TransitionGroup>
 
+    <OcrImageOverlay :file-id="fileId" :file-version="fileVersion" :width="imageSize[activeImage].width" :height="imageSize[activeImage].height" :x="position[activeImage].x" :y="position[activeImage].y" :zoom="scale[activeImage]" :rotate="imageRotate[activeImage]" :ready="!isLoading && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath" :transition="!noTransition && !isResizingContainer" @locate="locateOcrBounds" />
+
     <!-- All detected faces, including unnamed faces and other people in the photo. -->
     <div v-if="showFaceOverlay && faces.length && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath"
       class="absolute inset-0 w-full h-full pointer-events-none overflow-hidden">
@@ -146,6 +148,7 @@ import { setFileAccessibility } from '@/common/availability';
 import { IconError, IconBrightness } from '@/common/icons';
 import ImageNavigator from '@/components/ImageNavigator.vue';
 import FaceNameEditor from '@/components/FaceNameEditor.vue';
+import OcrImageOverlay from '@/components/OcrImageOverlay.vue';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -2006,6 +2009,13 @@ function zoomImage(cursorX: number, cursorY: number, newScale: number, force: bo
 
   scale.value[imgIndex] = newScale;
   clampPosition(force);
+}
+
+function locateOcrBounds(bounds: number[]) {
+  const size = imageSize.value[activeImage.value];
+  if (!bounds || !size.width || !size.height) return;
+  const regionScale = Math.min(containerSize.value.width / Math.max(1, size.width * bounds[2] * 1.5), containerSize.value.height / Math.max(1, size.height * bounds[3] * 3));
+  applyViewportState({ scale: Math.max(scale.value[activeImage.value], Math.min(regionScale, getActualSizeScale() * 2)), normX: bounds[0] + bounds[2] / 2, normY: bounds[1] + bounds[3] / 2 });
 }
 
 function getViewportState() {

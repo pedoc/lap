@@ -414,7 +414,7 @@
         </Transition>
       </div>
 
-      <PhotoOcrInfo :file="fileInfo" />
+      <PhotoOcrInfo :file="fileInfo" @focus-line="emit('ocr-focus', $event)" />
 
       <!-- Map View -->
       <div v-if="hasResolvableGps(fileInfo?.gps_latitude, fileInfo?.gps_longitude)"
@@ -543,6 +543,7 @@ const emit = defineEmits([
   'navigateFolder',
   'navigateMetadata',
   'navigatePerson',
+  'ocr-focus',
 ]);
 
 const displayTags = ref<any[]>([]);

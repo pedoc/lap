@@ -127,7 +127,8 @@ import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, require
 
 const { t } = useI18n();
 const toast = useToast();
-const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task = ref('semantic');
+const requestedTask = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('aiTask') : null;
+const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task = ref(requestedTask && ['semantic', 'face', 'ocr'].includes(requestedTask) ? requestedTask : 'semantic');
 const apiKey = ref(''), manifest = ref(''), error = ref(''), downloading = ref('');
 const downloadFeedback = ref<Record<string, ModelDownloadFeedback>>({});
 const loading = ref(false), busy = ref(false);
@@ -305,6 +306,8 @@ async function importModel() {
 }
 watch(task, () => { choose(view.value?.selection[task.value]); });
 onMounted(async () => {
+  const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr'].includes(event.payload) && !busy.value) task.value = event.payload; });
+  if (mounted) unlisten.push(offTask); else offTask();
   await refresh();
   const progressListener = await listen('ai-model-download-progress', (event: any) => {
     if (event.payload?.modelId === downloading.value) {

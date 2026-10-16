@@ -20,6 +20,10 @@ pub struct TextLine {
 pub struct Document {
     pub text: String,
     pub lines: Vec<TextLine>,
+    #[serde(default)]
+    pub image_width: u32,
+    #[serde(default)]
+    pub image_height: u32,
 }
 
 pub struct PaddleOcr {
@@ -256,7 +260,12 @@ impl PaddleOcr {
         if text.len() > 1024 * 1024 {
             return Err("OCR text exceeds 1 MiB limit".into());
         }
-        Ok(Document { text, lines })
+        Ok(Document {
+            text,
+            lines,
+            image_width: rgb.width(),
+            image_height: rgb.height(),
+        })
     }
 }
 fn alphabet_from_dictionary(dictionary: &str) -> Result<Vec<String>, String> {

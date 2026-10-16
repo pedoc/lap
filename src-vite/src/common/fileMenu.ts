@@ -19,6 +19,7 @@ import {
   IconTrash,
   IconComment,
   IconPhotoSearch,
+  IconFileSearch,
   IconPersonSearch,
   IconImageEdit,
   IconExternal,
@@ -141,6 +142,13 @@ export const useFileMenuItems = (
         icon: markRaw(IconCollage),
         disabled: unavailable || selectionCount < 2,
         action: createAction('create-montage'),
+      },
+      {
+        label: translate('ocr.recognize_selected'), icon: markRaw(IconFileSearch),
+        disabled: kind !== 'image' || selectionCount === 0, action: createAction('recognize-text'),
+      },
+      { label: translate('ocr.reidentify_selected'), icon: markRaw(IconFileSearch),
+        disabled: kind !== 'image' || selectionCount === 0, action: createAction('rerecognize-text'),
       },
       {
         label: translate('menu.file.detect_selected_faces'), icon: markRaw(IconPersonSearch),
@@ -359,6 +367,11 @@ export const useFileMenuItems = (
         shortcut: shortcut('file.searchSimilar'),
         disabled: !isImage,
         action: createAction('search-similar')
+      },
+      {
+        label: translate('ocr.recognize'), icon: markRaw(IconFileSearch), disabled: !isImage, action: createAction('recognize-text'),
+      },
+      { label: translate('ocr.reidentify'), icon: markRaw(IconFileSearch), disabled: !isImage, action: createAction('rerecognize-text'),
       },
       {
         label: translate('menu.file.detect_faces'), icon: markRaw(IconPersonSearch), disabled: !isImage,

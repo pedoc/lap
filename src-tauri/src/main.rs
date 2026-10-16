@@ -318,6 +318,7 @@ async fn main() {
             t_media_lifecycle::restore_deleted_media,
             t_media_lifecycle::preview_deleted_media_restore,
             ai::ocr::get_ocr_status,
+            ai::ocr::get_ocr_summaries,
             ai::ocr::start_ocr_index,
             ai::ocr::cancel_ocr_index,
             ai::ocr::get_photo_ocr,

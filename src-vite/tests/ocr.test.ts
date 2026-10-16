@@ -6,21 +6,28 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
+import { textSegments, ocrSelectionIds } from '../src/common/ocrUi.ts';
+import { SIDEBAR } from '../src/common/constants.ts';
 import * as AiModels from '../src/common/aiModels.ts';
 import { applyAiConfiguration, effectiveParameter } from '../src/common/aiModels.ts';
 const read = (name: string) => readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
 function harness(name: string, invoke: any = async () => ({})) {
   const watches: any[] = [], mounted: any[] = [], unmount: any[] = [], calls: any[] = [];
-  const listeners: any = {};
-  const ctx: any = { ...Vue, config: { settings: { ai: {} } }, libConfig: { _libraryId: 'A' }, props: { file: { id: 7, file_type: 1 } }, useI18n: () => ({ t: (key: string) => key }), defineProps: () => ctx.props,
+  const listeners: any = {}; const timers: Array<() => void> = [];
+  const ctx: any = { ...Vue, config: { main: { sidebarIndex: 0 }, settings: { ai: {} } }, libConfig: { _libraryId: 'A', ocr: { text: '' }, search: {} }, props: { file: { id: 7, file_type: 1 } }, useI18n: () => ({ t: (key: string) => key }), defineProps: () => ctx.props, defineEmits: () => () => {}, textSegments, SIDEBAR, ocrSelectionIds,
     invoke: async (...args: any[]) => { calls.push(args); return invoke(...args); }, ask: async () => true,
-    watch: (_: any, cb: any) => watches.push(cb), onMounted: (cb: any) => mounted.push(cb), onBeforeUnmount: (cb: any) => unmount.push(cb),
+    watch: (_: any, cb: any) => { watches.push(cb); return () => {}; }, onMounted: (cb: any) => mounted.push(cb), onBeforeUnmount: (cb: any) => unmount.push(cb),
+    setTimeout: (cb: () => void) => { timers.push(cb); return timers.length; }, clearTimeout: () => {},
     setInterval: () => 1, clearInterval: () => {}, listen: async (key: string, cb: any) => { listeners[key] = cb; return () => delete listeners[key]; },
   };
+  const module = stripTypeScriptTypes(readFileSync(new URL('../src/common/ocr.ts', import.meta.url), 'utf8')).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace(/^export /gm, '');
+  Object.assign(ctx, runInNewContext(`(()=>{${module};return {useOcr,startOcr,ocrFocus,ocrShowBoxes};})()`, ctx));
   const source = read(name);
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({refresh,${name === 'OcrIndexPanel' ? 'start,stop,view' : 'recognize,result'},error,busy});`, ctx);
-  return { ctx, api, watches, mounted, unmount, calls, listeners, source };
+  const api: any = runInNewContext(`${script}\n;({refresh,${name === 'OcrIndexPanel' ? 'start:run,stop,view,refresh' : 'recognize,result'},error,busy});`, ctx);
+  // Mount the shared controller once, leaving photo-specific hooks to tests.
+  mounted.shift()();
+  return { ctx, api, watches, mounted: mounted.length ? mounted : [async () => {}], unmount: [() => unmount.forEach(cb => cb())], calls, listeners, source, timers };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 test('OCR model synchronization preserves existing face/semantic configuration', () => {
@@ -31,7 +38,7 @@ test('OCR model synchronization preserves existing face/semantic configuration',
 test('photo OCR targets exactly the selected image, never a library scan', async () => {
   const h = harness('PhotoOcrInfo'); await h.api.recognize();
   assert.equal(h.calls[0][0], 'start_ocr_index');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0][1])), { libraryId: 'A', fileIds: [7], force: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0][1])), { libraryId: 'A', fileIds: [7], force: true, retryFailed: false, folderId: null });
 });
 for (const name of ['OcrIndexPanel', 'PhotoOcrInfo']) {
   test(`${name} ignores responses from an old library and after unmount`, async () => {
@@ -42,7 +49,10 @@ for (const name of ['OcrIndexPanel', 'PhotoOcrInfo']) {
   });
   test(`${name} ignores out-of-order responses`, async () => {
     const pending: any[] = []; const h = harness(name, () => new Promise(resolve => pending.push(resolve)));
-    const one = h.api.refresh(), two = h.api.refresh(); pending[1]({ indexed: 2 }); await two; pending[0]({ indexed: 1 }); await one;
+    const one = h.api.refresh(), two = h.api.refresh();
+    if (name === 'OcrIndexPanel') {
+      assert.equal(pending.length, 1); pending[0]({ indexed: 2 }); await Promise.all([one, two]);
+    } else { pending[1]({ indexed: 2 }); await two; pending[0]({ indexed: 1 }); await one; }
     assert.equal((name === 'OcrIndexPanel' ? h.api.view.value : h.api.result.value).indexed, 2);
   });
   test(`${name} compiles and renders its actual template`, async () => {
@@ -52,13 +62,13 @@ for (const name of ['OcrIndexPanel', 'PhotoOcrInfo']) {
       .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
     const component = runInNewContext(`${code}\n;component`, { ...h.ctx, ...imports });
     const html = await renderToString(Vue.createSSRApp(component, { file: { id: 7, file_type: 1 } }));
-    assert.match(html, name === 'OcrIndexPanel' ? /ocr.resume/ : /ocr.recognize/);
+    assert.match(html, name === 'OcrIndexPanel' ? /ocr.process_pending/ : /ocr.recognize/);
     assert.doesNotMatch(html, /undefined/);
   });
 }
 test('OCR panel does not run expensive coverage queries for every indexed photo event', async () => {
   const h = harness('OcrIndexPanel'); await h.mounted[0](); h.listeners['ocr-index-updated']({ payload: { libraryId: 'A', fileId: 7 } }); await tick(); assert.equal(h.calls.length, 0);
-  h.listeners['ocr-index-updated']({ payload: { libraryId: 'A', finished: true } }); await tick(); assert.equal(h.calls.length, 1);
+  h.listeners['ocr-index-updated']({ payload: { libraryId: 'A', finished: true } }); assert.equal(h.timers.length, 1); h.timers.shift()!(); await tick(); assert.equal(h.calls.length, 1);
 });
 test('OCR stop uses current library and exact job ID', async () => {
   const h = harness('OcrIndexPanel'); h.api.view.value = { status: { jobId: 'job-1' } }; await h.api.stop();

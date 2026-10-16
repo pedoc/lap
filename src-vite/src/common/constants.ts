@@ -9,6 +9,7 @@ export const SIDEBAR = {
   PERSON: 6,
   LOCATION: 7,
   CAMERA: 8,
+  OCR: 9,
 } as const;
 
 export type Sidebar = (typeof SIDEBAR)[keyof typeof SIDEBAR];

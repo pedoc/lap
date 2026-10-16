@@ -2063,6 +2063,10 @@ pub struct QueryParams {
     #[serde(default)]
     pub tag_group_id: i64,
     pub person_id: i64,
+    #[serde(default)]
+    pub ocr_state: String,
+    #[serde(default)]
+    pub ocr_text: String,
     // GPS bounding box filter (e.g. for "photos in this map area")
     #[serde(default)]
     pub gps_min_lat: Option<f64>,
@@ -4693,6 +4697,15 @@ impl AFile {
             vec![Self::live_photo_companion_exclusion_condition().to_string()];
         let mut sql_params: Vec<Box<dyn ToSql>> = Vec::new();
 
+        if !params.ocr_state.is_empty() || !params.ocr_text.is_empty() {
+            conditions.push("a.file_type IN (1,3)".into());
+            let (condition, values) = crate::ai::ocr::workspace_query(
+                if params.ocr_state.is_empty() { "all" } else { &params.ocr_state },
+                &params.ocr_text,
+            );
+            conditions.push(format!("({condition})"));
+            sql_params.extend(values);
+        }
         if !params.search_file_name.is_empty() {
             conditions.push(format!("(a.name LIKE ? COLLATE NOCASE OR a.comments LIKE ? COLLATE NOCASE OR {})", crate::ai::ocr::search_predicate()));
             let pattern = format!("%{}%", params.search_file_name);

@@ -107,6 +107,9 @@ export const useLibraryStore = defineStore('libraryStore', {
     /** @type {{ nodeId: number | null, label: string, path: Array<{nodeId:number,name:string}> }} */
     location: {nodeId: null, label: '', path: []},
 
+    /** @type {{ state: 'all' | 'text' | 'pending' | 'empty' | 'failed', text: string }} */
+    ocr: { state: 'all', text: '' },
+
     /** @type {{ id: number | null, name: string | null }} */
     person: {
       id: null,               // selected person id
@@ -262,6 +265,7 @@ export const useLibraryStore = defineStore('libraryStore', {
             camera: this.camera,
             location: this.location,
             search: this.search,
+            ocr: this.ocr,
             destFolder: this.destFolder,
             index: {
               status: this.index.status,

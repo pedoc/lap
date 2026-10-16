@@ -210,6 +210,7 @@
 </template>
 
 <script setup lang="ts">
+import { startOcr } from '@/common/ocr';
 import { getFileThumbById } from '@/common/api';
 import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
 import { thumbnailSelectionScope } from '@/common/thumbnailRebuild';
@@ -1466,6 +1467,17 @@ async function syncTagStates(fileStates: Array<{ file_id: number; has_tags: bool
 }
 
 const thumbnailRebuildRequest = ref<any>(null);
+async function recognizeViewerText(force = false) {
+  const libraryId = libConfig._libraryId;
+  const target = getFileInfoByPane(getActiveFilePane());
+  try {
+    if (!target || ![1, 3].includes(Number(target.file_type))) throw new Error(t('ocr.select_photos'));
+    if (force && !await ask(t('ocr.reidentify_confirm'), { kind: 'warning' })) return;
+    if (libraryId !== libConfig._libraryId) return;
+    await startOcr({ fileIds: [Number(target.id)], force });
+    toast.info(t('ocr.task_started'));
+  } catch (error: any) { if (libraryId === libConfig._libraryId) toast.error(error?.message || String(error)); }
+}
 async function detectViewerFaces(force = false) {
   const libraryId = libConfig._libraryId;
   const target = getFileInfoByPane(getActiveFilePane());
@@ -1486,6 +1498,8 @@ const handleItemAction = async (payload: { action: string }) => {
     case 'regenerate-thumbnails':
       try { thumbnailRebuildRequest.value = { libraryId: libConfig._libraryId, scope: thumbnailSelectionScope([getFileInfoByPane(pane)]) }; } catch (error: any) { toast.error(error?.message || String(error)); }
       break;
+    case 'recognize-text': await recognizeViewerText(); break;
+    case 'rerecognize-text': await recognizeViewerText(true); break;
     case 'detect-faces': await detectViewerFaces(); break;
     case 'redetect-faces': await detectViewerFaces(true); break;
     case 'toggle-face-boxes': config.setFaceEnabled(true); config.settings.face.showBoxes = config.settings.face.showBoxes === false; break;

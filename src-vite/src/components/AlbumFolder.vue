@@ -186,6 +186,7 @@ import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialo
 import { ref, nextTick, computed, inject, provide, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
+import { startOcr } from '@/common/ocr';
 import { config, libConfig } from '@/common/config';
 import { isMac, shortenFilename, isValidFileName, getFolderPath, getFullPath, normalizePathForCompare, isWithinRootPath } from '@/common/utils';
 import {
@@ -427,6 +428,14 @@ const getMenuItemsForFolder = async (folder: any) => {
           folderPath: folder.path,
         });
       }
+    },
+    {
+      label: t('ocr.recognize_folder'), icon: IconRefresh, disabled: unavailable || folder.is_excluded_from_search,
+      action: async () => {
+        if (disposed || libraryId !== libConfig._libraryId) return;
+        try { await startOcr({ folderId: Number(folder.id) }); toast.success(t('ocr.task_started')); }
+        catch (e) { if (libraryId === libConfig._libraryId) toast.error(String(e)); }
+      },
     },
     {
       label: t('thumbnail_rebuild.title'),

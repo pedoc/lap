@@ -50,6 +50,7 @@
           class="min-w-0 overflow-hidden"
           @navigate="handleTitleBreadcrumbNavigate"
         />
+        <span v-if="config.main.sidebarIndex === SIDEBAR.OCR && ocrPreviewDeferred" class="text-xs text-warning shrink-0" :title="t('ocr.preview_pending_hint')">{{ t('ocr.preview_pending') }}</span>
       </div>
 
       <!-- toolbar -->
@@ -513,6 +514,7 @@
             @navigate-folder="handleInfoNavigateFolder"
             @navigate-metadata="handleNavigateMetadata"
             @navigate-person="handleNavigatePerson"
+            @ocr-focus="!showFilmstripLayout && (showQuickView = true)"
           />
         </div>
       </div>
@@ -753,6 +755,7 @@ import { startupWindowProxy } from '@/common/windowProxy';
 
 import { isFaceRename, faceChangeAffectsPerson } from '@/common/faceUpdates';
 import { ref, watch, computed, createVNode, onMounted, onBeforeUnmount, nextTick, render, markRaw } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { emit as tauriEmit, listen } from '@tauri-apps/api/event';
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -781,6 +784,8 @@ import { getSmartTagById } from '@/common/smartTags';
 import { clearFolderFileCounts, setFolderFileCount } from '@/composables/useAlbumSelection';
 import { createEmptyLibraryCounts } from '@/stores/libraryStore';
 import { getAlbumScanState, getAlbumScanIcon, shouldAnimateAlbumScanIcon } from '@/common/scanStatus';
+import { startOcr } from '@/common/ocr';
+import { normalizeOcrState } from '@/common/ocrUi';
 import { CULLING, DATE_SORT, GROUP, LIB_ITEM, RATE, SIDEBAR } from '@/common/constants';
 import { isWin, isMac, isLinux, setTheme, separator,
          formatFileSize, formatDate, getCalendarDateRange, formatFolderBreadcrumb, getThumbnailDataUrl, getAssetSrc, getPreviewUrl,
@@ -1028,6 +1033,7 @@ const totalRowCount = ref(0);     // total render rows' count (group headers + f
 const totalFileSize = ref(0);     // total files' size
 
 const selectedItemIndex = ref(-1);
+const ocrPreviewDeferred = ref(false);
 let pendingInitialSelectedIndex = -1;
 let hasRestoredInitialSelection = false;
 
@@ -3734,6 +3740,7 @@ const currentTitleIcon = computed(() => {
                 ? IconCalendarDay
                 : IconCalendar;
           case SIDEBAR.TAG: return IconTag;
+          case SIDEBAR.OCR: return IconSearch;
           case SIDEBAR.PERSON: return IconPerson;
           case SIDEBAR.LOCATION: return IconLocation;
           case SIDEBAR.CAMERA: return config.camera.isCamera ? IconCamera : IconCameraAperture;
@@ -4336,6 +4343,18 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => { peopleEditDisposed = true; stopPeopleEdits?.(); });
 
+async function recognizeSelectedText(force = false) {
+  const libraryId = libConfig._libraryId;
+  try {
+    const files = selectMode.value ? await getActionableSelectedItemsForAction() : [fileList.value[selectedItemIndex.value]].filter(Boolean);
+    if (libraryId !== libConfig._libraryId) return;
+    if (!files.length || files.some(file => ![1, 3].includes(Number(file.file_type)))) throw new Error(t('ocr.select_photos'));
+    if (force && !await ask(t('ocr.reidentify_confirm'), { kind: 'warning' })) return;
+    if (libraryId !== libConfig._libraryId) return;
+    await startOcr({ fileIds: files.map(file => Number(file.id)), force });
+    toast.success(t('ocr.task_started'));
+  } catch (e) { if (libraryId === libConfig._libraryId) toast.error(String(e)); }
+}
 async function rebuildSelectedThumbnails() {
   const libraryId = libConfig._libraryId;
   try {
@@ -4440,6 +4459,8 @@ function handleItemAction(payload: { action: string, index: number }) {
     'add-to-collection': clickAddToCollection,
     'comment': () => showCommentMsgbox.value = true,
     'search-similar': () => enterSimilarSearchMode(fileList.value[selectedItemIndex.value]),
+    'recognize-text': () => void recognizeSelectedText(),
+    'rerecognize-text': () => void recognizeSelectedText(true),
     'detect-faces': () => void detectSelectedFaces(),
     'redetect-faces': () => void detectSelectedFaces(true),
     'toggle-face-boxes': () => { config.setFaceEnabled(true); config.settings.face.showBoxes = config.settings.face.showBoxes === false; },
@@ -6187,6 +6208,7 @@ watch(
     smartId: libConfig.library.smartId,
     album: [libConfig.album.id, libConfig.album.folderId, libConfig.album.folderPath, libConfig.album.selected],
     smartAlbum: [libConfig.smartAlbum.type, libConfig.smartAlbum.id],
+    ocr: config.main.sidebarIndex === SIDEBAR.OCR ? [libConfig.ocr.state, libConfig.ocr.text, config.settings.ai?.ocrProfile] : null,
     personId: libConfig.person.id,
     calendar: [config.calendar.view, libConfig.calendar.year, libConfig.calendar.month, libConfig.calendar.date],
     tagId: libConfig.tag.id,
@@ -6214,6 +6236,8 @@ watch(
     // Count and cover updates are query outputs, not refresh triggers.
     smartResultSignature(activeSmartAlbum.value), // Only active result-affecting changes reload photos; folders, names, and counters do not.
     libConfig.search.searchText,
+    config.main.sidebarIndex === SIDEBAR.OCR ? `${libConfig.ocr.state}\0${libConfig.ocr.text}` : null,
+    [SIDEBAR.OCR, SIDEBAR.SEARCH].includes(config.main.sidebarIndex) ? config.settings.ai?.ocrProfile : null,
     libConfig.rating.item, // rating
     libConfig.culling.item, // culling
     config.search.fileType, config.search.sortType, config.search.sortOrder, // search and sort 
@@ -6484,7 +6508,7 @@ const getCurrentQueryTimeLine = () => {
   return getQueryTimeLine(currentQueryParams.value);
 };
 
-const getCurrentQueryFiles = (offset: number, limit: number) => {
+const getCurrentQueryFilesBase = (offset: number, limit: number) => {
   if (currentQuerySource.value === 'search') {
     return Promise.resolve(fileList.value.slice(offset, offset + limit));
   }
@@ -6497,7 +6521,7 @@ const getCurrentQueryFiles = (offset: number, limit: number) => {
   return getQueryFiles(currentQueryParams.value, offset, limit);
 };
 
-const getCurrentGroupedQueryRows = (offset: number, limit: number) => {
+const getCurrentGroupedQueryRowsBase = (offset: number, limit: number) => {
   if (currentQuerySource.value === 'collection' && currentCollectionId.value) {
     return getCollectionGroupedQueryRows(currentCollectionId.value, getGroupingQueryParams(), offset, limit);
   }
@@ -6506,6 +6530,137 @@ const getCurrentGroupedQueryRows = (offset: number, limit: number) => {
   }
   return getGroupedQueryRows(getGroupingQueryParams(), offset, limit);
 };
+
+async function enrichOcrPhotos(files: any[]) {
+  if (![SIDEBAR.OCR, SIDEBAR.SEARCH].includes(config.main.sidebarIndex) || libConfig.activePane === 'collection' || !files?.length) return files;
+  const libraryId = libConfig._libraryId, profile = config.settings.ai?.ocrProfile;
+  const text = config.main.sidebarIndex === SIDEBAR.OCR ? libConfig.ocr.text || '' : libConfig.search.searchText || '';
+  const ids = files.map(file => Number(file?.id)).filter(id => id > 0);
+  const summaries: any[] = [];
+  try {
+    for (let offset = 0; offset < ids.length; offset += 256) {
+      summaries.push(...await invoke<any[]>('get_ocr_summaries', { libraryId, fileIds: ids.slice(offset, offset + 256), text }));
+    }
+  } catch (e) { console.error('OCR excerpts unavailable:', e); return files; }
+  if (libraryId !== libConfig._libraryId || profile !== config.settings.ai?.ocrProfile) return files;
+  const byId = new Map(summaries.map(row => [row.fileId, row]));
+  return files.map(file => ({ ...file, _ocr: byId.get(Number(file.id)) }));
+}
+const getCurrentQueryFiles = async (offset: number, limit: number) => enrichOcrPhotos(await getCurrentQueryFilesBase(offset, limit) || []);
+const getCurrentGroupedQueryRows = async (offset: number, limit: number) => {
+  const result: any = await getCurrentGroupedQueryRowsBase(offset, limit);
+  if (config.main.sidebarIndex !== SIDEBAR.OCR || !result) return result;
+  const normalized = normalizeGroupedRowsResult(result);
+  const files = normalized.rows.map((row: any) => row.file).filter(Boolean);
+  const enriched = new Map((await enrichOcrPhotos(files)).map((file: any) => [Number(file.id), file]));
+  return { ...result, rows: normalized.rows.map((row: any) => row.file ? { ...row, file: enriched.get(Number(row.file.id)) || row.file } : row) };
+};
+
+// Reconcile fetched viewport rows atomically. Do not clear the grid / close the
+// viewer for every completed image; stable IDs retain thumbnails and selection.
+let ocrRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+let ocrRefreshRunning = false, ocrRefreshAgain = false, ocrContentDisposed = false;
+let offOcrContent: (() => void) | undefined;
+function scheduleOcrContentRefresh() {
+  ocrRefreshAgain = true;
+  if (ocrRefreshTimer || ocrRefreshRunning) return;
+  ocrRefreshTimer = setTimeout(() => { ocrRefreshTimer = undefined; void refreshOcrContent(); }, 900);
+}
+async function refreshOcrContent() {
+  if (ocrContentDisposed || config.main.sidebarIndex !== SIDEBAR.OCR || libConfig.activePane === 'collection' || showQuickView.value) return;
+  if (ocrRefreshRunning) return;
+  ocrRefreshRunning = true; ocrRefreshAgain = false;
+  const requestId = currentContentRequestId;
+  try {
+    if (groupedModeActive.value) {
+      await refreshGroupedOcrContent(requestId);
+      return;
+    }
+    const result = await getCurrentQueryCountAndSum();
+    if (!result || requestId !== currentContentRequestId) return;
+    const focus = fileList.value[selectedItemIndex.value];
+    const position = focus?.id > 0 ? (await getQueryFilePosition(currentQueryParams.value, focus.id)) ?? -1 : -1;
+    if (requestId !== currentContentRequestId) return;
+    if (focus?.id > 0 && position < 0 && showFilmstripLayout.value) { ocrPreviewDeferred.value = true; return; }
+    ocrPreviewDeferred.value = false;
+    const count = Number(result[0]);
+    let start = Math.max(0, Math.min(Math.max(0, count - 1), lastVisibleRange.start) - 24);
+    let end = Math.min(count, Math.max(start + 48, lastVisibleRange.end + 25));
+    if (Number(position) >= 0) { start = Math.min(start, Number(position)); end = Math.max(end, Number(position) + 1); }
+    // A very distant focus need not make a viewport request unbounded.
+    const focusedOutside = end - start > 512;
+    if (focusedOutside) { start = Math.max(0, Math.min(count - 1, lastVisibleRange.start) - 24); end = Math.min(count, start + 256); }
+    const fresh = count > 0 ? await getCurrentQueryFiles(start, Math.max(1, end - start)) : [];
+    if (requestId !== currentContentRequestId) return;
+    const loaded = new Map(fileList.value.filter(isRealFileItem).map(file => [Number(file.id), file]));
+    const next = createVirtualFileSlots(count);
+    fresh.forEach((file, index) => { next[start + index] = { ...loaded.get(Number(file.id)), ...file, isSelected: selectedFileIds.has(Number(file.id)) }; });
+    if (focusedOutside && Number(position) >= 0 && Number(position) < count) next[Number(position)] = focus;
+    currentContentRequestId++; currentThumbRequestId++; visibleRangeSeqId++;
+    totalFileCount.value = count; totalFileSize.value = Number(result[1]); fileList.value = next;
+    if (Number(position) >= 0) selectedItemIndex.value = Number(position);
+    else if (selectedItemIndex.value >= count) selectedItemIndex.value = count - 1;
+    if (selectMode.value) {
+      captureSelectionForFileListRefresh();
+      void restoreSelectionAfterFileListRefresh();
+    }
+    scheduleLayoutRefresh();
+    const ready = fresh.map((_, index) => fileList.value[start + index]);
+    void getFileListThumb(ready);
+  } catch (e) { console.error('OCR results refresh failed:', e); }
+  finally { ocrRefreshRunning = false; if (ocrRefreshAgain && !ocrContentDisposed) scheduleOcrContentRefresh(); }
+}
+async function refreshGroupedOcrContent(requestId: number) {
+  const focus = fileList.value[selectedItemIndex.value];
+  const position = focus?.id > 0 ? (await getGroupedFilePosition(getGroupingQueryParams(), focus.id)) ?? -1 : -1;
+  if (requestId !== currentContentRequestId) return;
+  if (focus?.id > 0 && position < 0 && showFilmstripLayout.value) { ocrPreviewDeferred.value = true; return; }
+  ocrPreviewDeferred.value = false;
+  let start = Math.max(0, lastVisibleRange.start - 24);
+  const limit = Math.min(512, Math.max(80, lastVisibleRange.end - start + 25));
+  let raw = await getCurrentGroupedQueryRows(start, limit);
+  if (!raw) return;
+  let result = normalizeGroupedRowsResult(raw);
+  if (requestId !== currentContentRequestId) return;
+  if (start >= result.totalRowCount && start > 0) {
+    start = Math.max(0, result.totalRowCount - limit);
+    raw = await getCurrentGroupedQueryRows(start, limit);
+    if (!raw) return;
+    result = normalizeGroupedRowsResult(raw);
+  }
+  if (requestId !== currentContentRequestId) return;
+  const loaded = new Map(fileList.value.filter(isRealFileItem).map(file => [Number(file.id), file]));
+  const next = createVirtualFileSlots(result.totalItemCount);
+  const rows: any[] = Array.from({ length: result.totalRowCount }, (_, index) => ({ id: `grouped-ph-${index}`, isPlaceholder: true }));
+  for (const group of result.groups) rows[group.rowIndex] = createGroupHeaderRow(group);
+  result.rows.forEach((raw: any, index: number) => {
+    const row = normalizeGridRow(raw, start + index);
+    if (isItemRow(row) && row.file) {
+      row.file = { ...loaded.get(Number(row.file.id)), ...row.file, isSelected: selectedFileIds.has(Number(row.file.id)) };
+      next[row.file_index] = row.file;
+    }
+    rows[start + index] = row;
+  });
+  if (position >= 0 && position < next.length && !next[position]) next[position] = focus;
+  if (selectMode.value) captureSelectionForFileListRefresh();
+  currentContentRequestId++; currentThumbRequestId++; visibleRangeSeqId++;
+  groupFileIdsCache.clear(); groupMetaMap.clear(); fileIdToGroupId.clear();
+  groupSelectedCountMap.value = {}; groupSelectedSizeMap.value = {};
+  for (const group of result.groups) groupMetaMap.set(group.groupId, { count: group.count, size: group.size });
+  totalFileCount.value = result.totalItemCount; totalRowCount.value = result.totalRowCount; totalFileSize.value = result.totalSize;
+  groupedTimelineGroups.value = result.groups; fileList.value = next; groupedRows.value = rows;
+  selectedItemIndex.value = position >= 0 ? position : Math.min(selectedItemIndex.value, next.length - 1);
+  if (selectMode.value) void restoreSelectionAfterFileListRefresh();
+  scheduleLayoutRefresh();
+  void getFileListThumb(result.rows.map((row: any) => next[Number(row.file_index ?? row.fileIndex)]).filter(Boolean));
+}
+onMounted(async () => {
+  const off = await listen('ocr-index-updated', (event: any) => { if (event.payload?.libraryId === libConfig._libraryId) scheduleOcrContentRefresh(); });
+  if (ocrContentDisposed) off(); else offOcrContent = off;
+});
+watch(showQuickView, open => { if (!open && ocrRefreshAgain) scheduleOcrContentRefresh(); });
+watch(() => [showFilmstripLayout.value, selectedItemIndex.value], () => { if (ocrPreviewDeferred.value) scheduleOcrContentRefresh(); });
+onBeforeUnmount(() => { ocrContentDisposed = true; clearTimeout(ocrRefreshTimer); offOcrContent?.(); });
 
 const getCurrentQueryFileIds = () => {
   if (currentQuerySource.value === 'search') {
@@ -7060,6 +7215,13 @@ async function fetchMissingVisibleThumbnails(startIndex: number, endIndex: numbe
   const rows = groupedModeActive.value
     ? gridRows.value.slice(startIndex, endIndex + 1)
     : fileList.value.slice(startIndex, endIndex + 1);
+  if (config.main.sidebarIndex === SIDEBAR.SEARCH) {
+    const visible = rows.map((row: any) => isItemRow(row) ? row.file : row).filter((file: any) => isRealFileItem(file) && !file._ocr);
+    if (visible.length) {
+      const requestId = currentContentRequestId;
+      void enrichOcrPhotos(visible).then(enriched => { if (requestId === currentContentRequestId) enriched.forEach((file, index) => { visible[index]._ocr = file._ocr; }); });
+    }
+  }
   const seen = new Set<number>();
   const files = rows
     .map((row: any) => isItemRow(row) ? row.file : row)
@@ -7130,6 +7292,8 @@ async function getFileList(
     tagId = 0,
     tagGroupId = 0,
     personId = 0,
+    ocrState = '',
+    ocrText = '',
     gpsMinLat = null,
     gpsMaxLat = null,
     gpsMinLon = null,
@@ -7172,6 +7336,8 @@ async function getFileList(
     tagId,
     tagGroupId,
     personId,
+    ocrState,
+    ocrText,
     gpsMinLat,
     gpsMaxLat,
     gpsMinLon,
@@ -7729,6 +7895,7 @@ let contentUpdateSeq = 0;
 
 async function updateContent(force = false, preserveMultiSelection = selectMode.value) {
   const updateSeq = ++contentUpdateSeq;
+  ocrPreviewDeferred.value = false;
   const newIndex = config.main.sidebarIndex;
   const nextAlbumId = newIndex === SIDEBAR.ALBUM ? Number(libConfig.album.id || 0) : 0;
   const isCurrentAlbumIndexing =
@@ -8060,6 +8227,10 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
         }
       });
     }
+  }
+  else if(newIndex === SIDEBAR.OCR) {
+    contentTitle.value = `${t('ocr.workspace_title')} · ${t('ocr.state_' + normalizeOcrState(libConfig.ocr.state))}${libConfig.ocr.text ? ' — ' + libConfig.ocr.text : ''}`;
+    getFileList({ ocrState: normalizeOcrState(libConfig.ocr.state), ocrText: libConfig.ocr.text || '' }, requestId);
   }
   else if(newIndex === SIDEBAR.PERSON) {
     if (libConfig.person.id === null) {
@@ -9926,6 +10097,7 @@ function normalizeFileTypeMask(mask: number): number {
 }
 
 const emptyFilesMessage = computed(() => {
+  if (config.main.sidebarIndex === SIDEBAR.OCR && libConfig.activePane !== 'collection') return t('ocr.no_results');
   if (isCurrentFolderMissing.value) return localeMsg.value.album.folder_unavailable.title;
   if (imageSearchError.value) return localeMsg.value.tooltip.not_found.image_search_failed;
   if (imageSearchLanguageUnsupported.value) return localeMsg.value.tooltip.not_found.image_search_language_unsupported;
@@ -9947,6 +10119,7 @@ const emptyFilesMessage = computed(() => {
 });
 
 const emptyFilesHint = computed(() => {
+  if (config.main.sidebarIndex === SIDEBAR.OCR && libConfig.activePane !== 'collection') return t('ocr.no_results_hint');
   if (isCurrentFolderMissing.value) return localeMsg.value.album.folder_unavailable.description;
   if (imageSearchError.value) return localeMsg.value.tooltip.not_found.image_search_failed_hint;
   if (imageSearchLanguageUnsupported.value) return localeMsg.value.tooltip.not_found.image_search_language_unsupported_hint;
