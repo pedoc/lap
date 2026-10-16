@@ -330,7 +330,7 @@ fn run(
                 orientation,
             ))?;
             check()?;
-            backend.recognize(&image, &check)
+            super::ocr_orientation::recognize(&mut backend, model, &image, None, &check)
         })();
         match crate::t_utils::FileInfo::new(&path) {
             Ok(after) if after.modified==modified && after.file_size==size => {},

@@ -105,6 +105,7 @@ pub async fn extract_ocr_region(
     request_id: String,
     region: [f64; 4],
     preview_aspect: f64,
+    rotation: Option<String>,
 ) -> Result<Extraction, String> {
     crop_pixels(region, 1000, 1000)?;
     if file_id <= 0
@@ -132,7 +133,7 @@ pub async fn extract_ocr_region(
         let [x,y,w,h]=crop_pixels(region,image.width(),image.height())?;
         check()?;
         let mut backend=PaddleOcr::new(&model)?;
-        let mut document=backend.recognize(&image.crop_imm(x,y,w,h),&check)?;
+        let mut document=super::ocr_orientation::recognize(&mut backend,&model,&image.crop_imm(x,y,w,h),rotation.as_deref(),&check)?;
         document=restore_crop(document,[x,y,w,h],(image.width(),image.height()));
         let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
         check()?; source.verify()?;

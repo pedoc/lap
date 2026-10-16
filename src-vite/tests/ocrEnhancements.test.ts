@@ -21,7 +21,7 @@ function regionHarness(invoke:any=async()=>({document:{text:'one\ntwo',lines:[{t
     invoke:async(...args:any[])=>{calls.push(args);return invoke(...args);},
   };
   const script=stripTypeScriptTypes(read('OcrRegionTool').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'');
-  const scope=Vue.effectScope();const api:any=scope.run(()=>runInNewContext(`${script};({recognize,output,selected,copy,busy,error,close})`,ctx));
+  const scope=Vue.effectScope();const api:any=scope.run(()=>runInNewContext(`${script};({recognize,output,selected,copy,busy,error,close,rotation})`,ctx));
   return{ctx,api,calls,copied,listeners,mount:async()=>{for(const cb of mounted)await cb();},dispose:()=>{unmount.forEach(cb=>cb());scope.stop();}};
 }
 test('region selection clamps to the source and supports dragging in any direction',()=>{
@@ -50,4 +50,10 @@ test('region control renders before a photo has a whole-image OCR result',async(
   const script=stripTypeScriptTypes(compileScript(descriptor,{id:'ocr-region',inlineTemplate:true}).content).replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g,(_m,names)=>{for(const name of names.split(',')){const[original,alias]=name.trim().split(/\s+as\s+/);imports[alias||original]=(Vue as any)[original];}return '';}).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'').replace('export default','const component=');
   const component=runInNewContext(`${script};component`,{...h.ctx,...imports});
   const html=await renderToString(Vue.createSSRApp(component,h.ctx.props));assert.match(html,/框选文字/);assert.doesNotMatch(html,/undefined/);h.dispose();
+});
+
+test('temporary direction override is explicit and never modifies global model configuration',async()=>{
+  const h=regionHarness();h.api.rotation.value='90';await h.api.recognize([0,0,1,1]);
+  assert.equal(h.calls[0][1].rotation,'90');assert.equal(h.ctx.config.settings.ai.ocrProfile,'model-a');
+  h.api.rotation.value='model';await h.api.recognize([0,0,1,1]);assert.equal(h.calls.filter(([name])=>name==='extract_ocr_region')[1][1].rotation,null);h.dispose();
 });

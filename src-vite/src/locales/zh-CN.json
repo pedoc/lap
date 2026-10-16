@@ -1768,6 +1768,8 @@
       "reset_warning": "全局使用此模型？不兼容的自动 AI 结果会重建。人工确认的人物、姓名和人脸标注会保留；原文件发生变化的区域需要重新复核。不会修改原始媒体文件。",
       "delete_confirm": "移除此未启用的自定义模型及其配置？不会删除已下载的模型文件。",
       "parameters": {
+        "ocr_rotation": "文字方向校正",
+        "ocr_deskew_degrees": "倾斜校正角度（-15°～15°）",
         "ocr_detection_size": "文字检测输入尺寸",
         "ocr_recognition_width": "文字行最大输入宽度",
         "ocr_pixel_threshold": "文字像素阈值",
@@ -2283,6 +2285,16 @@
   }
 ,
   "ocr": {
+    "direction": "文字方向",
+    "rotation_model": "跟随模型配置",
+    "rotation_0": "原始方向",
+    "rotation_auto": "自动尝试方向",
+    "rotation_90": "顺时针 90°",
+    "rotation_180": "旋转 180°",
+    "rotation_270": "顺时针 270°",
+    "region_retry": "重新提取",
+    "rotation_applied": "本次方向校正 {rotation}°，倾斜校正 {tilt}°",
+
     "region_select": "框选文字",
     "region_cancel": "取消框选",
     "region_drag_hint": "拖动框选照片中的文字区域，Esc 取消。",

@@ -196,6 +196,8 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
             ParameterSpec::number("grouping_threshold", 0.93, 0., 1., 0.01, false),
         ]),
         Task::Ocr => p.extend([
+            ParameterSpec { key:"ocr_rotation".into(),kind:"choice".into(),default:json!("0"),min:0.,max:0.,step:0.,options:vec![json!("0"),json!("auto"),json!("90"),json!("180"),json!("270")],affects_index:true,reload_session:false },
+            ParameterSpec::number("ocr_deskew_degrees", 0., -15., 15., 0.5, true),
             ParameterSpec::number("ocr_detection_size", 960., 320., 2048., 32., true),
             ParameterSpec::number("ocr_recognition_width", 1024., 320., 2048., 32., true),
             ParameterSpec::number("ocr_pixel_threshold", 0.3, 0.05, 0.95, 0.05, true),

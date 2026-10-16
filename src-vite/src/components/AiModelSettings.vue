@@ -171,6 +171,7 @@ function optionAvailable(spec: any, option: any) {
   return true;
 }
 function optionLabel(spec: any, option: any) {
+  if (spec.key === 'ocr_rotation') return t(`ocr.rotation_${option}`);
   if (typeof option === 'boolean') return t(option ? 'settings.ai_models.on' : 'settings.ai_models.off');
   if (spec.key.endsWith('device')) {
     const name = t(`settings.ai_models.devices.${option}`);

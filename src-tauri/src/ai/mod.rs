@@ -13,6 +13,7 @@ pub mod hardware;
 pub mod profiles;
 pub mod ocr;
 pub mod ocr_extract;
+pub mod ocr_orientation;
 pub mod persons;
 pub mod remote;
 pub mod runtime;

@@ -1768,6 +1768,8 @@
       "reset_warning": "Use this model globally? Incompatible automatic AI results will be rebuilt. Human-confirmed people, names and face annotations are preserved; regions whose source files changed require review. Original media files are not modified.",
       "delete_confirm": "Remove this inactive custom model and its configuration? Downloaded model files will not be deleted.",
       "parameters": {
+        "ocr_rotation": "Text direction correction",
+        "ocr_deskew_degrees": "Tilt correction (-15° to 15°)",
         "ocr_detection_size": "Text detection size",
         "ocr_recognition_width": "Text recognition width",
         "ocr_pixel_threshold": "Text pixel threshold",
@@ -2283,6 +2285,16 @@
   }
 ,
   "ocr": {
+    "direction": "Text direction",
+    "rotation_model": "Use model setting",
+    "rotation_0": "Original direction",
+    "rotation_auto": "Try directions automatically",
+    "rotation_90": "90° clockwise",
+    "rotation_180": "180° rotation",
+    "rotation_270": "270° clockwise",
+    "region_retry": "Extract again",
+    "rotation_applied": "Direction correction: {rotation}°; tilt correction: {tilt}°",
+
     "region_select": "Select text region",
     "region_cancel": "Cancel selection",
     "region_drag_hint": "Drag to select a text region. Press Esc to cancel.",

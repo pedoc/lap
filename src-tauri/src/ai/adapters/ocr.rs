@@ -24,6 +24,10 @@ pub struct Document {
     pub image_width: u32,
     #[serde(default)]
     pub image_height: u32,
+    #[serde(default)]
+    pub rotation_degrees: i32,
+    #[serde(default)]
+    pub deskew_degrees: f32,
 }
 
 pub struct PaddleOcr {
@@ -265,6 +269,8 @@ impl PaddleOcr {
             lines,
             image_width: rgb.width(),
             image_height: rgb.height(),
+            rotation_degrees: 0,
+            deskew_degrees: 0.,
         })
     }
 }

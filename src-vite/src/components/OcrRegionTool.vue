@@ -1,6 +1,7 @@
 <template>
   <div v-if="ready" class="absolute inset-0 pointer-events-none" @keydown.stop>
     <div class="absolute top-3 right-3 z-40 pointer-events-auto flex gap-1" @mousedown.stop @dblclick.stop>
+      <select v-model="rotation" class="select select-sm w-28 bg-base-100/90" :disabled="busy || ocrBusy" :aria-label="t('ocr.direction')"><option v-for="value in ['model','0','auto','90','180','270']" :key="value" :value="value">{{ t('ocr.rotation_' + value) }}</option></select>
       <button class="btn btn-sm bg-base-100/90 shadow-sm" :class="selecting ? 'text-primary' : ''" :disabled="busy || ocrBusy" :aria-pressed="selecting" @click.stop="toggleSelection">{{ t(selecting ? 'ocr.region_cancel' : 'ocr.region_select') }}</button>
     </div>
     <div v-if="selecting || rect" class="absolute" :style="{ width: `${width}px`, height: `${height}px`, transform: `translate(${x}px, ${y}px) scale(${zoom}) rotate(${rotate}deg)` }">
@@ -12,6 +13,7 @@
     <section v-if="busy || output || error" class="absolute bottom-3 right-3 z-40 w-80 max-w-[calc(100%-1.5rem)] max-h-[70%] overflow-auto rounded-box border border-base-content/15 bg-base-100 p-3 shadow-lg pointer-events-auto space-y-2" @mousedown.stop @dblclick.stop aria-live="polite">
       <div class="flex items-center justify-between gap-2"><h3 class="text-sm font-medium">{{ t('ocr.region_result') }}</h3><button class="btn btn-xs btn-ghost" :aria-label="t('ocr.dismiss')" @click="close">×</button></div>
       <p class="text-xs opacity-60">{{ t('ocr.region_temporary') }}</p>
+      <button v-if="rect && !busy" class="btn btn-xs" :disabled="ocrBusy" @click="recognize(rect)">{{ t('ocr.region_retry') }}</button>
       <p v-if="busy" class="text-xs flex gap-2 items-center"><span class="loading loading-spinner loading-xs"></span>{{ t('ocr.recognizing') }}</p>
       <p v-if="error" role="alert" class="text-xs text-error whitespace-pre-wrap break-words">{{ error }}</p>
       <p v-else-if="output && !output.text" class="text-xs opacity-60">{{ t('ocr.empty') }}</p>
@@ -33,6 +35,7 @@ import { ocrBusy } from '@/common/ocr';
 import { ocrSelectionRect } from '@/common/ocrUi';
 const props = defineProps<{ fileId?: number; fileVersion?: number; width: number; height: number; x: number; y: number; zoom: number; rotate: number; ready: boolean }>();
 const { t } = useI18n(), ui = useUIStore();
+const rotation = ref('model');
 const canvas = ref<SVGSVGElement | null>(null), selecting = ref(false), busy = ref(false), copied = ref(false), error = ref(''), output = ref<any>(null), rect = ref<number[] | null>(null), selected = ref<boolean[]>([]);
 let origin: { x: number; y: number } | null = null, generation = 0, disposed = false;
 let request: { libraryId: string; requestId: string } | null = null;
@@ -61,9 +64,10 @@ async function finish(event: PointerEvent) {
 async function recognize(region: number[]) {
   const libraryId = libConfig._libraryId, fileId = props.fileId, scope = generation, requestId = crypto.randomUUID();
   if (ocrBusy.value) { error.value = t('ocr.region_busy'); return; }
+  output.value = null; selected.value = [];
   request = { libraryId, requestId }; busy.value = true; ocrBusy.value = true; error.value = ''; copied.value = false;
   try {
-    const result: any = await invoke('extract_ocr_region', { libraryId, fileId, requestId, region, previewAspect: props.width / props.height });
+    const result: any = await invoke('extract_ocr_region', { libraryId, fileId, requestId, region, previewAspect: props.width / props.height, rotation: rotation.value === 'model' ? null : rotation.value });
     if (!disposed && scope === generation) { output.value = result.document; selected.value = result.document.lines.map(() => true); }
   } catch (e) { if (!disposed && scope === generation) error.value = String(e); }
   finally { ocrBusy.value = false; if (request?.requestId === requestId) request = null; if (scope === generation) busy.value = false; }

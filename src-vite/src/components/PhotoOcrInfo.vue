@@ -8,6 +8,7 @@
       <label class="flex items-center gap-1 text-xs"><input v-model="ocrShowBoxes" type="checkbox" class="checkbox checkbox-xs" />{{ t('ocr.boxes') }}</label>
     </div>
     <p class="text-xs opacity-50">{{ t('ocr.photo_hint') }}</p>
+    <p v-if="result?.document?.rotationDegrees || result?.document?.deskewDegrees" class="text-xs opacity-60">{{ t('ocr.rotation_applied', { rotation: result.document.rotationDegrees || 0, tilt: result.document.deskewDegrees || 0 }) }}</p>
     <p v-if="error || result?.error" role="alert" class="text-xs text-error whitespace-pre-wrap">{{ error || result.error }}</p>
     <p v-else-if="!result?.indexed" class="text-xs opacity-50">{{ t('ocr.not_indexed') }}</p>
     <p v-else-if="!result?.document?.text" class="text-xs opacity-50">{{ t('ocr.empty') }}</p>

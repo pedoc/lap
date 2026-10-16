@@ -1,5 +1,15 @@
 {
   "ocr": {
+    "direction": "文字方向",
+    "rotation_model": "跟随模型配置",
+    "rotation_0": "原始方向",
+    "rotation_auto": "自动尝试方向",
+    "rotation_90": "顺时针 90°",
+    "rotation_180": "旋转 180°",
+    "rotation_270": "顺时针 270°",
+    "region_retry": "重新提取",
+    "rotation_applied": "本次方向校正 {rotation}°，倾斜校正 {tilt}°",
+
     "region_select": "框选文字",
     "region_cancel": "取消框选",
     "region_drag_hint": "拖动框选照片中的文字区域，Esc 取消。",
