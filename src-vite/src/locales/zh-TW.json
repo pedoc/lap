@@ -1,4 +1,7 @@
 {
+  "objects": {
+    "model_hint": "按需下载的本地对象检测，模型支持的类别有限，并不识别人或宠物身份。固定 640px 输入，默认优先 GPU；参数和标签集按模型隔离。"
+  },
   "smart_albums": {"templates": {"with_text": "包含文字的照片", "pending_text": "待辨識文字的照片"}},
   "ocr": {
     "smart_text": "图片文字",
@@ -1832,6 +1835,7 @@
       "proxy_test_success": "已透過代理成功連線至 Google。"
     },
     "ai_models": {
+      "detection": "对象检测",
       "title": "AI 模型",
       "intro": "每類任務選擇一個全域模型，所有圖庫共用；每個模型獨立儲存參數。",
       "semantic": "图文语义检索",
@@ -1868,6 +1872,9 @@
       "reset_warning": "全域使用此模型？不相容的自動 AI 結果會重建。人工確認的人物、姓名和人臉標註會保留；原始檔案變更的區域需要重新複核。不會修改原始媒體檔案。",
       "delete_confirm": "移除此未啟用的自訂模型及其設定？不會刪除已下載的模型檔案。",
       "parameters": {
+        "object_confidence": "检测分数阈值",
+        "object_nms_iou": "同类去重 IoU（0 为关闭）",
+        "object_max_results": "每张图最大检出数量",
         "threads": "每个模型会话的 CPU 线程数",
         "semantic_threshold": "语义检索阈值（标准）",
         "related_threshold": "相关图片阈值",

@@ -1,4 +1,7 @@
 {
+  "objects": {
+    "model_hint": "按需下载的本地对象检测，模型支持的类别有限，并不识别人或宠物身份。固定 640px 输入，默认优先 GPU；参数和标签集按模型隔离。"
+  },
   "sidebar": {
     "home": "主页",
     "library": "资料库",
@@ -1731,6 +1734,7 @@
       "proxy_test_success": "通过代理成功访问 Google。"
     },
     "ai_models": {
+      "detection": "对象检测",
       "ocr": "文字识别",
       "title": "AI 模型",
       "intro": "每类任务选择一个全局模型，所有图库共用；每个模型独立保存参数。",
@@ -1768,6 +1772,9 @@
       "reset_warning": "全局使用此模型？不兼容的自动 AI 结果会重建。人工确认的人物、姓名和人脸标注会保留；原文件发生变化的区域需要重新复核。不会修改原始媒体文件。",
       "delete_confirm": "移除此未启用的自定义模型及其配置？不会删除已下载的模型文件。",
       "parameters": {
+        "object_confidence": "检测分数阈值",
+        "object_nms_iou": "同类去重 IoU（0 为关闭）",
+        "object_max_results": "每张图最大检出数量",
         "ocr_rotation": "文字方向校正",
         "ocr_deskew_degrees": "倾斜校正角度（-15°～15°）",
         "ocr_detection_size": "文字检测输入尺寸",

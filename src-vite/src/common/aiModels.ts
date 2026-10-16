@@ -16,6 +16,8 @@ export function applyAiConfiguration(config: any, view: any) {
     faceProfile: view.faceProfile || '',
     ocrProfile: view.ocrProfile || '',
     ocrModel: view.selection.ocr || '',
+    detectionProfile: view.detectionProfile || '',
+    detectionModel: view.selection.detection || '',
   };
 }
 export function supportsNonLatin(languages: string[]) {

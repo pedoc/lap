@@ -41,3 +41,12 @@ pub fn semantic_backend(model: &ResolvedModel) -> Result<Box<dyn MultimodalEmbed
     }
     result
 }
+
+pub mod objects;
+
+pub fn create_object_backend(model: &crate::ai::types::ResolvedModel) -> Result<Box<dyn crate::ai::capabilities::ObjectDetector>, String> {
+    match model.definition.adapter {
+        crate::ai::types::Adapter::YoloXOnnx | crate::ai::types::Adapter::RtDetrOnnx => Ok(Box::new(objects::OnnxObjects::new(model)?)),
+        _ => Err("Adapter does not implement object detection".into()),
+    }
+}

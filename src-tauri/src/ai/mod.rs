@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod alignment;
 pub mod assets;
 pub mod capabilities;
+pub mod objects_types;
 pub mod commands;
 pub mod face_annotations;
 pub mod face_jobs;
@@ -72,6 +73,7 @@ mod smoke_tests {
                         definition.dimension
                     );
                 }
+                Task::Detection => { let mut backend=super::adapters::objects::OnnxObjects::new(&model).unwrap(); backend.probe().unwrap(); }
                 Task::Ocr => { let mut backend=super::adapters::ocr::PaddleOcr::new(&model).unwrap(); backend.recognize(&image::DynamicImage::new_rgb8(320,320), &||Ok(())).unwrap(); }
                 Task::Face => {
                     let mut adapter = crate::t_face::FaceEngine::new();
@@ -183,6 +185,7 @@ mod smoke_tests {
                             definition.dimension
                         );
                     }
+                    Task::Detection => { let mut backend=super::adapters::objects::OnnxObjects::new(&model)?; backend.probe()?; }
                     Task::Ocr => { let mut backend=super::adapters::ocr::PaddleOcr::new(&model)?; backend.recognize(&image::DynamicImage::new_rgb8(320,320), &||Ok(()))?; }
                     Task::Face => {
                         let mut backend = crate::t_face::FaceEngine::new();
@@ -228,6 +231,7 @@ mod smoke_tests {
                         .parameters
                         .insert("device".into(), serde_json::json!("auto"));
                     match definition.task {
+                        Task::Detection => { let mut backend=super::adapters::objects::OnnxObjects::new(&automatic).unwrap(); backend.probe().unwrap(); }
                         Task::Ocr => { let mut backend=super::adapters::ocr::PaddleOcr::new(&automatic).unwrap(); backend.recognize(&image::DynamicImage::new_rgb8(320,320), &||Ok(())).unwrap(); }
                         Task::Semantic => {
                             let mut backend = crate::t_ai::build_embedder(&automatic).unwrap();
@@ -323,7 +327,7 @@ mod smoke_tests {
         let bytes = png.into_inner();
         for definition in super::settings::builtins()
             .into_iter()
-            .filter(|d| d.adapter != super::types::Adapter::JinaEmbeddings && d.task != super::types::Task::Ocr)
+            .filter(|d| d.adapter != super::types::Adapter::JinaEmbeddings && d.task != super::types::Task::Ocr && d.task != super::types::Task::Detection)
         {
             let configuration = super::settings::Configuration::default();
             let mut cpu = configuration.resolve(&definition.id).unwrap();
@@ -334,7 +338,7 @@ mod smoke_tests {
             assert_eq!(cpu.profile(), gpu.profile());
             let output = |model: &super::types::ResolvedModel| -> Vec<f32> {
                 match definition.task {
-                    super::types::Task::Ocr => unreachable!("OCR does not provide embedding vectors"),
+                    super::types::Task::Ocr | super::types::Task::Detection => unreachable!("This task does not provide embedding vectors"),
                     super::types::Task::Semantic => {
                         let mut backend = crate::t_ai::build_embedder(model).unwrap();
                         backend.encode_image(&bytes).unwrap()

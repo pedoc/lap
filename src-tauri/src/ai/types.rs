@@ -8,6 +8,7 @@ pub enum Task {
     Semantic,
     Face,
     Ocr,
+    Detection,
 }
 impl Task {
     pub fn key(self) -> &'static str {
@@ -15,6 +16,7 @@ impl Task {
             Self::Semantic => "semantic",
             Self::Face => "face",
             Self::Ocr => "ocr",
+            Self::Detection => "detection",
         }
     }
 }
@@ -27,6 +29,8 @@ pub enum Adapter {
     JinaEmbeddings,
     PaddleOcrOnnx,
     RapidOcrOnnx,
+    YoloXOnnx,
+    RtDetrOnnx,
 }
 impl Adapter {
     // Bump only the affected adapter when its preprocessing/output contract changes.
@@ -37,6 +41,8 @@ impl Adapter {
             Self::JinaEmbeddings => "jina-json-jpeg1024-v1",
             Self::PaddleOcrOnnx => "paddle-db-ctc-bgr48-v1",
             Self::RapidOcrOnnx => "rapidocr-db-ctc-bgr48-embedded-v1",
+            Self::YoloXOnnx => "yolox-rgb640-top-left-grid-v1",
+            Self::RtDetrOnnx => "rtdetr-rgb640-logits-cxcywh-v1",
         }
     }
 }
@@ -69,6 +75,8 @@ pub struct ModelDefinition {
     pub defaults: BTreeMap<String, Value>,
     #[serde(default)]
     pub files: Vec<Artifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_set: Option<super::objects_types::LabelSet>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -164,9 +172,10 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
             false,
         ));
         for role in match task {
-            Task::Semantic => ["text", "vision"],
-            Task::Face => ["detector", "embedding"],
-            Task::Ocr => ["ocr_detector", "recognizer"],
+            Task::Semantic => &["text", "vision"][..],
+            Task::Face => &["detector", "embedding"][..],
+            Task::Ocr => &["ocr_detector", "recognizer"][..],
+            Task::Detection => &["detector"][..],
         } {
             p.push(ParameterSpec {
                 key: format!("{role}_device"),
@@ -194,6 +203,11 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
             ParameterSpec::number("related_threshold", 0.7, 0., 1., 0.01, false),
             ParameterSpec::number("smart_tag_threshold", 0.25, 0., 1., 0.01, false),
             ParameterSpec::number("grouping_threshold", 0.93, 0., 1., 0.01, false),
+        ]),
+        Task::Detection => p.extend([
+            ParameterSpec::number("object_confidence",0.35,0.01,0.99,0.05,true),
+            ParameterSpec::number("object_nms_iou",0.5,0.,1.,0.05,true),
+            ParameterSpec::number("object_max_results",100.,1.,300.,1.,true),
         ]),
         Task::Ocr => p.extend([
             ParameterSpec { key:"ocr_rotation".into(),kind:"choice".into(),default:json!("0"),min:0.,max:0.,step:0.,options:vec![json!("0"),json!("auto"),json!("90"),json!("180"),json!("270")],affects_index:true,reload_session:false },
@@ -298,6 +312,7 @@ impl ModelDefinition {
             (Task::Semantic, Adapter::JinaEmbeddings) => &[],
             (Task::Ocr, Adapter::PaddleOcrOnnx) => &["ocr_detector", "recognizer", "charset"],
             (Task::Ocr, Adapter::RapidOcrOnnx) => &["ocr_detector", "recognizer"],
+            (Task::Detection, Adapter::YoloXOnnx | Adapter::RtDetrOnnx) => &["detector"],
             _ => return Err("Adapter does not provide this task capability".into()),
         };
         if self.files.len() != roles.len() {
@@ -329,6 +344,10 @@ impl ModelDefinition {
                 return Err("Model downloads require HTTPS and a SHA256 checksum; credentials cannot be embedded in URLs".into());
             }
         }
+        if self.task==Task::Detection {
+            let labels=self.label_set.as_ref().ok_or("Detection models must declare a versioned label set")?;labels.validate()?;
+            if labels.classes.len()!=self.dimension{return Err("Detection class count and label-set size differ".into());}
+        } else if self.label_set.is_some(){return Err("Label sets belong to object detection models".into());}
         validate_values(self.task, self.adapter, &self.defaults)?;
         Ok(())
     }
@@ -448,7 +467,9 @@ impl ResolvedModel {
             .filter(|f| self.definition.task != Task::Semantic || f.role == "vision")
             .map(|f| (&f.role, &f.sha256))
             .collect::<Vec<_>>();
-        let bytes=serde_json::to_vec(&json!({"schema":1,"adapter":self.definition.adapter,"adapterRevision":self.definition.adapter.revision(),"space":self.definition.embedding_space,"dimension":self.definition.dimension,"artifacts":artifacts,"values":values,"endpoint":self.configuration.endpoint,"remoteModel":self.configuration.remote_model,"remoteRevision":self.configuration.remote_revision})).unwrap();
+        let mut contract=json!({"schema":1,"adapter":self.definition.adapter,"adapterRevision":self.definition.adapter.revision(),"space":self.definition.embedding_space,"dimension":self.definition.dimension,"artifacts":artifacts,"values":values,"endpoint":self.configuration.endpoint,"remoteModel":self.configuration.remote_model,"remoteRevision":self.configuration.remote_revision});
+        if self.definition.task==Task::Detection {contract["labelSet"]=json!(self.definition.label_set);}
+        let bytes=serde_json::to_vec(&contract).unwrap();
         blake3::hash(&bytes).to_hex().to_string()
     }
     pub fn contract_key(&self) -> String {

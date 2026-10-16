@@ -37,3 +37,8 @@ pub trait FacePipeline: FaceDetector + FaceEmbedder + Send {
         None
     }
 }
+
+/// General object detection is distinct from face identity and image embeddings.
+pub trait ObjectDetector: Send {
+    fn detect_objects(&mut self, image: &image::DynamicImage, check: &dyn Fn() -> Result<(), String>) -> Result<super::objects_types::ObjectDocument, String>;
+}

@@ -2,10 +2,11 @@
   <div class="space-y-3">
     <p class="text-xs opacity-60">{{ t('settings.ai_models.intro') }}</p>
     <div class="flex gap-2">
-      <button v-for="kind in ['semantic', 'face', 'ocr']" :key="kind" class="btn btn-sm" :class="task === kind ? 'btn-primary' : 'btn-ghost'" :disabled="busy" @click="task = kind">
+      <button v-for="kind in ['semantic', 'face', 'ocr', 'detection']" :key="kind" class="btn btn-sm" :class="task === kind ? 'btn-primary' : 'btn-ghost'" :disabled="busy" @click="task = kind">
         {{ t(`settings.ai_models.${kind}`) }}
       </button>
     </div>
+    <p v-if="task === 'detection'" class="text-xs opacity-70">{{ t('objects.model_hint') }}</p>
     <p v-if="task === 'ocr'" class="text-xs opacity-70">{{ t('ocr.quality_hint') }}</p>
     <label v-if="task === 'face'" class="flex gap-2 items-center text-sm">
       <input v-model="config.settings.face.enabled" type="checkbox" class="toggle toggle-sm toggle-primary" />
@@ -29,7 +30,7 @@
       </div>
       <div v-if="draft && selectedModel" class="rounded-box border border-base-content/10 p-3 space-y-3">
         <div class="font-semibold text-sm">{{ t('settings.ai_models.configuration') }}: {{ aiModelDisplayName(selectedModel.definition) }}<span class="badge badge-sm ml-2" :class="isActive ? 'badge-primary' : 'badge-ghost'">{{ t(isActive ? 'settings.ai_models.selected' : 'settings.ai_models.inactive') }}</span></div>
-        <div class="text-xs opacity-60">{{ selectedModel.definition.adapter }}<span v-if="task !== 'ocr'"> · {{ selectedModel.definition.dimension }}D</span></div>
+        <div class="text-xs opacity-60">{{ selectedModel.definition.adapter }}<span v-if="!['ocr','detection'].includes(task)"> · {{ selectedModel.definition.dimension }}D</span></div>
         <div class="text-xs opacity-60">{{ selectedModel.contractTested ? t('settings.ai_models.contract_verified') : t('settings.ai_models.contract_untested') }}</div>
         <div v-if="isRemote" class="space-y-2">
           <label v-for="field in ['endpoint', 'remoteModel', 'remoteRevision']" :key="field" class="block text-xs">
@@ -128,7 +129,7 @@ import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, require
 const { t } = useI18n();
 const toast = useToast();
 const requestedTask = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('aiTask') : null;
-const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task = ref(requestedTask && ['semantic', 'face', 'ocr'].includes(requestedTask) ? requestedTask : 'semantic');
+const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task = ref(requestedTask && ['semantic', 'face', 'ocr', 'detection'].includes(requestedTask) ? requestedTask : 'semantic');
 const apiKey = ref(''), manifest = ref(''), error = ref(''), downloading = ref('');
 const downloadFeedback = ref<Record<string, ModelDownloadFeedback>>({});
 const loading = ref(false), busy = ref(false);
@@ -228,7 +229,7 @@ async function test() {
     await persist();
     const result: any = await invoke('test_ai_model', { modelId: editingId.value });
     await refresh(editingId.value);
-    toast.success(`${t('settings.ai_models.test_success')} · ${result.runtime} · ${task.value === 'ocr' ? 'OCR' : result.dimension + 'D'} · ${result.elapsedMs}ms`);
+    toast.success(`${t('settings.ai_models.test_success')} · ${result.runtime} · ${['ocr','detection'].includes(task.value) ? t('settings.ai_models.' + task.value) : result.dimension + 'D'} · ${result.elapsedMs}ms`);
   });
 }
 async function activate() {
@@ -307,7 +308,7 @@ async function importModel() {
 }
 watch(task, () => { choose(view.value?.selection[task.value]); });
 onMounted(async () => {
-  const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr'].includes(event.payload) && !busy.value) task.value = event.payload; });
+  const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr', 'detection'].includes(event.payload) && !busy.value) task.value = event.payload; });
   if (mounted) unlisten.push(offTask); else offTask();
   await refresh();
   const progressListener = await listen('ai-model-download-progress', (event: any) => {

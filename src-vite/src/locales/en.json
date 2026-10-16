@@ -1,4 +1,7 @@
 {
+  "objects": {
+    "model_hint": "Downloadable local object detection with a finite class set, not person/pet identity. Fixed 640px input, GPU-first by default, isolated model parameters and label sets."
+  },
   "sidebar": {
     "home": "Home",
     "library": "Library",
@@ -1731,6 +1734,7 @@
       "proxy_test_success": "Google is reachable through the proxy."
     },
     "ai_models": {
+      "detection": "Object detection",
       "ocr": "OCR",
       "title": "AI models",
       "intro": "Choose one global model per task. All libraries share the selection; each model keeps its own parameters.",
@@ -1768,6 +1772,9 @@
       "reset_warning": "Use this model globally? Incompatible automatic AI results will be rebuilt. Human-confirmed people, names and face annotations are preserved; regions whose source files changed require review. Original media files are not modified.",
       "delete_confirm": "Remove this inactive custom model and its configuration? Downloaded model files will not be deleted.",
       "parameters": {
+        "object_confidence": "Detection score threshold",
+        "object_nms_iou": "NMS IoU (0 = off)",
+        "object_max_results": "Maximum objects per image",
         "ocr_rotation": "Text direction correction",
         "ocr_deskew_degrees": "Tilt correction (-15° to 15°)",
         "ocr_detection_size": "Text detection size",

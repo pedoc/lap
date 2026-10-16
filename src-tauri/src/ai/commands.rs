@@ -27,6 +27,7 @@ pub struct ConfigurationView {
     pub semantic_profile: String,
     pub face_profile: String,
     pub ocr_profile: String,
+    pub detection_profile: String,
     pub runtime: super::runtime::RuntimeInfo,
 }
 pub fn view() -> Result<ConfigurationView, String> {
@@ -67,6 +68,7 @@ pub fn view() -> Result<ConfigurationView, String> {
         semantic_profile: config.active(Task::Semantic)?.profile(),
         face_profile: config.active(Task::Face)?.profile(),
         ocr_profile: config.active(Task::Ocr)?.profile(),
+        detection_profile: config.active(Task::Detection)?.profile(),
         selection: config.selection,
         default_selection: settings::Selection::default(),
         models,
@@ -183,7 +185,7 @@ pub async fn save_ai_model(
                     let _ = entry.delete_credential();
                 }
             }
-            for task in [Task::Semantic, Task::Face, Task::Ocr] {
+            for task in [Task::Semantic, Task::Face, Task::Ocr, Task::Detection] {
                 if config.selected(task) == model_id {
                     super::profiles::ensure(task, &resolved.profile())?;
                 }
@@ -327,6 +329,9 @@ fn test_resolved(model: &ResolvedModel) -> Result<Value, String> {
                 return Err("Image and text embedding dimensions differ".into());
             }
             vector.len()
+        }
+        Task::Detection => {
+            let mut backend=super::adapters::objects::OnnxObjects::new(model)?;backend.probe()?;model.definition.dimension
         }
         Task::Ocr => {
             let mut backend=super::adapters::ocr::PaddleOcr::new(model)?;

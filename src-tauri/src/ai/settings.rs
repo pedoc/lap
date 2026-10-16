@@ -15,7 +15,10 @@ pub struct Selection {
     pub face: String,
     #[serde(default = "default_ocr")]
     pub ocr: String,
+    #[serde(default = "default_detection")]
+    pub detection: String,
 }
+fn default_detection()->String {"rtdetr-v2-r18".into()}
 fn default_ocr() -> String {
     "rapidocr-pp-ocrv5-server".into()
 }
@@ -25,6 +28,7 @@ impl Default for Selection {
             semantic: "clip-b32".into(),
             face: "buffalo-s".into(),
             ocr: default_ocr(),
+            detection: default_detection(),
         }
     }
 }
@@ -103,6 +107,7 @@ impl Configuration {
             Task::Semantic => &self.selection.semantic,
             Task::Face => &self.selection.face,
             Task::Ocr => &self.selection.ocr,
+            Task::Detection => &self.selection.detection,
         }
     }
     pub fn active(&self, task: Task) -> Result<ResolvedModel, String> {
@@ -128,6 +133,7 @@ impl Configuration {
             Task::Semantic => self.selection.semantic = model_id.into(),
             Task::Face => self.selection.face = model_id.into(),
             Task::Ocr => self.selection.ocr = model_id.into(),
+            Task::Detection => self.selection.detection = model_id.into(),
         }
         Ok(())
     }
@@ -136,8 +142,13 @@ impl Configuration {
             return Err("Unsupported AI configuration version".into());
         }
         let mut ids = BTreeSet::new();
+        let mut label_sets = BTreeMap::new();
         for definition in self.catalog() {
             definition.validate()?;
+            if let Some(labels)=&definition.label_set {
+                let key=format!("{}@{}",labels.namespace,labels.version);
+                if let Some(previous)=label_sets.insert(key,labels.clone()) {if previous!=*labels{return Err("Conflicting label mappings must use different label-set namespaces or versions".into());}}
+            }
             if !ids.insert(definition.id.clone()) {
                 return Err("Duplicate model ID".into());
             }
@@ -146,7 +157,7 @@ impl Configuration {
         if self.models.keys().any(|id| !ids.contains(id)) {
             return Err("Configuration references an unknown model".into());
         }
-        for task in [Task::Semantic, Task::Face, Task::Ocr] {
+        for task in [Task::Semantic, Task::Face, Task::Ocr, Task::Detection] {
             self.active(task)?;
         }
         Ok(())
@@ -169,7 +180,7 @@ fn decode(source: &str, legacy_library: Option<&str>) -> Result<Configuration, S
                 .as_array()
                 .ok_or("Invalid legacy AI settings")?;
             let binding = &value["bindings"][legacy_library.unwrap_or("")];
-            for task in [Task::Semantic, Task::Face, Task::Ocr] {
+            for task in [Task::Semantic, Task::Face, Task::Ocr, Task::Detection] {
                 let id = binding[task.key()]
                     .as_str()
                     .unwrap_or(config.selected(task));
@@ -183,6 +194,7 @@ fn decode(source: &str, legacy_library: Option<&str>) -> Result<Configuration, S
                     Task::Semantic => config.selection.semantic = model_id,
                     Task::Face => config.selection.face = model_id,
                     Task::Ocr => config.selection.ocr = model_id,
+                    Task::Detection => config.selection.detection = model_id,
                 }
             }
             config.models.clear();
@@ -312,7 +324,7 @@ pub fn delete_model(model_id: &str) -> Result<(), String> {
         if builtins().iter().any(|d| d.id == model_id) {
             return Err("Cannot delete a built-in model".into());
         }
-        if [Task::Semantic, Task::Face, Task::Ocr]
+        if [Task::Semantic, Task::Face, Task::Ocr, Task::Detection]
             .iter()
             .any(|task| config.selected(*task) == model_id)
         {
