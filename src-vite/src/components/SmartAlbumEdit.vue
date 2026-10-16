@@ -67,6 +67,7 @@
               </div>
             </template>
           </SmartAlbumRules>
+          <p v-if="hasOcrRules(rules)" class="text-xs mt-2 opacity-60">{{ $t('ocr.smart_hint') }}</p>
           <div class="text-xs mt-2 text-base-content/40">{{ $t('album.smart_edit.rules_count',{count:ruleCount,max:maxRules}) }}</div>
         </section>
       </div>
@@ -100,15 +101,15 @@ import SmartAlbumPhotoPicker from './SmartAlbumPhotoPicker.vue';
 import SmartAlbumRules from './SmartAlbumRules.vue';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
 import { SMART_TAG_CATEGORIES } from '@/common/smartTags';
-import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules } from '@/common/smartAlbums';
-import { libConfig } from '@/common/config';
+import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules, hasOcrRules } from '@/common/smartAlbums';
+import { listen } from '@tauri-apps/api/event';
+import { config, libConfig } from '@/common/config';
 import { getSmartQueryCountAndSum, getSmartQueryFiles, getSmartAlbumStatus, getFileThumbById } from '@/common/api';
 import { getThumbnailDataUrl, isWin, getThumbUrl } from '@/common/utils';
 import { locationNodePath } from '@/common/locationNames';
 import { getAllTags, getCameraInfo, getLensInfo, getLocationInfo, getPersons, getSupportedFormatExtensions, listAlbums, listCollections } from '@/common/api';
 import { IconAdd, IconEdit, IconRemove } from '@/common/icons';
 import { useUIStore } from '@/stores/uiStore';
-import { config } from '@/common/config';
 import { GROUP } from '@/common/constants';
 import ModalDialog from '@/components/ModalDialog.vue';
 import TButton from '@/components/TButton.vue';
@@ -179,7 +180,9 @@ function queryParams() {
     groupBy: 0,
   };
 }
-const previewSignature = computed(() => JSON.stringify(queryParams()));
+const ocrPreviewRevision = ref(0);
+const ocrPreviewStops: Array<() => void> = [];
+const previewSignature = computed(() => JSON.stringify([queryParams(), hasOcrRules(rules.value) ? [config.settings.ai?.ocrProfile, ocrPreviewRevision.value] : null]));
 const previewStale = computed(() => preview.value && preview.value.signature !== previewSignature.value);
 function applyTemplate() {
   if (!template.value) return;
@@ -329,6 +332,8 @@ const groupOptions = computed(() => {
 });
 
 const fieldOptions = computed(() => [
+  { value: 'ocr_text', label: t('ocr.smart_text') },
+  { value: 'ocr_state', label: t('ocr.smart_state') },
   { value: 'semantic', label: t('smart_albums.semantic') },
   { value: 'similar_image', label: t('smart_albums.similar_image') },
   { value: 'anniversary', label: t('smart_albums.anniversary') },
@@ -418,7 +423,8 @@ function getOperatorOptions(field: string) {
   const op = (key: string) => ({ value: key, label: t(`album.smart_edit.operators.${key}`) });
   if (['semantic','similar_image'].includes(field)) return [{value:'matches',label:'≥'}, {value:'not_matches',label:'<'}];
   if (field === 'anniversary') return [op('is')];
-  if (field === 'name') return [op('contains'), op('not_contains')];
+  if (field === 'name' || field === 'ocr_text') return [op('contains'), op('not_contains')];
+  if (field === 'ocr_state') return [op('is'), op('is_not')];
   if (['file_type', 'media_subtype', 'extension', 'camera', 'lens', 'location', 'album', 'collection'].includes(field)) return [op('is'), op('is_not')];
   if (field === 'favorite' || field === 'has_gps') return [op('is')];
   if (field === 'culling') return [op('is'), op('is_not')];
@@ -443,7 +449,8 @@ function setDefaultRuleValue(rule: any) {
   if (rule.field === 'semantic') rule.value = {prompt:'',threshold:0.25};
   else if (rule.field === 'similar_image') rule.value = {fileId:null,threshold:0.5};
   else if (rule.field === 'anniversary') rule.value = true;
-  else if (rule.field === 'name') rule.value = '';
+  else if (rule.field === 'name' || rule.field === 'ocr_text') rule.value = '';
+  else if (rule.field === 'ocr_state') rule.value = 'text';
   else if (rule.field === 'file_type') rule.value = 1;
   else if (rule.field === 'media_subtype') rule.value = 'motion_photo';
   else if (rule.field === 'extension') rule.value = extensionOptions.value[0]?.value || 'jpg';
@@ -474,6 +481,8 @@ function isRuleValid(rule: any) {
   if(rule.field==='group')return smartChildren(rule).length>0 && smartChildren(rule).every(isRuleValid);
   if(['semantic','similar_image'].includes(rule.field))return Number.isFinite(Number(rule.value?.threshold)) && Number(rule.value.threshold)>=0 && Number(rule.value.threshold)<=1 && (rule.field==='semantic'?Boolean(rule.value?.prompt?.trim()):Number.isSafeInteger(Number(rule.value?.fileId))&&Number(rule.value.fileId)>0);
   if(rule.field==='anniversary')return true;
+  if (rule.field === 'ocr_text') return ['contains','not_contains'].includes(rule.operator) && typeof rule.value === 'string' && rule.value.trim().length > 0 && rule.value.length <= 512;
+  if (rule.field === 'ocr_state') return ['is','is_not'].includes(rule.operator) && ['text','pending','empty','failed'].includes(rule.value);
   if (['empty', 'not_empty'].includes(rule.operator)) return true;
   if (rule.operator === 'between') {
     return Boolean(
@@ -759,6 +768,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  ocrPreviewStops.forEach(off => off());
   editDisposed = true; previewToken++;
   window.removeEventListener('keydown', handleKeyDown);
   uiStore.removeInputHandler('SmartAlbumEdit');
@@ -770,6 +780,15 @@ watch([tagOptions, personOptions, albumOptions, collectionOptions, cameraOptions
   });
 });
 
+onMounted(async () => {
+  for (const name of ['ocr-index-updated','ocr-annotations-changed']) {
+    const off = await listen(name, (event:any) => {
+      if (event.payload?.libraryId && event.payload.libraryId !== libConfig._libraryId || !hasOcrRules(rules.value)) return;
+      ocrPreviewRevision.value++;
+    });
+    if (editDisposed) off(); else ocrPreviewStops.push(off);
+  }
+});
 const RuleValueControl = defineComponent({
   props: {
     rule: { type: Object, required: true },
@@ -1006,6 +1025,8 @@ const RuleValueControl = defineComponent({
         h('label',{class:'flex items-center gap-2 text-xs'},[t('smart_albums.threshold'),numberInput(props.rule.value.threshold,(e:any)=>{props.rule.value.threshold=Number(e.target.value);},{min:0,max:1,step:0.01})]),
       ]);
       if (['empty', 'not_empty'].includes(props.rule.operator) && !isDateRuleField(props.rule.field)) return h('span', { class: 'text-xs text-base-content/30' }, '-');
+      if (props.rule.field === 'ocr_state') return selectInput(['text','pending','empty','failed'].map(value => ({ value, label: t('ocr.state_' + value) })));
+      if (props.rule.field === 'ocr_text') return h('input', { class: inputClass, value: props.rule.value, maxlength: 512, placeholder: t('ocr.smart_text_placeholder'), onInput: (event:any) => { props.rule.value = event.target.value; } });
       if (props.rule.field === 'file_type') return fileTypeInput();
       if (props.rule.field === 'culling') return selectInput(props.cullingOptions);
       if (props.rule.field === 'media_subtype') return mediaSubtypeInput();

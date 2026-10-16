@@ -101,7 +101,7 @@ function harness(overrides: any = {}) {
     source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1],
   ).replace(/^import[\s\S]*?from\s*[\'"][^\'"]+[\'"];?\r?\n/gm, "");
   const api = runInNewContext(
-    `${script}\n;({rules,name,parentId,template,applyTemplate,previewResults,preview,previewError,previewStale,canSave,clickOk,includeIds,excludeIds,recalibrate});`,
+    `${script}\n;({rules,name,parentId,template,applyTemplate,previewResults,preview,previewError,previewStale,canSave,clickOk,includeIds,excludeIds,recalibrate,makeRule,getOperatorOptions,isRuleValid,ocrPreviewRevision});`,
     ctx,
   );
   return { api, ctx, emits, watches };
@@ -384,4 +384,26 @@ test("late sidebar counts cannot write into another library", async () => {
   finish([2, 100]);
   await pending;
   assert.equal(h.ctx.libConfig.smartAlbums[0].count, 99);
+});
+
+test('OCR smart rules expose literal text and explicit status without requiring semantic indexing', () => {
+  const h = harness();
+  const state = h.api.makeRule('ocr_state'); assert.equal(state.value, 'text'); assert.equal(h.api.isRuleValid(state), true);
+  state.value = 'pending'; assert.equal(h.api.isRuleValid(state), true); state.value = 'invalid'; assert.equal(h.api.isRuleValid(state), false);
+  const text = h.api.makeRule('ocr_text'); assert.equal(h.api.isRuleValid(text), false); text.value = '中文 100% _'; assert.equal(h.api.isRuleValid(text), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.getOperatorOptions('ocr_text').map((option:any) => option.value))), ['contains','not_contains']);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.getOperatorOptions('ocr_state').map((option:any) => option.value))), ['is','is_not']);
+});
+test('OCR previews become stale after a global model change or text-index update', async () => {
+  const config = Vue.reactive({search:{sortType:0,sortOrder:1,groupBy:0},settings:{language:'en',ai:{semanticProfile:'semantic',ocrProfile:'ocr-a'}}});
+  const h = harness({config}); h.api.rules.value = [h.api.makeRule('ocr_state')]; await h.api.previewResults(); assert.equal(Boolean(h.api.previewStale.value), false);
+  config.settings.ai.ocrProfile = 'ocr-b'; assert.equal(Boolean(h.api.previewStale.value), true); await h.api.previewResults(); assert.equal(Boolean(h.api.previewStale.value), false);
+  h.api.ocrPreviewRevision.value++; assert.equal(Boolean(h.api.previewStale.value), true);
+});
+test('actual OCR smart rule controls render states, literal input and coverage guidance', async () => {
+  const group = renderComponent(readFileSync(new URL('../src/components/SmartAlbumRules.vue',import.meta.url),'utf8'),{},'SmartAlbumRules.vue');
+  const stub = {render(){return Vue.h('span');}};
+  const editor = renderComponent(source,{SmartAlbumRules:group,SmartAlbumStatus:stub,ModalDialog:{template:'<section><slot /></section>'},TButton:stub,IconAdd:stub,IconEdit:stub,IconRemove:stub},'SmartAlbumEdit.vue');
+  const html = await ssr(editor,{...props,smartAlbum:{id:'ocr',name:'Text',query:{match:'all',rules:[{id:'s',field:'ocr_state',operator:'is',value:'pending'},{id:'t',field:'ocr_text',operator:'contains',value:'中文 <script>'}]}}});
+  assert.match(html,/value="pending"/);assert.match(html,/value="failed"/);assert.match(html,/maxlength="512"/);assert.match(html,/ocr.smart_hint/);assert.doesNotMatch(html,/<script>/);
 });

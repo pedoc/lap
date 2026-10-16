@@ -9,6 +9,7 @@ import {
   smartResultSignature,
   setSmartOverrides,
   hasSemanticRules,
+  hasOcrRules,
   smartRuleCount,
   smartTemplateRules,
   SMART_TEMPLATES,
@@ -167,3 +168,8 @@ for (const template of SMART_TEMPLATES)
     assert.ok(a.length > 0);
     assert.notEqual(a[0].id, b[0].id);
   });
+
+test('nested OCR rules are recognized independently of semantic model rules', () => {
+  assert.equal(hasOcrRules([{id:'g',field:'group',operator:'any',value:{rules:[{id:'o',field:'ocr_text',operator:'contains',value:'invoice'}]}}]),true);
+  assert.equal(hasOcrRules([{id:'s',field:'semantic',operator:'matches',value:{prompt:'invoice'}}]),false);
+});

@@ -46,6 +46,11 @@ export function hasSemanticRules(rules: SmartRule[]): boolean {
   });
   return result;
 }
+export function hasOcrRules(rules: SmartRule[]): boolean {
+  let result = false;
+  visitSmartRules(rules, rule => { if (['ocr_text', 'ocr_state'].includes(rule.field)) result = true; });
+  return result;
+}
 export function smartQueryParams(album: any) {
   return {
     version: 2,
@@ -172,6 +177,8 @@ export function setSmartOverrides(
   };
 }
 export const SMART_TEMPLATES = [
+  "with_text",
+  "pending_text",
   "recent_picks",
   "person",
   "location",
@@ -190,6 +197,8 @@ export function smartTemplateRules(
     value,
   });
   switch (template) {
+    case "with_text": return [rule("ocr_state", "is", "text")];
+    case "pending_text": return [rule("ocr_state", "is", "pending")];
     case "recent_picks":
       return [
         rule("date_taken", "in_last", { amount: 1, unit: "month" }),

@@ -5597,6 +5597,11 @@ impl AFile {
         let value = &rule.value;
 
         match field {
+            "ocr_text" | "ocr_state" => {
+                let (condition, values) = crate::ai::ocr_smart::condition(field, operator, value)?;
+                sql_params.extend(values);
+                Ok(condition)
+            }
             "name" => Self::build_smart_name_condition(operator, value, sql_params),
             "file_type" => {
                 let mask = Self::smart_rule_i64(value)

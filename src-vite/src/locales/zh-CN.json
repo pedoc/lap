@@ -2133,6 +2133,8 @@
   "preview_error": "预览失败：{error}",
   "move_invalid": "不能将文件夹移到自身或其子文件夹。",
   "templates": {
+      "with_text": "包含文字的照片",
+      "pending_text": "待识别文字的照片",
     "recent_picks": "最近一个月的三星以上照片",
     "person": "指定人物",
     "location": "指定地点",
@@ -2285,6 +2287,11 @@
   }
 ,
   "ocr": {
+    "smart_text": "图片文字",
+    "smart_state": "文字识别状态",
+    "smart_hint": "使用当前全局模型的有效结果，人工修订优先。“文字不包含”只判断已识别结果，不把未识别或失败当作不包含；识别和修订后相册会更新。",
+    "smart_text_placeholder": "输入要匹配的图片文字",
+
     "auto_title": "自动识别",
     "auto_paused": "已暂停",
     "auto_enabled": "已启用",

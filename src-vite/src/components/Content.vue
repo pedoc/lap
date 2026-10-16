@@ -802,7 +802,7 @@ import ContextMenu from '@/components/ContextMenu.vue';
 import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFileDragActive, isReturningNativeFileDrag, startNativeFileDrag } from '@/common/nativeDrag';
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
-import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, isSmartFolder } from '@/common/smartAlbums';
+import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, hasOcrRules, isSmartFolder } from '@/common/smartAlbums';
 import { setMediaHidden } from '@/common/api';
 import { mediaTypeRules } from '@/common/mediaLifecycle';
 import { useFileMenuItems } from '@/common/fileMenu';
@@ -3410,12 +3410,13 @@ function queueSmartRefresh(){
   smartRefreshTimer=setTimeout(()=>{smartRefreshTimer=undefined;if(isLoading.value){queueSmartRefresh();return;}refreshActiveSmartAlbum();},800);
 }
 watch(()=>config.settings.ai?.semanticProfile,()=>{if(activeSmartAlbum.value && hasSemanticRules(activeSmartAlbum.value.query?.rules || []))queueSmartRefresh();});
+watch(()=>config.settings.ai?.ocrProfile,()=>{if(activeSmartAlbum.value && hasOcrRules(activeSmartAlbum.value.query?.rules || []))queueSmartRefresh();});
 watch(()=>uiStore.countUpdateTick,()=>{if(activeSmartAlbum.value)queueSmartRefresh();});
 watch(()=>activeSmartAlbum.value?.name, name=>{if(name && tempViewMode.value==='none')contentTitle.value=name;});
 onMounted(async()=>{
   smartClock=setInterval(()=>{if(activeSmartAlbum.value&&hasTimeSmartRules(activeSmartAlbum.value.query?.rules||[]))queueSmartRefresh();},60000);
-  for(const name of ['media-lifecycle-changed','files-deleted','semantic-index-changed','smart-album-index-progress','index_progress','index_finished','face-person-changed','face_index_finished','location-resolution-progress','map-location-changed']) {
-    const stop=await listen(name,(event:any)=>{const library=event.payload?.libraryId||event.payload?.library_id;if(library&&library!==libConfig._libraryId)return;if(name==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;queueSmartRefresh();});
+  for(const name of ['ocr-index-updated','ocr-annotations-changed','media-lifecycle-changed','files-deleted','semantic-index-changed','smart-album-index-progress','index_progress','index_finished','face-person-changed','face_index_finished','location-resolution-progress','map-location-changed']) {
+    const stop=await listen(name,(event:any)=>{const library=event.payload?.libraryId||event.payload?.library_id;if(library&&library!==libConfig._libraryId)return;if((name==='ocr-index-updated'||name==='ocr-annotations-changed')&&(!activeSmartAlbum.value||!hasOcrRules(activeSmartAlbum.value.query?.rules||[])))return;if(name==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;queueSmartRefresh();});
     if(smartEventsDisposed){stop();return;}smartEventStops.push(stop);
   }
 });

@@ -190,6 +190,7 @@ import { listen } from "@tauri-apps/api/event";
 import { config, libConfig } from "@/common/config";
 import {
   hasTimeSmartRules,
+  hasOcrRules,
   isSmartFolder,
   smartTreeRows,
   smartQueryParams,
@@ -427,6 +428,11 @@ let countTimer: ReturnType<typeof setTimeout> | undefined;
 let coverRequest = 0;
 const stops: (() => void)[] = [];
 let clock: ReturnType<typeof setInterval> | undefined;
+let ocrCountTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleOcrCounts() {
+  if (ocrCountTimer || !nodes.value.some(n => hasOcrRules(n.query?.rules || []))) return;
+  ocrCountTimer = setTimeout(() => { ocrCountTimer = undefined; void refreshCounts(true); }, 1500);
+}
 let counting = false;
 let countAgain = false;
 function scheduleCounts() {
@@ -436,7 +442,7 @@ function scheduleCounts() {
     void refreshCounts();
   }, 600);
 }
-async function refreshCounts() {
+async function refreshCounts(onlyOcr = false) {
   if (counting) {
     countAgain = true;
     return;
@@ -444,7 +450,7 @@ async function refreshCounts() {
   counting = true;
   const token = ++request;
   const library = libConfig._libraryId;
-  const albums = nodes.value.filter((n) => !isSmartFolder(n));
+  const albums = nodes.value.filter((n) => !isSmartFolder(n) && (!onlyOcr || hasOcrRules(n.query?.rules || [])));
   let cursor = 0;
   async function worker() {
     while (cursor < albums.length) {
@@ -519,6 +525,7 @@ watch(
   },
 );
 watch(() => config.settings.ai?.semanticProfile, scheduleCounts);
+watch(() => config.settings.ai?.ocrProfile, scheduleOcrCounts);
 watch(() => useUIStore().countUpdateTick, scheduleCounts);
 watch(
   () =>
@@ -577,6 +584,8 @@ onMounted(async () => {
       scheduleCounts();
   }, 60000);
   for (const eventName of [
+    "ocr-index-updated",
+    "ocr-annotations-changed",
     "media-lifecycle-changed",
     "files-deleted",
     "semantic-index-changed",
@@ -593,6 +602,7 @@ onMounted(async () => {
     const stop = await listen(eventName, (event: any) => {
       const library = event.payload?.libraryId || event.payload?.library_id;
       if (library && library !== libConfig._libraryId) return;
+      if (eventName === 'ocr-index-updated' || eventName === 'ocr-annotations-changed') { scheduleOcrCounts(); return; }
       if(eventName==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;
       if(eventName==='album-updated'&&!event.payload?.filtersChanged)return;
       if(eventName==='files-deleted'){const ids=new Set((event.payload?.fileIds||[]).map(Number));libConfig.smartAlbums=nodes.value.map(n=>ids.has(Number(n.coverFileId))?{...n,coverFileId:null}:n);}
@@ -610,6 +620,7 @@ onBeforeUnmount(() => {
   request++;
   coverRequest++;
   clearTimeout(countTimer);
+  clearTimeout(ocrCountTimer);
   clearInterval(clock);
   stops.forEach((stop) => stop());
 });

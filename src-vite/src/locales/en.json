@@ -2133,6 +2133,8 @@
   "preview_error": "Preview failed: {error}",
   "move_invalid": "Cannot move a folder into itself or its descendants.",
   "templates": {
+      "with_text": "Photos with text",
+      "pending_text": "Photos awaiting text recognition",
     "recent_picks": "Recent month: three stars or better",
     "person": "A person",
     "location": "A place",
@@ -2285,6 +2287,11 @@
   }
 ,
   "ocr": {
+    "smart_text": "Image text",
+    "smart_state": "Text recognition status",
+    "smart_hint": "Uses valid results for the current global model, with human edits taking priority. Text does not contain applies only to recognized results, not pending or failed photos. Albums update as recognition and edits complete.",
+    "smart_text_placeholder": "Enter text to match in photos",
+
     "auto_title": "Automatic recognition",
     "auto_paused": "Paused",
     "auto_enabled": "Enabled",
