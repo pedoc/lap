@@ -1,6 +1,17 @@
 name: Release Windows
 
 on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Existing release tag to publish Windows assets to"
+        required: true
+        type: string
+      build_target:
+        description: "Architecture to build (all, x64, or arm64)"
+        required: false
+        default: "all"
+        type: string
   workflow_dispatch:
     inputs:
       release_tag:
@@ -21,6 +32,8 @@ permissions:
   contents: write
 
 env:
+  RELEASE_TAG: ${{ inputs.release_tag }}
+  BUILD_TARGET: ${{ inputs.build_target }}
   # Pin the Tauri CLI so bundled toolchain changes in a floating
   # `@tauri-apps/cli@v2` cannot silently break packaging. Bump deliberately.
   TAURI_CLI_VERSION: '2.12.0'
@@ -40,7 +53,7 @@ jobs:
             {"arch":"arm64","runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","msvc_arch":"arm64","msvc_vsversion":"","platform_key":"windows-aarch64","artifact_name":"windows-aarch64","msi_glob":"*_arm64_*.msi"}
           ]'
 
-          INPUT="${{ github.event.inputs.build_target }}"
+          INPUT="$BUILD_TARGET"
           if [ -z "$INPUT" ] || [ "$INPUT" = "all" ]; then
             SEL="$ALL"
           else
@@ -66,6 +79,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.release_tag }}
           submodules: recursive
 
       - name: Setup Node.js
@@ -187,7 +201,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG="${{ github.event.inputs.release_tag }}"
+          TAG="$RELEASE_TAG"
           gh release view "$TAG" -R "$GH_REPO" --json assets --jq '.assets[].name'
 
       - name: Wait for latest.json asset
@@ -195,7 +209,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG="${{ github.event.inputs.release_tag }}"
+          TAG="$RELEASE_TAG"
           for i in $(seq 1 80); do
             rm -f release-files/latest.json
             if gh release download "$TAG" -R "$GH_REPO" -p "latest.json" -D release-files >/dev/null 2>&1; then
@@ -214,7 +228,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.release_tag }}"
+          TAG="$RELEASE_TAG"
           VERSION="${TAG#v}"
           REPO="${{ github.repository }}"
           PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -278,5 +292,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG="${{ github.event.inputs.release_tag }}"
+          TAG="$RELEASE_TAG"
           gh release upload "$TAG" -R "$GH_REPO" release-files/* --clobber

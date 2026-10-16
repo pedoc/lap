@@ -371,3 +371,13 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+
+  # Append Windows assets only after the shared Release and latest.json exist.
+  release-windows:
+    needs: release
+    if: github.event_name == 'push' || inputs.build_target == 'all'
+    uses: ./.github/workflows/release-windows.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+      build_target: all
+    secrets: inherit
