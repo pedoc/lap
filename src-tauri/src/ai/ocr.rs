@@ -26,6 +26,7 @@ pub(crate) fn try_inference() -> Result<InferenceLease, String> {
 struct Job {
     automatic: bool,
     batch_size: Option<usize>,
+    automation_revision: Option<String>,
     cancel: AtomicBool,
     status: Mutex<Status>,
 }
@@ -75,6 +76,16 @@ pub fn is_running() -> bool {
             .unwrap_or(true)
 }
 
+fn check_automatic(job: &Job, library: &str) -> Result<(), String> {
+    if job.automatic
+        && super::ocr_auto::authorized(job.automation_revision.as_deref().unwrap_or(""), library)
+            .is_err()
+    {
+        job.cancel.store(true, Ordering::SeqCst);
+        return Err("Automatic OCR yielded; completed results are saved".into());
+    }
+    Ok(())
+}
 pub fn yield_automatic() {
     let job = JOB.lock().ok().and_then(|slot| slot.clone());
     if let Some(job) = job.filter(|job| job.automatic) {
@@ -311,7 +322,7 @@ pub async fn start_ocr_index(
         let mut slot=JOB.lock().map_err(|e|e.to_string())?;
         if slot.as_ref().is_some_and(|j|j.status.lock().is_ok_and(|s|s.running)){return Err("An OCR job is already running".into());}
         let initial=Status {automatic,automation_revision,scope:scope.into(),scope_name:folder.as_ref().map(|(_,path)|path.clone()),library_id:library_id.clone(),job_id:uuid::Uuid::new_v4().to_string(),running:true,..Default::default()};
-        let job=Arc::new(Job {automatic,batch_size,cancel:AtomicBool::new(false),status:Mutex::new(initial.clone())});*slot=Some(job.clone());drop(slot);
+        let job=Arc::new(Job {automatic,batch_size,automation_revision:initial.automation_revision.clone(),cancel:AtomicBool::new(false),status:Mutex::new(initial.clone())});*slot=Some(job.clone());drop(slot);
         tauri::async_runtime::spawn_blocking(move||{
             let _lease = lease;
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||run(&app_handle,&library_id,&model,force,retry_failed,file_ids,folder, &job)));
@@ -368,6 +379,7 @@ fn run(
             .map_err(|e| e.to_string())?;
         let check = || {
             check_library(library)?;
+            check_automatic(job, library)?;
             if job.cancel.load(Ordering::SeqCst) {
                 return Err(
                     "OCR stopped; completed results are saved. Resume to process the remainder"
@@ -687,6 +699,22 @@ mod tests {
             INSERT INTO ai_index_profiles VALUES('ocr','model-a');").unwrap();
         ensure_schema(&c).unwrap();
         c
+    }
+    #[test]
+    fn automatic_checkpoints_reject_stale_policy_without_affecting_manual_jobs() {
+        let mut job = Job {
+            automatic: true,
+            batch_size: Some(20),
+            automation_revision: Some("stale-revision".into()),
+            cancel: AtomicBool::new(false),
+            status: Mutex::new(Status::default()),
+        };
+        assert!(check_automatic(&job, "library-a").is_err());
+        assert!(job.cancel.load(Ordering::SeqCst));
+        job.automatic = false;
+        job.cancel.store(false, Ordering::SeqCst);
+        assert!(check_automatic(&job, "library-a").is_ok());
+        assert!(!job.cancel.load(Ordering::SeqCst));
     }
     #[test]
     fn automation_selects_only_pending_rows_in_bounded_batches() {
