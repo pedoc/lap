@@ -1,51 +1,17 @@
 //! Temporary, source-checked OCR extraction. This module never writes an index.
+#[cfg(test)]
+use super::media::Source;
+use super::media::source_on;
 use super::{
     adapters::ocr::{Document, PaddleOcr},
     types::Task,
 };
-use image::DynamicImage;
-use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 static CANCEL: Mutex<Option<(String, String, Arc<AtomicBool>)>> = Mutex::new(None);
-#[derive(Clone)]
-pub(crate) struct Source {
-    pub path: String,
-    pub modified: Option<i64>,
-    pub size: i64,
-    pub width: u64,
-    pub height: u64,
-    pub orientation: i32,
-}
-pub(crate) fn source_on(c: &Connection, id: i64) -> Result<Source, String> {
-    c.query_row(&format!("SELECT b.path || '/' || a.name,a.modified_at,a.size,a.width,a.height,COALESCE(a.e_orientation,1) {} AND a.id=?1",super::ocr::base()),[id],|r| Ok(Source{path:r.get(0)?,modified:r.get(1)?,size:r.get(2)?,width:r.get(3)?,height:r.get(4)?,orientation:r.get(5)?})).optional().map_err(|e|e.to_string())?.ok_or_else(|| "Photo is unavailable, hidden, deleted or excluded".into())
-}
-impl Source {
-    pub(crate) fn verify(&self) -> Result<(), String> {
-        let info = crate::t_utils::FileInfo::new(&self.path)?;
-        if info.modified != self.modified || info.file_size != self.size {
-            return Err("Source changed; rescan the photo and retry".into());
-        }
-        Ok(())
-    }
-    pub(crate) fn load(&self) -> Result<DynamicImage, String> {
-        if self.width.saturating_mul(self.height) > 80_000_000 {
-            return Err("Image exceeds 80 megapixel OCR decoding limit".into());
-        }
-        self.verify()?;
-        let image = tauri::async_runtime::block_on(crate::t_image::load_oriented_image(
-            &self.path,
-            self.orientation,
-        ))?;
-        if u64::from(image.width()) * u64::from(image.height()) > 80_000_000 {
-            return Err("Decoded image exceeds OCR limit".into());
-        }
-        Ok(image)
-    }
-}
 pub(crate) fn crop_pixels(rect: [f64; 4], width: u32, height: u32) -> Result<[u32; 4], String> {
     let [x, y, w, h] = rect;
     if width == 0

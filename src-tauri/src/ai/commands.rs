@@ -93,7 +93,7 @@ fn require_idle<T>(
     let index_guard = indexing.lock().map_err(|e| e.to_string())?;
     let similar = app.state::<crate::t_similar::SimilarState>();
     let similar_guard = similar.status.lock().map_err(|e| e.to_string())?;
-    if super::ocr::is_running() || *face_guard || !index_guard.is_empty() || similar_guard.is_scanning {
+    if super::vision_jobs::busy() || super::objects_jobs::is_running() || super::ocr::is_running() || *face_guard || !index_guard.is_empty() || similar_guard.is_scanning {
         return Err(
             "Stop library/face/similarity indexing before changing AI configuration".into(),
         );
@@ -101,6 +101,7 @@ fn require_idle<T>(
     drop(similar_guard);
     drop(index_guard);
     drop(face_guard);
+    let _lane=super::vision_jobs::try_claim(Task::Semantic)?;
     operation()
 }
 #[tauri::command]
@@ -300,15 +301,14 @@ pub fn cancel_ai_model_download(model_id: String) -> Result<(), String> {
     assets::cancel(&model_id)
 }
 #[tauri::command]
-pub async fn test_ai_model(model_id: String) -> Result<Value, String> {
+pub async fn test_ai_model(app_handle: AppHandle, model_id: String) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let _configuration = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
-            .read()
-            .map_err(|e| e.to_string())?;
-        let model = settings::snapshot()?.resolve(&model_id)?;
-        let result = super::runtime::with_profiling(|| test_resolved(&model))?;
-        settings::mark_tested(&model_id, &model.contract_key())?;
-        Ok(result)
+        require_idle(&app_handle,||{
+            let model = settings::snapshot()?.resolve(&model_id)?;
+            let result = super::runtime::with_profiling(|| test_resolved(&model))?;
+            settings::mark_tested(&model_id, &model.contract_key())?;
+            Ok(result)
+        })
     })
     .await
     .map_err(|e| e.to_string())?

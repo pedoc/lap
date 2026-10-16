@@ -36,7 +36,7 @@ pub fn ensure_on(conn: &Connection, task: Task, fingerprint: &str) -> Result<boo
                 }
             }
             Task::Ocr => { super::ocr::ensure_schema(conn)?; }
-            Task::Detection => {}
+            Task::Detection => {super::objects_store::ensure_schema(conn)?;}
             Task::Face => {
                 super::face_annotations::reset_model_results(conn)?;
             }

@@ -1,6 +1,5 @@
 //! Explicit, resumable local OCR indexing. Derived text never changes originals.
 use super::{adapters::ocr::PaddleOcr, types::Task};
-use crate::t_sqlite::AFile;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::sync::{
@@ -10,18 +9,11 @@ use std::sync::{
 use tauri::{AppHandle, Emitter, Manager};
 
 static JOB: Mutex<Option<Arc<Job>>> = Mutex::new(None);
-static INFERENCE_BUSY: AtomicBool = AtomicBool::new(false);
-pub(crate) struct InferenceLease;
-impl Drop for InferenceLease {
-    fn drop(&mut self) {
-        INFERENCE_BUSY.store(false, Ordering::SeqCst);
+pub(crate) fn try_inference() -> Result<super::vision_jobs::Lease, String> {
+    if super::objects_jobs::is_running() {
+        return Err("Object recognition is queued or running; wait or stop it first".into());
     }
-}
-pub(crate) fn try_inference() -> Result<InferenceLease, String> {
-    INFERENCE_BUSY
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .map(|_| InferenceLease)
-        .map_err(|_| "OCR is busy; stop the current task before starting another".into())
+    super::vision_jobs::try_claim(Task::Ocr)
 }
 struct Job {
     automatic: bool,
@@ -66,7 +58,7 @@ pub struct View {
     pub automation_error: Option<String>,
 }
 pub fn is_running() -> bool {
-    INFERENCE_BUSY.load(Ordering::SeqCst)
+    super::vision_jobs::running(Task::Ocr)
         || JOB
             .lock()
             .map(|j| {
@@ -85,6 +77,14 @@ fn check_automatic(job: &Job, library: &str) -> Result<(), String> {
         return Err("Automatic OCR yielded; completed results are saved".into());
     }
     Ok(())
+}
+pub fn is_automatic_running() -> bool {
+    JOB.lock()
+        .map(|slot| {
+            slot.as_ref()
+                .is_some_and(|job| job.automatic && job.status.lock().is_ok_and(|s| s.running))
+        })
+        .unwrap_or(false)
 }
 pub fn yield_automatic() {
     let job = JOB.lock().ok().and_then(|slot| slot.clone());
@@ -161,24 +161,13 @@ pub fn workspace_query(state: &str, text: &str) -> (String, Vec<Box<dyn rusqlite
     (condition, values)
 }
 fn visible() -> String {
-    format!(
-        "{} AND {} AND {}",
-        AFile::search_exclusion_condition("b"),
-        AFile::live_photo_companion_exclusion_condition(),
-        AFile::album_query_predicate("a")
-    )
+    super::media::visible()
 }
 pub(crate) fn base() -> String {
-    format!(
-        "FROM afiles a JOIN afolders b ON b.id=a.folder_id WHERE a.file_type IN (1,3) AND {}",
-        visible()
-    )
+    super::media::base()
 }
 pub(crate) fn check_library(library: &str) -> Result<(), String> {
-    if crate::t_config::current_library_id()? != library {
-        return Err("Library changed; OCR stopped. Resume in the original library".into());
-    }
-    Ok(())
+    super::media::check_library(library)
 }
 fn current_status(library: &str) -> Status {
     JOB.lock()
@@ -294,6 +283,7 @@ pub async fn start_ocr_index(
     tauri::async_runtime::spawn_blocking(move||{
         let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
         check_library(&library_id)?;
+        if super::objects_jobs::is_running(){return Err("Stop object recognition before starting OCR".into());}
         let automatic=automation_revision.is_some();
         let policy=automation_revision.as_ref().map(|revision|super::ocr_auto::authorized(revision,&library_id)).transpose()?;
         if automatic && (force||retry_failed||file_ids.is_some()||folder_id.is_some()){return Err("Automatic OCR may only process its configured pending scope".into());}

@@ -10126,6 +10126,7 @@ fn create_db_internal() -> Result<(), String> {
     crate::ai::face_annotations::import_existing(&conn)?;
     crate::t_media_traits::ensure_schema(&conn)?;
     crate::ai::ocr::ensure_schema(&conn)?;
+    crate::ai::objects_store::ensure_schema(&conn)?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS ai_index_profiles(task TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);").map_err(|e|e.to_string())?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_content_identifier ON afiles(content_identifier)",

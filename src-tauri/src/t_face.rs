@@ -186,6 +186,8 @@ pub fn run_face_indexing(
     let epsilon = cluster_epsilon.unwrap_or(model.number("cluster_distance") as f32);
     let library_id = crate::t_config::current_library_id()?;
 
+    if crate::ai::objects_jobs::is_running(){return Err("Stop object recognition before starting face indexing".into());}
+    let lane=crate::ai::vision_jobs::try_claim(crate::ai::types::Task::Face)?;
     // Check if already running
     {
         let mut running = status_token.lock().unwrap();
@@ -210,6 +212,7 @@ pub fn run_face_indexing(
     }
 
     tauri::async_runtime::spawn_blocking(move || {
+        let _lane=lane;
         struct RunningGuard(Arc<Mutex<bool>>);
         impl Drop for RunningGuard { fn drop(&mut self) { if let Ok(mut running)=self.0.lock(){*running=false;} } }
         let _running = RunningGuard(status_token.clone());
