@@ -318,6 +318,8 @@ async fn main() {
             t_media_lifecycle::restore_deleted_media,
             t_media_lifecycle::preview_deleted_media_restore,
             ai::ocr::get_ocr_status,
+            ai::ocr_auto::record_ocr_activity,
+            ai::ocr_auto::save_ocr_automation,
             ai::ocr_annotations::save_ocr_text,
             ai::ocr_annotations::reset_ocr_text,
             ai::ocr_extract::extract_ocr_region,

@@ -11,6 +11,7 @@
 </template>
  
 <script setup>
+import { useOcrActivity } from '@/common/ocrAutomation';
 import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -25,6 +26,7 @@ import MediaJobPanel from '@/components/MediaJobPanel.vue';
 import FaceDiagnosticsDialog from '@/components/FaceDiagnosticsDialog.vue';
 import { faceDiagnosticState } from '@/common/faceDiagnostics';
 
+useOcrActivity();
 const libConfig = useLibraryStore();
 const isReady = ref(false);
 const config = useConfigStore();

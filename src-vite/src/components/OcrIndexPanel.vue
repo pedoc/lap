@@ -8,7 +8,7 @@
       <p class="text-xs opacity-70 break-all">{{ t('ocr.scope_' + (view.status.scope || 'library')) }}<span v-if="view.status.scopeName"> · {{ view.status.scopeName }}</span></p>
       <progress v-if="view.status.running" class="progress progress-primary w-full" :value="view.status.completed" :max="Math.max(1, view.status.total)"></progress>
       <p class="text-xs" aria-live="polite">{{ view.status.running && !view.status.total ? t('ocr.preparing') : t('ocr.progress', view.status) }}</p>
-      <p v-if="view.status.cancelled" class="text-xs opacity-60">{{ t('ocr.stopped_saved') }}</p>
+      <p v-if="view.status.cancelled" class="text-xs opacity-60">{{ t(view.status.automatic && !view.automation?.paused ? 'ocr.auto_yielded' : 'ocr.stopped_saved') }}</p>
     </template>
     <div v-if="error || view?.status.error" role="alert" class="text-xs text-error whitespace-pre-wrap break-words">{{ error || view.status.error }}</div>
     <div class="flex flex-wrap gap-2">
@@ -26,9 +26,11 @@
         <p v-if="session.fallbackReason" class="text-warning whitespace-pre-wrap">{{ session.fallbackReason }}</p>
       </div>
     </details>
+    <OcrAutoSettings />
   </section>
 </template>
 <script setup lang="ts">
+import OcrAutoSettings from './OcrAutoSettings.vue';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { libConfig } from '@/common/config';

@@ -7,7 +7,7 @@
     <p class="text-xs opacity-60 truncate" :title="view.status.scopeName">{{ t('ocr.scope_' + (view.status.scope || 'library')) }}<span v-if="view.status.scopeName"> · {{ view.status.scopeName }}</span></p>
     <progress v-if="view.status.running" class="progress progress-primary w-full" :value="view.status.completed" :max="Math.max(1, view.status.total)"></progress>
     <p class="text-xs" aria-live="polite">{{ view.status.running && !view.status.total ? t('ocr.preparing') : t('ocr.progress', view.status) }}</p>
-    <p v-if="view.status.cancelled" class="text-xs opacity-60">{{ t('ocr.stopped_saved') }}</p>
+    <p v-if="view.status.cancelled" class="text-xs opacity-60">{{ t(view.status.automatic && !view.automation?.paused ? 'ocr.auto_yielded' : 'ocr.stopped_saved') }}</p>
     <p v-if="error || view.status.error" role="alert" class="text-xs text-error break-words max-h-24 overflow-auto">{{ error || view.status.error }}</p>
     <button v-if="view.status.running" class="btn btn-xs" :disabled="busy || view.status.stopping" @click="cancel">{{ t(view.status.stopping ? 'ocr.stopping' : 'ocr.stop') }}</button>
   </aside>

@@ -54,3 +54,10 @@ export function ocrSelectionRect(start: { x: number; y: number }, end: { x: numb
   const w = Math.abs(clamp(end.x)-clamp(start.x)), h = Math.abs(clamp(end.y)-clamp(start.y));
   return w > 0 && h > 0 ? [x,y,w,h] : null;
 }
+
+export function ocrAutomationReady(view: any, libraryId: string | null, mediaIndexing = false) {
+  const policy = view?.automation;
+  return Boolean(libraryId && policy?.enabled && !policy.paused && view.modelInstalled && view.pending > 0 && !view.status?.running && !mediaIndexing
+    && (!policy.scope || policy.scope.libraryId === libraryId)
+    && !(view.status?.automatic && view.status?.error && view.status.automationRevision === policy.revision));
+}

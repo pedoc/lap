@@ -14,7 +14,7 @@ const read = (name: string) => readFileSync(new URL(`../src/components/${name}.v
 function harness(name: string, invoke: any = async () => ({})) {
   const watches: any[] = [], mounted: any[] = [], unmount: any[] = [], calls: any[] = [];
   const listeners: any = {}; const timers: Array<() => void> = [];
-  const ctx: any = { ...Vue, config: { main: { sidebarIndex: 0 }, settings: { ai: {} } }, libConfig: { _libraryId: 'A', ocr: { text: '' }, search: {} }, props: { file: { id: 7, file_type: 1 } }, useI18n: () => ({ t: (key: string) => key }), defineProps: () => ctx.props, defineEmits: () => () => {}, textSegments, SIDEBAR, ocrSelectionIds,
+  const ctx: any = { ...Vue, OcrAutoSettings: () => Vue.h('aside'), config: { main: { sidebarIndex: 0 }, settings: { ai: {} } }, libConfig: { _libraryId: 'A', ocr: { text: '' }, search: {} }, props: { file: { id: 7, file_type: 1 } }, useI18n: () => ({ t: (key: string) => key }), defineProps: () => ctx.props, defineEmits: () => () => {}, textSegments, SIDEBAR, ocrSelectionIds,
     invoke: async (...args: any[]) => { calls.push(args); return invoke(...args); }, ask: async () => true,
     watch: (_: any, cb: any) => { watches.push(cb); return () => {}; }, onMounted: (cb: any) => mounted.push(cb), onBeforeUnmount: (cb: any) => unmount.push(cb),
     setTimeout: (cb: () => void) => { timers.push(cb); return timers.length; }, clearTimeout: () => {},

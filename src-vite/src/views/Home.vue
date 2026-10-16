@@ -184,6 +184,7 @@
 </template>
 
 <script setup lang="ts">
+import { useOcrAutomation } from '@/common/ocrAutomation';
 import { startupWindowProxy } from '@/common/windowProxy';
 import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -275,6 +276,7 @@ const SETTINGS_BASE_WIDTH = 600;
 const SETTINGS_BASE_HEIGHT = 620;
 
 /// i18n
+useOcrAutomation();
 const { locale, messages, t } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
 
@@ -634,7 +636,7 @@ function clickSidebar(index: number) {
   // silently mutate the persisted sidebarIndex and dead-end in a blank pane.
   if (databaseCorrupted.value) return;
   activateMainPanel();
-  if (libraryEmpty.value && index !== SIDEBAR.ALBUM && index !== SIDEBAR.LIBRARY) return;
+  if (libraryEmpty.value && index !== SIDEBAR.ALBUM && index !== SIDEBAR.LIBRARY && index !== SIDEBAR.OCR) return;
   if (config.main.sidebarIndex === index) {
     showPanel.value = !showPanel.value;
   } else {

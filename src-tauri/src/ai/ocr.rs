@@ -7,7 +7,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 static JOB: Mutex<Option<Arc<Job>>> = Mutex::new(None);
 static INFERENCE_BUSY: AtomicBool = AtomicBool::new(false);
@@ -24,6 +24,8 @@ pub(crate) fn try_inference() -> Result<InferenceLease, String> {
         .map_err(|_| "OCR is busy; stop the current task before starting another".into())
 }
 struct Job {
+    automatic: bool,
+    batch_size: Option<usize>,
     cancel: AtomicBool,
     status: Mutex<Status>,
 }
@@ -42,6 +44,8 @@ pub struct Status {
     pub cancelled: bool,
     pub scope: String,
     pub scope_name: Option<String>,
+    pub automatic: bool,
+    pub automation_revision: Option<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +61,8 @@ pub struct View {
     pub model_installed: bool,
     pub profile: String,
     pub sessions: Vec<super::runtime::SessionReport>,
+    pub automation: Option<super::ocr_auto::Policy>,
+    pub automation_error: Option<String>,
 }
 pub fn is_running() -> bool {
     INFERENCE_BUSY.load(Ordering::SeqCst)
@@ -69,6 +75,17 @@ pub fn is_running() -> bool {
             .unwrap_or(true)
 }
 
+pub fn yield_automatic() {
+    let job = JOB.lock().ok().and_then(|slot| slot.clone());
+    if let Some(job) = job.filter(|job| job.automatic) {
+        if let Ok(mut status) = job.status.lock() {
+            if status.running {
+                job.cancel.store(true, Ordering::SeqCst);
+                status.stopping = true;
+            }
+        }
+    }
+}
 pub fn ensure_schema(c: &Connection) -> Result<(), String> {
     c.execute_batch("CREATE TABLE IF NOT EXISTS ocr_index (
         file_id INTEGER NOT NULL REFERENCES afiles(id) ON DELETE CASCADE,
@@ -186,7 +203,10 @@ fn view_on(c: &Connection, library: &str) -> Result<View, String> {
     let model = super::settings::active(Task::Ocr)?;
     let profile = model.profile();
     let (eligible, indexed, failed, with_text, without_text) = coverage_on(c, &profile)?;
+    let automation = super::ocr_auto::load();
     Ok(View {
+        automation: automation.as_ref().ok().cloned(),
+        automation_error: automation.err(),
         status: current_status(library),
         eligible,
         indexed,
@@ -214,7 +234,11 @@ pub async fn get_ocr_status(library_id: String) -> Result<View, String> {
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub async fn cancel_ocr_index(library_id: String, job_id: String) -> Result<(), String> {
+pub async fn cancel_ocr_index(
+    app_handle: AppHandle,
+    library_id: String,
+    job_id: String,
+) -> Result<(), String> {
     check_library(&library_id)?;
     let job = JOB
         .lock()
@@ -227,6 +251,11 @@ pub async fn cancel_ocr_index(library_id: String, job_id: String) -> Result<(), 
     }
     job.cancel.store(true, Ordering::SeqCst);
     status.stopping = status.running;
+    drop(status);
+    if job.automatic {
+        super::ocr_auto::pause()?;
+        let _ = app_handle.emit("ocr-automation-changed", ());
+    }
     Ok(())
 }
 #[tauri::command]
@@ -237,6 +266,7 @@ pub async fn start_ocr_index(
     file_ids: Option<Vec<i64>>,
     retry_failed: Option<bool>,
     folder_id: Option<i64>,
+    automation_revision: Option<String>,
 ) -> Result<Status, String> {
     let retry_failed = retry_failed.unwrap_or(false);
     if force && retry_failed {
@@ -253,23 +283,45 @@ pub async fn start_ocr_index(
     tauri::async_runtime::spawn_blocking(move||{
         let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
         check_library(&library_id)?;
+        let automatic=automation_revision.is_some();
+        let policy=automation_revision.as_ref().map(|revision|super::ocr_auto::authorized(revision,&library_id)).transpose()?;
+        if automatic && (force||retry_failed||file_ids.is_some()||folder_id.is_some()){return Err("Automatic OCR may only process its configured pending scope".into());}
+        if automatic {
+            if *app_handle.state::<crate::t_face::FaceIndexingStatus>().0.lock().map_err(|e|e.to_string())?
+                || !app_handle.state::<crate::t_cmds::IndexCancellation>().0.lock().map_err(|e|e.to_string())?.is_empty()
+                || app_handle.state::<crate::t_similar::SimilarState>().status.lock().map_err(|e|e.to_string())?.is_scanning { return Err("Another media task is running".into()); }
+        }
+        let folder_id=policy.as_ref().and_then(|p|p.scope.as_ref().map(|scope|scope.folder_id)).or(folder_id);
         let lease=try_inference()?;
         let model=super::settings::active(Task::Ocr)?;
-        super::assets::verify(&model.definition)?;
-        let mut slot=JOB.lock().map_err(|e|e.to_string())?;
-        if slot.as_ref().is_some_and(|j|j.status.lock().is_ok_and(|s|s.running)) {return Err("An OCR job is already running".into());}
-        let folder = folder_id.map(|id| folder_scope(&*crate::t_sqlite::open_conn()?, id)).transpose()?;
+        if let Err(error)=super::assets::verify(&model.definition) {
+            if automatic {let _=super::ocr_auto::pause_with_error(&error);let _=app_handle.emit("ocr-automation-changed",());}return Err(error);
+        }
+        let folder = match folder_id.map(|id| folder_scope(&*crate::t_sqlite::open_conn()?, id)).transpose() {
+            Ok(folder)=>folder,Err(error)=>{if automatic{let _=super::ocr_auto::pause_with_error(&error);let _=app_handle.emit("ocr-automation-changed",());}return Err(error);}
+        };
         let scope = if file_ids.is_some() { "selected" } else if folder.is_some() { "folder" } else { "library" };
-        let initial=Status {scope:scope.into(),scope_name:folder.as_ref().map(|(_,path)|path.clone()),library_id:library_id.clone(),job_id:uuid::Uuid::new_v4().to_string(),running:true,..Default::default()};
-        let job=Arc::new(Job {cancel:AtomicBool::new(false),status:Mutex::new(initial.clone())});*slot=Some(job.clone());drop(slot);
+        let batch_size=policy.as_ref().map(|p|p.batch_size);
+        let file_ids=if automatic {
+            let ids=target_ids_with_options(&*crate::t_sqlite::open_conn()?,&model.profile(),false,false,None,folder.clone(),&AtomicBool::new(false),true,batch_size)?;
+            if ids.is_empty(){return Ok(current_status(&library_id));}
+            super::ocr_auto::authorized(automation_revision.as_deref().unwrap_or(""),&library_id)?;
+            Some(ids)
+        } else {file_ids};
+        let mut slot=JOB.lock().map_err(|e|e.to_string())?;
+        if slot.as_ref().is_some_and(|j|j.status.lock().is_ok_and(|s|s.running)){return Err("An OCR job is already running".into());}
+        let initial=Status {automatic,automation_revision,scope:scope.into(),scope_name:folder.as_ref().map(|(_,path)|path.clone()),library_id:library_id.clone(),job_id:uuid::Uuid::new_v4().to_string(),running:true,..Default::default()};
+        let job=Arc::new(Job {automatic,batch_size,cancel:AtomicBool::new(false),status:Mutex::new(initial.clone())});*slot=Some(job.clone());drop(slot);
         tauri::async_runtime::spawn_blocking(move||{
             let _lease = lease;
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||run(&app_handle,&library_id,&model,force,retry_failed,file_ids,folder, &job)));
             if let Ok(mut status)=job.status.lock() {
                 status.running=false;status.stopping=false;
-                status.cancelled=job.cancel.load(Ordering::SeqCst);
+                status.cancelled=job.cancel.load(Ordering::SeqCst)||check_library(&library_id).is_err();
                 status.error=if status.cancelled { None } else { match result {Ok(Ok(()))=>None,Ok(Err(error))=>Some(error),Err(_)=>Some("OCR worker stopped unexpectedly; completed results are saved. Retry the remaining photos".into())} };
             }
+            let fatal=if job.automatic {job.status.lock().ok().and_then(|status|status.error.clone())}else{None};
+            if let Some(error)=fatal { let _=super::ocr_auto::pause_with_error(&error); let _=app_handle.emit("ocr-automation-changed",()); }
             let _=app_handle.emit("ocr-index-updated",serde_json::json!({"libraryId":library_id,"finished":true}));
         });
         Ok(initial)
@@ -294,7 +346,17 @@ fn run(
     };
     super::profiles::ensure_on(&c, Task::Ocr, &model.profile())?;
     let profile = model.profile();
-    let targets = target_ids_on(&c, &profile, force, retry_failed, ids, folder, &job.cancel)?;
+    let targets = target_ids_with_options(
+        &c,
+        &profile,
+        force,
+        retry_failed,
+        ids,
+        folder,
+        &job.cancel,
+        job.automatic,
+        job.batch_size,
+    )?;
     job.status.lock().map_err(|e| e.to_string())?.total = targets.len();
     if targets.is_empty() {
         return Ok(());
@@ -420,6 +482,7 @@ pub async fn get_photo_ocr(
     .await
     .map_err(|e| e.to_string())?
 }
+#[cfg(test)]
 fn target_ids_on(
     c: &Connection,
     profile: &str,
@@ -429,9 +492,38 @@ fn target_ids_on(
     folder: Option<(i64, String)>,
     cancel: &AtomicBool,
 ) -> Result<Vec<i64>, String> {
+    target_ids_with_options(
+        c,
+        profile,
+        force,
+        retry_failed,
+        ids,
+        folder,
+        cancel,
+        false,
+        None,
+    )
+}
+fn target_ids_with_options(
+    c: &Connection,
+    profile: &str,
+    force: bool,
+    retry_failed: bool,
+    ids: Option<Vec<i64>>,
+    folder: Option<(i64, String)>,
+    cancel: &AtomicBool,
+    only_pending: bool,
+    limit: Option<usize>,
+) -> Result<Vec<i64>, String> {
     // Snapshot IDs only. Page source rows lazily, never retain a whole library's paths / decoded pixels.
     let mut query = format!("SELECT a.id {}", base());
-    if retry_failed {
+    if only_pending {
+        query.push_str(" AND ");
+        query.push_str(&workspace_condition("pending").replace(
+            "(SELECT fingerprint FROM ai_index_profiles WHERE task='ocr')",
+            "?1",
+        ));
+    } else if retry_failed {
         query.push_str(" AND EXISTS (SELECT 1 FROM ocr_index oi WHERE oi.file_id=a.id AND oi.profile=?1 AND oi.modified_at IS a.modified_at AND oi.size=a.size AND oi.error IS NOT NULL)");
     } else if !force {
         query.push_str(" AND NOT EXISTS (SELECT 1 FROM ocr_index oi WHERE oi.file_id=a.id AND oi.profile=?1 AND oi.modified_at IS a.modified_at AND oi.size=a.size AND oi.error IS NULL)");
@@ -462,6 +554,10 @@ fn target_ids_on(
         ]);
     }
     query.push_str(" ORDER BY a.id");
+    if let Some(limit) = limit {
+        query.push_str(" LIMIT ?");
+        values.push(Box::new(limit.clamp(1, 100) as i64));
+    }
     let mut statement = c.prepare(&query).map_err(|e| e.to_string())?;
     let mut rows = statement
         .query(rusqlite::params_from_iter(values.iter()))
@@ -591,6 +687,52 @@ mod tests {
             INSERT INTO ai_index_profiles VALUES('ocr','model-a');").unwrap();
         ensure_schema(&c).unwrap();
         c
+    }
+    #[test]
+    fn automation_selects_only_pending_rows_in_bounded_batches() {
+        let c = db();
+        c.execute_batch(
+            "INSERT INTO afiles VALUES(3,1,1,100,100,NULL,10,20),(4,1,1,100,100,NULL,10,20);",
+        )
+        .unwrap();
+        store_result(
+            &c,
+            1,
+            "model-a",
+            Some(10),
+            20,
+            "",
+            None,
+            Some("decode failed"),
+        )
+        .unwrap();
+        store_result(&c, 2, "model-a", Some(10), 20, "", Some("{}"), None).unwrap();
+        let ids = target_ids_with_options(
+            &c,
+            "model-a",
+            false,
+            false,
+            None,
+            None,
+            &AtomicBool::new(false),
+            true,
+            Some(1),
+        )
+        .unwrap();
+        assert_eq!(ids, vec![3]);
+        let ids = target_ids_with_options(
+            &c,
+            "model-a",
+            false,
+            false,
+            None,
+            None,
+            &AtomicBool::new(false),
+            true,
+            Some(10),
+        )
+        .unwrap();
+        assert_eq!(ids, vec![3, 4]);
     }
     #[test]
     fn workspace_states_are_disjoint_and_scope_current_model_source_and_visibility() {

@@ -42,7 +42,8 @@ export function useOcr() {
       generation++; sequence++; pending = null; ocrView.value = null; ocrError.value = ''; ocrFocus.value = null;
       void refreshOcr();
     }, { immediate: true }));
-    for (const name of ['ocr-index-updated', 'ocr-annotations-changed', 'ai-configuration-changed', 'media-lifecycle-changed', 'files-deleted']) {
+    stops.push(watch(() => libConfig.library?.counts?.all, scheduleRefresh));
+    for (const name of ['ocr-index-updated', 'ocr-annotations-changed', 'ocr-automation-changed', 'ai-configuration-changed', 'media-lifecycle-changed', 'files-deleted', 'index_finished', 'album-updated', 'import-organize-finished', 'refresh-content']) {
       void listen(name, (event: any) => {
         if (name === 'ocr-annotations-changed' && event.payload?.libraryId === libConfig._libraryId) ocrFocus.value = null;
         if (name === 'ocr-index-updated' && !event.payload?.finished && ocrView.value?.status.running) return; // Poll coverage at most once per interval, not per image.

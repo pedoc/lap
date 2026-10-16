@@ -7,7 +7,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { ocrSelectionRect } from '../src/common/ocrUi.ts';
+import { ocrSelectionRect, ocrAutomationReady } from '../src/common/ocrUi.ts';
 const read=(name:string)=>readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');
 const locale=JSON.parse(readFileSync(new URL('../src/locales/zh-CN.json',import.meta.url),'utf8'));
 const t=(key:string)=>key.split('.').reduce((value,key)=>value?.[key],locale)||key;
@@ -87,4 +87,32 @@ test('unrelated indexing progress does not invalidate a human draft; current-fil
   const h=editorHarness();await h.mount();h.listeners['ocr-index-updated']({payload:{libraryId:'library-a',fileId:8}});assert.equal(h.api.stale.value,false);
   h.listeners['ocr-index-updated']({payload:{libraryId:'library-a',finished:true}});assert.equal(h.api.stale.value,false);
   h.listeners['ocr-annotations-changed']({payload:{libraryId:'library-a',fileId:7}});assert.equal(h.api.stale.value,true);h.dispose();
+});
+
+test('automatic OCR is opt-in, scope-aware, idle-coordinated and never retries a fatal job unchanged',()=>{
+  const base={modelInstalled:true,pending:3,status:{running:false},automation:{enabled:true,paused:false,revision:'r1',scope:null}};
+  assert.equal(ocrAutomationReady(base,'library-a'),true);
+  for(const value of [{...base,modelInstalled:false},{...base,pending:0},{...base,status:{running:true}},{...base,automation:{...base.automation,enabled:false}},{...base,automation:{...base.automation,paused:true}},{...base,automation:{...base.automation,scope:{libraryId:'other',folderId:7}}},{...base,status:{automatic:true,error:'failed',automationRevision:'r1'}}])assert.equal(ocrAutomationReady(value,'library-a'),false);
+  assert.equal(ocrAutomationReady(base,'library-a',true),false);assert.equal(ocrAutomationReady(base,null),false);
+});
+function automationHarness(){
+  const mounted:any[]=[],unmount:any[]=[],callbacks:any={},calls:any[]=[],intervals:any[]=[];let now=10000,refreshes=0;
+  const view=Vue.ref<any>({modelInstalled:true,pending:2,status:{running:false},automation:{enabled:true,paused:false,revision:'rev-a'}});
+  const ctx:any={onMounted:(cb:any)=>mounted.push(cb),onBeforeUnmount:(cb:any)=>unmount.push(cb),libConfig:{_libraryId:'library-a',index:{status:0}},ocrBusy:Vue.ref(false),ocrAutomationReady,
+    useOcr:()=>({view,refresh:async()=>refreshes++}),invoke:async(...args:any[])=>{calls.push(args);return{};},Date:{now:()=>now},setInterval:(cb:any)=>{intervals.push(cb);return 1;},clearInterval(){},
+    window:{addEventListener:(name:string,cb:any)=>callbacks[name]=cb,removeEventListener:(name:string)=>delete callbacks[name]},
+  };
+  const script=stripTypeScriptTypes(readFileSync(new URL('../src/common/ocrAutomation.ts',import.meta.url),'utf8')).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'').replace(/^export /gm,'');
+  const api=runInNewContext(`${script};({useOcrActivity,useOcrAutomation})`,ctx);
+  return{ctx,api,calls,view,callbacks,intervals,mount:()=>mounted.splice(0).forEach(cb=>cb()),dispose:()=>unmount.forEach(cb=>cb()),advance:(n:number)=>now+=n};
+}
+test('activity from any window is throttled and transmits no key, text or pointer payload',async()=>{
+  const h=automationHarness();h.api.useOcrActivity();h.mount();assert.equal(h.calls.length,1);
+  h.callbacks.keydown({key:'private content'});h.callbacks.pointermove({clientX:10});assert.equal(h.calls.length,1);
+  h.advance(2100);h.callbacks.wheel({deltaY:9});assert.equal(h.calls.length,2);assert.deepEqual(JSON.parse(JSON.stringify(h.calls)),[['record_ocr_activity'],['record_ocr_activity']]);h.dispose();assert.equal(Object.keys(h.callbacks).length,0);
+});
+test('main automation scheduler requests only bounded pending mode and respects pause',async()=>{
+  const h=automationHarness();h.api.useOcrAutomation();h.mount();h.intervals[0]();await tick();
+  assert.equal(h.calls[0][0],'start_ocr_index');assert.equal(h.calls[0][1].automationRevision,'rev-a');assert.equal(h.calls[0][1].force,false);assert.equal(h.calls[0][1].retryFailed,false);assert.equal(h.calls[0][1].fileIds,null);
+  h.view.value.automation.paused=true;h.intervals[0]();await tick();assert.equal(h.calls.length,1);h.dispose();
 });

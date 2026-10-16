@@ -15,6 +15,7 @@ pub mod ocr;
 pub mod ocr_extract;
 pub mod ocr_orientation;
 pub mod ocr_annotations;
+pub mod ocr_auto;
 pub mod persons;
 pub mod remote;
 pub mod runtime;
