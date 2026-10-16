@@ -39,3 +39,10 @@ export function ocrGeometryCompatible(width: number, height: number, sourceWidth
   if (!(sourceWidth > 0 && sourceHeight > 0)) return false;
   return Math.abs((width / height) / (sourceWidth / sourceHeight) - 1) < 0.02;
 }
+
+// A specific sidebar filter already communicates the OCR state. Only mixed
+// results need state labels; never leave an empty panel over the photograph.
+export function ocrThumbnailPresentation(summary: { state: string; excerpt?: string } | null | undefined, filter: unknown) {
+  const showStatus = !!summary && normalizeOcrState(filter) === 'all';
+  return { showStatus, visible: !!summary && (showStatus || !!summary.excerpt?.trim()) };
+}

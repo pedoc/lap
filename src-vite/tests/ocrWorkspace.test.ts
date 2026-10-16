@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
-import { parse, compileScript } from '@vue/compiler-sfc';
+import { parse, compileScript, compileTemplate } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { OCR_STATES, normalizeOcrState, textSegments, ocrFrameStyle, ocrGeometryCompatible, ocrSelectionIds } from '../src/common/ocrUi.ts';
+import { OCR_STATES, normalizeOcrState, ocrThumbnailPresentation, textSegments, ocrFrameStyle, ocrGeometryCompatible, ocrSelectionIds } from '../src/common/ocrUi.ts';
 import { SIDEBAR } from '../src/common/constants.ts';
 const read = (name: string) => readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
 const cn = JSON.parse(readFileSync(new URL('../src/locales/zh-CN.json', import.meta.url), 'utf8'));
@@ -163,4 +163,41 @@ test('standalone viewer recognizes exactly the active comparison pane, never eve
   context.ask=async()=>{library._libraryId='other';return true;};await fn(true);assert.equal(calls.length,1);
   assert.match(source,/case 'recognize-text': await recognizeViewerText\(\)/);
   assert.match(source,/case 'rerecognize-text': await recognizeViewerText\(true\)/);
+});
+
+async function renderThumbnailOcr(state: string, summary: any, sidebar = SIDEBAR.OCR) {
+  const source = read('Thumbnail');
+  const start = source.indexOf('<div v-if="file._ocr');
+  const end = source.indexOf('<!-- status badges -->', start);
+  assert.ok(start >= 0 && end > start);
+  const imports: any = {};
+  const { code } = compileTemplate({ source: source.slice(start, end), filename: 'Thumbnail.vue', id: 'ocr-thumbnail' });
+  const compiled = code.replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_m, names) => {
+    for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return '';
+  }).replace('export function render', 'function render');
+  const render = runInNewContext(`${compiled};render`, imports);
+  const data = { file: { _ocr: summary }, config: { main: { sidebarIndex: sidebar } }, libConfig: { activePane: 'main', ocr: { state, text: '' }, search: { searchText: '中文' } }, SIDEBAR, t: translate, textSegments, ocrThumbnail: ocrThumbnailPresentation(summary, state) };
+  return renderToString(Vue.createSSRApp({ data: () => data, render }));
+}
+for (const state of ['pending', 'empty']) {
+  test(`filtered ${state} thumbnails show the photo without redundant labels or empty overlay`, async () => {
+    const html = await renderThumbnailOcr(state, { state, excerpt: '' });
+    assert.doesNotMatch(html, /<div|<p|未识别|无文字/);
+    assert.equal(ocrThumbnailPresentation({ state, excerpt: '' }, state).visible, false);
+  });
+}
+test('text and failed filters retain useful excerpts without repeating the selected category', async () => {
+  let html = await renderThumbnailOcr('text', { state: 'text', excerpt: '照片中的中文' });
+  assert.match(html, /照片中的中文/); assert.doesNotMatch(html, /有文字|opacity-60/);
+  html = await renderThumbnailOcr('failed', { state: 'failed', excerpt: 'Unable to decode image' });
+  assert.match(html, /Unable to decode image/); assert.match(html, /text-error/); assert.doesNotMatch(html, /识别失败|opacity-60/);
+});
+test('mixed all-photos results retain distinguishing state labels', async () => {
+  assert.match(await renderThumbnailOcr('all', { state: 'pending', excerpt: '' }), /未识别/);
+  assert.match(await renderThumbnailOcr('all', { state: 'text', excerpt: '文字内容' }), /有文字/);
+  assert.equal(ocrThumbnailPresentation(null, 'all').visible, false);
+});
+test('ordinary search retains OCR match explanation and highlighted text', async () => {
+  const html = await renderThumbnailOcr('text', { state: 'text', excerpt: '照片中的中文' }, SIDEBAR.SEARCH);
+  assert.match(html, /图片文字命中/); assert.match(html, /<mark[^>]*>中文<\/mark>/);
 });

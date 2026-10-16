@@ -89,8 +89,8 @@
         <IconExclamation class="h-3.5 w-3.5 shrink-0 text-warning/70" />
       </div>
 
-      <div v-if="file._ocr && libConfig.activePane !== 'collection' && (config.main.sidebarIndex === SIDEBAR.OCR || config.main.sidebarIndex === SIDEBAR.SEARCH && file._ocr.state === 'text' && textSegments(file._ocr.excerpt, libConfig.search.searchText || '').some(part => part.match))" class="absolute inset-x-1 bottom-6 z-10 rounded-box bg-base-100/90 px-2 py-1 text-[11px] leading-4 pointer-events-none" :title="file._ocr.excerpt">
-        <p class="opacity-60">{{ config.main.sidebarIndex === SIDEBAR.SEARCH ? t('ocr.text_match') : t('ocr.state_' + file._ocr.state) }}</p>
+      <div v-if="file._ocr && libConfig.activePane !== 'collection' && (config.main.sidebarIndex === SIDEBAR.OCR && ocrThumbnail.visible || config.main.sidebarIndex === SIDEBAR.SEARCH && file._ocr.state === 'text' && textSegments(file._ocr.excerpt, libConfig.search.searchText || '').some(part => part.match))" class="absolute inset-x-1 bottom-6 z-10 rounded-box bg-base-100/90 px-2 py-1 text-[11px] leading-4 pointer-events-none" :title="file._ocr.excerpt">
+        <p v-if="config.main.sidebarIndex === SIDEBAR.SEARCH || ocrThumbnail.showStatus" class="opacity-60">{{ config.main.sidebarIndex === SIDEBAR.SEARCH ? t('ocr.text_match') : t('ocr.state_' + file._ocr.state) }}</p>
         <p v-if="file._ocr.excerpt" class="line-clamp-2 break-words" :class="file._ocr.state === 'failed' ? 'text-error' : ''"><template v-for="(part, index) in textSegments(file._ocr.excerpt, config.main.sidebarIndex === SIDEBAR.OCR ? libConfig.ocr.text || '' : libConfig.search.searchText || '')" :key="index"><mark v-if="part.match" class="bg-warning/30 text-base-content">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></p>
       </div>
       <!-- status badges -->
@@ -241,7 +241,7 @@ import { computed, nextTick, ref, watch, toRef, onBeforeUnmount, type CSSPropert
 import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
-import { textSegments } from '@/common/ocrUi';
+import { textSegments, ocrThumbnailPresentation } from '@/common/ocrUi';
 import { SIDEBAR, THUMBNAIL_BADGE } from '@/common/constants';
 import { isMac, shortenFilename, formatFileSize, formatDimensionText, formatDuration, formatTimestamp, formatCaptureSettings, formatCaptureSettingValue, formatCameraInfo, getAssetSrc, getThumbUrl, getFileExtension } from '@/common/utils';
 import { isWebViewVideoPlaybackDisabled, getGStreamerAvailability } from '@/common/video';
@@ -318,6 +318,7 @@ const showVideoPreview = ref(false);
 const isVideoPreviewReady = ref(false);
 const showAnimatedImagePreview = ref(false);
 const isAnimatedImagePreviewReady = ref(false);
+const ocrThumbnail = computed(() => ocrThumbnailPresentation(props.file?._ocr, libConfig.ocr?.state));
 const originalUnavailable = computed(() => isOriginalUnavailable(props.file));
 const isVideoFile = computed(() => props.file?.file_type === 2);
 const isLivePhoto = computed(() => props.file?.media_subtype === 'live_photo' && !!props.file?.live_photo_video_path);
