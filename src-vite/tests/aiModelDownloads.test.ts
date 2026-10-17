@@ -98,3 +98,20 @@ test('download feedback remains reactive across asynchronous failure', async () 
   const task=h.api.download(modelId);await Vue.nextTick();assert.equal(seen.at(-1),'downloading');
   d.reject('HTTP 403');await task;await Vue.nextTick();assert.equal(seen.at(-1),'failed');stop();
 });
+
+test('AGPL models show a license notice and a cancelled notice never starts a download', async () => {
+  const h=harness();h.api.view.value.models[0].definition.license='AGPL-3.0';
+  const messages:string[]=[];h.ctx.ask=async(message:string)=>{messages.push(message);return false;};
+  await h.api.download(modelId);assert.equal(h.calls.length,0);assert.equal(h.api.downloadFeedback.value[modelId],undefined);
+  assert.match(messages[0],/download_license_confirm/);assert.match(messages[0],/AGPL-3.0/);assert.equal(h.api.busy.value,false);
+});
+test('resume notices clear on recovery and progress resets only when the server explicitly restarts',()=>{
+  const state=downloads.beginModelDownload('YOLO26');
+  downloads.applyModelDownloadProgress(state,{progress:50,received:50,total:100,message:'retry 1/2',phase:'connecting'});
+  assert.equal(state.message,'retry 1/2');
+  downloads.applyModelDownloadProgress(state,{progress:20,received:20,message:'',phase:'downloading'});
+  assert.equal(state.progress,50);assert.equal(state.received,50);assert.equal(state.message,'');
+  downloads.applyModelDownloadProgress(state,{progress:0,received:0,total:100,restart:true,phase:'downloading'});
+  assert.equal(state.progress,0);assert.equal(state.received,0);
+  downloads.applyModelDownloadProgress(state,{progress:999,received:0,restart:true});assert.equal(state.progress,100);
+});

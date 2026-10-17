@@ -1,6 +1,6 @@
 {
   "objects": {
-    "model_hint": "Downloadable local object detection with a finite class set, not person/pet identity. Fixed 640px input, GPU-first by default, isolated model parameters and label sets.",
+    "model_hint": "Downloadable local object detection. Each export has its own fixed input size and preprocessing contract. Choose lighter or accuracy-oriented models; GPU-first by default, with isolated model parameters and a finite category set, not identity recognition.",
     "title": "Objects",
     "states": "Recognition status",
     "state_all": "All photos",
@@ -145,6 +145,13 @@
       "77": "teddy bear",
       "78": "hair drier",
       "79": "toothbrush"
+    },
+    "models": {
+      "yolox-s": "Lightweight option. Fixed 640px RGB input and 80 COCO categories. Favor this model when throughput or memory matters; it is not identity or open-vocabulary recognition.",
+      "rtdetr-v2-r18": "Balanced, relatively small RT-DETRv2 R18. Fixed 640px input and 80 COCO categories. The existing default remains unchanged; choose a larger model explicitly when desired.",
+      "yolo26-l": "Accuracy-oriented YOLO26-L. Fixed 640px input with an NMS-free export; more compute than lightweight models. AGPL-3.0 applies to these Ultralytics weights.",
+      "yolo26-x": "Higher-compute YOLO26-X. Larger than L; intended for users prioritizing detection quality over scan speed. Fixed 640px input, not a guarantee of better results on every photo. AGPL-3.0 weights.",
+      "rf-detr-large": "Accuracy-oriented RF-DETR Large with the current 704px contract, not the legacy 560px model. ImageNet normalization and sparse COCO output slots are adapted to the common 80-category index. Apache-2.0 weights."
     }
   },
   "sidebar": {
@@ -1879,6 +1886,7 @@
       "proxy_test_success": "Google is reachable through the proxy."
     },
     "ai_models": {
+      "download_license_confirm": "{model} uses {license}. Its code and model-weight licensing differs from Apache-2.0; review the applicable terms before redistribution or integration. Continue downloading?",
       "detection": "Object detection",
       "ocr": "OCR",
       "title": "AI models",

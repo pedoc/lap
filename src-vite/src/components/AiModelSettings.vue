@@ -82,7 +82,7 @@
         <div class="font-semibold text-sm">{{ t('settings.ai_models.catalog') }}</div>
         <div v-for="row in modelOptions" :key="row.definition.id" class="border-b border-base-content/10 pb-3 space-y-1">
           <div class="text-sm">{{ aiModelDisplayName(row.definition) }}<span v-if="isRecommendedAiModel(view, task, row.definition.id)" class="badge badge-sm badge-info ml-2">{{ t('ocr.quality_recommended') }}</span><span v-if="view.selection[task] === row.definition.id" class="badge badge-sm badge-primary ml-2">{{ t('settings.ai_models.selected') }}</span></div>
-          <p class="text-xs opacity-60">{{ row.definition.description }}</p>
+          <p class="text-xs opacity-60">{{ aiModelDescription(row, t) }}</p>
           <p class="text-[10px] opacity-50">{{ row.definition.license }}</p>
           <div class="flex flex-wrap items-center gap-2 pt-1">
             <span class="text-xs">{{ row.definition.files.length ? (row.installed ? t('settings.ai_models.ready') : t('settings.ai_models.missing')) : t('settings.ai_models.online_service') }}</span>
@@ -98,7 +98,7 @@
               <progress class="progress progress-primary w-full" :value="downloadFeedback[row.definition.id].progress" max="100"></progress>
               <div class="flex justify-between items-center gap-2">
                 <span>{{ downloadFeedback[row.definition.id].progress.toFixed(0) }}% · {{ formatModelDownloadBytes(downloadFeedback[row.definition.id].received) }} / {{ downloadFeedback[row.definition.id].total ? formatModelDownloadBytes(downloadFeedback[row.definition.id].total) : t('model_download.unknown_total') }}</span>
-                <button type="button" class="btn btn-xs" :disabled="['cancelling', 'complete'].includes(downloadFeedback[row.definition.id].phase)" @click="cancelDownload">{{ t('settings.ai_models.cancel') }}</button>
+                <button type="button" class="btn btn-xs" :disabled="['cancelling', 'installing', 'complete'].includes(downloadFeedback[row.definition.id].phase)" @click="cancelDownload">{{ t('settings.ai_models.cancel') }}</button>
               </div>
               <p v-if="downloadFeedback[row.definition.id].message" role="alert" class="text-warning whitespace-pre-wrap">{{ downloadFeedback[row.definition.id].message }}</p>
             </template>
@@ -124,7 +124,7 @@ import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
 import { useToast } from '@/common/toast';
-import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, requiresSelectionRebuild, formatGpuMemory, physicalGpuDevices, canActivateSavedModel, aiModelDisplayName, isRecommendedAiModel } from '@/common/aiModels';
+import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, requiresSelectionRebuild, formatGpuMemory, physicalGpuDevices, canActivateSavedModel, aiModelDisplayName, aiModelDescription, isRecommendedAiModel } from '@/common/aiModels';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -257,6 +257,7 @@ async function openDirectory(modelId: string) {
 async function download(modelId: string) {
   await action(async () => {
     const model = view.value?.models.find((row: any) => row.definition.id === modelId);
+    if (/^AGPL-/i.test(model?.definition.license || '') && !await ask(t('settings.ai_models.download_license_confirm', { model: aiModelDisplayName(model?.definition), license: model.definition.license }), { kind: 'warning' })) return;
     const feedback = beginModelDownload(aiModelDisplayName(model?.definition) || modelId);
     downloadFeedback.value[modelId] = feedback;
     // Mutate the reactive entry, not the raw object used to create it.

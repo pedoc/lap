@@ -19,7 +19,10 @@ impl OnnxObjects {
     pub fn new(model: &ResolvedModel) -> Result<Self, String> {
         if !matches!(
             model.definition.adapter,
-            Adapter::YoloXOnnx | Adapter::RtDetrOnnx
+            Adapter::YoloXOnnx
+                | Adapter::RtDetrOnnx
+                | Adapter::Yolo26Onnx
+                | Adapter::RfDetrCocoOnnx
         ) {
             return Err("Adapter does not implement object detection".into());
         }
@@ -29,16 +32,26 @@ impl OnnxObjects {
             .clone()
             .ok_or("Object model requires a versioned label set")?;
         labels.validate()?;
+        if model.definition.adapter == Adapter::RfDetrCocoOnnx {
+            labels.validate_coco80()?;
+        }
         assets::verify(&model.definition)?;
         let session = runtime::local_session(model, "detector")?;
         if session.inputs.len() != 1 {
             return Err("Object adapter expects exactly one float32 image input".into());
         }
-        if model.definition.adapter == Adapter::RtDetrOnnx
+        validate_image_input(
+            &session.inputs[0].input_type,
+            model
+                .definition
+                .object_input_size()
+                .ok_or("Object model has no image input contract")?,
+        )?;
+        if model.definition.adapter != Adapter::YoloXOnnx
             && (!session.outputs.iter().any(|o| o.name == "logits")
                 || !session.outputs.iter().any(|o| o.name == "pred_boxes"))
         {
-            return Err("RT-DETR export requires logits and pred_boxes outputs".into());
+            return Err("Query detector export requires logits and pred_boxes outputs".into());
         }
         if session.outputs.is_empty() {
             return Err("Object model has no outputs".into());
@@ -87,7 +100,14 @@ impl OnnxObjects {
             return Err("Cannot detect objects in an empty image".into());
         }
         let adapter = self.model.definition.adapter;
-        let input = preprocess(image, adapter);
+        let input = preprocess(
+            image,
+            adapter,
+            self.model
+                .definition
+                .object_input_size()
+                .ok_or("Object model has no input contract")?,
+        );
         check()?;
         let candidates = {
             let outputs=self.session.run(inputs![self.input_name.as_str()=>Value::from_array(input).map_err(|e|e.to_string())?]).map_err(|e|format!("Object inference failed: {e}"))?;
@@ -111,6 +131,11 @@ impl OnnxObjects {
                     (image.width(), image.height()),
                 )?
             } else {
+                let channels = if adapter == Adapter::RfDetrCocoOnnx {
+                    91
+                } else {
+                    self.labels.classes.len()
+                };
                 let logits = outputs
                     .get("logits")
                     .ok_or("RT-DETR logits output missing")?;
@@ -127,15 +152,22 @@ impl OnnxObjects {
                     || shape[0] != 1
                     || shape[1] <= 0
                     || shape[1] > 1000
-                    || shape[2] != self.labels.classes.len() as i64
+                    || shape[2] != channels as i64
                     || bshape.len() != 3
                     || bshape[0] != 1
                     || bshape[1] != shape[1]
                     || bshape[2] != 4
                 {
-                    return Err("RT-DETR requires [1,queries,classes] logits and [1,queries,4] normalized boxes".into());
+                    return Err(format!(
+                        "{} requires [1,queries,{channels}] float logits and [1,queries,4] normalized cxcywh boxes; received {shape:?} and {bshape:?}",
+                        model_name(adapter)
+                    ));
                 }
-                decode_rtdetr(scores, boxes, self.labels.classes.len())?
+                if adapter == Adapter::RfDetrCocoOnnx {
+                    decode_rf_detr(scores, boxes)?
+                } else {
+                    decode_rtdetr(scores, boxes, self.labels.classes.len())?
+                }
             }
         };
         check()?;
@@ -158,28 +190,49 @@ impl crate::ai::capabilities::ObjectDetector for OnnxObjects {
         self.detect(image, check)
     }
 }
-fn preprocess(image: &DynamicImage, adapter: Adapter) -> Array4<f32> {
+fn validate_image_input(value_type: &ort::value::ValueType, size: usize) -> Result<(), String> {
+    match value_type {
+        ort::value::ValueType::Tensor{ty,shape,..} if *ty==ort::tensor::TensorElementType::Float32 => {
+            let expected=[1,3,size as i64,size as i64];
+            if shape.len()!=4 || shape.iter().zip(expected).any(|(actual,want)|*actual>=0&&*actual!=want) {
+                return Err(format!("Object ONNX input shape {shape:?} does not match its declared FP32 NCHW contract {expected:?}; check the manifest inputSize and export"));
+            }
+            Ok(())
+        }
+        _=>Err("Object adapter requires a float32 NCHW image tensor, not another element type or container".into()),
+    }
+}
+fn model_name(adapter: Adapter) -> &'static str {
+    match adapter {
+        Adapter::Yolo26Onnx => "YOLO26",
+        Adapter::RfDetrCocoOnnx => "RF-DETR COCO",
+        _ => "RT-DETR",
+    }
+}
+fn preprocess(image: &DynamicImage, adapter: Adapter, size: usize) -> Array4<f32> {
     let rgb = image.to_rgb8();
-    let mut input = Array4::<f32>::zeros((1, 3, 640, 640));
+    let mut input = Array4::<f32>::zeros((1, 3, size, size));
     let (width, height) = if adapter == Adapter::YoloXOnnx {
-        let ratio = (640.0 / rgb.width() as f64).min(640.0 / rgb.height() as f64);
         input.fill(114.);
+        let ratio = (size as f64 / image.width() as f64).min(size as f64 / image.height() as f64);
         (
-            (rgb.width() as f64 * ratio).floor().max(1.) as u32,
-            (rgb.height() as f64 * ratio).floor().max(1.) as u32,
+            ((image.width() as f64 * ratio) as u32).max(1),
+            ((image.height() as f64 * ratio) as u32).max(1),
         )
     } else {
-        (640, 640)
+        (size as u32, size as u32)
     };
     let resized = image::imageops::resize(&rgb, width, height, FilterType::Triangle);
-    let scale = if adapter == Adapter::RtDetrOnnx {
-        1. / 255.
-    } else {
-        1.
-    };
     for (x, y, pixel) in resized.enumerate_pixels() {
-        for channel in 0..3 {
-            input[[0, channel, y as usize, x as usize]] = pixel[channel] as f32 * scale;
+        for c in 0..3 {
+            let mut value = pixel[c] as f32;
+            if adapter != Adapter::YoloXOnnx {
+                value /= 255.;
+            }
+            if adapter == Adapter::RfDetrCocoOnnx {
+                value = (value - [0.485, 0.456, 0.406][c]) / [0.229, 0.224, 0.225][c];
+            }
+            input[[0, c, y as usize, x as usize]] = value;
         }
     }
     input
@@ -237,31 +290,51 @@ fn decode_yolox(
     Ok(result)
 }
 fn decode_rtdetr(scores: &[f32], boxes: &[f32], classes: usize) -> Result<Vec<Candidate>, String> {
-    if classes == 0
-        || scores.len() % classes != 0
-        || boxes.len() != scores.len() / classes * 4
+    decode_query_logits(scores, boxes, classes, None)
+}
+fn decode_rf_detr(scores: &[f32], boxes: &[f32]) -> Result<Vec<Candidate>, String> {
+    decode_query_logits(
+        scores,
+        boxes,
+        91,
+        Some(&crate::ai::objects_types::COCO_CATEGORY_IDS),
+    )
+}
+fn decode_query_logits(
+    scores: &[f32],
+    boxes: &[f32],
+    channels: usize,
+    slots: Option<&[usize]>,
+) -> Result<Vec<Candidate>, String> {
+    if channels == 0
+        || scores.len() % channels != 0
+        || boxes.len() != scores.len() / channels * 4
         || scores.iter().chain(boxes).any(|v| !v.is_finite())
+        || slots.is_some_and(|ids| ids.is_empty() || ids.iter().any(|id| *id >= channels))
     {
-        return Err("Invalid RT-DETR tensor".into());
+        return Err("Invalid query-detector output tensors".into());
     }
     scores
-        .chunks_exact(classes)
+        .chunks_exact(channels)
         .zip(boxes.chunks_exact(4))
-        .map(|(scores, bounds)| {
-            let (class, logit) = scores
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.total_cmp(b.1))
-                .ok_or("RT-DETR has no classes")?;
+        .map(|(values, b)| {
+            let best = if let Some(ids) = slots {
+                ids.iter()
+                    .enumerate()
+                    .map(|(index, slot)| (index, values[*slot]))
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+            } else {
+                values
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+            };
+            let (class_index, logit) = best.ok_or("Detector declares no foreground classes")?;
             Ok(Candidate {
-                class_index: class,
-                score: 1. / (1. + (-*logit).exp()),
-                bounds: [
-                    bounds[0] - bounds[2] / 2.,
-                    bounds[1] - bounds[3] / 2.,
-                    bounds[2],
-                    bounds[3],
-                ],
+                class_index,
+                score: 1. / (1. + (-logit).exp()),
+                bounds: [b[0] - b[2] / 2., b[1] - b[3] / 2., b[2], b[3]],
             })
         })
         .collect()
@@ -276,10 +349,10 @@ mod tests {
             50,
             image::Rgb([255, 0, 0]),
         ));
-        let y = preprocess(&image, Adapter::YoloXOnnx);
+        let y = preprocess(&image, Adapter::YoloXOnnx, 640);
         assert_eq!(y[[0, 0, 0, 0]], 255.);
         assert_eq!(y[[0, 0, 639, 639]], 114.);
-        let r = preprocess(&image, Adapter::RtDetrOnnx);
+        let r = preprocess(&image, Adapter::RtDetrOnnx, 640);
         assert_eq!(r[[0, 0, 0, 0]], 1.);
         assert_eq!(r[[0, 1, 639, 639]], 0.);
     }
@@ -301,10 +374,144 @@ mod tests {
         assert!((d[0].bounds[2] - 0.0125).abs() < 1e-6);
     }
     #[test]
+    fn fixed_input_shapes_and_element_types_are_checked_before_inference() {
+        let input = |shape: Vec<i64>| ort::value::ValueType::Tensor {
+            ty: ort::tensor::TensorElementType::Float32,
+            shape: ort::tensor::Shape::new(shape),
+            dimension_symbols: ort::tensor::SymbolicDimensions::new(vec![String::new(); 4]),
+        };
+        assert!(validate_image_input(&input(vec![1, 3, 704, 704]), 704).is_ok());
+        assert!(validate_image_input(&input(vec![-1, 3, 640, 640]), 640).is_ok());
+        for shape in [
+            vec![1, 3, 512, 512],
+            vec![1, 704, 704, 3],
+            vec![0, 3, 704, 704],
+            vec![3, 704, 704],
+        ] {
+            assert!(validate_image_input(&input(shape), 704).is_err());
+        }
+        let half = ort::value::ValueType::Tensor {
+            ty: ort::tensor::TensorElementType::Float16,
+            shape: ort::tensor::Shape::new([1, 3, 704, 704]),
+            dimension_symbols: ort::tensor::SymbolicDimensions::new(vec![String::new(); 4]),
+        };
+        assert!(validate_image_input(&half, 704).is_err());
+    }
+    #[test]
+    fn exported_models_have_distinct_pixel_contracts() {
+        let image = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            100,
+            50,
+            image::Rgb([255, 0, 0]),
+        ));
+        let y = preprocess(&image, Adapter::Yolo26Onnx, 640);
+        assert_eq!(y.shape(), &[1, 3, 640, 640]);
+        assert_eq!(y[[0, 0, 639, 639]], 1.);
+        assert_eq!(y[[0, 1, 639, 639]], 0.);
+        let r = preprocess(&image, Adapter::RfDetrCocoOnnx, 704);
+        assert_eq!(r.shape(), &[1, 3, 704, 704]);
+        assert!((r[[0, 0, 703, 703]] - (1. - 0.485) / 0.229).abs() < 1e-6);
+        assert!((r[[0, 1, 0, 0]] - (-0.456) / 0.224).abs() < 1e-6);
+        assert_ne!(r[[0, 0, 0, 0]], y[[0, 0, 0, 0]]);
+    }
+    #[test]
+    fn rf_detr_91_slots_are_not_91_classes_or_shifted_dense_ids() {
+        let mut scores = vec![-20.; 91 * 3];
+        scores[0] = 100.;
+        scores[12] = 90.; // unused slots must never invent foreground classes
+        scores[18] = 2.; // sparse COCO dog -> canonical dense class 16
+        scores[91 + 6] = 3.; // bus -> 5
+        scores[182 + 17] = 4.; // cat -> 15
+        let boxes = [0.5, 0.5, 0.4, 0.2].repeat(3);
+        let objects = decode_rf_detr(&scores, &boxes).unwrap();
+        assert_eq!(
+            objects.iter().map(|o| o.class_index).collect::<Vec<_>>(),
+            vec![16, 5, 15]
+        );
+        assert!((objects[0].score - 0.880797).abs() < 1e-5);
+        assert!((objects[0].bounds[0] - 0.3).abs() < 1e-6);
+        assert!(decode_rf_detr(&scores[..90], &boxes[..4]).is_err());
+        scores[1] = f32::NAN;
+        assert!(decode_rf_detr(&scores, &boxes).is_err());
+    }
+    #[test]
+    fn new_catalog_models_use_shared_ontology_isolated_profiles_and_gpu_first_defaults() {
+        let mut config = crate::ai::settings::Configuration::default();
+        let mut profiles = std::collections::BTreeSet::new();
+        for id in [
+            "yolox-s",
+            "rtdetr-v2-r18",
+            "yolo26-l",
+            "yolo26-x",
+            "rf-detr-large",
+        ] {
+            let model = config.resolve(id).unwrap();
+            assert!(profiles.insert(model.profile()));
+            assert_eq!(model.values["device"], serde_json::json!("auto"));
+            let labels = model.definition.label_set.as_ref().unwrap();
+            labels.validate_coco80().unwrap();
+            assert_eq!(labels.label(16).unwrap().key, "coco2017-80@1:16");
+        }
+        let mut configurable = config.resolve("rf-detr-large").unwrap().definition;
+        assert_eq!(configurable.object_input_size(), Some(704));
+        configurable.input_size = Some(512);
+        assert!(configurable.validate().is_ok());
+        assert_eq!(configurable.object_input_size(), Some(512));
+        configurable.input_size = Some(0);
+        assert!(configurable.validate().is_err());
+        let mut legacy = config.resolve("yolox-s").unwrap().definition;
+        assert!(legacy.input_size.is_none());
+        legacy.input_size = Some(704);
+        assert!(legacy.validate().is_err());
+        let original = config.resolve("yolo26-l").unwrap();
+        config
+            .models
+            .get_mut("yolo26-l")
+            .unwrap()
+            .parameters
+            .insert("object_confidence".into(), serde_json::json!(0.7));
+        assert_ne!(
+            original.profile(),
+            config.resolve("yolo26-l").unwrap().profile()
+        );
+        assert_eq!(
+            config
+                .resolve("yolo26-x")
+                .unwrap()
+                .number("object_confidence"),
+            0.5
+        );
+        let mut invalid = config.resolve("rf-detr-large").unwrap().definition;
+        invalid.label_set.as_mut().unwrap().classes.swap(0, 1);
+        assert!(invalid.validate().is_err());
+        assert_eq!(original.definition.adapter, Adapter::Yolo26Onnx);
+        assert_eq!(
+            config
+                .resolve("rf-detr-large")
+                .unwrap()
+                .definition
+                .adapter
+                .object_input_size(),
+            Some(704)
+        );
+    }
+    #[test]
     #[ignore = "Requires downloaded checksum-pinned models and workspace-only LAP_AI_TEST_MODEL_ROOT"]
     fn real_catalog_models_detect_objects_on_cpu_and_gpu() {
         let root = std::path::PathBuf::from(std::env::var_os("LAP_AI_TEST_MODEL_ROOT").unwrap());
-        let image = image::open(root.join("fixture.jpg")).unwrap();
+        assert!(
+            root.canonicalize().unwrap().starts_with(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target")
+                    .canonicalize()
+                    .unwrap()
+            ),
+            "Model tests must stay inside the workspace target directory"
+        );
+        let fixture = std::env::var("LAP_OBJECT_TEST_FIXTURE").unwrap_or("fixture.jpg".into());
+        assert!(matches!(fixture.as_str(), "fixture.jpg" | "cats.jpg"));
+        let image = image::open(root.join(fixture)).unwrap();
+        let expected = std::env::var("LAP_OBJECT_TEST_CLASSES").unwrap_or("0,5".into());
         let provider = std::env::var("LAP_OBJECT_TEST_DEVICE").unwrap_or("cpu".into());
         let ids = std::env::var("LAP_OBJECT_TEST_MODELS").unwrap_or("yolox-s,rtdetr-v2-r18".into());
         for id in ids.split(',') {
@@ -333,7 +540,12 @@ mod tests {
                 "sessions {}",
                 serde_json::to_string(&runtime::reports(&model)).unwrap()
             );
-            assert!(doc.objects.iter().any(|o| o.class.source_id == "0"));
+            for class in expected.split(',') {
+                assert!(
+                    doc.objects.iter().any(|o| o.class.source_id == class),
+                    "{id} did not detect expected canonical class {class}"
+                );
+            }
             assert!(doc.objects.iter().all(|o| {
                 o.bounds
                     .iter()

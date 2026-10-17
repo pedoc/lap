@@ -31,8 +31,18 @@ pub enum Adapter {
     RapidOcrOnnx,
     YoloXOnnx,
     RtDetrOnnx,
+    Yolo26Onnx,
+    RfDetrCocoOnnx,
 }
 impl Adapter {
+    /// Input size is an export contract, not a free resize knob for fixed ONNX graphs.
+    pub fn object_input_size(self) -> Option<usize> {
+        match self {
+            Self::YoloXOnnx | Self::RtDetrOnnx | Self::Yolo26Onnx => Some(640),
+            Self::RfDetrCocoOnnx => Some(704),
+            _ => None,
+        }
+    }
     // Bump only the affected adapter when its preprocessing/output contract changes.
     pub fn revision(self) -> &'static str {
         match self {
@@ -43,6 +53,8 @@ impl Adapter {
             Self::RapidOcrOnnx => "rapidocr-db-ctc-bgr48-embedded-v1",
             Self::YoloXOnnx => "yolox-rgb640-top-left-grid-v1",
             Self::RtDetrOnnx => "rtdetr-rgb640-logits-cxcywh-v1",
+            Self::Yolo26Onnx => "yolo26-hf-rgb-e2e-logits-cxcywh-v1",
+            Self::RfDetrCocoOnnx => "rfdetr-rgb-imagenet-coco91-logits-cxcywh-v1",
         }
     }
 }
@@ -77,6 +89,8 @@ pub struct ModelDefinition {
     pub files: Vec<Artifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_set: Option<super::objects_types::LabelSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_size: Option<u32>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -296,6 +310,14 @@ pub fn safe_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
 }
 impl ModelDefinition {
+    pub fn object_input_size(&self) -> Option<usize> {
+        if self.task != Task::Detection {
+            return None;
+        }
+        self.input_size
+            .map(|size| size as usize)
+            .or_else(|| self.adapter.object_input_size())
+    }
     pub fn validate(&self) -> Result<(), String> {
         if !safe_id(&self.id)
             || !safe_id(&self.version)
@@ -312,7 +334,7 @@ impl ModelDefinition {
             (Task::Semantic, Adapter::JinaEmbeddings) => &[],
             (Task::Ocr, Adapter::PaddleOcrOnnx) => &["ocr_detector", "recognizer", "charset"],
             (Task::Ocr, Adapter::RapidOcrOnnx) => &["ocr_detector", "recognizer"],
-            (Task::Detection, Adapter::YoloXOnnx | Adapter::RtDetrOnnx) => &["detector"],
+            (Task::Detection, Adapter::YoloXOnnx | Adapter::RtDetrOnnx | Adapter::Yolo26Onnx | Adapter::RfDetrCocoOnnx) => &["detector"],
             _ => return Err("Adapter does not provide this task capability".into()),
         };
         if self.files.len() != roles.len() {
@@ -344,10 +366,22 @@ impl ModelDefinition {
                 return Err("Model downloads require HTTPS and a SHA256 checksum; credentials cannot be embedded in URLs".into());
             }
         }
-        if self.task==Task::Detection {
-            let labels=self.label_set.as_ref().ok_or("Detection models must declare a versioned label set")?;labels.validate()?;
-            if labels.classes.len()!=self.dimension{return Err("Detection class count and label-set size differ".into());}
-        } else if self.label_set.is_some(){return Err("Label sets belong to object detection models".into());}
+        if self.task == Task::Detection {
+            let labels = self.label_set.as_ref().ok_or("Detection models must declare a versioned label set")?;
+            labels.validate()?;
+            if labels.classes.len() != self.dimension {
+                return Err("Detection class count and label-set size differ".into());
+            }
+            if self.adapter == Adapter::RfDetrCocoOnnx { labels.validate_coco80()?; }
+        } else if self.label_set.is_some() {
+            return Err("Label sets belong to object detection models".into());
+        }
+        if let Some(size) = self.input_size {
+            if self.task != Task::Detection || !(32..=2048).contains(&size) || size % 32 != 0
+                || (matches!(self.adapter, Adapter::YoloXOnnx | Adapter::RtDetrOnnx) && size != 640) {
+                return Err("Object inputSize must match the export contract (32–2048, multiple of 32; legacy adapters require 640)".into());
+            }
+        }
         validate_values(self.task, self.adapter, &self.defaults)?;
         Ok(())
     }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, requiresSelectionRebuild, supportsNonLatin, formatGpuMemory, physicalGpuDevices, canActivateSavedModel } from '../src/common/aiModels.ts';
+import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, requiresSelectionRebuild, supportsNonLatin, formatGpuMemory, physicalGpuDevices, canActivateSavedModel, aiModelDescription } from '../src/common/aiModels.ts';
 
 function fixture() {
   return {
@@ -301,4 +301,19 @@ test('background face-data refresh keeps current frames mounted until replacemen
   const old = [{ id: 'existing-face' }]; h.faces.value = old;
   const updating = h.run([1, true], [1, true, 'library-a', 'small-face-space', 0], () => {});
   assert.equal(h.faces.value, old); resolve([]); await updating; assert.deepEqual(h.faces.value, []);
+});
+
+test('all detection choices have clear localized positioning while custom model descriptions remain untouched',()=>{
+  const catalog=JSON.parse(readFileSync(new URL('../../src-tauri/src/ai/catalog.json',import.meta.url),'utf8'));
+  const models=catalog.filter((model:any)=>model.task==='detection');
+  assert.deepEqual(models.map((model:any)=>model.id),['yolox-s','rtdetr-v2-r18','yolo26-l','yolo26-x','rf-detr-large']);
+  for(const locale of ['en','zh-CN','zh-TW']){
+    const dictionary=JSON.parse(readFileSync(new URL(`../src/locales/${locale}.json`,import.meta.url),'utf8'));
+    const t=(key:string)=>key.split('.').reduce((v,k)=>v?.[k],dictionary)||key;
+    for(const model of models){const description=aiModelDescription({definition:model,builtin:true},t);assert.ok(description && !description.startsWith('objects.models.'));assert.equal(model.defaults.device,'auto');}
+    assert.match(aiModelDescription({definition:models.find((m:any)=>m.id==='rf-detr-large'),builtin:true},t),/704/);
+  }
+  assert.equal(aiModelDescription({definition:{task:'detection',id:'third-party',description:'my custom contract'},builtin:false},()=>{throw new Error('Custom models must not be treated as built-ins');}),'my custom contract');
+  for(const model of models.filter((m:any)=>['yolo26-l','yolo26-x','rf-detr-large'].includes(m.id))){assert.equal(model.inputSize,model.id==='rf-detr-large'?704:640);}
+  const canonical=models[0].labelSet;for(const model of models){assert.deepEqual(model.labelSet,canonical);assert.ok(model.files[0].url.startsWith('https://'));assert.match(model.files[0].sha256,/^[a-f0-9]{64}$/);}
 });

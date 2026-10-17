@@ -136,6 +136,220 @@ fn artifact_network_error(error: reqwest::Error, artifact: &super::types::Artifa
         crate::t_network::request_error(error, &artifact.url)
     )
 }
+/// An interrupted stream can resume only when the server acknowledges the exact byte range.
+/// SHA-256 remains mandatory; partial data is confined to the staging directory.
+async fn stream_artifact(
+    client: &reqwest::Client,
+    artifact: &super::types::Artifact,
+    path: &std::path::Path,
+    cancelled: &mut tokio::sync::watch::Receiver<bool>,
+    progress: impl Fn(&str, u64, Option<&str>, bool),
+) -> Result<u64, String> {
+    const ATTEMPTS: usize = 3;
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    let mut written = 0u64;
+    let mut expected = (artifact.size > 0).then_some(artifact.size);
+    let mut failure = String::new();
+    for attempt in 0..ATTEMPTS {
+        if *cancelled.borrow() {
+            return Err("Download canceled".into());
+        }
+        let notice = (attempt > 0).then(|| {
+            format!(
+                "Connection interrupted at {written} bytes; retry {attempt}/{}: {failure}",
+                ATTEMPTS - 1
+            )
+        });
+        progress("connecting", written, notice.as_deref(), false);
+        if *cancelled.borrow() {
+            return Err("Download canceled".into());
+        }
+        let mut request = artifact_request(client, &artifact.url);
+        if written > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={written}-"));
+        }
+        let result = tokio::select! {
+            result=tokio::time::timeout(Duration::from_secs(30),request.send())=>result.map_err(|_|"Response headers stalled for 30 seconds".into()).and_then(|r|r.map_err(|e|artifact_network_error(e,artifact))),
+            _=cancelled.changed()=>return Err("Download canceled".into()),
+        };
+        let mut response = match result {
+            Ok(response) => response,
+            Err(error) => {
+                failure = error;
+                if attempt + 1 < ATTEMPTS {
+                    retry_delay(cancelled, attempt).await?;
+                }
+                continue;
+            }
+        };
+        let status = response.status();
+        if !matches!(status.as_u16(), 200 | 206) {
+            let retryable = status.is_server_error() || matches!(status.as_u16(), 408 | 429);
+            let retry_after = response
+                .headers()
+                .contains_key(reqwest::header::RETRY_AFTER);
+            failure = response
+                .error_for_status()
+                .err()
+                .map(|e| artifact_network_error(e, artifact))
+                .unwrap_or_else(|| format!("Unexpected HTTP status {status}"));
+            // Do not hammer rate-limited sources or silently ignore a long Retry-After.
+            if !retryable || retry_after {
+                return Err(failure);
+            }
+            if attempt + 1 < ATTEMPTS {
+                retry_delay(cancelled, attempt).await?;
+            }
+            continue;
+        }
+        if status.as_u16() == 206 {
+            let range = response
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .ok_or("Missing Content-Range for resumed model download")?;
+            let (start, end, total) = parse_content_range(range)?;
+            if start != written
+                || expected.is_some_and(|n| n != total)
+                || response
+                    .content_length()
+                    .is_some_and(|n| n != end - start + 1)
+            {
+                return Err("Server returned an inconsistent model download byte range".into());
+            }
+            expected = Some(total);
+        } else {
+            if written > 0 {
+                file.set_len(0).await.map_err(|e| e.to_string())?;
+                use tokio::io::AsyncSeekExt;
+                file.rewind().await.map_err(|e| e.to_string())?;
+                written = 0;
+                hash = Sha256::new();
+                progress(
+                    "downloading",
+                    0,
+                    Some("Server does not support resuming; restarting this file safely"),
+                    true,
+                );
+            }
+            if let Some(length) = response.content_length() {
+                if expected.is_some_and(|n| n != length) {
+                    return Err("Model source Content-Length does not match its pinned size".into());
+                }
+                expected = Some(length);
+            }
+        }
+        progress("downloading", written, None, false);
+        let mut emitted = Instant::now();
+        let mut broken = None;
+        loop {
+            if *cancelled.borrow() {
+                return Err("Download canceled".into());
+            }
+            let chunk = tokio::select! {
+                result=tokio::time::timeout(Duration::from_secs(30),response.chunk())=>result.map_err(|_|"Download stalled for 30 seconds".into()).and_then(|r|r.map_err(|e|artifact_network_error(e,artifact))),
+                _=cancelled.changed()=>return Err("Download canceled".into()),
+            };
+            let chunk = match chunk {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(error) => {
+                    broken = Some(error);
+                    break;
+                }
+            };
+            let next = written
+                .checked_add(chunk.len() as u64)
+                .ok_or("Model download size overflow")?;
+            if expected.is_some_and(|n| next > n) {
+                return Err("Model download exceeded its pinned size".into());
+            }
+            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+            hash.update(&chunk);
+            written = next;
+            if emitted.elapsed() > Duration::from_millis(200) {
+                progress("downloading", written, None, false);
+                emitted = Instant::now();
+            }
+        }
+        if broken.is_none() && expected.is_some_and(|n| n != written) {
+            broken = Some("Model response ended before its declared length".into());
+        }
+        if let Some(error) = broken {
+            // A fully received, checksum-valid payload is safe even if the connection then breaks.
+            if !expected.is_some_and(|n| n == written)
+                || format!("{:x}", hash.clone().finalize()) != artifact.sha256.to_lowercase()
+            {
+                failure = error;
+                if attempt + 1 < ATTEMPTS {
+                    retry_delay(cancelled, attempt).await?;
+                }
+                continue;
+            }
+        }
+        if written == 0
+            || expected.is_some_and(|n| n != written)
+            || format!("{:x}", hash.finalize()) != artifact.sha256.to_lowercase()
+        {
+            return Err(format!(
+                "{} is incomplete or failed SHA256 verification",
+                artifact.role
+            ));
+        }
+        if *cancelled.borrow() {
+            return Err("Download canceled".into());
+        }
+        progress("verifying", written, None, false);
+        file.sync_all().await.map_err(|e| e.to_string())?;
+        return Ok(written);
+    }
+    Err(format!(
+        "{} download failed after {ATTEMPTS} attempts ({written} bytes received): {failure}",
+        artifact.role
+    ))
+}
+fn parse_content_range(value: &str) -> Result<(u64, u64, u64), String> {
+    let (unit, value) = value
+        .split_once(' ')
+        .ok_or("Invalid model Content-Range unit")?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return Err("Invalid model Content-Range unit".into());
+    }
+    let (range, total) = value
+        .split_once('/')
+        .ok_or("Invalid model Content-Range total")?;
+    let (start, end) = range
+        .split_once('-')
+        .ok_or("Invalid model Content-Range bounds")?;
+    let start = start
+        .parse::<u64>()
+        .map_err(|_| "Invalid model byte range start")?;
+    let end = end
+        .parse::<u64>()
+        .map_err(|_| "Invalid model byte range end")?;
+    let total = total
+        .parse::<u64>()
+        .map_err(|_| "Invalid model byte range size")?;
+    if start > end || end >= total || total == 0 {
+        return Err("Invalid model Content-Range bounds".into());
+    }
+    Ok((start, end, total))
+}
+async fn retry_delay(
+    cancelled: &mut tokio::sync::watch::Receiver<bool>,
+    attempt: usize,
+) -> Result<(), String> {
+    if *cancelled.borrow() {
+        return Err("Download canceled".into());
+    }
+    tokio::select! {
+        _=tokio::time::sleep(Duration::from_millis(500*(attempt as u64+1)))=>Ok(()),
+        _=cancelled.changed()=>Err("Download canceled".into()),
+    }
+}
 pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), String> {
     model.validate()?;
     let client = crate::t_network::client()?;
@@ -169,69 +383,20 @@ async fn download_with_client(
         .await
         .map_err(|e| e.to_string())?;
     let _stage_guard = Stage(staging.clone());
-    let total: u64 = model.files.iter().map(|f| f.size).sum();
+    let total: u64 = model.files.iter().try_fold(0u64, |bytes, file| {
+        bytes
+            .checked_add(file.size)
+            .ok_or("Model download total size overflow")
+    })?;
     let mut received = 0u64;
-    let mut emitted = Instant::now();
     for (index, artifact) in model.files.iter().enumerate() {
-        if *cancelled.borrow() {
-            return Err("Download canceled".into());
-        }
-        emit(
-            json!({"modelId":model.id,"file":artifact.role,"phase":"connecting","progress":if total>0 {received as f64/total as f64*100.}else{0.},"received":received,"total":total}),
-        );
-        let mut response = tokio::select! {
-            result=artifact_request(&client,&artifact.url).send()=>result.map_err(|e|artifact_network_error(e,artifact))?.error_for_status().map_err(|e|artifact_network_error(e,artifact))?,
-            _=cancelled.changed()=>return Err("Download canceled".into()),
-        };
-        emit(
-            json!({"modelId":model.id,"file":artifact.role,"phase":"downloading","progress":if total>0 {received as f64/total as f64*100.}else{0.},"received":received,"total":total}),
-        );
-        let expected = response.content_length();
+        let completed = received;
         let path = staging.join(artifact_filename(&artifact.role));
-        let mut file = tokio::fs::File::create(&path)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut hash = Sha256::new();
-        let mut written = 0u64;
-        loop {
-            let chunk = tokio::select! {
-                result=tokio::time::timeout(Duration::from_secs(30),response.chunk())=>result.map_err(|_|format!("{}: Download stalled for 30 seconds",artifact.role))?.map_err(|e|artifact_network_error(e,artifact))?,
-                _=cancelled.changed()=>return Err("Download canceled".into()),
-            };
-            let Some(chunk) = chunk else {
-                break;
-            };
-            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-            hash.update(&chunk);
-            written += chunk.len() as u64;
-            received += chunk.len() as u64;
-            if emitted.elapsed() > Duration::from_millis(200) {
-                let progress = if total > 0 {
-                    (received as f64 / total as f64 * 100.).min(99.)
-                } else {
-                    index as f64 / model.files.len() as f64 * 100.
-                };
-                emit(
-                    json!({"modelId":model.id,"file":artifact.role,"phase":"downloading","progress":progress,"received":received,"total":total}),
-                );
-                emitted = Instant::now();
-            }
-        }
-        emit(
-            json!({"modelId":model.id,"file":artifact.role,"phase":"verifying","progress":if total>0 {(received as f64/total as f64*100.).min(99.)}else{0.},"received":received,"total":total}),
-        );
-        file.sync_all().await.map_err(|e| e.to_string())?;
-        drop(file);
-        if written == 0
-            || expected.is_some_and(|n| n != written)
-            || (artifact.size > 0 && written != artifact.size)
-            || format!("{:x}", hash.finalize()) != artifact.sha256.to_lowercase()
-        {
-            return Err(format!(
-                "{} is incomplete or failed SHA256 verification",
-                artifact.role
-            ));
-        }
+        received+=stream_artifact(&client,artifact,&path,&mut cancelled,|phase,written,message,restart| {
+            let bytes=completed+written;
+            let progress=if total>0 {(bytes as f64/total as f64*100.).min(99.)}else{index as f64/model.files.len() as f64*100.};
+            emit(json!({"modelId":model.id,"file":artifact.role,"phase":phase,"progress":progress,"received":bytes,"total":total,"message":message.unwrap_or(""),"restart":restart}));
+        }).await?;
     }
     if *cancelled.borrow() {
         return Err("Download canceled".into());
@@ -442,5 +607,155 @@ mod download_transport_tests {
             model.files.iter().map(|f| f.size).sum::<u64>(),
             events.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod resumable_download_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    fn server(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model.onnx", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let thread = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let deadline = Instant::now() + Duration::from_secs(8);
+                let mut socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return requests;
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("test server: {error}"),
+                    }
+                };
+                // Windows accepted sockets may inherit FIONBIO from the listener.
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 2048];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = socket.read(&mut buffer).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..n]);
+                    assert!(request.len() < 16384);
+                }
+                requests.push(String::from_utf8_lossy(&request).to_lowercase());
+                socket.write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        (url, thread)
+    }
+    fn artifact(url: String) -> super::super::types::Artifact {
+        super::super::types::Artifact {
+            role: "detector".into(),
+            url,
+            sha256: format!("{:x}", Sha256::digest(b"weights")),
+            size: 7,
+        }
+    }
+    fn path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("model-download-test-{}.part", uuid::Uuid::new_v4()))
+    }
+    fn full(body: &str) -> String {
+        format!("HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\n{body}")
+    }
+    #[tokio::test]
+    async fn interrupted_body_resumes_the_exact_range_without_restarting_or_skipping_checksum() {
+        for unknown_size in [false, true] {
+            let (url,server)=server(vec![full("wei"),"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 3-6/7\r\nConnection: close\r\n\r\nghts".into()]);
+            let mut artifact = artifact(url);
+            if unknown_size {
+                artifact.size = 0;
+            }
+            let p = path();
+            let (_tx, mut rx) = tokio::sync::watch::channel(false);
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let bytes = stream_artifact(&client, &artifact, &p, &mut rx, |_, _, _, _| {})
+                .await
+                .unwrap();
+            assert_eq!(bytes, 7);
+            assert_eq!(std::fs::read(&p).unwrap(), b"weights");
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests[1].contains("range: bytes=3-"));
+            assert!(requests[1].contains("user-agent: lap/"));
+            std::fs::remove_file(p).unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn ignored_range_restarts_safely_and_emits_an_explicit_progress_reset() {
+        let (url, server) = server(vec![full("wei"), full("weights")]);
+        let p = path();
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        let restarted = std::sync::atomic::AtomicBool::new(false);
+        stream_artifact(
+            &reqwest::Client::builder().no_proxy().build().unwrap(),
+            &artifact(url),
+            &p,
+            &mut rx,
+            |_, n, _, reset| {
+                if reset {
+                    assert_eq!(n, 0);
+                    restarted.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert!(restarted.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(std::fs::read(&p).unwrap(), b"weights");
+        assert_eq!(server.join().unwrap().len(), 2);
+        std::fs::remove_file(p).unwrap();
+    }
+    #[tokio::test]
+    async fn invalid_resume_ranges_and_wrong_checksums_are_never_accepted() {
+        for responses in [
+            vec![full("wei"),"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 2-5/7\r\nConnection: close\r\n\r\nghts".into()],
+            vec![full("weighTs")],
+            vec!["HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()],
+            vec!["HTTP/1.1 503 Service Unavailable\r\nRetry-After: Sat, 17 Oct 2026 12:00:00 GMT\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()],
+        ] {
+            let expected=responses.len();let (url,server)=server(responses);let p=path();let (_tx,mut rx)=tokio::sync::watch::channel(false);
+            let result=stream_artifact(&reqwest::Client::builder().no_proxy().build().unwrap(),&artifact(url),&p,&mut rx,|_,_,_,_|{}).await;
+            assert!(result.is_err());assert_eq!(server.join().unwrap().len(),expected);std::fs::remove_file(p).unwrap();
+        }
+        for invalid in ["items 0-6/7", "bytes 3-2/7", "bytes 0-7/7", "bytes 0-0/*"] {
+            assert!(parse_content_range(invalid).is_err());
+        }
+    }
+    #[tokio::test]
+    async fn cancellation_before_retry_does_not_connect_again_or_mark_a_partial_file_complete() {
+        let (url, server) = server(vec![full("wei")]);
+        let p = path();
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let result = stream_artifact(
+            &reqwest::Client::builder().no_proxy().build().unwrap(),
+            &artifact(url),
+            &p,
+            &mut rx,
+            |phase, _, message, _| {
+                if phase == "connecting" && message.is_some() {
+                    tx.send(true).unwrap();
+                }
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "Download canceled");
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert_eq!(std::fs::read(&p).unwrap(), b"wei");
+        std::fs::remove_file(p).unwrap();
     }
 }

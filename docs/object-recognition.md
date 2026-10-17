@@ -40,3 +40,34 @@
 两份固定权重已完成大小／SHA-256 校验，并通过软件共用 Rust 下载通道实际安装（RT-DETR 使用显式本机代理复测通过，远端此前出现过响应中断）。CPU 和 DirectML 原生推理均已验证，GPU 验证包含实际算子事件，不只是注册执行提供者。结果存储、来源失效、人工保护、截断／否定规则、前端请求竞态和组件渲染已有回归测试。
 
 当前环境未连接到可操控的桌面／浏览器实例；原生窗口布局、键鼠操作和长任务交互仍需实机验收。构建、服务端组件渲染和推理测试不替代这部分验收。
+
+## 高精度候选扩展（2026-10-17）
+
+默认全局模型仍为 RT-DETRv2 R18，不自动下载或替换用户已选模型。模型目录现提供五种选择：YOLOX-S（轻量）、RT-DETRv2 R18（均衡）、YOLO26-L（精度取向）、YOLO26-X（较高计算开销）、RF-DETR Large 704（精度取向）。这些定位不是本机速度排名，也不保证大型号在每张照片上都更好。
+
+| 新模型 | 固定导出来源与版本 | FP32 文件大小 | SHA-256 |
+| --- | --- | ---: | --- |
+| YOLO26-L | `onnx-community/yolo26l-ONNX` @ `7a72d097ea1719e10eda2d89f75b6e9c009f7f6b`，`onnx/model.onnx` | 99,574,509 bytes | `60938f3c91e456337439f962d1185bffc5f7ababa902dbaf4686ae86a66952bd` |
+| YOLO26-X | `onnx-community/yolo26x-ONNX` @ `032eec52a570b81e5f9d66485b9322bd9b7f4053`，`onnx/model.onnx` | 223,248,653 bytes | `73970a0227222a6e454b7b12f8453bd228183ebc688a62699e7ba57b3e105c42` |
+| RF-DETR Large 704 | `AXERA-TECH/rf-detr-large` @ `6a71d9f1f392415f214d573af99989da405610cc`，`models/rf-detr-large_704_sim.onnx` | 121,523,996 bytes | `cf0d64793e5ead6c21260d92f447e95737e6ea76b3f4b3da302aabdf67da9aff` |
+
+### 导出契约，而非仅模型名称
+
+- `yolo26_onnx`：固定 640px RGB 拉伸、0–1 浮点输入；Hugging Face 适配导出提供 `logits [1,300,80]`、`pred_boxes [1,300,4]`，框为归一化 cxcywh、分数为 sigmoid logits。该契约不是原始 Ultralytics `.pt`，也不等于任意名称为 YOLO 的 ONNX。端到端模型默认关闭额外 NMS，用户仍可按模型配置。
+- `rf_detr_coco_onnx`：固定 704px RGB 拉伸、0–1 后按 ImageNet mean/std 归一化；完整 FP32 图输出 91 个 COCO 原始编号槽位和归一化 cxcywh。只读取 80 个已知类别槽位，排除 0 和空洞编号，再映射到 `coco2017-80@1`。例如原始 dog=18 对应现有 dog=16，bus=6 对应 bus=5。不得把 91 槽直接当作 91 类。
+- RF-DETR 选择的是完整 `*_704_sim.onnx`，不是 AX 专用二进制、拆分中间图或旧版 ONNX Community 的 560px Large。该来源仓库的[固定导出脚本](https://huggingface.co/AXERA-TECH/rf-detr-large/blob/6a71d9f1f392415f214d573af99989da405610cc/src/tool/export_rfdetr_onnx_hf.py)使用 `Roboflow/rf-detr-large`；原始[模型卡与配置](https://huggingface.co/Roboflow/rf-detr-large/tree/f62f7dd5252b61097cbace33886045816dadbde9)声明 Apache-2.0 和 704px。
+- 输入尺寸在新模型清单的 `inputSize` 中声明，属于权重导出契约，而不是可随意修改的运行时滑块。同一适配器的后续尺寸变体可通过清单声明，不必每个型号新增代码；旧清单省略该字段仍保留原有默认值与指纹。设备、阈值、可选 NMS、结果上限继续按模型独立配置；默认 `auto` 优先实际可用的 GPU 后端，不覆盖用户显式保存的 CPU 选择。
+
+### 许可与未接入范围
+
+YOLO26 权重采用 Ultralytics 的 AGPL-3.0／企业许可体系；目录标注 AGPL-3.0，下载前显示许可提示。参见 [Ultralytics 官方说明](https://docs.ultralytics.com/models/yolo26/#citations-and-acknowledgments)、`model-licenses/Ultralytics-AGPL-3.0.txt`。这不等同于宣称软件集成或再分发必然满足许可，分发者需核对适用条款。
+
+RF-DETR Large 属于项目指定的 Apache-2.0 型号，许可副本见 `model-licenses/RF-DETR-Apache-2.0.txt`。RF-DETR XL／2XL 的 PML 1.0、未公开权重的 YOLO27，以及需要文本条件与新任务契约的开放词汇检测，均不冒充本次已接入型号。
+
+### 大文件断流恢复
+
+模型权重仍在软件内按需下载、沿用代理并写入暂存目录，不随发布包打包。同一任务内对网络中断最多尝试三次；仅在 `Content-Range` 起点、长度、总大小一致时续传，服务器忽略 Range 则清空当前暂存文件并安全重下。拒绝错误区间、超出固定大小、校验失败和不可重试的 HTTP 错误。传输和重试等待阶段可立即取消；进入短暂的原子安装提交后保持一致性，残缺文件不会成为已安装模型；关闭或取消任务后的跨任务持久续传不在本轮范围。所有文件验证完成后仍通过原有原子安装路径替换目标。
+
+### 本次执行设备验证边界
+
+在本机公开公交车与猫样片上，三个新增模型均已通过原生 CPU 推理；YOLO26-L／X 也通过 DirectML 推理并记录实际 GPU 算子。当前 RF-DETR 704 导出在本机 DirectML 会话初始化阶段失败；这不是宣称该系列在所有 GPU 上都不支持。自动模式会尝试加速后回退 CPU，并保留失败原因，显式指定 DirectML 则如实报错。CUDA／CoreML 和其他驱动组合未经本次实机验证，不将“注册成功”当成“已在 GPU 执行”。

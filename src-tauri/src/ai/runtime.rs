@@ -342,8 +342,11 @@ fn build(
                     .map_err(|e| e.to_string())?;
             }
         } else if model.definition.task == super::types::Task::Detection {
-            for (name,size) in [("batch_size",1),("batch",1),("num_channels",3),("height",640),("width",640)] {
-                builder=builder.with_dimension_override(name,size).map_err(|e|e.to_string())?;
+            let size = model.definition.object_input_size().ok_or("Unknown object input contract")? as i64;
+            for (name, size) in [
+                ("batch_size", 1), ("batch", 1), ("num_channels", 3), ("height", size), ("width", size),
+            ] {
+                builder = builder.with_dimension_override(name, size).map_err(|e| e.to_string())?;
             }
         } else if role == "vision" {
             for (name, size) in [

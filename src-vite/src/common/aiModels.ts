@@ -59,3 +59,15 @@ export function aiModelDisplayName(definition: any) {
 export function isRecommendedAiModel(view: any, task: string, modelId: string) {
   return task === 'ocr' && !!modelId && view?.defaultSelection?.ocr === modelId;
 }
+
+// Built-in descriptions can be translated without changing weight/profile fingerprints.
+// Custom manifests keep the author's description instead of assuming a known model family.
+export function aiModelDescription(row: any, translate: (key: string) => string) {
+  const definition = row?.definition;
+  if (row?.builtin && definition?.task === 'detection') {
+    const key = `objects.models.${definition.id}`;
+    const text = translate(key);
+    if (text !== key) return text;
+  }
+  return definition?.description || '';
+}

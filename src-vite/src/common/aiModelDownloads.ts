@@ -28,6 +28,8 @@ export function applyModelDownloadProgress(state: ModelDownloadFeedback, event: 
   if (state.state !== 'downloading') return;
   const number = (value: any) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
   const progress = number(event.progress), received = number(event.received), total = number(event.total);
+  if (event.restart === true) { state.progress = Math.min(100, progress ?? 0); state.received = received ?? 0; }
+  if (typeof event.message === 'string') state.message = event.message;
   if (progress !== null) state.progress = Math.max(state.progress, Math.min(100, progress));
   if (received !== null) state.received = Math.max(state.received, received);
   if (total !== null) state.total = Math.max(state.total, total);
