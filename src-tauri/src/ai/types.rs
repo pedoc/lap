@@ -222,6 +222,9 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
             ParameterSpec::number("object_confidence",0.35,0.01,0.99,0.05,true),
             ParameterSpec::number("object_nms_iou",0.5,0.,1.,0.05,true),
             ParameterSpec::number("object_max_results",100.,1.,300.,1.,true),
+            ParameterSpec { key:"object_tiled".into(),kind:"choice".into(),default:json!(false),min:0.,max:0.,step:0.,options:vec![json!(false),json!(true)],affects_index:true,reload_session:false },
+            ParameterSpec::number("object_tile_size",640.,320.,2048.,32.,true),
+            ParameterSpec::number("object_tile_overlap",0.2,0.,0.9,0.05,true),
         ]),
         Task::Ocr => p.extend([
             ParameterSpec { key:"ocr_rotation".into(),kind:"choice".into(),default:json!("0"),min:0.,max:0.,step:0.,options:vec![json!("0"),json!("auto"),json!("90"),json!("180"),json!("270")],affects_index:true,reload_session:false },
@@ -668,5 +671,29 @@ mod tests {
             .parameters
             .insert("detector_size".into(), json!(641));
         assert!(ResolvedModel::new(a.definition, a.configuration).is_err());
+    }
+    #[test]
+    fn detection_tiling_parameters_are_schema_aware_and_affect_index_identity() {
+        let specs = parameters(Task::Detection, Adapter::RfDetrCocoOnnx);
+        let tiled = specs
+            .iter()
+            .find(|spec| spec.key == "object_tiled")
+            .unwrap();
+        assert_eq!(tiled.default, json!(false));
+        assert!(tiled.affects_index);
+        let size = specs
+            .iter()
+            .find(|spec| spec.key == "object_tile_size")
+            .unwrap();
+        assert_eq!(size.default, json!(640.));
+        let mut config = crate::ai::settings::Configuration::default();
+        let base = config.resolve("rf-detr-large").unwrap().profile();
+        config
+            .models
+            .get_mut("rf-detr-large")
+            .unwrap()
+            .parameters
+            .insert("object_tiled".into(), json!(true));
+        assert_ne!(base, config.resolve("rf-detr-large").unwrap().profile());
     }
 }

@@ -100,77 +100,24 @@ impl OnnxObjects {
             return Err("Cannot detect objects in an empty image".into());
         }
         let adapter = self.model.definition.adapter;
-        let input = preprocess(
-            image,
-            adapter,
-            self.model
-                .definition
-                .object_input_size()
-                .ok_or("Object model has no input contract")?,
-        );
-        check()?;
-        let candidates = {
-            let outputs=self.session.run(inputs![self.input_name.as_str()=>Value::from_array(input).map_err(|e|e.to_string())?]).map_err(|e|format!("Object inference failed: {e}"))?;
-            if adapter == Adapter::YoloXOnnx {
-                let output = outputs
-                    .get(self.output_name.as_str())
-                    .ok_or("YOLOX output is missing")?;
-                let (shape, data) = output
-                    .try_extract_tensor::<f32>()
-                    .map_err(|e| e.to_string())?;
-                if shape.len() != 3
-                    || shape[0] != 1
-                    || shape[1] != 8400
-                    || shape[2] != (self.labels.classes.len() + 5) as i64
-                {
-                    return Err("YOLOX requires [1,8400,5+classes] float output at 640px".into());
-                }
-                decode_yolox(
-                    data,
-                    self.labels.classes.len(),
-                    (image.width(), image.height()),
-                )?
-            } else {
-                let channels = if adapter == Adapter::RfDetrCocoOnnx {
-                    91
-                } else {
-                    self.labels.classes.len()
-                };
-                let logits = outputs
-                    .get("logits")
-                    .ok_or("RT-DETR logits output missing")?;
-                let boxes = outputs
-                    .get("pred_boxes")
-                    .ok_or("RT-DETR boxes output missing")?;
-                let (shape, scores) = logits
-                    .try_extract_tensor::<f32>()
-                    .map_err(|e| e.to_string())?;
-                let (bshape, boxes) = boxes
-                    .try_extract_tensor::<f32>()
-                    .map_err(|e| e.to_string())?;
-                if shape.len() != 3
-                    || shape[0] != 1
-                    || shape[1] <= 0
-                    || shape[1] > 1000
-                    || shape[2] != channels as i64
-                    || bshape.len() != 3
-                    || bshape[0] != 1
-                    || bshape[1] != shape[1]
-                    || bshape[2] != 4
-                {
-                    return Err(format!(
-                        "{} requires [1,queries,{channels}] float logits and [1,queries,4] normalized cxcywh boxes; received {shape:?} and {bshape:?}",
-                        model_name(adapter)
-                    ));
-                }
-                if adapter == Adapter::RfDetrCocoOnnx {
-                    decode_rf_detr(scores, boxes)?
-                } else {
-                    decode_rtdetr(scores, boxes, self.labels.classes.len())?
-                }
-            }
+        let size = self
+            .model
+            .definition
+            .object_input_size()
+            .ok_or("Object model has no input contract")?;
+        let tiled = self
+            .model
+            .values
+            .get("object_tiled")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let tile = (self.model.number("object_tile_size") as u32).max(32);
+        let overlap = self.model.number("object_tile_overlap") as f32;
+        let candidates = if tiled && (image.width() > tile || image.height() > tile) {
+            self.detect_tiled(image, adapter, size, tile, overlap, check)?
+        } else {
+            self.run_pass(image, adapter, size, check)?
         };
-        check()?;
         finish(
             candidates,
             &self.labels,
@@ -180,6 +127,129 @@ impl OnnxObjects {
             (image.width(), image.height()),
         )
     }
+    fn run_pass(
+        &mut self,
+        image: &DynamicImage,
+        adapter: Adapter,
+        size: usize,
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Vec<Candidate>, String> {
+        let input = preprocess(
+            image,
+            adapter,
+            size,
+        );
+        check()?;
+        let outputs=self.session.run(inputs![self.input_name.as_str()=>Value::from_array(input).map_err(|e|e.to_string())?]).map_err(|e|format!("Object inference failed: {e}"))?;
+        let candidates = if adapter == Adapter::YoloXOnnx {
+            let output = outputs
+                .get(self.output_name.as_str())
+                .ok_or("YOLOX output is missing")?;
+            let (shape, data) = output
+                .try_extract_tensor::<f32>()
+                .map_err(|e| e.to_string())?;
+            if shape.len() != 3
+                || shape[0] != 1
+                || shape[1] != 8400
+                || shape[2] != (self.labels.classes.len() + 5) as i64
+            {
+                return Err("YOLOX requires [1,8400,5+classes] float output at 640px".into());
+            }
+            decode_yolox(
+                data,
+                self.labels.classes.len(),
+                (image.width(), image.height()),
+            )?
+        } else {
+            let channels = if adapter == Adapter::RfDetrCocoOnnx {
+                91
+            } else {
+                self.labels.classes.len()
+            };
+            let logits = outputs
+                .get("logits")
+                .ok_or("RT-DETR logits output missing")?;
+            let boxes = outputs
+                .get("pred_boxes")
+                .ok_or("RT-DETR boxes output missing")?;
+            let (shape, scores) = logits
+                .try_extract_tensor::<f32>()
+                .map_err(|e| e.to_string())?;
+            let (bshape, boxes) = boxes
+                .try_extract_tensor::<f32>()
+                .map_err(|e| e.to_string())?;
+            if shape.len() != 3
+                || shape[0] != 1
+                || shape[1] <= 0
+                || shape[1] > 1000
+                || shape[2] != channels as i64
+                || bshape.len() != 3
+                || bshape[0] != 1
+                || bshape[1] != shape[1]
+                || bshape[2] != 4
+            {
+                return Err(format!(
+                    "{} requires [1,queries,{channels}] float logits and [1,queries,4] normalized cxcywh boxes; received {shape:?} and {bshape:?}",
+                    model_name(adapter)
+                ));
+            }
+            if adapter == Adapter::RfDetrCocoOnnx {
+                decode_rf_detr(scores, boxes)?
+            } else {
+                decode_rtdetr(scores, boxes, self.labels.classes.len())?
+            }
+        };
+        Ok(candidates)
+    }
+    fn detect_tiled(
+        &mut self,
+        image: &DynamicImage,
+        adapter: Adapter,
+        size: usize,
+        tile: u32,
+        overlap: f32,
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Vec<Candidate>, String> {
+        let width = image.width();
+        let height = image.height();
+        let overlap = overlap.clamp(0., 0.9);
+        let mut candidates = Vec::new();
+        for ty in tile_offsets(height, tile, overlap) {
+            for tx in tile_offsets(width, tile, overlap) {
+                check()?;
+                let tw = tile.min(width - tx);
+                let th = tile.min(height - ty);
+                let sub = image.crop_imm(tx, ty, tw, th);
+                let mut local = self.run_pass(&sub, adapter, size, check)?;
+                for candidate in &mut local {
+                    candidate.bounds = [
+                        (tx as f32 + candidate.bounds[0] * tw as f32) / width as f32,
+                        (ty as f32 + candidate.bounds[1] * th as f32) / height as f32,
+                        candidate.bounds[2] * tw as f32 / width as f32,
+                        candidate.bounds[3] * th as f32 / height as f32,
+                    ];
+                }
+                candidates.extend(local);
+            }
+        }
+        Ok(candidates)
+    }
+}
+fn tile_offsets(length: u32, tile: u32, overlap: f32) -> Vec<u32> {
+    if tile == 0 || length <= tile {
+        return vec![0];
+    }
+    let stride = ((tile as f32) * (1. - overlap)).max(1.) as u32;
+    let mut offsets = vec![0];
+    let mut offset = stride;
+    while offset < length {
+        offsets.push(offset);
+        offset += stride;
+    }
+    if *offsets.last().unwrap() + tile < length {
+        *offsets.last_mut().unwrap() = length - tile;
+    }
+    offsets
 }
 impl crate::ai::capabilities::ObjectDetector for OnnxObjects {
     fn detect_objects(
@@ -355,6 +425,16 @@ mod tests {
         let r = preprocess(&image, Adapter::RtDetrOnnx, 640);
         assert_eq!(r[[0, 0, 0, 0]], 1.);
         assert_eq!(r[[0, 1, 639, 639]], 0.);
+    }
+    #[test]
+    fn tile_grid_covers_edges_and_small_images_without_duplicating_offsets() {
+        assert_eq!(tile_offsets(100, 64, 0.5), vec![0, 32, 64, 96]);
+        assert_eq!(tile_offsets(100, 64, 0.2), vec![0, 51]);
+        assert_eq!(tile_offsets(50, 64, 0.5), vec![0]);
+        assert_eq!(tile_offsets(64, 64, 0.), vec![0]);
+        assert!(tile_offsets(1000, 640, 0.2)
+            .iter()
+            .all(|offset| *offset + 640 >= 1000 || *offset == 0));
     }
     #[test]
     fn decoders_are_explicit_about_shape_probabilities_and_source_coordinates() {
