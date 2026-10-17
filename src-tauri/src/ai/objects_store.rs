@@ -478,6 +478,8 @@ pub struct View {
     pub history: Vec<super::objects_journal::Entry>,
     pub history_error: Option<String>,
     pub sessions: Vec<super::runtime::SessionReport>,
+    pub automation: Option<super::objects_automation::Policy>,
+    pub automation_error: Option<String>,
 }
 pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<View, String> {
     let profile = model.profile();
@@ -550,6 +552,7 @@ pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<V
         item.instances = instances;
     }
     let mut status = super::objects_jobs::status(library);
+    let automation = super::objects_automation::load();
     let (history, history_error) = match super::objects_journal::list(c, library, &profile, &status)
     {
         Ok(entries) => (entries, None),
@@ -576,6 +579,8 @@ pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<V
         history,
         history_error,
         sessions: super::runtime::reports(model),
+        automation: automation.as_ref().ok().cloned(),
+        automation_error: automation.err(),
     })
 }
 #[tauri::command]

@@ -188,6 +188,7 @@
 
 <script setup lang="ts">
 import { useOcrAutomation } from '@/common/ocrAutomation';
+import { useObjectAutomation } from '@/common/objectAutomation';
 import { startupWindowProxy } from '@/common/windowProxy';
 import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -283,6 +284,7 @@ const SETTINGS_BASE_HEIGHT = 620;
 
 /// i18n
 useOcrAutomation();
+useObjectAutomation();
 const { locale, messages, t } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
 

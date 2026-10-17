@@ -142,6 +142,7 @@ pub fn authorized(revision: &str, library: &str) -> Result<Policy, String> {
 pub fn record_ocr_activity() {
     *ACTIVITY.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
     super::ocr::yield_automatic();
+    super::objects_automation::record_activity();
 }
 #[tauri::command]
 pub fn save_ocr_automation(app_handle: AppHandle, policy: Policy) -> Result<Policy, String> {

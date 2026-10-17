@@ -84,6 +84,7 @@ export function useObjects() {
     for (const name of [
       'object-index-updated',
       'object-annotations-changed',
+      'object-automation-changed',
       'ai-configuration-changed',
       'media-lifecycle-changed',
       'files-deleted',

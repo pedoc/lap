@@ -326,6 +326,8 @@ async fn main() {
             ai::ocr::get_ocr_status,
             ai::ocr_auto::record_ocr_activity,
             ai::ocr_auto::save_ocr_automation,
+            ai::objects_automation::record_object_activity,
+            ai::objects_automation::save_object_automation,
             ai::ocr_annotations::save_ocr_text,
             ai::ocr_annotations::reset_ocr_text,
             ai::ocr_extract::extract_ocr_region,

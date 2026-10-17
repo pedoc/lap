@@ -183,6 +183,7 @@
         </details>
       </section>
       <ObjectTaskHistory :entries="view?.history" :error="view?.historyError" :busy="busy" :running="view?.status.running" @resume="resume" />
+      <ObjectAutoSettings />
     </div>
   </div>
 </template>
@@ -192,6 +193,7 @@ import { useI18n } from 'vue-i18n';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { config, libConfig } from '@/common/config';
 import ObjectTaskHistory from './ObjectTaskHistory.vue';
+import ObjectAutoSettings from './ObjectAutoSettings.vue';
 import { OBJECT_STATES, objectClassName, objectTaskPhase, objectExecution } from '@/common/objectUi';
 import { useObjects, openObjectSettings } from '@/common/objects';
 const { t } = useI18n();

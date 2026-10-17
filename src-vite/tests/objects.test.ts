@@ -64,6 +64,7 @@ function context() {
     ...Vue,
     ...objectHelpers,
     ObjectTaskHistory: () => Vue.h('aside'),
+    ObjectAutoSettings: () => Vue.h('aside'),
     t,
     useI18n: () => ({ t }),
     config: Vue.reactive({

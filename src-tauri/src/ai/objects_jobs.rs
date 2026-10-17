@@ -26,6 +26,8 @@ pub struct Status {
     pub error: Option<String>,
     pub historical: bool,
     pub execution: serde_json::Value,
+    pub automatic: bool,
+    pub automation_revision: Option<String>,
 }
 struct Job {
     cancel: AtomicBool,
@@ -39,6 +41,21 @@ pub fn is_running() -> bool {
                 .is_some_and(|job| job.status.lock().is_ok_and(|status| status.running))
         })
         .unwrap_or(true)
+}
+pub fn yield_automatic() {
+    let job = JOB.lock().ok().and_then(|slot| slot.clone());
+    let automatic = job
+        .as_ref()
+        .and_then(|job| job.status.lock().ok().map(|status| status.automatic))
+        .unwrap_or(false);
+    if let Some(job) = job.filter(|_| automatic) {
+        if let Ok(mut status) = job.status.lock() {
+            if status.running {
+                job.cancel.store(true, Ordering::SeqCst);
+                status.stopping = true;
+            }
+        }
+    }
 }
 pub fn status(library: &str) -> Status {
     JOB.lock()
@@ -71,6 +88,7 @@ fn targets(
     retry: bool,
     ids: Option<&[i64]>,
     folder: Option<(i64, String)>,
+    limit: Option<usize>,
 ) -> Result<Vec<i64>, String> {
     let mut sql = format!("SELECT a.id {}", media::base());
     let mut values: Vec<Box<dyn ToSql>> = Vec::new();
@@ -103,6 +121,10 @@ fn targets(
         ]);
     }
     sql.push_str(" ORDER BY a.id");
+    if let Some(limit) = limit {
+        sql.push_str(" LIMIT ?");
+        values.push(Box::new(limit as i64));
+    }
     let mut statement = c.prepare(&sql).map_err(|e| e.to_string())?;
     statement
         .query_map(params_from_iter(values.iter()), |r| r.get(0))
@@ -124,8 +146,11 @@ pub async fn start_object_index(
     folder_id: Option<i64>,
     resume_job_id: Option<String>,
     resume_failed: Option<bool>,
+    automation_revision: Option<String>,
 ) -> Result<Status, String> {
     use super::objects_journal as journal;
+    use super::objects_automation as automation;
+    let automatic = automation_revision.is_some();
     let request = journal::Request {
         force,
         retry_failed: retry_failed.unwrap_or(false),
@@ -134,6 +159,19 @@ pub async fn start_object_index(
         ..Default::default()
     };
     request.validate()?;
+    if automatic
+        && (request.force
+            || request.retry_failed
+            || request.file_ids.is_some()
+            || request.folder_id.is_some()
+            || resume_job_id.is_some())
+    {
+        return Err("Automatic object recognition may only process its configured pending scope".into());
+    }
+    let policy = automation_revision
+        .as_ref()
+        .map(|revision| automation::authorized(revision, &library_id))
+        .transpose()?;
     let resume_failed = resume_failed.unwrap_or(false);
     if resume_failed && resume_job_id.is_none()
         || resume_job_id.is_some()
@@ -177,7 +215,13 @@ pub async fn start_object_index(
             );
         }
         let model = super::settings::active(Task::Detection)?;
-        super::assets::verify(&model.definition)?;
+        if let Err(error) = super::assets::verify(&model.definition) {
+            if automatic {
+                let _ = automation::pause_with_error(&error);
+                let _ = app_handle.emit("object-automation-changed", ());
+            }
+            return Err(error);
+        }
         let mut c = crate::t_sqlite::open_conn()?;
         store::ensure_schema(&c)?;
         store::ensure_model(&c, &model)?;
@@ -194,8 +238,12 @@ pub async fn start_object_index(
         // A completed plan replays exact ledger IDs; a renamed/deleted folder cannot broaden it.
         let replay = recovery.as_ref().and_then(|r| r.ids.clone());
         let folder = if replay.is_none() {
-            request
-                .folder_id
+            let folder_id = if automatic {
+                policy.as_ref().and_then(|p| p.scope.as_ref()).map(|s| s.folder_id)
+            } else {
+                request.folder_id
+            };
+            folder_id
                 .map(|id| {
                     c.query_row(
                         "SELECT album_id,path FROM afolders WHERE id=?1",
@@ -247,6 +295,8 @@ pub async fn start_object_index(
             phase: "preparing".into(),
             scope,
             scope_name,
+            automatic,
+            automation_revision: automation_revision.clone(),
             ..Default::default()
         };
         let mut slot = JOB.lock().map_err(|e| e.to_string())?;
@@ -297,6 +347,11 @@ pub async fn start_object_index(
                         request.retry_failed,
                         request.file_ids.as_deref(),
                         folder,
+                        if automatic {
+                            policy.as_ref().map(|p| p.batch_size)
+                        } else {
+                            None
+                        },
                     )?,
                 };
                 if !replayed {
@@ -446,6 +501,20 @@ pub async fn start_object_index(
                     }
                 }
             }
+            let fatal = if job
+                .status
+                .lock()
+                .ok()
+                .is_some_and(|status| status.automatic)
+            {
+                job.status.lock().ok().and_then(|status| status.error.clone())
+            } else {
+                None
+            };
+            if let Some(error) = fatal {
+                let _ = automation::pause_with_error(&error);
+                let _ = app_handle.emit("object-automation-changed", ());
+            }
             let _ = app_handle.emit(
                 "object-index-updated",
                 serde_json::json!({"libraryId":library_id,"finished":true}),
@@ -470,6 +539,11 @@ pub async fn cancel_object_index(library_id: String, job_id: String) -> Result<(
     }
     job.cancel.store(true, Ordering::SeqCst);
     status.stopping = status.running;
+    let automatic = status.automatic;
+    drop(status);
+    if automatic {
+        super::objects_automation::pause()?;
+    }
     Ok(())
 }
 
@@ -482,7 +556,7 @@ mod tests {
         c.execute_batch("CREATE TABLE albums(id INTEGER PRIMARY KEY,path TEXT,file_types INTEGER,small_image_filter INTEGER,excluded_folders TEXT);CREATE TABLE afolders(id INTEGER PRIMARY KEY,album_id INTEGER,path TEXT,is_excluded_from_search INTEGER DEFAULT 0);CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,width INTEGER,height INTEGER,live_photo_video_id INTEGER,modified_at INTEGER,size INTEGER);CREATE TABLE media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER DEFAULT 0,deleted_at INTEGER);INSERT INTO albums VALUES(1,'/photos',7,0,'[]');INSERT INTO afolders VALUES(1,1,'/photos/trip_%',0),(2,1,'/photos/trip_%/child',0),(3,1,'/photos/trip_%2',0);INSERT INTO afiles VALUES(1,1,1,100,100,NULL,10,20),(2,2,1,100,100,NULL,10,20),(3,3,1,100,100,NULL,10,20);").unwrap();
         store::ensure_schema(&c).unwrap();
         assert_eq!(
-            targets(&c, "p", false, false, Some(&[2]), None).unwrap(),
+            targets(&c, "p", false, false, Some(&[2]), None, None).unwrap(),
             vec![2]
         );
         assert_eq!(
@@ -492,7 +566,8 @@ mod tests {
                 false,
                 false,
                 None,
-                Some((1, "/photos/trip_%".into()))
+                Some((1, "/photos/trip_%".into())),
+                None
             )
             .unwrap(),
             vec![1, 2]
@@ -502,13 +577,13 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(targets(&c, "p", false, true, None, None).unwrap(), vec![1]);
+        assert_eq!(targets(&c, "p", false, true, None, None, None).unwrap(), vec![1]);
         assert_eq!(
-            targets(&c, "p", false, false, None, None).unwrap(),
+            targets(&c, "p", false, false, None, None, None).unwrap(),
             vec![2, 3]
         );
         assert_eq!(
-            targets(&c, "p", true, false, Some(&[1]), None).unwrap(),
+            targets(&c, "p", true, false, Some(&[1]), None, None).unwrap(),
             vec![1]
         );
     }
