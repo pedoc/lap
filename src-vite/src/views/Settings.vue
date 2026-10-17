@@ -1092,12 +1092,17 @@ onMounted(async () => {
   // Show window after mount
   await appWindow.show();
 
-  // Destroy the window on close (rather than merely `close()`, which leaves the
-  // label registered) so reopening always creates a fresh window. Re-showing a
-  // closed transparent window can fail silently on Windows.
+  // Hide instead of destroying. Tauri removes webviews from its IPC registry by
+  // label; a late close event from a destroyed window can otherwise unregister a
+  // freshly recreated window with the same label ("failed to acquire webview
+  // reference"). Keeping this webview alive also makes reopening instant.
   unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
     event.preventDefault();
-    await appWindow.destroy();
+    try {
+      await appWindow.hide();
+    } catch (hideError) {
+      console.error('Failed to hide settings window:', hideError);
+    }
   });
 });
 

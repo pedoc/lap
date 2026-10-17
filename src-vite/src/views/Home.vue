@@ -753,6 +753,10 @@ async function clickSettings(tabIndex?: number, aiTask?: string) {
       console.error('Failed to show existing settings window, recreating:', error);
       try {
         await settingsWindow.destroy();
+        // Tauri's window-close and webview-close hooks fire separately. Give the
+        // late hook time to release this label before a replacement is created,
+        // otherwise it can unregister the new settings webview.
+        await new Promise(resolve => setTimeout(resolve, 250));
       } catch (destroyError) {
         console.error('Failed to destroy stale settings window:', destroyError);
       }
