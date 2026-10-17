@@ -1,7 +1,7 @@
 use super::types::ResolvedModel;
 use ort::{
     execution_providers::{CPUExecutionProvider, ExecutionProvider},
-    session::{Session, builder::GraphOptimizationLevel},
+    session::{builder::GraphOptimizationLevel, Session},
 };
 use serde::Serialize;
 use std::{
@@ -10,8 +10,8 @@ use std::{
     ops::{Deref, DerefMut},
     path::PathBuf,
     sync::{
-        Mutex,
         atomic::{AtomicU64, Ordering},
+        Mutex,
     },
 };
 
@@ -342,11 +342,20 @@ fn build(
                     .map_err(|e| e.to_string())?;
             }
         } else if model.definition.task == super::types::Task::Detection {
-            let size = model.definition.object_input_size().ok_or("Unknown object input contract")? as i64;
+            let size = model
+                .definition
+                .object_input_size()
+                .ok_or("Unknown object input contract")? as i64;
             for (name, size) in [
-                ("batch_size", 1), ("batch", 1), ("num_channels", 3), ("height", size), ("width", size),
+                ("batch_size", 1),
+                ("batch", 1),
+                ("num_channels", 3),
+                ("height", size),
+                ("width", size),
             ] {
-                builder = builder.with_dimension_override(name, size).map_err(|e| e.to_string())?;
+                builder = builder
+                    .with_dimension_override(name, size)
+                    .map_err(|e| e.to_string())?;
             }
         } else if role == "vision" {
             for (name, size) in [
@@ -366,44 +375,81 @@ fn build(
     }
     #[cfg(test)]
     eprintln!("GPU debug: commit {provider}/{role}");
+    let artifact = super::assets::artifact_path(&model.definition, role)?;
+    if provider == "directml" && model.definition.adapter == super::types::Adapter::RfDetrCocoOnnx {
+        // This RF-DETR export has no zero entries in Reshape target shapes, so
+        // clearing allowzero preserves its output while satisfying DirectML.
+        let mut bytes = std::fs::read(&artifact).map_err(|e| e.to_string())?;
+        if super::onnx_patch::disable_reshape_allowzero(&mut bytes) > 0 {
+            return builder
+                .commit_from_memory(&bytes)
+                .map_err(|e| format!("Cannot create {provider} session for {role}: {e}"));
+        }
+    }
     builder
-        .commit_from_file(super::assets::artifact_path(&model.definition, role)?)
+        .commit_from_file(artifact)
         .map_err(|e| format!("Cannot create {provider} session for {role}: {e}"))
 }
-fn directml_device(runtime: &RuntimeInfo, configured: i32) -> Option<i32> {
-    if configured < 0 {
-        // Prefer one representative per verified physical GPU. Raw
-        // adapters remain a fallback if the driver cannot identify hardware.
-        runtime
-            .devices
-            .iter()
-            .max_by(|a, b| {
-                a.memory_bytes
-                    .unwrap_or(0)
-                    .cmp(&b.memory_bytes.unwrap_or(0))
-                    .then_with(|| b.id.cmp(&a.id))
-            })
-            .map(|device| device.id)
-            .or_else(|| {
-                runtime
-                    .adapters
-                    .iter()
-                    .max_by(|a, b| {
-                        a.memory_bytes
-                            .cmp(&b.memory_bytes)
-                            .then_with(|| b.id.cmp(&a.id))
-                    })
-                    .map(|adapter| adapter.id)
-            })
-    } else {
-        // Explicit legacy DXGI aliases remain valid; never confuse
-        // a physical display ordinal with a provider's adapter ID.
-        runtime
+fn virtual_adapter(name: &str) -> bool {
+    let name = name.to_lowercase();
+    [
+        "todesk",
+        "parsec",
+        "sunshine",
+        "virtual",
+        "idd",
+        "remote",
+        "basic display",
+        "基本显示",
+        "虚拟",
+    ]
+    .iter()
+    .any(|needle| name.contains(needle))
+}
+fn directml_devices(runtime: &RuntimeInfo, configured: i32) -> Vec<i32> {
+    if configured >= 0 {
+        return runtime
             .adapters
             .iter()
-            .find(|adapter| adapter.id == configured)
-            .map(|adapter| adapter.id)
+            .any(|adapter| adapter.id == configured)
+            .then_some(configured)
+            .into_iter()
+            .collect();
     }
+    let mut candidates = Vec::new();
+    let mut push = |id: i32| {
+        if !candidates.contains(&id) {
+            candidates.push(id);
+        }
+    };
+    let mut devices = runtime.devices.iter().collect::<Vec<_>>();
+    devices.sort_by(|a, b| {
+        virtual_adapter(&a.name)
+            .cmp(&virtual_adapter(&b.name))
+            .then_with(|| {
+                b.memory_bytes
+                    .unwrap_or(0)
+                    .cmp(&a.memory_bytes.unwrap_or(0))
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    for device in devices {
+        push(device.id);
+        for id in &device.adapter_ids {
+            push(*id);
+        }
+    }
+    let mut adapters = runtime.adapters.iter().collect::<Vec<_>>();
+    adapters.sort_by(|a, b| {
+        virtual_adapter(&a.name)
+            .cmp(&virtual_adapter(&b.name))
+            .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    for adapter in adapters {
+        push(adapter.id);
+    }
+    candidates
 }
 
 fn provider_candidates(desired: &str, forced_cpu: bool) -> Vec<&str> {
@@ -479,50 +525,65 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
             continue;
         }
         let configured = model.number("gpu_device_id") as i32;
-        let device = match provider {
+        let devices: Vec<Option<i32>> = match provider {
             "directml" => {
-                let id = directml_device(&runtime, configured);
-                let Some(id) = id else {
+                let ids = directml_devices(&runtime, configured);
+                if ids.is_empty() {
                     if desired == "auto" {
                         failures.push("Requested DirectML adapter is unavailable".into());
                         continue;
                     }
                     return Err("Requested DirectML adapter is unavailable".into());
-                };
-                Some(id)
+                }
+                ids.into_iter().map(Some).collect()
             }
-            "cuda" => Some(configured.max(0)),
-            _ => None,
+            "cuda" => vec![Some(configured.max(0))],
+            _ => vec![None],
         };
-        match build(model, role, provider, device, &trace) {
-            Ok(session) => {
-                if desired == "auto" && provider == "cpu" && failures.is_empty() {
-                    failures.push("No available GPU execution provider; using CPU".into());
+        let explicit_device = provider != "directml" || configured >= 0;
+        for device in devices {
+            match build(model, role, provider, device, &trace) {
+                Ok(session) => {
+                    if desired == "auto" && provider == "cpu" && failures.is_empty() {
+                        failures.push("No available GPU execution provider; using CPU".into());
+                    }
+                    let key = model.session_key();
+                    let report = SessionReport {
+                        role: role.into(),
+                        requested: desired.clone(),
+                        selected: provider.into(),
+                        device_id: device,
+                        fallback_reason: (!failures.is_empty()).then(|| failures.join("; ")),
+                        operators: BTreeMap::new(),
+                    };
+                    if let Ok(mut reports) = REPORTS.lock() {
+                        reports.insert((key.clone(), role.into()), report);
+                    }
+                    return Ok(SessionHandle {
+                        session,
+                        key,
+                        role: role.into(),
+                        trace_prefix: trace,
+                    });
                 }
-                let key = model.session_key();
-                let report = SessionReport {
-                    role: role.into(),
-                    requested: desired.clone(),
-                    selected: provider.into(),
-                    device_id: device,
-                    fallback_reason: (!failures.is_empty()).then(|| failures.join("; ")),
-                    operators: BTreeMap::new(),
-                };
-                if let Ok(mut reports) = REPORTS.lock() {
-                    reports.insert((key.clone(), role.into()), report);
+                Err(error) => {
+                    let message = match device {
+                        Some(id) => {
+                            let name = runtime
+                                .adapters
+                                .iter()
+                                .find(|adapter| adapter.id == id)
+                                .map(|adapter| adapter.name.as_str())
+                                .unwrap_or("unknown adapter");
+                            format!("{provider} device {id} ({name}): {error}")
+                        }
+                        None => error,
+                    };
+                    if desired != "auto" && explicit_device {
+                        return Err(message);
+                    }
+                    failures.push(message);
                 }
-                return Ok(SessionHandle {
-                    session,
-                    key,
-                    role: role.into(),
-                    trace_prefix: trace,
-                });
-            }
-            Err(error) => {
-                if desired != "auto" {
-                    return Err(error);
-                }
-                failures.push(error);
             }
         }
     }
@@ -603,17 +664,17 @@ mod tests {
     #[test]
     fn physical_grouping_keeps_explicit_provider_adapter_ids_valid() {
         let runtime = logical_alias_fixture();
-        assert_eq!(directml_device(&runtime, -1), Some(0));
-        assert_eq!(directml_device(&runtime, 1), Some(1));
-        assert_eq!(directml_device(&runtime, 7), None);
+        assert_eq!(directml_devices(&runtime, -1), vec![0, 1]);
+        assert_eq!(directml_devices(&runtime, 1), vec![1]);
+        assert!(directml_devices(&runtime, 7).is_empty());
     }
     #[test]
     fn failed_physical_detection_does_not_disable_usable_logical_adapters() {
         let mut runtime = logical_alias_fixture();
         runtime.devices.clear();
         runtime.physical_detection_complete = false;
-        assert_eq!(directml_device(&runtime, -1), Some(0));
-        assert_eq!(directml_device(&runtime, 1), Some(1));
+        assert_eq!(directml_devices(&runtime, -1), vec![0, 1]);
+        assert_eq!(directml_devices(&runtime, 1), vec![1]);
     }
     #[test]
     fn automatic_selection_uses_representative_ids_not_physical_display_ordinals() {
@@ -625,17 +686,33 @@ mod tests {
             physical_id: "physical-b".into(),
             adapter_ids: vec![5],
         });
-        assert_eq!(directml_device(&runtime, -1), Some(5));
+        assert_eq!(directml_devices(&runtime, -1), vec![5, 0, 1]);
+    }
+    #[test]
+    fn virtual_display_adapters_are_tried_after_hardware() {
+        let mut runtime = logical_alias_fixture();
+        runtime.devices.push(GpuDevice {
+            id: 3,
+            name: "ToDesk Virtual Display Adapter".into(),
+            memory_bytes: Some(16384),
+            physical_id: "physical-virtual".into(),
+            adapter_ids: vec![3],
+        });
+        runtime.adapters.push(GpuAdapter {
+            id: 3,
+            name: "ToDesk Virtual Display Adapter".into(),
+            memory_bytes: 16384,
+            physical_ids: vec!["physical-virtual".into()],
+        });
+        assert_eq!(directml_devices(&runtime, -1), vec![0, 1, 3]);
     }
     #[test]
     fn runtime_discovery_is_explicit() {
         let runtime = info();
-        assert!(
-            runtime
-                .providers
-                .iter()
-                .any(|p| p.id == "cpu" && p.available)
-        );
+        assert!(runtime
+            .providers
+            .iter()
+            .any(|p| p.id == "cpu" && p.available));
         println!("runtime: {:?}", runtime);
     }
 }

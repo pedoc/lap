@@ -9,6 +9,7 @@ pub mod objects_smart;
 pub mod objects_jobs;
 pub mod objects_journal;
 pub mod objects_automation;
+pub mod onnx_patch;
 pub mod vision_jobs;
 pub mod commands;
 pub mod face_annotations;
