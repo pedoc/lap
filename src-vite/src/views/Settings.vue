@@ -1092,16 +1092,15 @@ onMounted(async () => {
   // Show window after mount
   await appWindow.show();
 
-  // Hide instead of destroying. Tauri removes webviews from its IPC registry by
-  // label; a late close event from a destroyed window can otherwise unregister a
-  // freshly recreated window with the same label ("failed to acquire webview
-  // reference"). Keeping this webview alive also makes reopening instant.
+  // Destroy on close so the settings WebView and its JS heap are released.
+  // Home.vue waits for this label to disappear before creating a replacement,
+  // which avoids the late-close IPC registry race.
   unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
     event.preventDefault();
     try {
-      await appWindow.hide();
-    } catch (hideError) {
-      console.error('Failed to hide settings window:', hideError);
+      await appWindow.destroy();
+    } catch (destroyError) {
+      console.error('Failed to destroy settings window:', destroyError);
     }
   });
 });

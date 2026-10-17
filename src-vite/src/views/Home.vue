@@ -755,15 +755,13 @@ async function clickSettings(tabIndex?: number, aiTask?: string) {
       console.error('Failed to show existing settings window, recreating:', error);
       try {
         await settingsWindow.destroy();
-        // Tauri's window-close and webview-close hooks fire separately. Give the
-        // late hook time to release this label before a replacement is created,
-        // otherwise it can unregister the new settings webview.
-        await new Promise(resolve => setTimeout(resolve, 250));
       } catch (destroyError) {
         console.error('Failed to destroy stale settings window:', destroyError);
       }
     }
   }
+
+  if (!await waitForSettingsLabelRelease()) return;
 
   const options: any = {
     url: aiTask ? `/settings?aiTask=${encodeURIComponent(aiTask)}` : '/settings',
@@ -790,6 +788,21 @@ async function clickSettings(tabIndex?: number, aiTask?: string) {
   newSettingsWindow.once('tauri://created', () => {
     console.log('settings window created');
   });
+}
+
+// Tauri removes a destroyed webview from its label registry asynchronously.
+// Creating the next window too early lets the old close hook unregister the new
+// webview, after which every invoke fails with "failed to acquire webview
+// reference". Poll until the label is free before constructing a replacement.
+async function waitForSettingsLabelRelease(timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const existing = await WebviewWindow.getByLabel('settings').catch(() => null);
+    if (!existing) return true;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  console.error('Timed out waiting for the settings window label to be released');
+  return false;
 }
 
 function getSettingsWindowScale() {
