@@ -37,6 +37,12 @@ pub(crate) fn source_optional_on(c: &Connection, id: i64) -> Result<Option<Sourc
     c.query_row(&format!("SELECT b.path || '/' || a.name,a.modified_at,a.size,a.width,a.height,COALESCE(a.e_orientation,1) {} AND a.id=?1",base()),[id],|r|Ok(Source{path:r.get(0)?,modified:r.get(1)?,size:r.get(2)?,width:r.get(3)?,height:r.get(4)?,orientation:r.get(5)?})).optional().map_err(|e|e.to_string())
 }
 impl Source {
+    pub(crate) fn stamp_key(&self) -> Result<String, String> {
+        let bytes = serde_json::to_vec(&(&self.path, self.modified, self.size, self.orientation))
+            .map_err(|e| e.to_string())?;
+        Ok(blake3::hash(&bytes).to_hex().to_string())
+    }
+
     pub(crate) fn verify(&self) -> Result<(), String> {
         let info = crate::t_utils::FileInfo::new(&self.path)?;
         if info.modified != self.modified || info.file_size != self.size {

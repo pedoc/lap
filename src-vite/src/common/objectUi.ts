@@ -93,7 +93,26 @@ export function objectGeometryCompatible(
 export function validateObjectScope(options: {
   fileIds?: number[];
   folderId?: number;
+  force?: boolean;
+  retryFailed?: boolean;
+  resumeJobId?: string;
+  resumeFailed?: boolean;
 }) {
+  if (options.resumeJobId !== undefined) {
+    if (
+      typeof options.resumeJobId !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        options.resumeJobId,
+      ) ||
+      options.fileIds !== undefined ||
+      options.folderId !== undefined ||
+      options.force ||
+      options.retryFailed
+    )
+      throw new Error('Invalid saved task scope; no recognition started');
+  } else if (options.resumeFailed)
+    throw new Error('Choose a saved task before retrying its failed photos');
+
   if (
     options.fileIds !== undefined &&
     (options.folderId !== undefined ||
@@ -108,4 +127,54 @@ export function validateObjectScope(options: {
     (!Number.isSafeInteger(options.folderId) || options.folderId <= 0)
   )
     throw new Error('Invalid folder; no recognition started');
+}
+
+export function objectTaskPhase(status: any) {
+  if (status?.running && status?.stopping) return 'stopping';
+  const phases = [
+    'preparing',
+    'waiting',
+    'indexing',
+    'finished',
+    'failed',
+    'stopped',
+    'interrupted',
+  ];
+  return phases.includes(status?.phase)
+    ? status.phase
+    : status?.running
+      ? 'preparing'
+      : status?.error
+        ? 'failed'
+        : 'finished';
+}
+export function objectExecution(sessions: any[]) {
+  const rows = Array.isArray(sessions) ? sessions : [];
+  const providers = [
+    ...new Set(
+      rows
+        .map((row) => row?.selected)
+        .filter((id: any) => typeof id === 'string' && id),
+    ),
+  ];
+  const reasons = [
+    ...new Set(
+      rows
+        .map((row) => row?.fallbackReason)
+        .filter((reason: any) => typeof reason === 'string' && reason),
+    ),
+  ];
+  return {
+    providers,
+    reasons,
+    kind: !providers.length
+      ? 'unknown'
+      : providers.every((id) => id === 'cpu')
+        ? reasons.length
+          ? 'cpu_fallback'
+          : 'cpu'
+        : providers.includes('coreml')
+          ? 'system'
+          : 'accelerated',
+  };
 }

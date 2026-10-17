@@ -119,9 +119,7 @@
             {{
               t(
                 'objects.phase_' +
-                  (view.status.running
-                    ? view.status.phase || 'preparing'
-                    : 'finished'),
+                  objectTaskPhase(view.status),
               )
             }}
             · {{ t('objects.progress', view.status) }}
@@ -170,9 +168,10 @@
             :disabled="busy || view.status.stopping"
             @click="cancel"
           >
-            {{ t('objects.stop') }}
+            {{ t(view.status.stopping ? 'objects.stopping_short' : 'objects.stop') }}
           </button>
         </div>
+        <div class="text-xs space-y-1" aria-live="polite"><p class="font-medium" :class="execution.kind==='cpu_fallback'?'text-warning':''">{{ t('objects.execution_' + execution.kind) }}<span v-if="execution.providers.length"> · {{ execution.providers.join(' / ') }}</span></p><p v-for="reason in execution.reasons" :key="reason" class="text-warning whitespace-pre-wrap break-words">{{ reason }}</p></div>
         <details v-if="view?.sessions?.length" class="text-xs">
           <summary class="cursor-pointer opacity-70">
             {{ t('objects.device') }}
@@ -183,6 +182,7 @@
           >
         </details>
       </section>
+      <ObjectTaskHistory :entries="view?.history" :error="view?.historyError" :busy="busy" :running="view?.status.running" @resume="resume" />
     </div>
   </div>
 </template>
@@ -191,10 +191,12 @@ import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { config, libConfig } from '@/common/config';
-import { OBJECT_STATES, objectClassName } from '@/common/objectUi';
+import ObjectTaskHistory from './ObjectTaskHistory.vue';
+import { OBJECT_STATES, objectClassName, objectTaskPhase, objectExecution } from '@/common/objectUi';
 import { useObjects, openObjectSettings } from '@/common/objects';
 const { t } = useI18n();
 const { view, error, busy, start, stop } = useObjects();
+const execution = computed(() => objectExecution(view.value?.sessions));
 const query = ref(''),
   allClasses = ref(false);
 const name = (label: any) => objectClassName(label, t);
@@ -250,6 +252,7 @@ async function run(force = false, retryFailed = false) {
     /* Visible inline. */
   }
 }
+async function resume(jobId:string,failed:boolean){try{await start({resumeJobId:jobId,resumeFailed:failed});}catch{/* Shared error is visible. */}}
 async function cancel() {
   try {
     await stop();

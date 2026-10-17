@@ -12,9 +12,7 @@
         {{ t('objects.title') }} ·
         {{
           t(
-            view.status.running
-              ? 'objects.phase_' + (view.status.phase || 'preparing')
-              : 'objects.phase_finished',
+            'objects.phase_' + objectTaskPhase(view.status),
           )
         }}</button
       ><button
@@ -55,7 +53,7 @@
       :disabled="busy || view.status.stopping"
       @click="cancel"
     >
-      {{ t('objects.stop') }}
+      {{ t(view.status.stopping ? 'objects.stopping_short' : 'objects.stop') }}
     </button>
   </aside>
 </template>
@@ -64,6 +62,7 @@ import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { SIDEBAR } from '@/common/constants';
+import { objectTaskPhase } from '@/common/objectUi';
 import { useObjects } from '@/common/objects';
 const { t } = useI18n(),
   { view, error, busy, stop } = useObjects(),
@@ -72,6 +71,7 @@ const visible = computed(
   () =>
     config.main.sidebarIndex !== SIDEBAR.OBJECTS &&
     view.value?.status.jobId &&
+    (!view.value.status.historical || view.value.status.phase === 'interrupted') &&
     view.value.status.jobId !== dismissed.value,
 );
 function open() {

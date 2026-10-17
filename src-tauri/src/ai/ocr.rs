@@ -313,8 +313,8 @@ pub async fn start_ocr_index(
         if slot.as_ref().is_some_and(|j|j.status.lock().is_ok_and(|s|s.running)){return Err("An OCR job is already running".into());}
         let initial=Status {automatic,automation_revision,scope:scope.into(),scope_name:folder.as_ref().map(|(_,path)|path.clone()),library_id:library_id.clone(),job_id:uuid::Uuid::new_v4().to_string(),running:true,..Default::default()};
         let job=Arc::new(Job {automatic,batch_size,automation_revision:initial.automation_revision.clone(),cancel:AtomicBool::new(false),status:Mutex::new(initial.clone())});*slot=Some(job.clone());drop(slot);
+        drop(lease);
         tauri::async_runtime::spawn_blocking(move||{
-            let _lease = lease;
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||run(&app_handle,&library_id,&model,force,retry_failed,file_ids,folder, &job)));
             if let Ok(mut status)=job.status.lock() {
                 status.running=false;status.stopping=false;
@@ -362,22 +362,17 @@ fn run(
     if targets.is_empty() {
         return Ok(());
     }
-    let mut backend = PaddleOcr::new(model)?;
+    let check = || {
+        check_library(library)?;
+        check_automatic(job,library)?;
+        if job.cancel.load(Ordering::SeqCst){return Err("OCR stopped; completed results are saved. Resume to process the remainder".into());}
+        Ok(())
+    };
+    let mut backend = {let _lane=super::vision_jobs::claim(Task::Ocr,&check)?;PaddleOcr::new(model)?};
     for id in targets {
         let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .read()
             .map_err(|e| e.to_string())?;
-        let check = || {
-            check_library(library)?;
-            check_automatic(job, library)?;
-            if job.cancel.load(Ordering::SeqCst) {
-                return Err(
-                    "OCR stopped; completed results are saved. Resume to process the remainder"
-                        .into(),
-                );
-            }
-            Ok(())
-        };
         check()?;
         let row=c.query_row(&format!("SELECT b.path || '/' || a.name,a.modified_at,a.size,a.width,a.height,COALESCE(a.e_orientation,1) {} AND a.id=?1",base()),[id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,i64>(2)?,r.get::<_,u64>(3)?,r.get::<_,u64>(4)?,r.get::<_,i32>(5)?))).optional().map_err(|e|e.to_string())?;
         let Some((path, modified, size, width, height, orientation)) = row else {
@@ -385,6 +380,7 @@ fn run(
             s.completed += 1;
             continue;
         };
+        let _lane=super::vision_jobs::claim(Task::Ocr,&check)?;
         let mut process = (|| {
             if width.saturating_mul(height) > 80_000_000 {
                 return Err("Image exceeds 80 megapixel OCR decoding limit".into());

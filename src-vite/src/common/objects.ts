@@ -150,9 +150,11 @@ export async function startObjectIndex(
     retryFailed?: boolean;
     fileIds?: number[];
     folderId?: number;
+    resumeJobId?: string;
+    resumeFailed?: boolean;
   } = {},
 ) {
-  validateObjectScope(options);
+  try { validateObjectScope(options); } catch(error) { objectError.value=String(error); throw error; }
   if (objectBusy.value)
     throw new Error('An object recognition request is being submitted');
   const libraryId = libConfig._libraryId;
@@ -165,6 +167,8 @@ export async function startObjectIndex(
       retryFailed: !!options.retryFailed,
       fileIds: options.fileIds ?? null,
       folderId: options.folderId ?? null,
+      resumeJobId: options.resumeJobId ?? null,
+      resumeFailed: !!options.resumeFailed,
     });
     if (libraryId === libConfig._libraryId) {
       sequence++;

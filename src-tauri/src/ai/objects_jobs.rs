@@ -1,17 +1,14 @@
 //! Explicit resumable object indexing. Models are global; observations are library-local.
 use super::{media, objects_store as store, types::Task, vision_jobs};
 use rusqlite::{Connection, ToSql, params_from_iter};
-use serde::Serialize;
-use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
+use serde::{Deserialize, Serialize};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use tauri::{AppHandle, Emitter, Manager};
-#[derive(Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Status {
     pub library_id: String,
     pub job_id: String,
@@ -27,6 +24,8 @@ pub struct Status {
     pub scope: String,
     pub scope_name: Option<String>,
     pub error: Option<String>,
+    pub historical: bool,
+    pub execution: serde_json::Value,
 }
 struct Job {
     cancel: AtomicBool,
@@ -111,6 +110,10 @@ fn targets(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())
 }
+fn persist(c: &Connection, job: &Job) -> Result<(), String> {
+    let status = job.status.lock().map_err(|e| e.to_string())?.clone();
+    super::objects_journal::save_status(c, &status)
+}
 #[tauri::command]
 pub async fn start_object_index(
     app_handle: AppHandle,
@@ -119,16 +122,27 @@ pub async fn start_object_index(
     retry_failed: Option<bool>,
     file_ids: Option<Vec<i64>>,
     folder_id: Option<i64>,
+    resume_job_id: Option<String>,
+    resume_failed: Option<bool>,
 ) -> Result<Status, String> {
-    let retry = retry_failed.unwrap_or(false);
-    if force && retry || folder_id.is_some() && file_ids.is_some() {
-        return Err("Choose one object indexing mode and scope".into());
-    }
-    if file_ids
-        .as_ref()
-        .is_some_and(|ids| ids.is_empty() || ids.len() > 10000 || ids.iter().any(|id| *id <= 0))
+    use super::objects_journal as journal;
+    let request = journal::Request {
+        force,
+        retry_failed: retry_failed.unwrap_or(false),
+        file_ids,
+        folder_id,
+        ..Default::default()
+    };
+    request.validate()?;
+    let resume_failed = resume_failed.unwrap_or(false);
+    if resume_failed && resume_job_id.is_none()
+        || resume_job_id.is_some()
+            && (request.force
+                || request.retry_failed
+                || request.file_ids.is_some()
+                || request.folder_id.is_some())
     {
-        return Err("Select 1–10000 indexed images for object detection".into());
+        return Err("Choose either a fresh task scope or one saved task to continue".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
@@ -164,33 +178,75 @@ pub async fn start_object_index(
         }
         let model = super::settings::active(Task::Detection)?;
         super::assets::verify(&model.definition)?;
-        let c = crate::t_sqlite::open_conn()?;
+        let mut c = crate::t_sqlite::open_conn()?;
         store::ensure_schema(&c)?;
         store::ensure_model(&c, &model)?;
-        let folder = folder_id
-            .map(|id| {
-                c.query_row(
-                    "SELECT album_id,path FROM afolders WHERE id=?1",
-                    [id],
-                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
-                )
-                .map_err(|e| e.to_string())
-            })
+        let recovery = resume_job_id
+            .as_ref()
+            .map(|id| journal::recover(&c, id, &library_id, &model.profile(), resume_failed))
             .transpose()?;
-        let scope = if file_ids.is_some() {
-            "selected"
-        } else if folder.is_some() {
-            "folder"
+        let mut request = recovery
+            .as_ref()
+            .map(|r| r.request.clone())
+            .unwrap_or(request);
+        request.model_values = model.values.clone();
+        request.model_version = model.definition.version.clone();
+        // A completed plan replays exact ledger IDs; a renamed/deleted folder cannot broaden it.
+        let replay = recovery.as_ref().and_then(|r| r.ids.clone());
+        let folder = if replay.is_none() {
+            request
+                .folder_id
+                .map(|id| {
+                    c.query_row(
+                        "SELECT album_id,path FROM afolders WHERE id=?1",
+                        [id],
+                        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+                    )
+                    .map_err(|e| e.to_string())
+                })
+                .transpose()?
         } else {
-            "library"
+            None
         };
+        if replay.is_none() {
+            if let Some(recovery)=&recovery {
+                if recovery.scope=="folder" && folder.as_ref().map(|(_,path)|path.as_str())!=recovery.scope_name.as_deref() {
+                    return Err("The saved folder identity changed; start a new explicit scope instead of resuming".into());
+                }
+                if request.file_ids.as_ref().is_some_and(|ids|ids.iter().any(|id|!request.selected_sources.contains_key(id))) {
+                    return Err("This selected task has no early source identity snapshot; start a new selection".into());
+                }
+            } else if let Some(ids)=&request.file_ids {
+                for id in ids {
+                    let key=media::source_optional_on(&c,*id)?.map(|source|source.stamp_key()).unwrap_or_else(||Ok(blake3::hash(format!("unavailable-selection:{library_id}:{id}").as_bytes()).to_hex().to_string()))?;
+                    request.selected_sources.insert(*id,key);
+                }
+            }
+        }
+        let scope = recovery
+            .as_ref()
+            .map(|r| r.scope.clone())
+            .unwrap_or_else(|| {
+                if request.file_ids.is_some() {
+                    "selected"
+                } else if folder.is_some() {
+                    "folder"
+                } else {
+                    "library"
+                }
+                .into()
+            });
+        let scope_name = recovery
+            .as_ref()
+            .and_then(|r| r.scope_name.clone())
+            .or_else(|| folder.as_ref().map(|(_, p)| p.clone()));
         let initial = Status {
             library_id: library_id.clone(),
             job_id: uuid::Uuid::new_v4().to_string(),
             running: true,
             phase: "preparing".into(),
-            scope: scope.into(),
-            scope_name: folder.as_ref().map(|(_, path)| path.clone()),
+            scope,
+            scope_name,
             ..Default::default()
         };
         let mut slot = JOB.lock().map_err(|e| e.to_string())?;
@@ -200,6 +256,15 @@ pub async fn start_object_index(
         {
             return Err("An object recognition job is already running".into());
         }
+        journal::begin(
+            &mut c,
+            &initial,
+            &request,
+            &model.profile(),
+            &model.definition.id,
+            &model.definition.name,
+            recovery.as_ref(),
+        )?;
         let job = Arc::new(Job {
             cancel: AtomicBool::new(false),
             status: Mutex::new(initial.clone()),
@@ -207,18 +272,13 @@ pub async fn start_object_index(
         *slot = Some(job.clone());
         drop(slot);
         super::ocr::yield_automatic();
+        let _ = app_handle.emit(
+            "object-index-updated",
+            serde_json::json!({"libraryId":library_id,"started":true}),
+        );
+        let job_id = initial.job_id.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _lane = loop {
-                    check(&job, &library_id)?;
-                    match vision_jobs::try_claim(Task::Detection) {
-                        Ok(lease) => break lease,
-                        Err(_) => {
-                            job.status.lock().map_err(|e| e.to_string())?.phase = "waiting".into();
-                            std::thread::sleep(Duration::from_millis(50));
-                        }
-                    }
-                };
                 let mut c = {
                     let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
                         .read()
@@ -227,16 +287,54 @@ pub async fn start_object_index(
                     crate::t_sqlite::open_conn()?
                 };
                 let profile = model.profile();
-                let ids = targets(&c, &profile, force, retry, file_ids.as_deref(), folder)?;
+                let replayed = replay.is_some();
+                let ids = match replay {
+                    Some(ids) => ids,
+                    None => targets(
+                        &c,
+                        &profile,
+                        request.force,
+                        request.retry_failed,
+                        request.file_ids.as_deref(),
+                        folder,
+                    )?,
+                };
+                if !replayed {
+                    journal::plan_sources(
+                        &mut c,
+                        &job_id,
+                        &ids,
+                        || check(&job, &library_id),
+                        |c, id| {
+                            if let Some(key)=request.selected_sources.get(&id){return Ok(key.clone());}
+                            media::source_optional_on(c, id)?
+                                .map(|source| source.stamp_key())
+                                .unwrap_or_else(|| {
+                                    Ok(blake3::hash(
+                                        format!("unavailable:{job_id}:{id}").as_bytes(),
+                                    )
+                                    .to_hex()
+                                    .to_string())
+                                })
+                        },
+                    )?;
+                }
                 {
                     let mut status = job.status.lock().map_err(|e| e.to_string())?;
                     status.total = ids.len();
-                    status.phase = "indexing".into();
+                    status.phase = "waiting".into();
                 }
+                persist(&c, &job)?;
                 if ids.is_empty() {
                     return Ok::<(), String>(());
                 }
-                let mut backend = super::adapters::create_object_backend(&model)?;
+                // Loading sessions also consumes the shared inference lane, but not for the entire library.
+                let mut backend = {
+                    let _lane = vision_jobs::claim(Task::Detection, || check(&job, &library_id))?;
+                    super::adapters::create_object_backend(&model)?
+                };
+                job.status.lock().map_err(|e| e.to_string())?.execution =
+                    serde_json::json!(super::runtime::reports(&model));
                 for id in ids {
                     check(&job, &library_id)?;
                     let source = {
@@ -246,12 +344,28 @@ pub async fn start_object_index(
                         check(&job, &library_id)?;
                         media::source_optional_on(&c, id)?
                     };
+                    let source = match source {
+                        Some(source)
+                            if source.stamp_key()?
+                                == journal::expected_source(&c, &job_id, id)? =>
+                        {
+                            Some(source)
+                        }
+                        _ => None,
+                    };
                     let Some(source) = source else {
-                        let mut status = job.status.lock().map_err(|e| e.to_string())?;
-                        status.completed += 1;
-                        status.skipped += 1;
+                        journal::mark(&c, &job_id, id, "skipped")?;
+                        {
+                            let mut status = job.status.lock().map_err(|e| e.to_string())?;
+                            status.completed += 1;
+                            status.skipped += 1;
+                        }
+                        persist(&c, &job)?;
                         continue;
                     };
+                    job.status.lock().map_err(|e| e.to_string())?.phase = "waiting".into();
+                    let _lane = vision_jobs::claim(Task::Detection, || check(&job, &library_id))?;
+                    job.status.lock().map_err(|e| e.to_string())?.phase = "indexing".into();
                     let mut result = source.load().and_then(|image| {
                         backend.detect_objects(&image, &|| check(&job, &library_id))
                     });
@@ -267,10 +381,19 @@ pub async fn start_object_index(
                         if let Err(error) = &mut result {
                             *error = error.replace(&source.path, "[photo]");
                         }
-                        store::store(&mut c, id, &profile, source.modified, source.size, &result)?
+                        store::store_for_job(
+                            &mut c,
+                            id,
+                            &profile,
+                            source.modified,
+                            source.size,
+                            &result,
+                            &job_id,
+                        )?
                     };
                     {
                         let mut status = job.status.lock().map_err(|e| e.to_string())?;
+                        status.execution = serde_json::json!(super::runtime::reports(&model));
                         status.completed += 1;
                         if !written {
                             status.skipped += 1;
@@ -280,6 +403,8 @@ pub async fn start_object_index(
                             status.failed += 1;
                         }
                     }
+                    persist(&c, &job)?;
+                    drop(_lane);
                     let _ = app_handle.emit(
                         "object-index-updated",
                         serde_json::json!({"libraryId":library_id,"fileId":id}),
@@ -297,13 +422,29 @@ pub async fn start_object_index(
                 } else {
                     match result {
                         Ok(Ok(())) => None,
-                        Ok(Err(error)) => Some(error),
+                        Ok(Err(e)) => Some(e),
                         Err(_) => Some(
                             "Object worker stopped unexpectedly; completed results are saved"
                                 .into(),
                         ),
                     }
                 };
+                status.phase = if status.cancelled {
+                    "stopped"
+                } else if status.error.is_some() {
+                    "failed"
+                } else {
+                    "finished"
+                }
+                .into();
+            }
+            // Only touch the current library. An old task's last item ledger remains recoverable after switching back.
+            if let Ok(_guard) = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read() {
+                if media::check_library(&library_id).is_ok() {
+                    if let Ok(c) = crate::t_sqlite::open_conn() {
+                        let _ = persist(&c, &job);
+                    }
+                }
             }
             let _ = app_handle.emit(
                 "object-index-updated",

@@ -79,6 +79,7 @@ impl FaceEngine {
         self.load_model(model)
     }
     pub fn load_model(&mut self, model: crate::ai::types::ResolvedModel) -> Result<(), String> {
+        let _lane=crate::ai::vision_jobs::claim(crate::ai::types::Task::Face,||Ok(()))?;
         let backend = crate::ai::adapters::face_backend(&model)?;
         self.backend = Some(backend);
         self.model = Some(model);
@@ -99,6 +100,7 @@ impl FaceEngine {
                 .is_some_and(|(loaded, active)| loaded.session_key() == active.session_key())
     }
     fn process(&mut self, image: &DynamicImage) -> Result<(Vec<FaceData>, (u32, u32)), String> {
+        let _lane=crate::ai::vision_jobs::claim(crate::ai::types::Task::Face,||Ok(()))?;
         let result = self
             .backend
             .as_mut()
@@ -211,8 +213,9 @@ pub fn run_face_indexing(
         progress.scope = scope.key().into();
     }
 
+    // Initialization and each inference claim the lane on the worker, not for the entire library.
+    drop(lane);
     tauri::async_runtime::spawn_blocking(move || {
-        let _lane=lane;
         struct RunningGuard(Arc<Mutex<bool>>);
         impl Drop for RunningGuard { fn drop(&mut self) { if let Ok(mut running)=self.0.lock(){*running=false;} } }
         let _running = RunningGuard(status_token.clone());
@@ -460,6 +463,7 @@ pub fn run_face_indexing(
 
 impl crate::ai::capabilities::FaceDetector for FaceEngine {
     fn detect(&mut self,image:&DynamicImage)->Result<Vec<FaceBox>,String>{
+        let _lane=crate::ai::vision_jobs::claim(crate::ai::types::Task::Face,||Ok(()))?;
         let result=self.backend.as_mut().ok_or("No face model loaded")?.detect(image);
         if let Err(ref error)=result {
             let model=self.model.clone().ok_or("No face model loaded")?;
@@ -473,6 +477,7 @@ impl crate::ai::capabilities::FaceDetector for FaceEngine {
 }
 impl crate::ai::capabilities::FaceEmbedder for FaceEngine {
     fn embed_face(&mut self,image:&DynamicImage,face:&FaceBox)->Result<Vec<f32>,String>{
+        let _lane=crate::ai::vision_jobs::claim(crate::ai::types::Task::Face,||Ok(()))?;
         let result=self.backend.as_mut().ok_or("No face model loaded")?.embed_face(image,face);
         if let Err(ref error)=result {
             let model=self.model.clone().ok_or("No face model loaded")?;

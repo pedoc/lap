@@ -16,7 +16,8 @@ pub fn ensure_schema(c: &Connection) -> Result<(), String> {
  CREATE TABLE IF NOT EXISTS object_annotations(file_id INTEGER PRIMARY KEY REFERENCES afiles(id) ON DELETE CASCADE,modified_at INTEGER,size INTEGER NOT NULL,source_profile TEXT NOT NULL,model_name TEXT NOT NULL,source TEXT NOT NULL,edits TEXT NOT NULL,document TEXT NOT NULL,object_count INTEGER NOT NULL,complete INTEGER NOT NULL,revision TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS object_counts(file_id INTEGER NOT NULL,owner TEXT NOT NULL,class_key TEXT NOT NULL,source_id TEXT NOT NULL,name TEXT NOT NULL,n INTEGER NOT NULL,PRIMARY KEY(file_id,owner,class_key));
  CREATE INDEX IF NOT EXISTS object_counts_class ON object_counts(owner,class_key,file_id);
- CREATE TRIGGER IF NOT EXISTS objects_delete AFTER DELETE ON afiles BEGIN DELETE FROM object_index WHERE file_id=OLD.id;DELETE FROM object_annotations WHERE file_id=OLD.id;DELETE FROM object_counts WHERE file_id=OLD.id;END;").map_err(|e|e.to_string())
+ CREATE TRIGGER IF NOT EXISTS objects_delete AFTER DELETE ON afiles BEGIN DELETE FROM object_index WHERE file_id=OLD.id;DELETE FROM object_annotations WHERE file_id=OLD.id;DELETE FROM object_counts WHERE file_id=OLD.id;END;").map_err(|e|e.to_string())?;
+    super::objects_journal::ensure_schema(c)
 }
 pub fn ensure_model(c: &Connection, model: &ResolvedModel) -> Result<(), String> {
     let profile = model.profile();
@@ -176,6 +177,7 @@ fn write_counts(
     }
     Ok(())
 }
+#[cfg(test)]
 pub fn store(
     c: &mut Connection,
     id: i64,
@@ -184,8 +186,39 @@ pub fn store(
     size: i64,
     result: &Result<ObjectDocument, String>,
 ) -> Result<bool, String> {
+    store_inner(c, id, profile, modified, size, result, None)
+}
+pub fn store_for_job(
+    c: &mut Connection,
+    id: i64,
+    profile: &str,
+    modified: Option<i64>,
+    size: i64,
+    result: &Result<ObjectDocument, String>,
+    job: &str,
+) -> Result<bool, String> {
+    store_inner(c, id, profile, modified, size, result, Some(job))
+}
+fn store_inner(
+    c: &mut Connection,
+    id: i64,
+    profile: &str,
+    modified: Option<i64>,
+    size: i64,
+    result: &Result<ObjectDocument, String>,
+    job: Option<&str>,
+) -> Result<bool, String> {
     let tx = c.transaction().map_err(|e| e.to_string())?;
-    if stamp(&tx, id)? != Some((modified, size)) {
+    if stamp(&tx, id)? != Some((modified, size))
+        || job
+            .map(|job| super::objects_journal::source_matches(&tx, job, id))
+            .transpose()?
+            .is_some_and(|matches| !matches)
+    {
+        if let Some(job) = job {
+            super::objects_journal::mark(&tx, job, id, "skipped")?;
+            tx.commit().map_err(|e| e.to_string())?;
+        }
         return Ok(false);
     }
     let (document, error, n, complete) = match result {
@@ -209,6 +242,18 @@ pub fn store(
         profile,
         result.as_ref().unwrap_or(&ObjectDocument::default()),
     )?;
+    if let Some(job) = job {
+        super::objects_journal::mark(
+            &tx,
+            job,
+            id,
+            if result.is_ok() {
+                "succeeded"
+            } else {
+                "failed"
+            },
+        )?;
+    }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(true)
 }
@@ -409,6 +454,8 @@ pub struct View {
     pub model_name: String,
     pub profile: String,
     pub status: super::objects_jobs::Status,
+    pub history: Vec<super::objects_journal::Entry>,
+    pub history_error: Option<String>,
     pub sessions: Vec<super::runtime::SessionReport>,
 }
 pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<View, String> {
@@ -481,6 +528,17 @@ pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<V
         item.photos = photos;
         item.instances = instances;
     }
+    let mut status = super::objects_jobs::status(library);
+    let (history, history_error) = match super::objects_journal::list(c, library, &profile, &status)
+    {
+        Ok(entries) => (entries, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    if status.job_id.is_empty() {
+        if let Some(entry) = history.first() {
+            status = entry.status.clone();
+        }
+    }
     Ok(View {
         eligible,
         indexed,
@@ -493,7 +551,9 @@ pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<V
         model_installed: super::assets::installed(&model.definition),
         model_name: model.definition.name.clone(),
         profile,
-        status: super::objects_jobs::status(library),
+        status,
+        history,
+        history_error,
         sessions: super::runtime::reports(model),
     })
 }
@@ -683,6 +743,93 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
+    }
+    #[test]
+    fn task_items_and_object_results_commit_together_or_not_at_all() {
+        use crate::ai::{objects_jobs::Status, objects_journal as journal};
+        let mut c = db();
+        c.execute_batch("ALTER TABLE afiles ADD COLUMN name TEXT DEFAULT 'photo.jpg';ALTER TABLE afiles ADD COLUMN e_orientation INTEGER DEFAULT 1;").unwrap();
+        let m = model();
+        ensure_model(&c, &m).unwrap();
+        let p = m.profile();
+        let job = Status {
+            library_id: "A".into(),
+            job_id: uuid::Uuid::new_v4().to_string(),
+            running: true,
+            ..Default::default()
+        };
+        journal::begin(
+            &mut c,
+            &job,
+            &journal::Request::default(),
+            &p,
+            "m",
+            "Model",
+            None,
+        )
+        .unwrap();
+        journal::plan_sources(
+            &mut c,
+            &job.job_id,
+            &[1, 3],
+            || Ok(()),
+            |c, id| super::super::media::source_on(c, id)?.stamp_key(),
+        )
+        .unwrap();
+        store_for_job(
+            &mut c,
+            1,
+            &p,
+            Some(10),
+            20,
+            &Ok(doc(&m, 2, false)),
+            &job.job_id,
+        )
+        .unwrap();
+        assert_eq!(
+            journal::list(&c, "A", &p, &Status::default()).unwrap()[0]
+                .status
+                .succeeded,
+            1
+        );
+        assert!(
+            store_for_job(
+                &mut c,
+                2,
+                &p,
+                Some(10),
+                20,
+                &Ok(doc(&m, 1, false)),
+                &job.job_id
+            )
+            .is_err()
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM object_index WHERE file_id=2",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert!(
+            !store_for_job(
+                &mut c,
+                3,
+                &p,
+                Some(999),
+                20,
+                &Ok(doc(&m, 1, false)),
+                &job.job_id
+            )
+            .unwrap()
+        );
+        let entry = journal::list(&c, "A", &p, &Status::default())
+            .unwrap()
+            .remove(0);
+        assert_eq!(entry.status.skipped, 1);
+        assert_eq!(entry.remaining, 0);
     }
     #[test]
     fn known_empty_failure_pending_and_unsupported_absence_are_distinct() {

@@ -21,7 +21,7 @@ impl AiEngine {
             runtime_generation: crate::ai::runtime::generation(),
         }
     }
-    pub fn ensure_active(&mut self) -> Result<ResolvedModel, String> {
+    fn ensure_active_inner(&mut self) -> Result<ResolvedModel, String> {
         let resolved = ai::settings::active(Task::Semantic)?;
         if resolved.definition.adapter == ai::types::Adapter::JinaEmbeddings
             && !ai::settings::contract_tested(&resolved)
@@ -47,7 +47,8 @@ impl AiEngine {
         self.backend.is_some()
     }
     pub fn encode_text(&mut self, text: &str) -> Result<Vec<f32>, String> {
-        self.ensure_active()?;
+        let _lane = ai::vision_jobs::claim(Task::Semantic, || Ok(()))?;
+        self.ensure_active_inner()?;
         let result = self
             .backend
             .as_mut()
@@ -58,7 +59,7 @@ impl AiEngine {
             if ai::runtime::is_auto(&model, "text") && ai::runtime::used_acceleration(&model) {
                 ai::runtime::force_cpu(&model, error);
                 self.backend = None;
-                self.ensure_active()?;
+                self.ensure_active_inner()?;
                 return self
                     .backend
                     .as_mut()
@@ -73,7 +74,8 @@ impl AiEngine {
         self.encode_image_from_bytes(&bytes)
     }
     pub fn encode_image_from_bytes(&mut self, bytes: &[u8]) -> Result<Vec<f32>, String> {
-        self.ensure_active()?;
+        let _lane = ai::vision_jobs::claim(Task::Semantic, || Ok(()))?;
+        self.ensure_active_inner()?;
         let result = self
             .backend
             .as_mut()
@@ -84,7 +86,7 @@ impl AiEngine {
             if ai::runtime::is_auto(&model, "vision") && ai::runtime::used_acceleration(&model) {
                 ai::runtime::force_cpu(&model, error);
                 self.backend = None;
-                self.ensure_active()?;
+                self.ensure_active_inner()?;
                 return self
                     .backend
                     .as_mut()

@@ -20,6 +20,7 @@ import {
   smartTemplateRules,
 } from '../src/common/smartAlbums.ts';
 import { SIDEBAR } from '../src/common/constants.ts';
+import * as objectHelpers from '../src/common/objectUi.ts';
 const read = (name: string) =>
   readFileSync(
     new URL(`../src/components/${name}.vue`, import.meta.url),
@@ -59,6 +60,8 @@ const tick = async () => {
 function context() {
   const ctx: any = {
     ...Vue,
+    ...objectHelpers,
+    ObjectTaskHistory: () => Vue.h('aside'),
     t,
     useI18n: () => ({ t }),
     config: Vue.reactive({
@@ -479,4 +482,40 @@ test('photo result requests discard stale sources and hide annotations immediate
   await tick();
   assert.equal(api.result.value, null);
   assert.equal(Object.keys(listeners).length, 0);
+});
+
+test('saved task recovery validates its exact identifier and cannot silently start a whole-library task',()=>{
+ const id='01234567-89ab-4cde-8fab-0123456789ab';
+ validateObjectScope({resumeJobId:id});validateObjectScope({resumeJobId:id,resumeFailed:true});
+ for(const options of [{resumeJobId:''},{resumeJobId:'bad'},{resumeFailed:true},{resumeJobId:id,folderId:1},{resumeJobId:id,fileIds:[7]},{resumeJobId:id,force:true}])assert.throws(()=>validateObjectScope(options));
+ assert.equal(objectHelpers.objectTaskPhase({running:true,stopping:true,phase:'indexing'}),'stopping');
+ assert.equal(objectHelpers.objectTaskPhase({running:false,phase:'interrupted'}),'interrupted');
+});
+test('actual executor presentation distinguishes explicit CPU, fallback and system acceleration',()=>{
+ assert.equal(objectHelpers.objectExecution([]).kind,'unknown');
+ assert.equal(objectHelpers.objectExecution([{selected:'cpu',fallbackReason:null}]).kind,'cpu');
+ assert.equal(objectHelpers.objectExecution([{selected:'cpu',fallbackReason:'DirectML initialization failed'}]).kind,'cpu_fallback');
+ assert.equal(objectHelpers.objectExecution([{selected:'directml'}]).kind,'accelerated');
+ assert.equal(objectHelpers.objectExecution([{selected:'coreml'}]).kind,'system');
+});
+test('task history renders recovery scope, incompatible models and interrupted preparation without fake completion',async()=>{
+ const ctx=context();const entry={status:{jobId:'task-1',phase:'interrupted',scope:'selected',completed:2,total:3,failed:1},modelName:'Original model',planned:true,remaining:1,resumable:true,retryable:true,compatible:false,modelValues:{object_confidence:.5},createdAt:1000};
+ const html=await renderToString(Vue.createSSRApp(component('ObjectTaskHistory',ctx),{entries:[entry]}));
+ assert.match(html,/Original model/);assert.match(html,/意外中断/);assert.match(html,/恢复未完成部分/);assert.match(html,/disabled/);assert.match(html,/原始参数/);
+ const empty=await renderToString(Vue.createSSRApp(component('ObjectTaskHistory',ctx),{entries:[]}));assert.match(empty,/还没有/);
+ const failed=await renderToString(Vue.createSSRApp(component('ObjectTaskHistory',ctx),{entries:[],error:'History database read failed'}));assert.match(failed,/History database read failed/);
+});
+
+test('history actions submit only a saved task ID, never a fresh library/folder scope',async()=>{
+ const ctx=context(),calls:any[]=[];
+ ctx.useObjects=()=>({view:Vue.ref(null),busy:Vue.ref(false),error:Vue.ref(''),start:async(...args:any[])=>calls.push(args)});
+ const h=script('ObjectBrowser',ctx,'resume');await h.api.resume('01234567-89ab-4cde-8fab-0123456789ab',true);
+ assert.deepEqual(JSON.parse(JSON.stringify(calls)),[[{resumeJobId:'01234567-89ab-4cde-8fab-0123456789ab',resumeFailed:true}]]);h.dispose();
+});
+test('completed historical tasks do not reopen floating banners on startup, but interrupted tasks remain visible',async()=>{
+ const ctx=context();ctx.config.main.sidebarIndex=SIDEBAR.LIBRARY;
+ const view=Vue.ref({status:{jobId:'j',running:false,historical:true,phase:'finished',scope:'library',completed:1,total:1,succeeded:1,failed:0,skipped:0}});
+ ctx.useObjects=()=>({view,error:Vue.ref(''),busy:Vue.ref(false),stop:async()=>{}});
+ let html=await renderToString(Vue.createSSRApp(component('ObjectTaskBanner',ctx)));assert.doesNotMatch(html,/<aside/);
+ view.value.status.phase='interrupted';html=await renderToString(Vue.createSSRApp(component('ObjectTaskBanner',ctx)));assert.match(html,/意外中断/);
 });
