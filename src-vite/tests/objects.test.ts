@@ -102,6 +102,42 @@ function context() {
     onBeforeUnmount: () => {},
     objectFocus: Vue.ref(null),
     showObjectBoxes: Vue.ref(false),
+    objectEdit: Vue.ref(null),
+    objectEditActive: (fileId: number) =>
+      ctx.objectEdit.value?.fileId === fileId,
+    startObjectEdit: (fileId: number, photo: any, choices: any[], rev: number) => {
+      ctx.objectEdit.value = {
+        libraryId: ctx.libConfig._libraryId,
+        fileId,
+        profile: photo.profile,
+        sourceKey: photo.sourceKey,
+        expectedRevision: photo.annotation?.revision || '',
+        readRevision: rev,
+        imageWidth: photo.document.imageWidth,
+        imageHeight: photo.document.imageHeight,
+        choices,
+        boxes: photo.document.objects.map((o: any) => ({
+          id: o.id,
+          class: { ...o.class },
+          bounds: [...o.bounds],
+          score: o.score ?? null,
+          reviewed: o.reviewed,
+        })),
+        selected: [],
+        drawing: false,
+        busy: false,
+        error: '',
+        stale: false,
+      };
+    },
+    saveObjectEdit: async () => {},
+    cancelObjectEdit: () => {
+      ctx.objectEdit.value = null;
+    },
+    markObjectEditStale: (fileId: number) => {
+      if (ctx.objectEdit.value?.fileId === fileId)
+        ctx.objectEdit.value.stale = true;
+    },
     OBJECT_STATES,
     objectClassName,
     objectBoxStyle,
@@ -222,39 +258,32 @@ test('object sidebar category and state navigation are mutually exclusive', () =
   assert.equal(ctx.libConfig.objects.minCount, 1);
   h.dispose();
 });
-test('human editor submits immutable snapshot IDs and no client coordinates or scores', async () => {
+test('human editor opens a shared session carrying the full detection geometry', async () => {
   const ctx = context(),
     calls: any[] = [];
   ctx.invoke = async (...args: any[]) => calls.push(args);
-  const h = script('PhotoObjectInfo', ctx, 'edit,draft,save,stale');
+  const h = script('PhotoObjectInfo', ctx, 'edit,editing');
   h.api.edit();
-  h.api.draft.value.edits[0].classKey = dog.key;
-  h.api.draft.value.edits[0].confirmed = true;
-  await h.api.save();
-  assert.equal(calls[0][0], 'save_object_annotations');
-  assert.equal(calls[0][1].sourceKey, 'a'.repeat(64));
-  assert.equal(calls[0][1].edits[0].objectId, 'original-1');
-  assert.equal(calls[0][1].expectedRevision, '');
-  assert.equal('bounds' in calls[0][1].edits[0], false);
-  assert.equal('score' in calls[0][1].edits[0], false);
+  assert.equal(ctx.objectEdit.value.fileId, 7);
+  assert.equal(ctx.objectEdit.value.sourceKey, 'a'.repeat(64));
+  assert.deepEqual(ctx.objectEdit.value.boxes[0].bounds, [0.1, 0.2, 0.3, 0.4]);
+  assert.equal(h.api.editing.value, true);
   h.dispose();
 });
-test('background changes preserve drafts but reject stale writes, and switching photo drops them', async () => {
+test('stale edits are rejected before saving and changing photo leaves the session', async () => {
   const ctx = context(),
     calls: any[] = [];
   ctx.props = Vue.reactive(ctx.props);
   ctx.invoke = async (...args: any[]) => calls.push(args);
-  const h = script('PhotoObjectInfo', ctx, 'edit,draft,save,stale');
+  const h = script('PhotoObjectInfo', ctx, 'edit,editing');
   h.api.edit();
   ctx.revision.value++;
   await tick();
-  assert.equal(h.api.stale.value, true);
-  assert.ok(h.api.draft.value);
-  await h.api.save();
-  assert.equal(calls.length, 0);
+  assert.equal(ctx.objectEdit.value.stale, true);
+  assert.equal(h.api.editing.value, true);
   ctx.props.file.id = 8;
   await tick();
-  assert.equal(h.api.draft.value, null);
+  assert.equal(h.api.editing.value, false);
   h.dispose();
 });
 test('photo details mark truncated and human results, including nullable class confidence', async () => {
@@ -482,6 +511,92 @@ test('photo result requests discard stale sources and hide annotations immediate
   await tick();
   assert.equal(api.result.value, null);
   assert.equal(Object.keys(listeners).length, 0);
+});
+
+test('object editor saves full normalized documents including added and resized boxes', async () => {
+  const calls: any[] = [];
+  const ctx: any = {
+    ref: Vue.ref,
+    invoke: async (name: string, args: any) => {
+      calls.push({ name, args });
+    },
+    libConfig: Vue.reactive({ _libraryId: 'A' }),
+  };
+  const code = stripTypeScriptTypes(
+    readFileSync(
+      new URL('../src/common/objectEditing.ts', import.meta.url),
+      'utf8',
+    ),
+  )
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '')
+    .replace(/^export /gm, '');
+  const scope = Vue.effectScope();
+  const api: any = scope.run(() =>
+    runInNewContext(
+      `${code};({objectEdit,startObjectEdit,saveObjectEdit,cancelObjectEdit,markObjectEditStale})`,
+      ctx,
+    ),
+  );
+  api.startObjectEdit(
+    7,
+    photo(),
+    [
+      { key: dog.key, name: 'dog', sourceId: '16' },
+      { key: 'coco2017-80@1:15', name: 'cat', sourceId: '15' },
+    ],
+    0,
+  );
+  const session = api.objectEdit.value;
+  session.boxes[0].bounds = [0.2, 0.2, 0.5, 0.5];
+  session.boxes.push({
+    id: 'manual-1',
+    class: { key: 'coco2017-80@1:15', name: 'cat', sourceId: '15' },
+    bounds: [0, 0, 0.1, 0.1],
+    score: null,
+    reviewed: true,
+  });
+  await api.saveObjectEdit();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'save_object_annotations');
+  assert.equal(calls[0].args.sourceKey, 'a'.repeat(64));
+  assert.equal(calls[0].args.document.objects.length, 2);
+  assert.deepEqual(calls[0].args.document.objects[0].bounds, [0.2, 0.2, 0.5, 0.5]);
+  assert.equal(calls[0].args.document.objects[1].class.sourceId, '15');
+  assert.equal(calls[0].args.document.truncated, false);
+  assert.equal(api.objectEdit.value, null);
+  scope.stop();
+});
+
+test('object editor never submits stale sessions', async () => {
+  const calls: any[] = [];
+  const ctx: any = {
+    ref: Vue.ref,
+    invoke: async (name: string, args: any) => {
+      calls.push({ name, args });
+    },
+    libConfig: Vue.reactive({ _libraryId: 'A' }),
+  };
+  const code = stripTypeScriptTypes(
+    readFileSync(
+      new URL('../src/common/objectEditing.ts', import.meta.url),
+      'utf8',
+    ),
+  )
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '')
+    .replace(/^export /gm, '');
+  const scope = Vue.effectScope();
+  const api: any = scope.run(() =>
+    runInNewContext(
+      `${code};({objectEdit,startObjectEdit,saveObjectEdit})`,
+      ctx,
+    ),
+  );
+  api.startObjectEdit(7, photo(), [{ key: dog.key, name: 'dog', sourceId: '16' }], 0);
+  api.objectEdit.value.stale = true;
+  await api.saveObjectEdit();
+  assert.equal(calls.length, 0);
+  assert.match(api.objectEdit.value.error, /changed/);
+  scope.stop();
 });
 
 test('saved task recovery validates its exact identifier and cannot silently start a whole-library task',()=>{

@@ -41,92 +41,49 @@
         >
           {{ t('objects.boxes') }}</button
         ><button
-          v-if="!draft && source?.objects?.length"
+          v-if="!editing"
           class="btn btn-xs"
+          :disabled="busy"
           @click="edit"
         >
           {{ t('objects.edit') }}
         </button>
       </div>
-      <template v-if="draft">
-        <p class="text-xs opacity-60">{{ t('objects.edit_hint') }}</p>
-        <p v-if="stale" role="alert" class="text-xs text-warning">
+      <div
+        v-if="editing"
+        class="rounded-box border border-primary/30 bg-primary/5 p-2 space-y-2"
+      >
+        <p class="text-xs opacity-70">{{ t('objects.edit_hint') }}</p>
+        <p
+          v-if="objectEdit?.stale"
+          role="alert"
+          class="text-xs text-warning"
+        >
           {{ t('objects.stale') }}
         </p>
-        <div class="max-h-96 overflow-y-auto space-y-3">
-          <div
-            v-for="(entry, index) in draft.edits"
-            :key="entry.objectId"
-            class="rounded-box border border-base-content/10 p-2 space-y-2"
-            :class="entry.ignored ? 'opacity-60' : ''"
-          >
-            <button
-              class="text-xs text-primary hover:underline"
-              @click="focus(draft.source.objects[index])"
-            >
-              #{{ index + 1 }} · {{ name(draft.source.objects[index].class) }}
-            </button>
-            <select
-              v-model="entry.classKey"
-              class="select select-xs w-full"
-              :disabled="busy || stale"
-            >
-              <option
-                v-for="label in choices"
-                :key="label.key"
-                :value="label.key"
-              >
-                {{ name(label) }}
-              </option>
-            </select>
-            <div class="flex flex-wrap gap-3 text-xs">
-              <label class="flex items-center gap-1"
-                ><input
-                  v-model="entry.confirmed"
-                  type="checkbox"
-                  class="checkbox checkbox-xs"
-                  :disabled="busy || stale || entry.ignored"
-                />{{ t('objects.confirm') }}</label
-              ><label class="flex items-center gap-1"
-                ><input
-                  :checked="entry.ignored"
-                  type="checkbox"
-                  class="checkbox checkbox-xs"
-                  :disabled="busy || stale"
-                  @change="
-                    entry.ignored = ($event.target as HTMLInputElement).checked;
-                    entry.confirmed = false;
-                  "
-                />{{ t('objects.ignore') }}</label
-              ><button
-                class="underline"
-                :disabled="busy || stale"
-                @click="
-                  Object.assign(entry, {
-                    classKey: draft.source.objects[index].class.key,
-                    ignored: false,
-                    confirmed: false,
-                  })
-                "
-              >
-                {{ t('objects.restore_item') }}
-              </button>
-            </div>
-          </div>
-        </div>
+        <p
+          v-if="objectEdit?.error"
+          role="alert"
+          class="text-xs text-error whitespace-pre-wrap break-words"
+        >
+          {{ objectEdit.error }}
+        </p>
+        <p class="text-xs opacity-60">
+          {{ t('objects.edit_on_image_hint') }}
+        </p>
         <div class="flex gap-2">
           <button
             class="btn btn-xs btn-primary"
-            :disabled="busy || stale"
-            @click="save"
+            :disabled="objectEdit?.busy || objectEdit?.stale"
+            @click="saveObjectEdit"
           >
             {{ t('objects.save') }}</button
-          ><button class="btn btn-xs" :disabled="busy" @click="draft = null">
+          ><button class="btn btn-xs" :disabled="objectEdit?.busy" @click="cancelObjectEdit">
             {{ t('objects.cancel') }}
           </button>
         </div>
-      </template>
-      <div v-else class="max-h-80 overflow-y-auto space-y-1">
+      </div>
+      <div v-if="!editing" class="max-h-80 overflow-y-auto space-y-1">
         <button
           v-for="(object, index) in result.document.objects"
           :key="object.id"
@@ -150,7 +107,7 @@
         </button>
       </div>
       <button
-        v-if="result.annotation && !draft"
+        v-if="result.annotation && !editing"
         class="btn btn-xs btn-ghost text-warning"
         :disabled="busy"
         @click="reset"
@@ -173,6 +130,14 @@ import { config, libConfig } from '@/common/config';
 import { useObjects, objectFocus, showObjectBoxes } from '@/common/objects';
 import { usePhotoObjects } from '@/common/photoObjects';
 import { objectClassName } from '@/common/objectUi';
+import {
+  objectEdit,
+  objectEditActive,
+  startObjectEdit,
+  saveObjectEdit,
+  cancelObjectEdit,
+  markObjectEditStale,
+} from '@/common/objectEditing';
 const props = defineProps<{ file: any }>(),
   emit = defineEmits(['focus-object']),
   { t } = useI18n();
@@ -184,22 +149,15 @@ const { result, error, loading, revision, refresh } = usePhotoObjects(() => [
 const supported = computed(() =>
     [1, 3].includes(Number(props.file?.file_type)),
   ),
-  source = computed(
-    () => result.value?.annotation?.source || result.value?.modelDocument,
-  );
-const draft = ref<any>(null),
-  busy = ref(false),
+  editing = computed(() => objectEditActive(Number(props.file?.id)));
+const busy = ref(false),
   actionError = ref('');
-const stale = computed(
-  () => draft.value && draft.value.readRevision !== revision.value,
-);
 const name = (label: any) => objectClassName(label, t);
 const choices = computed(() => [
   ...new Map(
-    [
-      ...(view.value?.classes || []).filter((c: any) => c.supported),
-      ...(draft.value?.source.objects || []).map((o: any) => o.class),
-    ].map((c: any) => [c.key, c]),
+    (view.value?.classes || [])
+      .filter((c: any) => c.supported)
+      .map((c: any) => [c.key, c]),
   ).values(),
 ]);
 watch(
@@ -210,11 +168,14 @@ watch(
     config.settings.ai?.detectionProfile,
   ],
   () => {
-    draft.value = null;
     actionError.value = '';
     busy.value = false;
   },
 );
+watch(revision, (value) => {
+  if (editing.value && objectEdit.value?.readRevision !== value)
+    markObjectEditStale(Number(props.file.id));
+});
 function focus(object: any) {
   showObjectBoxes.value = true;
   objectFocus.value = {
@@ -227,26 +188,8 @@ function focus(object: any) {
 }
 function edit() {
   const data = result.value;
-  if (!source.value) return;
-  draft.value = {
-    libraryId: libConfig._libraryId,
-    fileId: Number(props.file.id),
-    profile: data.profile,
-    sourceKey: data.sourceKey,
-    expectedRevision: data.annotation?.revision || '',
-    source: JSON.parse(JSON.stringify(source.value)),
-    readRevision: revision.value,
-    edits: source.value.objects.map(
-      (o: any) =>
-        data.annotation?.edits.find((e: any) => e.objectId === o.id) || {
-          objectId: o.id,
-          classKey: o.class.key,
-          ignored: false,
-          confirmed: false,
-        },
-    ),
-  };
-  draft.value.edits = JSON.parse(JSON.stringify(draft.value.edits));
+  if (!data?.document) return;
+  startObjectEdit(Number(props.file.id), data, choices.value, revision.value);
 }
 async function recognize() {
   const libraryId = libConfig._libraryId,
@@ -269,33 +212,6 @@ async function recognize() {
   } catch (e) {
     if (libraryId === libConfig._libraryId && fileId === Number(props.file.id))
       actionError.value = String(e);
-  }
-}
-async function save() {
-  if (!draft.value || stale.value) return;
-  const snapshot = draft.value;
-  busy.value = true;
-  actionError.value = '';
-  try {
-    const { libraryId, fileId, profile, sourceKey, expectedRevision, edits } =
-      snapshot;
-    await invoke('save_object_annotations', {
-      libraryId,
-      fileId,
-      profile,
-      sourceKey,
-      expectedRevision,
-      edits,
-    });
-    if (draft.value === snapshot) {
-      draft.value = null;
-      objectFocus.value = null;
-      await refresh();
-    }
-  } catch (e) {
-    if (draft.value === snapshot) actionError.value = String(e);
-  } finally {
-    busy.value = false;
   }
 }
 async function reset() {

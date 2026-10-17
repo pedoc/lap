@@ -1,11 +1,11 @@
 //! Versioned object observations, compact query counts and human-owned snapshots.
 use super::{
     media,
-    objects_types::{ObjectClass, ObjectDocument},
+    objects_types::{ObjectClass, ObjectDocument, ObjectObservation},
     types::{ResolvedModel, Task},
 };
 use rusqlite::{Connection, OptionalExtension, ToSql, params};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
 use tauri::{AppHandle, Emitter};
 pub fn ensure_schema(c: &Connection) -> Result<(), String> {
@@ -257,21 +257,12 @@ fn store_inner(
     tx.commit().map_err(|e| e.to_string())?;
     Ok(true)
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ObjectEdit {
-    pub object_id: String,
-    pub class_key: String,
-    pub ignored: bool,
-    pub confirmed: bool,
-}
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Annotation {
     pub source_profile: String,
     pub model_name: String,
     pub source: ObjectDocument,
-    pub edits: Vec<ObjectEdit>,
     pub revision: String,
 }
 #[derive(Serialize, Default)]
@@ -292,21 +283,18 @@ fn annotation_on(
     modified: Option<i64>,
     size: i64,
 ) -> Result<Option<(Annotation, ObjectDocument)>, String> {
-    let row=c.query_row("SELECT source_profile,model_name,source,edits,revision,document FROM object_annotations WHERE file_id=?1 AND modified_at IS ?2 AND size=?3",params![id,modified,size],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?))).optional().map_err(|e|e.to_string())?;
-    row.map(
-        |(source_profile, model_name, source, edits, revision, document)| {
-            Ok((
-                Annotation {
-                    source_profile,
-                    model_name,
-                    source: serde_json::from_str(&source).map_err(|e| e.to_string())?,
-                    edits: serde_json::from_str(&edits).map_err(|e| e.to_string())?,
-                    revision,
-                },
-                serde_json::from_str(&document).map_err(|e| e.to_string())?,
-            ))
-        },
-    )
+    let row=c.query_row("SELECT source_profile,model_name,source,revision,document FROM object_annotations WHERE file_id=?1 AND modified_at IS ?2 AND size=?3",params![id,modified,size],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).optional().map_err(|e|e.to_string())?;
+    row.map(|(source_profile, model_name, source, revision, document)| {
+        Ok((
+            Annotation {
+                source_profile,
+                model_name,
+                source: serde_json::from_str(&source).map_err(|e| e.to_string())?,
+                revision,
+            },
+            serde_json::from_str(&document).map_err(|e| e.to_string())?,
+        ))
+    })
     .transpose()
 }
 fn key(document: &ObjectDocument) -> Result<String, String> {
@@ -315,6 +303,106 @@ fn key(document: &ObjectDocument) -> Result<String, String> {
             .to_hex()
             .to_string(),
     )
+}
+fn validate_document(
+    source: &ObjectDocument,
+    document: &ObjectDocument,
+    allowed: &[ObjectClass],
+) -> Result<ObjectDocument, String> {
+    if document.image_width != source.image_width
+        || document.image_height != source.image_height
+        || source.image_width == 0
+        || source.image_height == 0
+    {
+        return Err("Edited object geometry no longer matches the photo".into());
+    }
+    if document.objects.len() > 300 {
+        return Err("Too many objects in one photo".into());
+    }
+    let classes: BTreeMap<_, _> = allowed
+        .iter()
+        .chain(source.objects.iter().map(|object| &object.class))
+        .map(|class| (class.key.as_str(), class))
+        .collect();
+    let mut ids = std::collections::BTreeSet::new();
+    let mut objects = Vec::with_capacity(document.objects.len());
+    for object in &document.objects {
+        if object.id.trim().is_empty()
+            || object.id.len() > 128
+            || object.id.chars().any(char::is_control)
+            || !ids.insert(object.id.as_str())
+        {
+            return Err("Object IDs must be unique and nonempty".into());
+        }
+        let bounds = super::objects_types::clip_bounds(object.bounds)
+            .ok_or("Object boxes must lie inside the photo")?;
+        let class = classes
+            .get(object.class.key.as_str())
+            .copied()
+            .ok_or("Unsupported replacement object class")?;
+        if let Some(score) = object.score {
+            if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+                return Err("Object confidence must be a finite value between 0 and 1".into());
+            }
+        }
+        objects.push(ObjectObservation {
+            id: object.id.clone(),
+            class: class.clone(),
+            score: object.score,
+            reviewed: object.reviewed,
+            bounds,
+        });
+    }
+    Ok(ObjectDocument {
+        image_width: source.image_width,
+        image_height: source.image_height,
+        objects,
+        truncated: false,
+    })
+}
+fn save_annotation_on(
+    c: &mut Connection,
+    id: i64,
+    profile: &str,
+    model_name: &str,
+    revision: &str,
+    source_key: &str,
+    document: &ObjectDocument,
+    allowed: &[ObjectClass],
+) -> Result<(), String> {
+    let tx = c.transaction().map_err(|e| e.to_string())?;
+    let view = photo_on(&tx, id, profile)?;
+    if view
+        .annotation
+        .as_ref()
+        .map(|a| a.revision.as_str())
+        .unwrap_or("")
+        != revision
+        || view.source_key.as_deref() != Some(source_key)
+    {
+        return Err("Object results changed; reopen the editor before saving".into());
+    }
+    let source = view
+        .annotation
+        .as_ref()
+        .map(|a| a.source.clone())
+        .or(view.model_document)
+        .ok_or("Detect objects before editing")?;
+    let document = validate_document(&source, document, allowed)?;
+    let (modified, size) = stamp(&tx, id)?.ok_or("Photo is no longer visible")?;
+    let source_profile = view
+        .annotation
+        .as_ref()
+        .map(|a| a.source_profile.as_str())
+        .unwrap_or(profile);
+    let model_name = view
+        .annotation
+        .as_ref()
+        .map(|a| a.model_name.as_str())
+        .unwrap_or(model_name);
+    tx.execute("INSERT INTO object_annotations VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(file_id) DO UPDATE SET modified_at=excluded.modified_at,size=excluded.size,source_profile=excluded.source_profile,model_name=excluded.model_name,source=excluded.source,edits=excluded.edits,document=excluded.document,object_count=excluded.object_count,complete=excluded.complete,revision=excluded.revision",params![id,modified,size,source_profile,model_name,serde_json::to_string(&source).map_err(|e|e.to_string())?,"[]",serde_json::to_string(&document).map_err(|e|e.to_string())?,document.objects.len() as i64,!document.truncated,uuid::Uuid::new_v4().to_string()]).map_err(|e|e.to_string())?;
+    write_counts(&tx, id, "human", &document)?;
+    tx.commit().map_err(|e| e.to_string())
 }
 pub fn photo_on(c: &Connection, id: i64, profile: &str) -> Result<PhotoObjects, String> {
     let Some((modified, size)) = stamp(c, id)? else {
@@ -345,90 +433,6 @@ pub fn photo_on(c: &Connection, id: i64, profile: &str) -> Result<PhotoObjects, 
         source_key,
         profile: profile.into(),
     })
-}
-fn apply_edits(
-    source: &ObjectDocument,
-    edits: &[ObjectEdit],
-    allowed: &[ObjectClass],
-) -> Result<ObjectDocument, String> {
-    if edits.len() != source.objects.len() || edits.len() > 300 {
-        return Err("Object edits no longer match the source detections".into());
-    }
-    let edits: BTreeMap<_, _> = edits.iter().map(|e| (e.object_id.as_str(), e)).collect();
-    if edits.len() != source.objects.len() {
-        return Err("Duplicate object edit IDs".into());
-    }
-    let mut document = source.clone();
-    document.objects.clear();
-    for original in &source.objects {
-        let edit = edits
-            .get(original.id.as_str())
-            .ok_or("Object was re-detected; reload before editing")?;
-        if edit.ignored && edit.confirmed {
-            return Err("An ignored object cannot also be confirmed".into());
-        }
-        if edit.ignored {
-            continue;
-        }
-        let class = allowed
-            .iter()
-            .chain(source.objects.iter().map(|o| &o.class))
-            .find(|class| class.key == edit.class_key)
-            .ok_or("Unsupported replacement object class")?;
-        let mut object = original.clone();
-        if class.key != original.class.key {
-            object.score = None;
-            object.reviewed = true;
-        }
-        object.class = class.clone();
-        object.reviewed |= edit.confirmed;
-        document.objects.push(object);
-    }
-    Ok(document)
-}
-fn save_annotation_on(
-    c: &mut Connection,
-    id: i64,
-    profile: &str,
-    model_name: &str,
-    revision: &str,
-    source_key: &str,
-    edits: &[ObjectEdit],
-    allowed: &[ObjectClass],
-) -> Result<(), String> {
-    let tx = c.transaction().map_err(|e| e.to_string())?;
-    let view = photo_on(&tx, id, profile)?;
-    if view
-        .annotation
-        .as_ref()
-        .map(|a| a.revision.as_str())
-        .unwrap_or("")
-        != revision
-        || view.source_key.as_deref() != Some(source_key)
-    {
-        return Err("Object results changed; reopen the editor before saving".into());
-    }
-    let source = view
-        .annotation
-        .as_ref()
-        .map(|a| a.source.clone())
-        .or(view.model_document)
-        .ok_or("Detect objects before editing")?;
-    let document = apply_edits(&source, edits, allowed)?;
-    let (modified, size) = stamp(&tx, id)?.ok_or("Photo is no longer visible")?;
-    let source_profile = view
-        .annotation
-        .as_ref()
-        .map(|a| a.source_profile.as_str())
-        .unwrap_or(profile);
-    let model_name = view
-        .annotation
-        .as_ref()
-        .map(|a| a.model_name.as_str())
-        .unwrap_or(model_name);
-    tx.execute("INSERT INTO object_annotations VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(file_id) DO UPDATE SET modified_at=excluded.modified_at,size=excluded.size,source_profile=excluded.source_profile,model_name=excluded.model_name,source=excluded.source,edits=excluded.edits,document=excluded.document,object_count=excluded.object_count,complete=excluded.complete,revision=excluded.revision",params![id,modified,size,source_profile,model_name,serde_json::to_string(&source).map_err(|e|e.to_string())?,serde_json::to_string(edits).map_err(|e|e.to_string())?,serde_json::to_string(&document).map_err(|e|e.to_string())?,document.objects.len() as i64,!document.truncated,uuid::Uuid::new_v4().to_string()]).map_err(|e|e.to_string())?;
-    write_counts(&tx, id, "human", &document)?;
-    tx.commit().map_err(|e| e.to_string())
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -599,9 +603,9 @@ pub async fn save_object_annotations(
     profile: String,
     expected_revision: String,
     source_key: String,
-    edits: Vec<ObjectEdit>,
+    document: ObjectDocument,
 ) -> Result<(), String> {
-    if file_id <= 0 || source_key.len() != 64 || edits.len() > 300 {
+    if file_id <= 0 || source_key.len() != 64 {
         return Err("Invalid object annotation request".into());
     }
     let event_library = library_id.clone();
@@ -632,7 +636,7 @@ pub async fn save_object_annotations(
             &model.definition.name,
             &expected_revision,
             &source_key,
-            &edits,
+            &document,
             &allowed,
         )
     })
@@ -874,12 +878,10 @@ mod tests {
         store(&mut c, 1, &p, Some(10), 20, &Ok(doc(&m, 1, false))).unwrap();
         let old = photo_on(&c, 1, &p).unwrap();
         let cat = label(&m, 15);
-        let edits = [ObjectEdit {
-            object_id: "object-0".into(),
-            class_key: cat.key.clone(),
-            ignored: false,
-            confirmed: true,
-        }];
+        let mut human_document = doc(&m, 1, false);
+        human_document.objects[0].class = cat.clone();
+        human_document.objects[0].score = None;
+        human_document.objects[0].reviewed = true;
         save_annotation_on(
             &mut c,
             1,
@@ -887,7 +889,7 @@ mod tests {
             "YOLOX",
             "",
             old.source_key.as_ref().unwrap(),
-            &edits,
+            &human_document,
             &[cat.clone()],
         )
         .unwrap();
@@ -908,7 +910,7 @@ mod tests {
                 "YOLOX",
                 "",
                 old.source_key.as_ref().unwrap(),
-                &edits,
+                &human_document,
                 &[cat]
             )
             .is_err()
