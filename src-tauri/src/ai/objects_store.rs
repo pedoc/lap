@@ -141,6 +141,23 @@ pub fn workspace_condition(
     }
     Ok((format!("a.file_type IN(1,3) AND ({condition})"), values))
 }
+pub fn text_condition(
+    classes: &[String],
+    min: i64,
+) -> Result<(String, Vec<Box<dyn ToSql>>), String> {
+    if classes.is_empty() || classes.len() > 64 {
+        return Err("Object text search requires 1–64 resolved classes".into());
+    }
+    let profile = super::settings::active(Task::Detection)?.profile();
+    let mut branches = Vec::with_capacity(classes.len());
+    let mut values: Vec<Box<dyn ToSql>> = Vec::new();
+    for class_key in classes {
+        let (condition, args) = count_condition(&profile, class_key, "gte", min.max(1))?;
+        branches.push(condition);
+        values.extend(args);
+    }
+    Ok((format!("({})", branches.join(" OR ")), values))
+}
 fn stamp(c: &Connection, id: i64) -> Result<Option<(Option<i64>, i64)>, String> {
     c.query_row(
         &format!("SELECT a.modified_at,a.size {} AND a.id=?1", media::base()),
@@ -868,6 +885,32 @@ mod tests {
         assert_eq!(count(&c, &p, &label(&m, 16).key, "gte", 2), vec![1]);
         assert!(count(&c, &p, &label(&m, 16).key, "eq", 2).is_empty());
         assert!(count(&c, &p, &label(&m, 15).key, "eq", 0).is_empty());
+    }
+    #[test]
+    fn object_text_search_ors_resolved_classes_and_keeps_effective_row_precedence() {
+        let mut c = db();
+        let m = model();
+        ensure_model(&c, &m).unwrap();
+        let p = m.profile();
+        let dog = label(&m, 16).key;
+        let cat = label(&m, 15).key;
+        store(&mut c, 1, &p, Some(10), 20, &Ok(doc(&m, 1, false))).unwrap();
+        store(&mut c, 2, &p, Some(10), 20, &Ok(doc(&m, 1, false))).unwrap();
+        store(&mut c, 3, &p, Some(10), 20, &Ok(doc(&m, 0, false))).unwrap();
+        let (condition, values) = text_condition(&[dog.clone(), cat.clone()], 1).unwrap();
+        let mut statement = c
+            .prepare(&format!(
+                "SELECT a.id {} AND ({condition}) ORDER BY a.id",
+                media::base()
+            ))
+            .unwrap();
+        let ids = statement
+            .query_map(rusqlite::params_from_iter(values.iter()), |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<i64>, _>>()
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+        assert!(text_condition(&[], 1).is_err());
     }
     #[test]
     fn human_snapshots_survive_reruns_and_model_switches_without_rebinding_ids() {

@@ -471,6 +471,7 @@
     "unknown_lens": "未知镜头",
     "semantic_matches": "视觉匹配",
     "text_matches": "文本匹配",
+  "object_matches": "对象匹配",
     "index": {
       "wait_index": "排队等待扫描",
       "indexing": "正在扫描... {count}/{total}",

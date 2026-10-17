@@ -14,6 +14,7 @@ import {
   validateObjectScope,
   objectBoxStyle,
   objectGeometryCompatible,
+  resolveObjectTextClasses,
 } from '../src/common/objectUi.ts';
 import {
   hasObjectRules,
@@ -190,6 +191,23 @@ test('object status and class namespaces preserve unknown third-party categories
     objectClassName({ key: 'third-party@2:16', name: 'my custom class' }, t),
     'my custom class',
   );
+});
+test('object text search resolves localized, raw and keyed class names', () => {
+  const classes = [
+    { key: 'coco2017-80@1:16', name: 'dog', sourceId: '16' },
+    { key: 'coco2017-80@1:15', name: 'cat', sourceId: '15' },
+  ];
+  assert.deepEqual(resolveObjectTextClasses('狗', classes, t), [
+    'coco2017-80@1:16',
+  ]);
+  assert.deepEqual(resolveObjectTextClasses('dog', classes, t), [
+    'coco2017-80@1:16',
+  ]);
+  assert.deepEqual(resolveObjectTextClasses('coco2017-80@1:15', classes, t), [
+    'coco2017-80@1:15',
+  ]);
+  assert.deepEqual(resolveObjectTextClasses('', classes, t), []);
+  assert.deepEqual(resolveObjectTextClasses('bird', classes, t), []);
 });
 test('explicit image scopes never widen malformed selections to a library job', () => {
   assert.deepEqual(

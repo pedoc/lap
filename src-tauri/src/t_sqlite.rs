@@ -2073,6 +2073,8 @@ pub struct QueryParams {
     pub object_class: String,
     #[serde(default = "default_object_min_count")]
     pub object_min_count: i64,
+    #[serde(default)]
+    pub object_classes: Vec<String>,
     // GPS bounding box filter (e.g. for "photos in this map area")
     #[serde(default)]
     pub gps_min_lat: Option<f64>,
@@ -4717,6 +4719,14 @@ impl AFile {
                     &params.object_state
                 },
                 &params.object_class,
+                params.object_min_count,
+            )?;
+            conditions.push(condition);
+            sql_params.extend(values);
+        }
+        if !params.object_classes.is_empty() {
+            let (condition, values) = crate::ai::objects_store::text_condition(
+                &params.object_classes,
                 params.object_min_count,
             )?;
             conditions.push(condition);

@@ -471,6 +471,7 @@
     "unknown_lens": "Unknown lens",
     "semantic_matches": "Visual matches",
     "text_matches": "Text matches",
+    "object_matches": "Object matches",
     "index": {
       "wait_index": "Queued for scan",
       "indexing": "Scanning... {count}/{total}",

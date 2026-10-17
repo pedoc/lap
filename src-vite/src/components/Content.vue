@@ -788,7 +788,7 @@ import { getAlbumScanState, getAlbumScanIcon, shouldAnimateAlbumScanIcon } from 
 import { startOcr } from '@/common/ocr';
 import { normalizeOcrState } from '@/common/ocrUi';
 import { startObjectIndex } from '@/common/objects';
-import { normalizeObjectState, objectClassName, objectSelectionIds } from '@/common/objectUi';
+import { normalizeObjectState, objectClassName, objectSelectionIds, resolveObjectTextClasses } from '@/common/objectUi';
 import { CULLING, DATE_SORT, GROUP, LIB_ITEM, RATE, SIDEBAR } from '@/common/constants';
 import { isWin, isMac, isLinux, setTheme, separator,
          formatFileSize, formatDate, getCalendarDateRange, formatFolderBreadcrumb, getThumbnailDataUrl, getAssetSrc, getPreviewUrl,
@@ -7770,6 +7770,19 @@ async function getImageSearchFileList(
   }
 }
 
+async function resolveObjectText(searchText: string): Promise<string[]> {
+  const query = searchText.trim();
+  if (!query) return [];
+  try {
+    const state: any = await invoke('get_object_state', {
+      libraryId: libConfig._libraryId,
+    });
+    return resolveObjectTextClasses(query, state?.classes || [], t);
+  } catch {
+    return [];
+  }
+}
+
 async function getUnifiedSearchFileList(searchText: string, requestId: number) {
   const textParams = {
     searchFileType: config.search.fileType,
@@ -7806,6 +7819,8 @@ async function getUnifiedSearchFileList(searchText: string, requestId: number) {
     threshold: config.imageSearchThresholds[config.settings.imageSearch.thresholdIndex],
     fileType: Number(config.search.fileType || 0),
   };
+  const objectClasses = await resolveObjectText(searchText);
+  const objectParams = { ...textParams, searchFileName: '', objectClasses };
   imageSearchError.value = false;
   const isDefaultModelUnsupportedLanguage =
     (config.settings.ai?.semanticLanguages?.length === 1 && config.settings.ai.semanticLanguages[0] === 'en')
@@ -7816,11 +7831,17 @@ async function getUnifiedSearchFileList(searchText: string, requestId: number) {
   let visualSearchFailed = false;
 
   try {
-    const [textResult, visualResult] = await Promise.all([
+    const [textResult, objectResult, visualResult] = await Promise.all([
       getQueryFiles(textParams, 0, 0).catch(error => {
         console.error('Text search failed:', error);
         return [];
       }),
+      objectClasses.length
+        ? getQueryFiles(objectParams, 0, 0).catch(error => {
+            console.error('Object search failed:', error);
+            return [];
+          })
+        : Promise.resolve([]),
       (isDefaultModelUnsupportedLanguage
         ? Promise.resolve([])
         : searchSimilarImages(currentImageSearchParams.value)
@@ -7835,10 +7856,15 @@ async function getUnifiedSearchFileList(searchText: string, requestId: number) {
 
     const textMatches = Array.isArray(textResult) ? textResult : [];
     const textIds = new Set(textMatches.map((file: any) => Number(file.id)));
+    const objectMatches = (Array.isArray(objectResult) ? objectResult : [])
+      .filter((file: any) => !textIds.has(Number(file.id)));
+    for (const file of objectMatches) (file as any)._object = true;
+    const objectIds = new Set(objectMatches.map((file: any) => Number(file.id)));
     const visualMatches = (Array.isArray(visualResult) ? visualResult : [])
       .filter((file: any) => !textIds.has(Number(file.id)))
+      .filter((file: any) => !objectIds.has(Number(file.id)))
       .filter(passesAlbumFilters);
-    const files = preserveLoadedThumbnails([...textMatches, ...visualMatches]);
+    const files = preserveLoadedThumbnails([...textMatches, ...objectMatches, ...visualMatches]);
     contentCountIsAuthoritative.value = true;
 
     clearSelectionForFileListUpdate();
@@ -7858,6 +7884,15 @@ async function getUnifiedSearchFileList(searchText: string, requestId: number) {
             icon: IconFileSearch,
             files: textMatches,
             countLabel: String(textMatches.length),
+          }
+        : null,
+      objectMatches.length > 0
+        ? {
+            id: 'search-object',
+            label: localeMsg.value.search.object_matches,
+            icon: IconFileSearch,
+            files: objectMatches,
+            countLabel: String(objectMatches.length),
           }
         : null,
       visualMatches.length > 0

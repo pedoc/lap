@@ -577,6 +577,7 @@
     "unknown_lens": "未知鏡頭",
     "semantic_matches": "視覺相符",
     "text_matches": "文字比對",
+    "object_matches": "物件相符",
     "index": {
       "wait_index": "已排隊等待掃描",
       "indexing": "掃描中... {count}/{total}",

@@ -24,6 +24,28 @@ export function objectClassName(
   }
   return String(label?.name || key);
 }
+export function resolveObjectTextClasses(
+  query: string,
+  classes: any[],
+  translate: (key: string) => string,
+) {
+  const text = String(query || '').trim().toLowerCase();
+  if (!text || !Array.isArray(classes)) return [];
+  const keys: string[] = [];
+  for (const label of classes) {
+    const key = String(label?.key || '');
+    if (!key) continue;
+    const display = objectClassName(label, translate).toLowerCase();
+    const raw = String(label?.name || '').toLowerCase();
+    if (
+      display.includes(text) ||
+      raw.includes(text) ||
+      key.toLowerCase().includes(text)
+    )
+      keys.push(key);
+  }
+  return keys;
+}
 export function objectSelectionIds(files: any[]) {
   if (
     !files.length ||
