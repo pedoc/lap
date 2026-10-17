@@ -21,6 +21,7 @@ import {
 } from '../src/common/smartAlbums.ts';
 import { SIDEBAR } from '../src/common/constants.ts';
 import * as objectHelpers from '../src/common/objectUi.ts';
+import { diffObjects } from '../src/common/objectDiff.ts';
 const read = (name: string) =>
   readFileSync(
     new URL(`../src/components/${name}.vue`, import.meta.url),
@@ -142,6 +143,7 @@ function context() {
     objectClassName,
     objectBoxStyle,
     objectGeometryCompatible,
+    diffObjects,
     openObjectSettings: () => {},
     SIDEBAR,
   };
@@ -234,6 +236,23 @@ test('object frames clip safely, distinguish objects, and keep a constant screen
   assert.equal(objectBoxStyle([2, 0, 0.1, 0.1], 1000, 800, 1), null);
   assert.equal(objectGeometryCompatible(500, 400, document), true);
   assert.equal(objectGeometryCompatible(400, 500, document), false);
+});
+test('object diff keeps matched human boxes and surfaces only unmatched model boxes', () => {
+  const human = [
+    { id: 'h1', bounds: [0.1, 0.1, 0.3, 0.3] },
+    { id: 'h2', bounds: [0.6, 0.6, 0.2, 0.2] },
+  ];
+  const model = [
+    { id: 'm1', bounds: [0.12, 0.12, 0.3, 0.3] },
+    { id: 'm2', bounds: [0.3, 0.3, 0.1, 0.1] },
+  ];
+  const result = diffObjects(human, model);
+  assert.equal(result.matched.length, 1);
+  assert.equal(result.matched[0].human.id, 'h1');
+  assert.deepEqual(result.candidates.map((c) => c.id), ['m2']);
+  assert.deepEqual(result.humanOnly.map((h) => h.id), ['h2']);
+  assert.equal(diffObjects([], model).candidates.length, model.length);
+  assert.equal(diffObjects(human, []).humanOnly.length, human.length);
 });
 test('object workspace renders states and categories without duplicating thumbnail badges', async () => {
   const ctx = context();

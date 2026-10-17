@@ -50,6 +50,66 @@
         </button>
       </div>
       <div
+        v-if="reviewAvailable && !editing"
+        class="rounded-box border border-base-content/10 p-2 space-y-2"
+      >
+        <button
+          class="btn btn-xs"
+          :aria-pressed="reviewOpen"
+          @click="reviewOpen = !reviewOpen"
+        >
+          {{ t('objects.review') }} ·
+          {{ diff.candidates.length }}
+        </button>
+        <template v-if="reviewOpen">
+          <p class="text-xs opacity-60">
+            {{ t('objects.review_hint') }}
+          </p>
+          <p v-if="diff.humanOnly.length" class="text-xs opacity-70">
+            {{ t('objects.review_human_only', { count: diff.humanOnly.length }) }}
+          </p>
+          <p v-if="!diff.candidates.length" class="text-xs opacity-60">
+            {{ t('objects.review_no_candidates') }}
+          </p>
+          <div class="max-h-64 overflow-y-auto space-y-1">
+            <label
+              v-for="candidate in diff.candidates"
+              :key="candidate.id"
+              class="flex items-center gap-2 text-xs rounded-box p-2 hover:bg-base-content/5"
+            >
+              <input
+                v-model="accepted"
+                type="checkbox"
+                class="checkbox checkbox-xs"
+                :value="candidate.id"
+              />
+              <span class="truncate"
+                >{{ name(candidate.class) }}
+                <span v-if="candidate.score !== null" class="opacity-60"
+                  >· {{ (candidate.score * 100).toFixed(0) }}%</span
+                ></span
+              >
+            </label>
+          </div>
+          <div class="flex gap-2">
+            <button
+              class="btn btn-xs btn-primary"
+              :disabled="busy || !accepted.length"
+              @click="mergeCandidates"
+            >
+              {{ t('objects.review_merge', { count: accepted.length }) }}
+            </button>
+            <button
+              class="btn btn-xs"
+              :disabled="busy"
+              @click="reviewOpen = false"
+            >
+              {{ t('objects.review_ignore') }}
+            </button>
+          </div>
+        </template>
+      </div>
+      <div
         v-if="editing"
         class="rounded-box border border-primary/30 bg-primary/5 p-2 space-y-2"
       >
@@ -130,6 +190,7 @@ import { config, libConfig } from '@/common/config';
 import { useObjects, objectFocus, showObjectBoxes } from '@/common/objects';
 import { usePhotoObjects } from '@/common/photoObjects';
 import { objectClassName } from '@/common/objectUi';
+import { diffObjects } from '@/common/objectDiff';
 import {
   objectEdit,
   objectEditActive,
@@ -151,7 +212,9 @@ const supported = computed(() =>
   ),
   editing = computed(() => objectEditActive(Number(props.file?.id)));
 const busy = ref(false),
-  actionError = ref('');
+  actionError = ref(''),
+  reviewOpen = ref(false),
+  accepted = ref<string[]>([]);
 const name = (label: any) => objectClassName(label, t);
 const choices = computed(() => [
   ...new Map(
@@ -160,6 +223,19 @@ const choices = computed(() => [
       .map((c: any) => [c.key, c]),
   ).values(),
 ]);
+const modelDocument = computed(() => result.value?.modelDocument);
+const diff = computed(() =>
+  diffObjects(
+    (result.value?.document?.objects || []) as any[],
+    (modelDocument.value?.objects || []) as any[],
+  ),
+);
+const reviewAvailable = computed(
+  () =>
+    !!result.value?.annotation &&
+    !!modelDocument.value &&
+    (diff.value.candidates.length > 0 || diff.value.humanOnly.length > 0),
+);
 watch(
   () => [
     libConfig._libraryId,
@@ -170,6 +246,8 @@ watch(
   () => {
     actionError.value = '';
     busy.value = false;
+    reviewOpen.value = false;
+    accepted.value = [];
   },
 );
 watch(revision, (value) => {
@@ -190,6 +268,60 @@ function edit() {
   const data = result.value;
   if (!data?.document) return;
   startObjectEdit(Number(props.file.id), data, choices.value, revision.value);
+}
+async function mergeCandidates() {
+  const data = result.value;
+  if (!data?.document || !data.annotation) return;
+  const libraryId = libConfig._libraryId,
+    fileId = Number(props.file.id);
+  const source = data.document;
+  const chosen = (modelDocument.value?.objects || []).filter((o: any) =>
+    accepted.value.includes(o.id),
+  );
+  const objects = [
+    ...(source.objects || []).map((o: any) => ({
+      id: o.id,
+      class: { ...o.class },
+      score: o.score ?? null,
+      reviewed: o.reviewed,
+      bounds: [...o.bounds],
+    })),
+    ...chosen.map((o: any, index: number) => ({
+      id: `merged-${Date.now()}-${index}`,
+      class: { ...o.class },
+      score: o.score ?? null,
+      reviewed: true,
+      bounds: [...o.bounds],
+    })),
+  ];
+  const document = {
+    imageWidth: source.imageWidth,
+    imageHeight: source.imageHeight,
+    objects,
+    truncated: false,
+  };
+  busy.value = true;
+  actionError.value = '';
+  try {
+    await invoke('save_object_annotations', {
+      libraryId,
+      fileId,
+      profile: data.profile,
+      sourceKey: data.sourceKey,
+      expectedRevision: data.annotation.revision,
+      document,
+    });
+    if (libraryId === libConfig._libraryId && fileId === Number(props.file.id)) {
+      reviewOpen.value = false;
+      accepted.value = [];
+      await refresh();
+    }
+  } catch (e) {
+    if (libraryId === libConfig._libraryId && fileId === Number(props.file.id))
+      actionError.value = String(e);
+  } finally {
+    busy.value = false;
+  }
 }
 async function recognize() {
   const libraryId = libConfig._libraryId,
