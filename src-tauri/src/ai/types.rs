@@ -225,6 +225,7 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
             ParameterSpec { key:"object_tiled".into(),kind:"choice".into(),default:json!(false),min:0.,max:0.,step:0.,options:vec![json!(false),json!(true)],affects_index:true,reload_session:false },
             ParameterSpec::number("object_tile_size",640.,320.,2048.,32.,true),
             ParameterSpec::number("object_tile_overlap",0.2,0.,0.9,0.05,true),
+            ParameterSpec::number("object_tile_nms_iou",0.5,0.05,0.95,0.05,true),
         ]),
         Task::Ocr => p.extend([
             ParameterSpec { key:"ocr_rotation".into(),kind:"choice".into(),default:json!("0"),min:0.,max:0.,step:0.,options:vec![json!("0"),json!("auto"),json!("90"),json!("180"),json!("270")],affects_index:true,reload_session:false },
@@ -686,6 +687,9 @@ mod tests {
             .find(|spec| spec.key == "object_tile_size")
             .unwrap();
         assert_eq!(size.default, json!(640.));
+        let merge = specs.iter().find(|spec| spec.key == "object_tile_nms_iou").unwrap();
+        assert_eq!(merge.default, json!(0.5));
+        assert!(merge.min > 0. && merge.affects_index);
         let mut config = crate::ai::settings::Configuration::default();
         let base = config.resolve("rf-detr-large").unwrap().profile();
         config

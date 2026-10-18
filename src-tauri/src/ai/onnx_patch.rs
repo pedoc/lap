@@ -141,9 +141,9 @@ fn patch_offsets(model: &[u8]) -> Result<Vec<usize>, ()> {
     Ok(patches)
 }
 
-/// Disables `allowzero` on every `Reshape` node. Returns the number of
-/// attributes changed; malformed input leaves the model untouched.
-pub fn disable_reshape_allowzero(model: &mut [u8]) -> usize {
+/// Only call for the checksum-pinned export selected by the runtime compatibility guard.
+/// Its constant target shapes contain no zero dimensions. Malformed input is unchanged.
+pub(super) fn disable_reshape_allowzero(model: &mut [u8]) -> usize {
     let Ok(patches) = patch_offsets(model) else {
         return 0;
     };

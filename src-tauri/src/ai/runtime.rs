@@ -1,7 +1,7 @@
 use super::types::ResolvedModel;
 use ort::{
     execution_providers::{CPUExecutionProvider, ExecutionProvider},
-    session::{builder::GraphOptimizationLevel, Session},
+    session::{Session, builder::GraphOptimizationLevel},
 };
 use serde::Serialize;
 use std::{
@@ -10,8 +10,8 @@ use std::{
     ops::{Deref, DerefMut},
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -376,9 +376,7 @@ fn build(
     #[cfg(test)]
     eprintln!("GPU debug: commit {provider}/{role}");
     let artifact = super::assets::artifact_path(&model.definition, role)?;
-    if provider == "directml" && model.definition.adapter == super::types::Adapter::RfDetrCocoOnnx {
-        // This RF-DETR export has no zero entries in Reshape target shapes, so
-        // clearing allowzero preserves its output while satisfying DirectML.
+    if provider == "directml" && needs_reshape_compatibility(model, role) {
         let mut bytes = std::fs::read(&artifact).map_err(|e| e.to_string())?;
         if super::onnx_patch::disable_reshape_allowzero(&mut bytes) > 0 {
             return builder
@@ -389,6 +387,16 @@ fn build(
     builder
         .commit_from_file(artifact)
         .map_err(|e| format!("Cannot create {provider} session for {role}: {e}"))
+}
+fn needs_reshape_compatibility(model: &ResolvedModel, role: &str) -> bool {
+    model.definition.adapter == super::types::Adapter::RfDetrCocoOnnx
+        && role == "detector"
+        && model.definition.files.iter().any(|artifact| {
+            artifact.role == role
+                && artifact.sha256.eq_ignore_ascii_case(
+                    "cf0d64793e5ead6c21260d92f447e95737e6ea76b3f4b3da302aabdf67da9aff",
+                )
+        })
 }
 fn virtual_adapter(name: &str) -> bool {
     let name = name.to_lowercase();
@@ -596,6 +604,22 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
 mod tests {
     use super::*;
     #[test]
+    fn reshape_compatibility_only_applies_to_the_verified_export() {
+        let mut model = crate::ai::settings::Configuration::default()
+            .resolve("rf-detr-large")
+            .unwrap();
+        assert!(needs_reshape_compatibility(&model, "detector"));
+        assert!(!needs_reshape_compatibility(&model, "vision"));
+        model.definition.id = "custom-rf-detr".into();
+        assert!(needs_reshape_compatibility(&model, "detector"));
+        model.definition.files[0].sha256 = "a".repeat(64);
+        assert!(!needs_reshape_compatibility(&model, "detector"));
+        model.definition.files[0].sha256 =
+            "cf0d64793e5ead6c21260d92f447e95737e6ea76b3f4b3da302aabdf67da9aff".into();
+        model.definition.adapter = super::super::types::Adapter::RtDetrOnnx;
+        assert!(!needs_reshape_compatibility(&model, "detector"));
+    }
+    #[test]
     fn automatic_provider_order_prefers_acceleration_and_forcing_respects_explicit_gpu() {
         assert_eq!(
             provider_candidates("auto", false),
@@ -709,10 +733,12 @@ mod tests {
     #[test]
     fn runtime_discovery_is_explicit() {
         let runtime = info();
-        assert!(runtime
-            .providers
-            .iter()
-            .any(|p| p.id == "cpu" && p.available));
+        assert!(
+            runtime
+                .providers
+                .iter()
+                .any(|p| p.id == "cpu" && p.available)
+        );
         println!("runtime: {:?}", runtime);
     }
 }

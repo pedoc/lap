@@ -20,9 +20,9 @@ export interface ObjectEditSession {
   profile: string;
   sourceKey: string;
   expectedRevision: string;
-  readRevision: number;
   imageWidth: number;
   imageHeight: number;
+  truncated: boolean;
   choices: ObjectClassDraft[];
   boxes: ObjectBoxDraft[];
   selected: string[];
@@ -53,7 +53,6 @@ export function startObjectEdit(
   fileId: number,
   photo: any,
   choices: any[],
-  readRevision: number,
 ) {
   const document = photo?.document;
   if (!document?.objects) return;
@@ -89,9 +88,9 @@ export function startObjectEdit(
     profile: String(photo?.profile || ''),
     sourceKey: String(photo?.sourceKey || ''),
     expectedRevision: String(photo?.annotation?.revision || ''),
-    readRevision,
     imageWidth: Number(document.imageWidth || 0),
     imageHeight: Number(document.imageHeight || 0),
+    truncated: !!document.truncated,
     choices: [...classes.values()],
     boxes,
     selected: [],
@@ -102,11 +101,11 @@ export function startObjectEdit(
   };
 }
 
-export function markObjectEditStale(fileId: number) {
+export function markObjectEditStale(fileId: number, libraryId = libConfig._libraryId) {
   const session = objectEdit.value;
   if (
     session &&
-    session.libraryId === libConfig._libraryId &&
+    session.libraryId === libraryId &&
     session.fileId === fileId
   )
     session.stale = true;
@@ -141,7 +140,7 @@ export async function saveObjectEdit() {
         reviewed: box.reviewed,
         bounds: box.bounds,
       })),
-      truncated: false,
+      truncated: snapshot.truncated,
     };
     await invoke('save_object_annotations', {
       libraryId: snapshot.libraryId,

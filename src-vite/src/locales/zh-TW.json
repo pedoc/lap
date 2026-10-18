@@ -2087,6 +2087,7 @@
         "object_tiled": "重叠切片检测（利于小目标）",
         "object_tile_size": "切片边长",
         "object_tile_overlap": "切片重叠比例",
+        "object_tile_nms_iou": "跨切片同類去重 IoU",
         "threads": "每个模型会话的 CPU 线程数",
         "semantic_threshold": "语义检索阈值（标准）",
         "related_threshold": "相关图片阈值",

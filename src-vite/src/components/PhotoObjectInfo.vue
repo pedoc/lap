@@ -197,13 +197,12 @@ import {
   startObjectEdit,
   saveObjectEdit,
   cancelObjectEdit,
-  markObjectEditStale,
 } from '@/common/objectEditing';
 const props = defineProps<{ file: any }>(),
   emit = defineEmits(['focus-object']),
   { t } = useI18n();
 const { view, busy: taskBusy, start } = useObjects();
-const { result, error, loading, revision, refresh } = usePhotoObjects(() => [
+const { result, error, loading, refresh } = usePhotoObjects(() => [
   Number(props.file?.id),
   props.file?.modified_at,
 ]);
@@ -250,10 +249,6 @@ watch(
     accepted.value = [];
   },
 );
-watch(revision, (value) => {
-  if (editing.value && objectEdit.value?.readRevision !== value)
-    markObjectEditStale(Number(props.file.id));
-});
 function focus(object: any) {
   showObjectBoxes.value = true;
   objectFocus.value = {
@@ -267,7 +262,7 @@ function focus(object: any) {
 function edit() {
   const data = result.value;
   if (!data?.document) return;
-  startObjectEdit(Number(props.file.id), data, choices.value, revision.value);
+  startObjectEdit(Number(props.file.id), data, choices.value);
 }
 async function mergeCandidates() {
   const data = result.value;
@@ -298,7 +293,7 @@ async function mergeCandidates() {
     imageWidth: source.imageWidth,
     imageHeight: source.imageHeight,
     objects,
-    truncated: false,
+    truncated: !!source.truncated || !!modelDocument.value?.truncated,
   };
   busy.value = true;
   actionError.value = '';

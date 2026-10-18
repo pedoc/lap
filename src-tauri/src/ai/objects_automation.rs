@@ -123,6 +123,16 @@ pub fn pause_with_error(error: &str) -> Result<(), String> {
 }
 pub fn authorized(revision: &str, library: &str) -> Result<Policy, String> {
     let policy = load()?;
+    let idle = ACTIVITY.lock().map_err(|e| e.to_string())?.elapsed();
+    authorize_policy(&policy, revision, library, idle)?;
+    Ok(policy)
+}
+fn authorize_policy(
+    policy: &Policy,
+    revision: &str,
+    library: &str,
+    idle: Duration,
+) -> Result<(), String> {
     if !policy.enabled || policy.paused || policy.revision != revision {
         return Err("Object automation is disabled, paused or its settings changed".into());
     }
@@ -133,12 +143,10 @@ pub fn authorized(revision: &str, library: &str) -> Result<Policy, String> {
     {
         return Err("Automatic object recognition is limited to a different library".into());
     }
-    if ACTIVITY.lock().map_err(|e| e.to_string())?.elapsed()
-        < Duration::from_secs(policy.idle_seconds)
-    {
+    if idle < Duration::from_secs(policy.idle_seconds) {
         return Err("Application is not idle".into());
     }
-    Ok(policy)
+    Ok(())
 }
 pub fn record_activity() {
     *ACTIVITY.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
@@ -151,9 +159,7 @@ pub fn record_object_activity() {
 #[tauri::command]
 pub fn save_object_automation(app_handle: AppHandle, policy: Policy) -> Result<Policy, String> {
     let policy = save(policy)?;
-    if !policy.enabled || policy.paused {
-        super::objects_jobs::yield_automatic();
-    }
+    super::objects_jobs::yield_automatic();
     app_handle
         .emit("object-automation-changed", ())
         .map_err(|e| e.to_string())?;
@@ -188,5 +194,29 @@ mod tests {
         assert!(validate(&p).is_ok());
         let value = serde_json::to_value(p).unwrap();
         assert_eq!(value["scope"]["libraryId"], "library-a");
+    }
+    #[test]
+    fn authorization_rejects_activity_pauses_scope_changes_and_stale_revisions() {
+        let mut policy = Policy {
+            enabled: true,
+            revision: "initial".into(),
+            ..Default::default()
+        };
+        let idle = Duration::from_secs(60);
+        assert!(authorize_policy(&policy, "initial", "A", idle).is_ok());
+        assert!(authorize_policy(&policy, "initial", "A", Duration::ZERO).is_err());
+        policy.paused = true;
+        assert!(authorize_policy(&policy, "initial", "A", idle).is_err());
+        policy.paused = false;
+        policy.revision = "changed".into();
+        assert!(authorize_policy(&policy, "initial", "A", idle).is_err());
+        policy.scope = Some(Scope {
+            library_id: "B".into(),
+            folder_id: 1,
+            label: "folder".into(),
+        });
+        assert!(authorize_policy(&policy, "changed", "A", idle).is_err());
+        policy.enabled = false;
+        assert!(authorize_policy(&policy, "changed", "B", idle).is_err());
     }
 }

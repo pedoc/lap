@@ -145,14 +145,21 @@ pub fn text_condition(
     classes: &[String],
     min: i64,
 ) -> Result<(String, Vec<Box<dyn ToSql>>), String> {
+    let profile = super::settings::active(Task::Detection)?.profile();
+    text_condition_for_profile(&profile, classes, min)
+}
+fn text_condition_for_profile(
+    profile: &str,
+    classes: &[String],
+    min: i64,
+) -> Result<(String, Vec<Box<dyn ToSql>>), String> {
     if classes.is_empty() || classes.len() > 64 {
         return Err("Object text search requires 1–64 resolved classes".into());
     }
-    let profile = super::settings::active(Task::Detection)?.profile();
     let mut branches = Vec::with_capacity(classes.len());
     let mut values: Vec<Box<dyn ToSql>> = Vec::new();
     for class_key in classes {
-        let (condition, args) = count_condition(&profile, class_key, "gte", min.max(1))?;
+        let (condition, args) = count_condition(profile, class_key, "gte", min.max(1))?;
         branches.push(condition);
         values.extend(args);
     }
@@ -374,7 +381,7 @@ fn validate_document(
         image_width: source.image_width,
         image_height: source.image_height,
         objects,
-        truncated: false,
+        truncated: source.truncated || document.truncated,
     })
 }
 fn save_annotation_on(
@@ -399,13 +406,18 @@ fn save_annotation_on(
     {
         return Err("Object results changed; reopen the editor before saving".into());
     }
+    let was_truncated = view
+        .document
+        .as_ref()
+        .is_some_and(|document| document.truncated);
     let source = view
         .annotation
         .as_ref()
         .map(|a| a.source.clone())
         .or(view.model_document)
         .ok_or("Detect objects before editing")?;
-    let document = validate_document(&source, document, allowed)?;
+    let mut document = validate_document(&source, document, allowed)?;
+    document.truncated |= was_truncated;
     let (modified, size) = stamp(&tx, id)?.ok_or("Photo is no longer visible")?;
     let source_profile = view
         .annotation
@@ -902,7 +914,8 @@ mod tests {
         store(&mut c, 1, &p, Some(10), 20, &Ok(doc(&m, 1, false))).unwrap();
         store(&mut c, 2, &p, Some(10), 20, &Ok(doc(&m, 1, false))).unwrap();
         store(&mut c, 3, &p, Some(10), 20, &Ok(doc(&m, 0, false))).unwrap();
-        let (condition, values) = text_condition(&[dog.clone(), cat.clone()], 1).unwrap();
+        let (condition, values) =
+            text_condition_for_profile(&p, &[dog.clone(), cat.clone()], 1).unwrap();
         let mut statement = c
             .prepare(&format!(
                 "SELECT a.id {} AND ({condition}) ORDER BY a.id",
@@ -915,7 +928,65 @@ mod tests {
             .collect::<Result<Vec<i64>, _>>()
             .unwrap();
         assert_eq!(ids, vec![1, 2]);
-        assert!(text_condition(&[], 1).is_err());
+        assert!(text_condition_for_profile(&p, &[], 1).is_err());
+    }
+    #[test]
+    fn manual_edits_and_merges_preserve_partial_coverage() {
+        for source_partial in [true, false] {
+            let mut c = db();
+            let m = model();
+            ensure_model(&c, &m).unwrap();
+            let profile = m.profile();
+            store(
+                &mut c,
+                1,
+                &profile,
+                Some(10),
+                20,
+                &Ok(doc(&m, 2, source_partial)),
+            )
+            .unwrap();
+            let original = photo_on(&c, 1, &profile).unwrap();
+            let mut edited = original.document.clone().unwrap();
+            edited.truncated = !source_partial;
+            edited.objects[0].reviewed = true;
+            let allowed = [label(&m, 16)];
+            save_annotation_on(
+                &mut c,
+                1,
+                &profile,
+                "test",
+                "",
+                original.source_key.as_ref().unwrap(),
+                &edited,
+                &allowed,
+            )
+            .unwrap();
+            let reviewed = photo_on(&c, 1, &profile).unwrap();
+            assert!(reviewed.document.as_ref().unwrap().truncated);
+            edited.truncated = false;
+            save_annotation_on(
+                &mut c,
+                1,
+                &profile,
+                "test",
+                &reviewed.annotation.as_ref().unwrap().revision,
+                reviewed.source_key.as_ref().unwrap(),
+                &edited,
+                &allowed,
+            )
+            .unwrap();
+            assert!(
+                photo_on(&c, 1, &profile)
+                    .unwrap()
+                    .document
+                    .unwrap()
+                    .truncated
+            );
+            assert_eq!(count(&c, &profile, &allowed[0].key, "gte", 2), vec![1]);
+            assert!(count(&c, &profile, &allowed[0].key, "eq", 2).is_empty());
+            assert!(count(&c, &profile, &label(&m, 15).key, "eq", 0).is_empty());
+        }
     }
     #[test]
     fn human_snapshots_survive_reruns_and_model_switches_without_rebinding_ids() {

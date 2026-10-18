@@ -1982,6 +1982,7 @@
   "object_tiled": "重叠切片检测（利于小目标）",
   "object_tile_size": "切片边长",
   "object_tile_overlap": "切片重叠比例",
+        "object_tile_nms_iou": "跨切片同类去重 IoU",
         "ocr_rotation": "文字方向校正",
         "ocr_deskew_degrees": "倾斜校正角度（-15°～15°）",
         "ocr_detection_size": "文字检测输入尺寸",

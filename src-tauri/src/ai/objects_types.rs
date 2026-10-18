@@ -118,11 +118,27 @@ pub fn clip_bounds([x, y, w, h]: [f32; 4]) -> Option<[f32; 4]> {
     }
     Some([l, t, r - l, b - t])
 }
-fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
+pub(crate) fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
     let area = ((a[0] + a[2]).min(b[0] + b[2]) - a[0].max(b[0])).max(0.)
         * ((a[1] + a[3]).min(b[1] + b[3]) - a[1].max(b[1])).max(0.);
     let total = a[2] * a[3] + b[2] * b[3] - area;
     if total > 0. { area / total } else { 0. }
+}
+pub(crate) fn validate_candidates(
+    candidates: &[Candidate],
+    labels: &LabelSet,
+) -> Result<(), String> {
+    if candidates.iter().any(|candidate| {
+        candidate.class_index >= labels.classes.len()
+            || !candidate.score.is_finite()
+            || !(0.0..=1.0).contains(&candidate.score)
+            || !candidate.bounds.iter().all(|number| number.is_finite())
+            || candidate.bounds[2] < 0.
+            || candidate.bounds[3] < 0.
+    }) {
+        return Err("Detector returned invalid scores, coordinates or class IDs".into());
+    }
+    Ok(())
 }
 pub fn finish(
     mut candidates: Vec<Candidate>,
@@ -142,16 +158,7 @@ pub fn finish(
     {
         return Err("Invalid detector postprocessing settings".into());
     }
-    if candidates.iter().any(|c| {
-        c.class_index >= labels.classes.len()
-            || !c.score.is_finite()
-            || !(0.0..=1.0).contains(&c.score)
-            || !c.bounds.iter().all(|n| n.is_finite())
-            || c.bounds[2] < 0.
-            || c.bounds[3] < 0.
-    }) {
-        return Err("Detector returned invalid scores, coordinates or class IDs".into());
-    }
+    validate_candidates(&candidates, labels)?;
     candidates.retain(|c| c.score >= threshold);
     candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
     let mut truncated = candidates.len() > 2000;

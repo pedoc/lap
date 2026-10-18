@@ -42,6 +42,7 @@
           v-for="(box, index) in editing.boxes"
           :key="box.id"
           class="absolute"
+          :class="editing.drawing ? 'pointer-events-none' : 'pointer-events-auto'"
           :style="editBoxStyle(box.bounds, index, selected(box.id))"
           @mousedown.stop.prevent="beginBox($event, box)"
         >
@@ -55,7 +56,7 @@
               v-for="(corner, ci) in cornerHandles"
               :key="ci"
               class="absolute rounded-full bg-primary border-2 border-base-100 w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2"
-              :style="handleStyle(corner, box.bounds)"
+              :style="handleStyle(corner)"
               @mousedown.stop.prevent="beginBox($event, box, corner)"
               @dblclick.stop
             />
@@ -70,6 +71,7 @@
                 :value="box.class.key"
                 class="select select-xs bg-base-100/95 shadow"
                 :aria-label="t('objects.set_class')"
+                :disabled="editing.busy || editing.stale"
                 @change="
                   setBoxClass(box, ($event.target as HTMLSelectElement).value)
                 "
@@ -87,6 +89,7 @@
                   type="checkbox"
                   class="checkbox checkbox-xs"
                   :checked="box.reviewed"
+                  :disabled="editing.busy || editing.stale"
                   @change="
                     box.reviewed = ($event.target as HTMLInputElement).checked
                   "
@@ -94,6 +97,7 @@
               >
               <button
                 class="btn btn-xs btn-ghost text-error bg-base-100/95 shadow"
+                :disabled="editing.busy || editing.stale"
                 @click.stop="removeBox(box)"
               >
                 {{ t('objects.delete_box') }}
@@ -109,7 +113,7 @@
         {{ t('objects.geometry') }}
       </p>
       <div
-        class="absolute top-3 left-3 z-40 flex flex-wrap items-center gap-1"
+        class="absolute top-3 left-3 z-40 flex flex-wrap items-center gap-1 pointer-events-auto"
         @mousedown.stop
         @dblclick.stop
       >
@@ -131,7 +135,7 @@
           class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
           :class="editing.drawing ? 'text-primary' : ''"
           :aria-pressed="editing.drawing"
-          :disabled="editing.busy"
+          :disabled="editing.busy || editing.stale"
           @click.stop="editing.drawing = !editing.drawing"
         >
           {{ t('objects.draw_box') }}
@@ -140,6 +144,7 @@
           v-model="draftClass"
           class="select select-sm bg-base-100/90 border-base-content/15"
           :aria-label="t('objects.set_class')"
+          :disabled="editing.busy || editing.stale"
         >
           <option v-for="choice in editing.choices" :key="choice.key" :value="choice.key">
             {{ name(choice) }}
@@ -249,7 +254,7 @@
   </template>
 </template>
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { objectFocus, showObjectBoxes } from '@/common/objects';
@@ -264,7 +269,6 @@ import {
   objectEditActive,
   cancelObjectEdit,
   saveObjectEdit,
-  markObjectEditStale,
 } from '@/common/objectEditing';
 const props = defineProps<{
   fileId?: number;
@@ -280,7 +284,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ locate: [bounds: number[]] }>(),
   { t } = useI18n();
-const { result, revision } = usePhotoObjects(() => [
+const { result } = usePhotoObjects(() => [
   Number(props.fileId),
   props.fileVersion,
 ]);
@@ -373,12 +377,11 @@ function editBoxStyle(
     cursor: 'move',
   };
 }
-function handleStyle(corner: string, bounds: number[]) {
-  const p = cornerOf(corner, bounds);
+function handleStyle(corner: string) {
   return {
-    left: `${p.x * props.width}px`,
-    top: `${p.y * props.height}px`,
-    cursor: corner.includes('e') || corner.includes('w') ? 'ew-resize' : 'ns-resize',
+    left: corner.endsWith('w') ? '0%' : '100%',
+    top: corner.startsWith('n') ? '0%' : '100%',
+    cursor: corner === 'nw' || corner === 'se' ? 'nwse-resize' : 'nesw-resize',
   };
 }
 function beginBox(
@@ -387,7 +390,7 @@ function beginBox(
   corner?: string,
 ) {
   const session = editing.value;
-  if (!session || event.button !== 0) return;
+  if (!session || session.busy || session.stale || session.drawing || event.button !== 0) return;
   const p = point(event);
   if (!p) return;
   const id = box.id;
@@ -430,7 +433,7 @@ function beginBox(
   window.addEventListener('pointerup', onWindowUp);
 }
 function onWindowMove(event: PointerEvent) {
-  if (!gesture) return;
+  if (!gesture || editing.value?.busy || editing.value?.stale) return;
   const box = boxById(gesture.id);
   const p = point(event);
   if (!box || !p) return;
@@ -452,13 +455,15 @@ function onWindowMove(event: PointerEvent) {
   }
 }
 function onWindowUp() {
-  window.removeEventListener('pointermove', onWindowMove);
-  window.removeEventListener('pointerup', onWindowUp);
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('pointermove', onWindowMove);
+    window.removeEventListener('pointerup', onWindowUp);
+  }
   gesture = undefined;
 }
 function beginDraw(event: PointerEvent) {
   const session = editing.value;
-  if (!session?.drawing || event.button !== 0) return;
+  if (!session?.drawing || session.busy || session.stale || event.button !== 0) return;
   const p = point(event);
   if (!p) return;
   drawRect.value = null;
@@ -513,6 +518,7 @@ function cancelDraw() {
 }
 function setBoxClass(box: { class: { key: string; name: string; sourceId: string } }, key: string) {
   const session = editing.value;
+  if (!session || session.busy || session.stale) return;
   const choice = session?.choices.find((c) => c.key === key);
   if (!choice) return;
   if (choice.key !== box.class.key) {
@@ -523,7 +529,7 @@ function setBoxClass(box: { class: { key: string; name: string; sourceId: string
 function applyClassToSelected() {
   const session = editing.value;
   const choice = session?.choices.find((c) => c.key === draftClass.value) || session?.choices[0];
-  if (!session || !choice) return;
+  if (!session || session.busy || session.stale || !choice) return;
   for (const box of session.boxes.filter((b) => session.selected.includes(b.id))) {
     if (choice.key !== box.class.key) {
       box.class = { ...choice };
@@ -533,40 +539,35 @@ function applyClassToSelected() {
 }
 function confirmSelected() {
   const session = editing.value;
-  if (!session) return;
+  if (!session || session.busy || session.stale) return;
   for (const box of session.boxes.filter((b) => session.selected.includes(b.id)))
     box.reviewed = true;
 }
 function removeBox(box: { id: string }) {
   const session = editing.value;
-  if (!session) return;
+  if (!session || session.busy || session.stale) return;
   session.boxes = session.boxes.filter((b) => b.id !== box.id);
   session.selected = session.selected.filter((id) => id !== box.id);
 }
 function removeSelected() {
   const session = editing.value;
-  if (!session) return;
+  if (!session || session.busy || session.stale) return;
   const ids = new Set(session.selected);
   session.boxes = session.boxes.filter((b) => !ids.has(b.id));
   session.selected = [];
 }
 watch(
-  [editing, () => props.ready, revision],
+  [editing, () => props.ready],
   () => {
-    gesture = undefined;
+    onWindowUp();
     drawRect.value = null;
-    if (
-      editing.value &&
-      editing.value.readRevision !== revision.value &&
-      revision.value !== undefined
-    )
-      markObjectEditStale(Number(props.fileId));
     const session = editing.value;
     if (session && !session.choices.some((c) => c.key === draftClass.value))
       draftClass.value = session.choices[0]?.key || '';
   },
   { immediate: true },
 );
+onBeforeUnmount(onWindowUp);
 function focus(object: any) {
   showObjectBoxes.value = true;
   objectFocus.value = {

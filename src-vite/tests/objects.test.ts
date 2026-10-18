@@ -108,16 +108,16 @@ function context() {
     objectEdit: Vue.ref(null),
     objectEditActive: (fileId: number) =>
       ctx.objectEdit.value?.fileId === fileId,
-    startObjectEdit: (fileId: number, photo: any, choices: any[], rev: number) => {
+    startObjectEdit: (fileId: number, photo: any, choices: any[]) => {
       ctx.objectEdit.value = {
         libraryId: ctx.libConfig._libraryId,
         fileId,
         profile: photo.profile,
         sourceKey: photo.sourceKey,
         expectedRevision: photo.annotation?.revision || '',
-        readRevision: rev,
         imageWidth: photo.document.imageWidth,
         imageHeight: photo.document.imageHeight,
+        truncated: !!photo.document.truncated,
         choices,
         boxes: photo.document.objects.map((o: any) => ({
           id: o.id,
@@ -176,6 +176,12 @@ function component(name: string, ctx: any) {
     .replace('export default', 'const component=');
   return runInNewContext(`${code};component`, { ...ctx, ...imports });
 }
+function commonModule(name: string, ctx: any, expose: string) {
+  const code = stripTypeScriptTypes(
+    readFileSync(new URL(`../src/common/${name}.ts`, import.meta.url), 'utf8'),
+  ).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace(/^export /gm, '');
+  return runInNewContext(`${code};({${expose}})`, ctx);
+}
 test('object status and class namespaces preserve unknown third-party categories', () => {
   assert.equal(SIDEBAR.OBJECTS, 10);
   assert.equal(normalizeObjectState('invalid'), 'all');
@@ -209,6 +215,54 @@ test('object text search resolves localized, raw and keyed class names', () => {
   ]);
   assert.deepEqual(resolveObjectTextClasses('', classes, t), []);
   assert.deepEqual(resolveObjectTextClasses('bird', classes, t), []);
+});
+test('automatic detection only schedules pending photos in the authorized library', () => {
+  const view = { automation: { enabled: true, paused: false, revision: 'r1', scope: null as any }, modelInstalled: true, pending: 2, status: { running: false } };
+  assert.equal(objectHelpers.objectAutomationReady(view, 'A', true), true);
+  for (const pending of [0, -1, undefined, NaN]) {
+    assert.equal(objectHelpers.objectAutomationReady({ ...view, pending }, 'A', true), false);
+  }
+  assert.equal(objectHelpers.objectAutomationReady(view, 'A', false), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, modelInstalled: false }, 'A', true), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, status: { running: true } }, 'A', true), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, automation: { ...view.automation, paused: true } }, 'A', true), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, automation: { ...view.automation, enabled: false } }, 'A', true), false);
+  view.automation.scope = { libraryId: 'B', folderId: 12 };
+  assert.equal(objectHelpers.objectAutomationReady(view, 'A', true), false);
+  assert.equal(objectHelpers.objectAutomationReady(view, 'B', true), true);
+});
+test('automatic polling skips empty libraries and keeps a single request through state refresh', async () => {
+  const mounted: Array<() => void> = [], unmount: Array<() => void> = [], ticks: Array<() => void> = [], calls: any[] = [];
+  let finishRefresh: () => void = () => {};
+  const view = Vue.ref({ automation: { enabled: true, paused: false, revision: 'r1' }, modelInstalled: true, pending: 0, status: { running: false } });
+  const ctx = {
+    libConfig: Vue.reactive({ _libraryId: 'A', index: { status: 1 } }),
+    objectBusy: Vue.ref(false), objectAutomationReady: objectHelpers.objectAutomationReady,
+    useObjects: () => ({ view, refresh: () => new Promise<void>(resolve => { finishRefresh = resolve; }) }),
+    invoke: async (name: string, args: any) => { calls.push({ name, args }); },
+    onMounted: (callback: () => void) => mounted.push(callback),
+    onBeforeUnmount: (callback: () => void) => unmount.push(callback),
+    setInterval: (callback: () => void) => { ticks.push(callback); return 1; }, clearInterval: () => {},
+  };
+  commonModule('objectAutomation', ctx, 'useObjectAutomation').useObjectAutomation();
+  mounted.forEach(callback => callback());
+  ticks[0](); await tick();
+  assert.equal(calls.length, 0);
+  view.value.pending = 2;
+  ticks[0](); await tick();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'start_object_index');
+  assert.equal(calls[0].args.automationRevision, 'r1');
+  ticks[0](); await tick();
+  assert.equal(calls.length, 1);
+  view.value.pending = 0;
+  finishRefresh(); await tick();
+  ticks[0](); await tick();
+  assert.equal(calls.length, 1);
+  unmount.forEach(callback => callback());
+  view.value.pending = 2;
+  ticks[0](); await tick();
+  assert.equal(calls.length, 1);
 });
 test('explicit image scopes never widen malformed selections to a library job', () => {
   assert.deepEqual(
@@ -308,16 +362,13 @@ test('human editor opens a shared session carrying the full detection geometry',
   assert.equal(h.api.editing.value, true);
   h.dispose();
 });
-test('stale edits are rejected before saving and changing photo leaves the session', async () => {
+test('changing the selected photo does not transfer its edit session', async () => {
   const ctx = context(),
     calls: any[] = [];
   ctx.props = Vue.reactive(ctx.props);
   ctx.invoke = async (...args: any[]) => calls.push(args);
   const h = script('PhotoObjectInfo', ctx, 'edit,editing');
   h.api.edit();
-  ctx.revision.value++;
-  await tick();
-  assert.equal(ctx.objectEdit.value.stale, true);
   assert.equal(h.api.editing.value, true);
   ctx.props.file.id = 8;
   await tick();
@@ -368,6 +419,85 @@ test('object overlays reuse the image transform and suppress incompatible previe
   );
   assert.match(html, /比例不一致/);
   assert.doesNotMatch(html, /pointer-events-auto/);
+});
+test('editing frames and controls accept pointer input and handles use box-local corners', async () => {
+  const ctx = context();
+  ctx.props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 2, rotate: 0, ready: true, transition: false };
+  ctx.startObjectEdit(7, photo(), [dog]);
+  ctx.objectEdit.value.selected = [observation.id];
+  const html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), ctx.props));
+  assert.match(html, /class="absolute pointer-events-auto"/);
+  assert.match(html, /class="[^"]*top-3[^"]*pointer-events-auto/);
+  ctx.objectEdit.value.drawing = true;
+  const drawing = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), ctx.props));
+  assert.match(drawing, /pointer-events-auto cursor-crosshair/);
+  assert.doesNotMatch(drawing, /class="absolute pointer-events-auto"/);
+  const h = script('ObjectImageOverlay', ctx, 'handleStyle');
+  for (const [corner, left, top] of [['nw', '0%', '0%'], ['ne', '100%', '0%'], ['sw', '0%', '100%'], ['se', '100%', '100%']]) {
+    const style = h.api.handleStyle(corner);
+    assert.equal(style.left, left);
+    assert.equal(style.top, top);
+  }
+  h.dispose();
+});
+test('independent photo readers do not stale a new edit but real invalidation blocks its save', async () => {
+  const ctx = context();
+  const mounted: Array<() => any> = [], unmount: Array<() => any> = [], calls: string[] = [];
+  const listeners = new Map<string, Set<(event: any) => void>>();
+  ctx.onMounted = (callback: () => any) => mounted.push(callback);
+  ctx.onBeforeUnmount = (callback: () => any) => unmount.push(callback);
+  ctx.invoke = async (command: string) => { calls.push(command); return photo(); };
+  ctx.listen = async (name: string, callback: (event: any) => void) => {
+    if (!listeners.has(name)) listeners.set(name, new Set());
+    listeners.get(name)!.add(callback);
+    return () => listeners.get(name)!.delete(callback);
+  };
+  Object.assign(ctx, commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,objectEditActive,markObjectEditStale,saveObjectEdit,cancelObjectEdit'));
+  const readers = Vue.effectScope();
+  const imageSource = Vue.ref(6);
+  const { usePhotoObjects } = commonModule('photoObjects', ctx, 'usePhotoObjects');
+  const imageReader = readers.run(() => usePhotoObjects(() => [imageSource.value, 0]));
+  imageSource.value = 7;
+  await tick();
+  const infoReader = readers.run(() => usePhotoObjects(() => [7, 0]));
+  await tick();
+  assert.notEqual(imageReader.revision.value, infoReader.revision.value);
+  for (const mount of mounted) await mount();
+  ctx.props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
+  ctx.usePhotoObjects = () => imageReader;
+  const overlay = script('ObjectImageOverlay', ctx, 'editing');
+  ctx.startObjectEdit(7, infoReader.result.value, [dog]);
+  await tick();
+  assert.equal(ctx.objectEdit.value.stale, false);
+  for (const listener of listeners.get('object-annotations-changed')!) listener({ payload: { libraryId: 'other', fileId: 7 } });
+  assert.equal(ctx.objectEdit.value.stale, false);
+  for (const listener of listeners.get('media-lifecycle-changed')!) listener({ payload: { library_id: 'other', file_id: 7 } });
+  assert.equal(ctx.objectEdit.value.stale, false);
+  for (const listener of listeners.get('object-annotations-changed')!) listener({ payload: { libraryId: 'A', fileId: 7 } });
+  assert.equal(ctx.objectEdit.value.stale, true);
+  await ctx.saveObjectEdit();
+  assert.equal(calls.includes('save_object_annotations'), false);
+  for (const stop of unmount) stop();
+  overlay.dispose();
+  readers.stop();
+});
+test('editing and merging retain incomplete result coverage', async () => {
+  const ctx = context(), calls: any[] = [];
+  ctx.invoke = async (command: string, args: any) => calls.push({ command, args });
+  const api = commonModule('objectEditing', ctx, 'startObjectEdit,saveObjectEdit');
+  const partial = photo();
+  partial.document.truncated = true;
+  api.startObjectEdit(7, partial, [dog]);
+  await api.saveObjectEdit();
+  assert.equal(calls[0].args.document.truncated, true);
+  ctx.result.value.annotation = { revision: 'r1' };
+  ctx.result.value.modelDocument.truncated = true;
+  ctx.result.value.modelDocument.objects = [{ ...observation, id: 'new-1', bounds: [0.6, 0.6, 0.1, 0.1] }];
+  const h = script('PhotoObjectInfo', ctx, 'accepted,mergeCandidates');
+  h.api.accepted.value = ['new-1'];
+  await h.api.mergeCandidates();
+  assert.equal(calls[1].args.document.truncated, true);
+  h.dispose();
 });
 test('object smart rules are detected recursively and templates are editable saved-index queries', () => {
   assert.equal(
@@ -495,6 +625,8 @@ test('photo result requests discard stale sources and hide annotations immediate
     config: Vue.reactive({ settings: { ai: { detectionProfile: 'p1' } } }),
     libConfig: Vue.reactive({ _libraryId: 'A' }),
     file: Vue.ref({ id: 7, version: 1 }),
+    objectEdit: Vue.ref(null),
+    markObjectEditStale: () => {},
     invoke: (name: string, args: any) =>
       new Promise((resolve) => {
         requests.push({ name, args, resolve });
@@ -582,7 +714,6 @@ test('object editor saves full normalized documents including added and resized 
       { key: dog.key, name: 'dog', sourceId: '16' },
       { key: 'coco2017-80@1:15', name: 'cat', sourceId: '15' },
     ],
-    0,
   );
   const session = api.objectEdit.value;
   session.boxes[0].bounds = [0.2, 0.2, 0.5, 0.5];
@@ -629,7 +760,7 @@ test('object editor never submits stale sessions', async () => {
       ctx,
     ),
   );
-  api.startObjectEdit(7, photo(), [{ key: dog.key, name: 'dog', sourceId: '16' }], 0);
+  api.startObjectEdit(7, photo(), [{ key: dog.key, name: 'dog', sourceId: '16' }]);
   api.objectEdit.value.stale = true;
   await api.saveObjectEdit();
   assert.equal(calls.length, 0);

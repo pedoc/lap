@@ -2,6 +2,7 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { config, libConfig } from '@/common/config';
+import { objectEdit, markObjectEditStale } from './objectEditing';
 export function usePhotoObjects(source: () => [number, unknown]) {
   const result = ref<any>(null),
     error = ref(''),
@@ -22,13 +23,19 @@ export function usePhotoObjects(source: () => [number, unknown]) {
     }
     loading.value = true;
     try {
-      const data = await invoke('get_photo_objects', { libraryId, fileId });
+      const data = await invoke<any>('get_photo_objects', { libraryId, fileId });
       if (
         !disposed &&
         request === sequence &&
         libraryId === libConfig._libraryId &&
         profile === config.settings.ai?.detectionProfile
       ) {
+        const session = objectEdit.value;
+        if (
+          session?.libraryId === libraryId && session.fileId === fileId &&
+          (session.profile !== data.profile || session.sourceKey !== data.sourceKey ||
+            session.expectedRevision !== (data.annotation?.revision || ''))
+        ) markObjectEditStale(fileId, libraryId);
         result.value = data;
         error.value = '';
       }
@@ -47,7 +54,8 @@ export function usePhotoObjects(source: () => [number, unknown]) {
       ...source(),
       config.settings.ai?.detectionProfile,
     ],
-    () => {
+    (_value, previous) => {
+      if (previous) markObjectEditStale(Number(previous[1]), String(previous[0]));
       result.value = null;
       error.value = '';
       revision.value++;
@@ -64,14 +72,16 @@ export function usePhotoObjects(source: () => [number, unknown]) {
       'files-deleted',
     ]) {
       const off = await listen(name, (event: any) => {
+        const eventLibrary = event.payload?.libraryId || event.payload?.library_id;
+        const eventFile = event.payload?.fileId ?? event.payload?.file_id;
         if (
-          event.payload?.libraryId &&
-          event.payload.libraryId !== libConfig._libraryId
+          eventLibrary &&
+          eventLibrary !== libConfig._libraryId
         )
           return;
         if (
-          event.payload?.fileId &&
-          Number(event.payload.fileId) !== source()[0]
+          eventFile &&
+          Number(eventFile) !== source()[0]
         )
           return;
         if (
@@ -82,6 +92,7 @@ export function usePhotoObjects(source: () => [number, unknown]) {
           ].includes(name)
         )
           result.value = null;
+        markObjectEditStale(source()[0], libConfig._libraryId);
         revision.value++;
         void refresh();
       });

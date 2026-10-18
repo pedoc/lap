@@ -2,18 +2,7 @@ import { onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { libConfig } from '@/common/config';
 import { useObjects, objectBusy } from './objects';
-
-function ready(view: any, libraryId: string, indexed: boolean) {
-  const policy = view?.automation;
-  return (
-    !!policy &&
-    policy.enabled &&
-    !policy.paused &&
-    indexed &&
-    view?.modelInstalled &&
-    !view?.status?.running
-  );
-}
+import { objectAutomationReady } from './objectUi';
 // Only the main window schedules; the backend independently validates opt-in,
 // revision, shared idle time, scope and competing media jobs.
 export function useObjectAutomation() {
@@ -26,7 +15,7 @@ export function useObjectAutomation() {
       pending ||
       disposed ||
       objectBusy.value ||
-      !ready(view.value, libConfig._libraryId, Number(libConfig.index.status) === 1)
+      !objectAutomationReady(view.value, libConfig._libraryId, Number(libConfig.index.status) === 1)
     )
       return;
     const libraryId = libConfig._libraryId,
@@ -46,8 +35,9 @@ export function useObjectAutomation() {
     } catch {
       /* Active users / competing jobs are expected deferrals. */
     } finally {
-      pending = false;
-      if (!disposed && libraryId === libConfig._libraryId) await refresh();
+      try {
+        if (!disposed && libraryId === libConfig._libraryId) await refresh();
+      } finally { pending = false; }
     }
   }
   onMounted(() => {

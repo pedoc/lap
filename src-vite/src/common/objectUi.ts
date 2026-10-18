@@ -12,6 +12,12 @@ export function normalizeObjectState(value: unknown): ObjectState {
     ? (value as ObjectState)
     : 'all';
 }
+export function objectAutomationReady(view: any, libraryId: string, indexed: boolean) {
+  const policy = view?.automation;
+  return !!libraryId && indexed && !!view?.modelInstalled && Number(view?.pending) > 0 &&
+    !view?.status?.running && !!policy?.enabled && !policy.paused &&
+    (!policy.scope || policy.scope.libraryId === libraryId);
+}
 export function objectClassName(
   label: any,
   translate: (key: string) => string,

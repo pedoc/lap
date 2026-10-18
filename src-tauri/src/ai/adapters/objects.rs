@@ -1,7 +1,9 @@
 //! Explicit native contracts for YOLOX grid exports and Hugging Face RT-DETR logits/boxes.
 use crate::ai::{
     assets,
-    objects_types::{Candidate, LabelSet, ObjectDocument, finish},
+    objects_types::{
+        Candidate, LabelSet, ObjectDocument, clip_bounds, finish, iou, validate_candidates,
+    },
     runtime,
     types::{Adapter, ResolvedModel},
 };
@@ -134,11 +136,7 @@ impl OnnxObjects {
         size: usize,
         check: &dyn Fn() -> Result<(), String>,
     ) -> Result<Vec<Candidate>, String> {
-        let input = preprocess(
-            image,
-            adapter,
-            size,
-        );
+        let input = preprocess(image, adapter, size);
         check()?;
         let outputs=self.session.run(inputs![self.input_name.as_str()=>Value::from_array(input).map_err(|e|e.to_string())?]).map_err(|e|format!("Object inference failed: {e}"))?;
         let candidates = if adapter == Adapter::YoloXOnnx {
@@ -214,40 +212,78 @@ impl OnnxObjects {
         let height = image.height();
         let overlap = overlap.clamp(0., 0.9);
         let mut candidates = Vec::new();
+        let mut tile_id = 0;
+        let confidence = self.model.number("object_confidence") as f32;
         for ty in tile_offsets(height, tile, overlap) {
             for tx in tile_offsets(width, tile, overlap) {
                 check()?;
                 let tw = tile.min(width - tx);
                 let th = tile.min(height - ty);
                 let sub = image.crop_imm(tx, ty, tw, th);
-                let mut local = self.run_pass(&sub, adapter, size, check)?;
-                for candidate in &mut local {
+                let local = self.run_pass(&sub, adapter, size, check)?;
+                validate_candidates(&local, &self.labels)?;
+                for mut candidate in local {
+                    if candidate.score < confidence {
+                        continue;
+                    }
+                    let Some(bounds) = clip_bounds(candidate.bounds) else {
+                        continue;
+                    };
                     candidate.bounds = [
-                        (tx as f32 + candidate.bounds[0] * tw as f32) / width as f32,
-                        (ty as f32 + candidate.bounds[1] * th as f32) / height as f32,
-                        candidate.bounds[2] * tw as f32 / width as f32,
-                        candidate.bounds[3] * th as f32 / height as f32,
+                        (tx as f32 + bounds[0] * tw as f32) / width as f32,
+                        (ty as f32 + bounds[1] * th as f32) / height as f32,
+                        bounds[2] * tw as f32 / width as f32,
+                        bounds[3] * th as f32 / height as f32,
                     ];
+                    candidates.push((tile_id, candidate));
                 }
-                candidates.extend(local);
+                tile_id += 1;
             }
         }
-        Ok(candidates)
+        merge_tile_candidates(
+            candidates,
+            self.model.number("object_tile_nms_iou") as f32,
+            check,
+        )
     }
+}
+fn merge_tile_candidates(
+    mut candidates: Vec<(usize, Candidate)>,
+    threshold: f32,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<Vec<Candidate>, String> {
+    if !threshold.is_finite() || !(0.05..=0.95).contains(&threshold) {
+        return Err("Cross-tile overlap threshold must be between 0.05 and 0.95".into());
+    }
+    candidates.sort_by(|left, right| right.1.score.total_cmp(&left.1.score));
+    let mut kept: Vec<(usize, Candidate)> = Vec::new();
+    for (tile, candidate) in candidates {
+        check()?;
+        if kept.iter().any(|(previous_tile, previous)| {
+            *previous_tile != tile
+                && previous.class_index == candidate.class_index
+                && iou(previous.bounds, candidate.bounds) > threshold
+        }) {
+            continue;
+        }
+        kept.push((tile, candidate));
+    }
+    Ok(kept.into_iter().map(|(_, candidate)| candidate).collect())
 }
 fn tile_offsets(length: u32, tile: u32, overlap: f32) -> Vec<u32> {
     if tile == 0 || length <= tile {
         return vec![0];
     }
     let stride = ((tile as f32) * (1. - overlap)).max(1.) as u32;
-    let mut offsets = vec![0];
-    let mut offset = stride;
-    while offset < length {
+    let last = length - tile;
+    let mut offsets = Vec::new();
+    let mut offset = 0;
+    loop {
         offsets.push(offset);
-        offset += stride;
-    }
-    if *offsets.last().unwrap() + tile < length {
-        *offsets.last_mut().unwrap() = length - tile;
+        if offset == last {
+            break;
+        }
+        offset = offset.saturating_add(stride).min(last);
     }
     offsets
 }
@@ -428,13 +464,54 @@ mod tests {
     }
     #[test]
     fn tile_grid_covers_edges_and_small_images_without_duplicating_offsets() {
-        assert_eq!(tile_offsets(100, 64, 0.5), vec![0, 32, 64, 96]);
-        assert_eq!(tile_offsets(100, 64, 0.2), vec![0, 51]);
+        assert_eq!(tile_offsets(100, 64, 0.5), vec![0, 32, 36]);
+        assert_eq!(tile_offsets(100, 64, 0.2), vec![0, 36]);
         assert_eq!(tile_offsets(50, 64, 0.5), vec![0]);
         assert_eq!(tile_offsets(64, 64, 0.), vec![0]);
-        assert!(tile_offsets(1000, 640, 0.2)
-            .iter()
-            .all(|offset| *offset + 640 >= 1000 || *offset == 0));
+        assert_eq!(tile_offsets(1000, 640, 0.2), vec![0, 360]);
+        assert_eq!(tile_offsets(1025, 640, 0.2), vec![0, 385]);
+        for length in [641, 1024, 1025, 4000] {
+            let offsets = tile_offsets(length, 640, 0.2);
+            assert_eq!(*offsets.last().unwrap() + 640, length);
+            assert!(
+                offsets
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1] && pair[1] - pair[0] <= 640)
+            );
+        }
+    }
+    #[test]
+    fn tile_deduplication_is_independent_of_model_nms_and_preserves_same_tile_instances() {
+        let candidate = |class_index, score| Candidate {
+            class_index,
+            score,
+            bounds: [0.2, 0.2, 0.3, 0.3],
+        };
+        let merged = merge_tile_candidates(
+            vec![(0, candidate(0, 0.9)), (1, candidate(0, 0.8))],
+            0.5,
+            &|| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].score, 0.9);
+        let separate = merge_tile_candidates(
+            vec![
+                (0, candidate(0, 0.9)),
+                (0, candidate(0, 0.8)),
+                (1, candidate(1, 0.7)),
+            ],
+            0.5,
+            &|| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(separate.len(), 3);
+        assert!(
+            merge_tile_candidates(vec![(0, candidate(0, 0.9))], 0.5, &|| Err(
+                "cancelled".into()
+            ))
+            .is_err()
+        );
     }
     #[test]
     fn decoders_are_explicit_about_shape_probabilities_and_source_coordinates() {
@@ -602,6 +679,14 @@ mod tests {
                 .unwrap()
                 .parameters
                 .insert("device".into(), serde_json::json!(provider));
+            if std::env::var("LAP_OBJECT_TEST_TILED").is_ok_and(|value| value == "1") {
+                config
+                    .models
+                    .get_mut(id)
+                    .unwrap()
+                    .parameters
+                    .insert("object_tiled".into(), serde_json::json!(true));
+            }
             let model = config.resolve(id).unwrap();
             std::fs::write(
                 assets::directory(&model.definition)

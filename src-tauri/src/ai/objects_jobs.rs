@@ -79,7 +79,35 @@ fn check(job: &Job, library: &str) -> Result<(), String> {
     if job.cancel.load(Ordering::SeqCst) {
         return Err("Object recognition stopped; completed results are saved".into());
     }
+    check_automation(job, library, |revision, library| {
+        super::objects_automation::authorized(revision, library).map(|_| ())
+    })
+}
+fn check_automation(
+    job: &Job,
+    library: &str,
+    authorized: impl FnOnce(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    let revision = {
+        let status = job.status.lock().map_err(|error| error.to_string())?;
+        status
+            .automatic
+            .then(|| status.automation_revision.clone().unwrap_or_default())
+    };
+    if let Some(revision) = revision {
+        if authorized(&revision, library).is_err() {
+            job.cancel.store(true, Ordering::SeqCst);
+            return Err("Automatic object recognition yielded; completed results are saved".into());
+        }
+    }
     Ok(())
+}
+fn apply_automation_scope(
+    request: &mut super::objects_journal::Request,
+    policy: &super::objects_automation::Policy,
+) {
+    request.folder_id = policy.scope.as_ref().map(|scope| scope.folder_id);
+    request.batch_size = Some(policy.batch_size);
 }
 fn targets(
     c: &Connection,
@@ -148,8 +176,8 @@ pub async fn start_object_index(
     resume_failed: Option<bool>,
     automation_revision: Option<String>,
 ) -> Result<Status, String> {
-    use super::objects_journal as journal;
     use super::objects_automation as automation;
+    use super::objects_journal as journal;
     let automatic = automation_revision.is_some();
     let request = journal::Request {
         force,
@@ -166,12 +194,10 @@ pub async fn start_object_index(
             || request.folder_id.is_some()
             || resume_job_id.is_some())
     {
-        return Err("Automatic object recognition may only process its configured pending scope".into());
+        return Err(
+            "Automatic object recognition may only process its configured pending scope".into(),
+        );
     }
-    let policy = automation_revision
-        .as_ref()
-        .map(|revision| automation::authorized(revision, &library_id))
-        .transpose()?;
     let resume_failed = resume_failed.unwrap_or(false);
     if resume_failed && resume_job_id.is_none()
         || resume_job_id.is_some()
@@ -187,6 +213,8 @@ pub async fn start_object_index(
             .read()
             .map_err(|e| e.to_string())?;
         media::check_library(&library_id)?;
+        let policy = automation_revision.as_ref()
+            .map(|revision| automation::authorized(revision, &library_id)).transpose()?;
         if *app_handle
             .state::<crate::t_face::FaceIndexingStatus>()
             .0
@@ -215,13 +243,6 @@ pub async fn start_object_index(
             );
         }
         let model = super::settings::active(Task::Detection)?;
-        if let Err(error) = super::assets::verify(&model.definition) {
-            if automatic {
-                let _ = automation::pause_with_error(&error);
-                let _ = app_handle.emit("object-automation-changed", ());
-            }
-            return Err(error);
-        }
         let mut c = crate::t_sqlite::open_conn()?;
         store::ensure_schema(&c)?;
         store::ensure_model(&c, &model)?;
@@ -235,15 +256,12 @@ pub async fn start_object_index(
             .unwrap_or(request);
         request.model_values = model.values.clone();
         request.model_version = model.definition.version.clone();
+        if let Some(policy) = &policy { apply_automation_scope(&mut request, policy); }
+        request.validate()?;
         // A completed plan replays exact ledger IDs; a renamed/deleted folder cannot broaden it.
         let replay = recovery.as_ref().and_then(|r| r.ids.clone());
         let folder = if replay.is_none() {
-            let folder_id = if automatic {
-                policy.as_ref().and_then(|p| p.scope.as_ref()).map(|s| s.folder_id)
-            } else {
-                request.folder_id
-            };
-            folder_id
+            request.folder_id
                 .map(|id| {
                     c.query_row(
                         "SELECT album_id,path FROM afolders WHERE id=?1",
@@ -270,6 +288,18 @@ pub async fn start_object_index(
                     request.selected_sources.insert(*id,key);
                 }
             }
+        }
+        let prepared_ids = if automatic {
+            let ids = targets(&c, &model.profile(), false, false, None, folder.clone(), request.batch_size)?;
+            if ids.is_empty() { return Ok(status(&library_id)); }
+            Some(ids)
+        } else { None };
+        if let Err(error) = super::assets::verify(&model.definition) {
+            if automatic {
+                let _ = automation::pause_with_error(&error);
+                let _ = app_handle.emit("object-automation-changed", ());
+            }
+            return Err(error);
         }
         let scope = recovery
             .as_ref()
@@ -306,6 +336,9 @@ pub async fn start_object_index(
         {
             return Err("An object recognition job is already running".into());
         }
+        if let Some(revision) = &automation_revision {
+            automation::authorized(revision, &library_id)?;
+        }
         journal::begin(
             &mut c,
             &initial,
@@ -340,6 +373,8 @@ pub async fn start_object_index(
                 let replayed = replay.is_some();
                 let ids = match replay {
                     Some(ids) => ids,
+                    None => match prepared_ids {
+                    Some(ids) => ids,
                     None => targets(
                         &c,
                         &profile,
@@ -347,12 +382,9 @@ pub async fn start_object_index(
                         request.retry_failed,
                         request.file_ids.as_deref(),
                         folder,
-                        if automatic {
-                            policy.as_ref().map(|p| p.batch_size)
-                        } else {
-                            None
-                        },
+                        request.batch_size,
                     )?,
+                    },
                 };
                 if !replayed {
                     journal::plan_sources(
@@ -551,6 +583,57 @@ pub async fn cancel_object_index(library_id: String, job_id: String) -> Result<(
 mod tests {
     use super::*;
     #[test]
+    fn automatic_checks_cancel_changed_policies_but_do_not_authorize_manual_jobs() {
+        let job = Job {
+            cancel: AtomicBool::new(false),
+            status: Mutex::new(Status {
+                automatic: true,
+                automation_revision: Some("r1".into()),
+                ..Default::default()
+            }),
+        };
+        assert!(
+            check_automation(&job, "A", |revision, library| {
+                assert_eq!(revision, "r1");
+                assert_eq!(library, "A");
+                Ok(())
+            })
+            .is_ok()
+        );
+        assert!(check_automation(&job, "A", |_, _| Err("paused or active".into())).is_err());
+        assert!(job.cancel.load(Ordering::SeqCst));
+        let manual = Job {
+            cancel: AtomicBool::new(false),
+            status: Mutex::new(Status::default()),
+        };
+        assert!(
+            check_automation(&manual, "A", |_, _| panic!(
+                "manual jobs must not check an idle policy"
+            ))
+            .is_ok()
+        );
+    }
+    #[test]
+    fn automatic_scope_and_batch_limit_are_part_of_the_saved_request() {
+        use super::super::objects_automation::{Policy, Scope};
+        let policy = Policy {
+            batch_size: 7,
+            scope: Some(Scope {
+                library_id: "A".into(),
+                folder_id: 12,
+                label: "photos".into(),
+            }),
+            ..Default::default()
+        };
+        let mut request = super::super::objects_journal::Request::default();
+        apply_automation_scope(&mut request, &policy);
+        request.validate().unwrap();
+        let restored: super::super::objects_journal::Request =
+            serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+        assert_eq!(restored.folder_id, Some(12));
+        assert_eq!(restored.batch_size, Some(7));
+    }
+    #[test]
     fn explicit_scope_and_retry_modes_never_expand_into_other_images() {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE albums(id INTEGER PRIMARY KEY,path TEXT,file_types INTEGER,small_image_filter INTEGER,excluded_folders TEXT);CREATE TABLE afolders(id INTEGER PRIMARY KEY,album_id INTEGER,path TEXT,is_excluded_from_search INTEGER DEFAULT 0);CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,width INTEGER,height INTEGER,live_photo_video_id INTEGER,modified_at INTEGER,size INTEGER);CREATE TABLE media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER DEFAULT 0,deleted_at INTEGER);INSERT INTO albums VALUES(1,'/photos',7,0,'[]');INSERT INTO afolders VALUES(1,1,'/photos/trip_%',0),(2,1,'/photos/trip_%/child',0),(3,1,'/photos/trip_%2',0);INSERT INTO afiles VALUES(1,1,1,100,100,NULL,10,20),(2,2,1,100,100,NULL,10,20),(3,3,1,100,100,NULL,10,20);").unwrap();
@@ -577,10 +660,17 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(targets(&c, "p", false, true, None, None, None).unwrap(), vec![1]);
+        assert_eq!(
+            targets(&c, "p", false, true, None, None, None).unwrap(),
+            vec![1]
+        );
         assert_eq!(
             targets(&c, "p", false, false, None, None, None).unwrap(),
             vec![2, 3]
+        );
+        assert_eq!(
+            targets(&c, "p", false, false, None, None, Some(1)).unwrap(),
+            vec![2]
         );
         assert_eq!(
             targets(&c, "p", true, false, Some(&[1]), None, None).unwrap(),

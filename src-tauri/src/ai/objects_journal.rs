@@ -9,6 +9,7 @@ pub struct Request {
     pub retry_failed: bool,
     pub file_ids: Option<Vec<i64>>,
     pub folder_id: Option<i64>,
+    pub batch_size: Option<usize>,
     pub model_values: std::collections::BTreeMap<String, serde_json::Value>,
     pub model_version: String,
     pub selected_sources: std::collections::BTreeMap<i64, String>,
@@ -18,6 +19,9 @@ impl Request {
         if self.force && self.retry_failed
             || self.file_ids.is_some() && self.folder_id.is_some()
             || self.folder_id.is_some_and(|id| id <= 0)
+            || self
+                .batch_size
+                .is_some_and(|size| !(1..=100).contains(&size))
             || self.file_ids.as_ref().is_some_and(|ids| {
                 ids.is_empty() || ids.len() > 10000 || ids.iter().any(|id| *id <= 0)
             })
@@ -453,6 +457,30 @@ mod tests {
         assert!(recovery.ids.is_none());
         assert_eq!(recovery.request.folder_id, Some(12));
         assert!(recovery.request.force);
+    }
+    #[test]
+    fn unplanned_automatic_batches_keep_their_folder_and_limit_for_manual_recovery() {
+        let mut c = db();
+        let mut root = status();
+        root.automatic = true;
+        root.scope = "folder".into();
+        root.scope_name = Some("/photos/trip".into());
+        let request = Request {
+            folder_id: Some(12),
+            batch_size: Some(20),
+            ..Default::default()
+        };
+        begin(&mut c, &root, &request, "p", "m", "Model", None).unwrap();
+        let recovery = recover(&c, &root.job_id, "A", "p", false).unwrap();
+        assert_eq!(recovery.scope, "folder");
+        assert_eq!(recovery.scope_name.as_deref(), Some("/photos/trip"));
+        assert_eq!(recovery.request.folder_id, Some(12));
+        assert_eq!(recovery.request.batch_size, Some(20));
+        assert!(recovery.ids.is_none());
+        assert!(!recovery.request.force && !recovery.request.retry_failed);
+        let mut invalid = request;
+        invalid.batch_size = Some(0);
+        assert!(invalid.validate().is_err());
     }
     #[test]
     fn selected_intent_retains_source_identity_even_before_a_plan_exists() {
