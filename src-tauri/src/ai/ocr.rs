@@ -391,10 +391,10 @@ fn run(
                     "Source file changed since its last scan; rescan this album before OCR".into(),
                 );
             }
-            let image = tauri::async_runtime::block_on(crate::t_image::load_oriented_image(
+            let image = crate::t_image::load_oriented_image_blocking(
                 &path,
                 orientation,
-            ))?;
+            )?;
             check()?;
             super::ocr_orientation::recognize(&mut backend, model, &image, None, &check)
         })();

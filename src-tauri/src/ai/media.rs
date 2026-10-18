@@ -55,10 +55,10 @@ impl Source {
             return Err("Image exceeds 80 megapixel analysis decoding limit".into());
         }
         self.verify()?;
-        let image = tauri::async_runtime::block_on(crate::t_image::load_oriented_image(
+        let image = crate::t_image::load_oriented_image_blocking(
             &self.path,
             self.orientation,
-        ))?;
+        )?;
         if u64::from(image.width()) * u64::from(image.height()) > 80_000_000 {
             return Err("Decoded image exceeds analysis limit".into());
         }

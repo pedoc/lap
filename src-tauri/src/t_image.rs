@@ -1416,26 +1416,27 @@ pub(crate) async fn load_oriented_image(
     file_path: &str,
     orientation: i32,
 ) -> Result<DynamicImage, String> {
+    let path = file_path.to_string();
+    tauri::async_runtime::spawn_blocking(move || load_oriented_image_blocking(&path, orientation))
+        .await
+        .map_err(|e| format!("Failed to join decode task: {e}"))?
+}
+
+/// For callers already on a blocking worker. Never submit another decode to the
+/// same pool and wait for it while holding an inference lease or library lock.
+pub(crate) fn load_oriented_image_blocking(
+    file_path: &str,
+    orientation: i32,
+) -> Result<DynamicImage, String> {
     let file_type = t_utils::get_file_type(file_path).unwrap_or(0);
-    // decoding is CPU-bound: keep it off the async runtime threads
     if should_generate_preview_for_file(file_path, file_type) {
-        let preview = get_generated_preview_bytes(file_path)
-            .await?
+        let preview = tauri::async_runtime::block_on(get_generated_preview_bytes(file_path))?
             .ok_or_else(|| "Failed to resolve editable preview image".to_string())?;
-        tauri::async_runtime::spawn_blocking(move || {
-            image::load_from_memory(&preview)
-                .map_err(|e| format!("Failed to decode editable preview image: {}", e))
-        })
-        .await
-        .map_err(|e| format!("Failed to join decode task: {}", e))?
+        image::load_from_memory(&preview)
+            .map_err(|e| format!("Failed to decode editable preview image: {e}"))
     } else {
-        let path = file_path.to_string();
-        tauri::async_runtime::spawn_blocking(move || {
-            let img = image::open(Path::new(&path)).map_err(|e| e.to_string())?;
-            Ok(apply_orientation(img, orientation))
-        })
-        .await
-        .map_err(|e| format!("Failed to join decode task: {}", e))?
+        let img = image::open(Path::new(file_path)).map_err(|e| e.to_string())?;
+        Ok(apply_orientation(img, orientation))
     }
 }
 
@@ -1901,6 +1902,61 @@ pub async fn get_raw_preview_cached(path: &str, options: RawDisplayOptions) -> R
         }
         Ok(result)
     }).await.map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod oriented_decode_tests {
+    use super::*;
+
+    #[test]
+    fn analysis_worker_decodes_and_orients_without_an_async_runtime() {
+        let path = std::env::temp_dir().join(format!("lap-oriented-{}.png", uuid::Uuid::new_v4()));
+        let pixels = image::RgbImage::from_fn(3, 2, |x, y| image::Rgb([x as u8, y as u8, 100]));
+        pixels.save(&path).unwrap();
+        let source = std::fs::read(&path).unwrap();
+        let (plain, rotated, mirrored) = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let file = path.to_str().unwrap();
+                    (
+                        load_oriented_image_blocking(file, 1).unwrap().to_rgb8(),
+                        load_oriented_image_blocking(file, 6).unwrap().to_rgb8(),
+                        load_oriented_image_blocking(file, 2).unwrap().to_rgb8(),
+                    )
+                })
+                .join()
+                .unwrap()
+        });
+        assert_eq!(plain, pixels);
+        assert_eq!(rotated.dimensions(), (2, 3));
+        assert_eq!(rotated.get_pixel(0, 0), pixels.get_pixel(0, 1));
+        assert_eq!(mirrored.get_pixel(0, 0), pixels.get_pixel(2, 0));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            source,
+            "original pixels are read-only"
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert!(load_oriented_image_blocking(path.to_str().unwrap(), 1).is_err());
+    }
+
+    #[test]
+    fn async_editing_and_blocking_analysis_use_identical_orientation() {
+        let path =
+            std::env::temp_dir().join(format!("lap-async-oriented-{}.png", uuid::Uuid::new_v4()));
+        image::RgbImage::from_fn(3, 2, |x, y| image::Rgb([x as u8, y as u8, 100]))
+            .save(&path)
+            .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for orientation in 1..=8 {
+            let direct = load_oriented_image_blocking(path.to_str().unwrap(), orientation).unwrap();
+            let asynchronous = runtime
+                .block_on(load_oriented_image(path.to_str().unwrap(), orientation))
+                .unwrap();
+            assert_eq!(direct.to_rgb8(), asynchronous.to_rgb8());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
 }
 
 #[cfg(test)]

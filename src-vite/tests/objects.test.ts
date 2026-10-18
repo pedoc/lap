@@ -182,6 +182,65 @@ function commonModule(name: string, ctx: any, expose: string) {
   ).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace(/^export /gm, '');
   return runInNewContext(`${code};({${expose}})`, ctx);
 }
+test('object start and stop stay usable while coverage refresh is pending', async () => {
+  const requests: Array<{ name: string; args: any; resolve: (value: any) => void }> = [];
+  const ctx = {
+    ...Vue,
+    validateObjectScope,
+    libConfig: Vue.reactive({ _libraryId: 'A' }),
+    invoke: (name: string, args: any) => new Promise(resolve => requests.push({ name, args, resolve })),
+  };
+  const api = commonModule('objects', ctx, 'objectView,objectError,objectBusy,startObjectIndex,stopObjectIndex');
+  api.objectView.value = { pending: 11435, status: { jobId: 'old', running: false, historical: true } };
+  const start = api.startObjectIndex();
+  assert.equal(api.objectBusy.value, true);
+  requests[0].resolve({ libraryId: 'A', jobId: 'new', running: true, phase: 'preparing' });
+  await tick();
+  assert.equal(requests[1].name, 'get_object_state');
+  assert.equal(api.objectBusy.value, false, 'statistics refresh must not lock stop');
+  assert.equal(api.objectView.value.status.jobId, 'new');
+  assert.equal(api.objectView.value.status.running, true);
+  assert.equal((await start).jobId, 'new');
+
+  const stop = api.stopObjectIndex();
+  assert.equal(requests[2].name, 'cancel_object_index');
+  assert.equal(requests[2].args.jobId, 'new');
+  requests[2].resolve(undefined);
+  await tick();
+  assert.equal(api.objectBusy.value, false);
+  assert.equal(api.objectView.value.status.stopping, true);
+  await stop;
+  requests[1].resolve({ status: { jobId: 'new', running: true, stopping: false } });
+  await tick();
+  assert.equal(api.objectView.value.status.stopping, true, 'pre-cancel refresh is stale');
+  requests[3].resolve({ pending: 11435, status: { jobId: 'new', running: false, cancelled: true } });
+  await tick();
+  assert.equal(api.objectView.value.status.cancelled, true);
+});
+test('failed object startup releases controls and preserves the error', async () => {
+  const api = commonModule('objects', {
+    ...Vue, validateObjectScope, libConfig: { _libraryId: 'A' },
+    invoke: async () => { throw new Error('Stop manual OCR first'); },
+  }, 'objectView,objectError,objectBusy,startObjectIndex');
+  await assert.rejects(api.startObjectIndex(), /Stop manual OCR first/);
+  assert.equal(api.objectBusy.value, false);
+  assert.match(api.objectError.value, /Stop manual OCR first/);
+});
+test('an object startup reply cannot replace the new library view', async () => {
+  let finish!: (value: any) => void;
+  const ctx = {
+    ...Vue, validateObjectScope, libConfig: Vue.reactive({ _libraryId: 'A' }),
+    invoke: () => new Promise(resolve => { finish = resolve; }),
+  };
+  const api = commonModule('objects', ctx, 'objectView,objectBusy,startObjectIndex');
+  const start = api.startObjectIndex();
+  ctx.libConfig._libraryId = 'B';
+  api.objectView.value = { status: { jobId: 'library-b' } };
+  finish({ libraryId: 'A', jobId: 'library-a', running: true });
+  await start;
+  assert.equal(api.objectView.value.status.jobId, 'library-b');
+  assert.equal(api.objectBusy.value, false);
+});
 test('object status and class namespaces preserve unknown third-party categories', () => {
   assert.equal(SIDEBAR.OBJECTS, 10);
   assert.equal(normalizeObjectState('invalid'), 'all');

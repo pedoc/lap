@@ -2007,6 +2007,24 @@ struct FolderSyncOutcome {
 
 const FOLDER_SYNC_THUMBNAIL_SIZE: u32 = 512;
 
+// Wait asynchronously BEFORE entering the shared blocking pool. A large folder
+// must not fill that pool with workers waiting for the same album/inference lock.
+static SYNCED_FILE_WORK_PERMITS: Lazy<Arc<Semaphore>> = Lazy::new(|| Arc::new(Semaphore::new(2)));
+
+async fn run_synced_file_work<T: Send + 'static>(
+    permits: Arc<Semaphore>,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let permit = permits.acquire_owned().await.map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        // Keep admission until the worker really exits, even if its waiter is cancelled.
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|e| format!("Synced file processing worker failed: {e}"))
+}
+
 fn is_path_not_found(err: &str) -> bool {
     err.contains("No such file or directory")
         || err.contains("The system cannot find the file specified")
@@ -2136,14 +2154,27 @@ fn sync_generation_valid(generation: u64) -> bool {
 }
 
 pub fn start_folder_mtime_sync(app_handle: tauri::AppHandle) {
+    let Ok(library_id) = crate::t_config::current_library_id() else {
+        return;
+    };
     let generation = FOLDER_SYNC_GENERATION
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         .wrapping_add(1);
 
     tauri::async_runtime::spawn(async move {
-        match sync_dirty_folders_by_mtime(generation) {
-            Ok((result, tasks)) => {
-                if !sync_generation_valid(generation) {
+        let scan_library = library_id.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            crate::t_cmds::with_current_library(&scan_library, || {
+                sync_dirty_folders_by_mtime(generation)
+            })
+        })
+        .await;
+        match result {
+            Ok(Ok((result, tasks))) => {
+                if !sync_generation_valid(generation)
+                    || crate::t_config::current_library_id().ok().as_deref()
+                        != Some(library_id.as_str())
+                {
                     return;
                 }
                 if !result.folder_path_migrations.is_empty() {
@@ -2153,14 +2184,15 @@ pub fn start_folder_mtime_sync(app_handle: tauri::AppHandle) {
                     );
                 }
                 for task in tasks {
-                    schedule_synced_file_processing(app_handle.clone(), task);
+                    schedule_synced_file_processing(app_handle.clone(), library_id.clone(), task);
                 }
                 if result.dirty_folder_count > 0 || result.new_folder_count > 0 {
                     let _ = app_handle.emit("library-folder-sync-finished", &result);
                     let _ = app_handle.emit("library-total-refreshed", ());
                 }
             }
-            Err(e) => eprintln!("folder mtime sync failed: {}", e),
+            Ok(Err(e)) => eprintln!("folder mtime sync failed: {}", e),
+            Err(e) => eprintln!("folder mtime sync worker failed: {}", e),
         }
     });
 }
@@ -2716,6 +2748,7 @@ pub fn sync_single_folder(
     folder_path: &str,
     group_raw_jpeg_pairs: bool,
 ) -> Result<FolderMtimeSyncResult, String> {
+    let library_id = crate::t_config::current_library_id()?;
     // A complete album scan owns folder and file reconciliation for this
     // album. Skip foreground refreshes until it finishes to avoid concurrent
     // writes based on different filesystem snapshots.
@@ -2829,7 +2862,7 @@ pub fn sync_single_folder(
         AFile::clear_raw_jpeg_pairs_in_folder(resolved_folder_id)?;
     }
     for task in outcome.tasks {
-        schedule_synced_file_processing(app_handle.clone(), task);
+        schedule_synced_file_processing(app_handle.clone(), library_id.clone(), task);
     }
 
     let mtime = info.modified;
@@ -2905,9 +2938,15 @@ fn should_process_synced_file(file: &AFile, file_type: i64, threshold: i64) -> b
         && crate::ai::settings::background_indexing_enabled()
 }
 
-fn schedule_synced_file_processing(app_handle: tauri::AppHandle, task: SyncedFileTask) {
+fn schedule_synced_file_processing(
+    app_handle: tauri::AppHandle,
+    library_id: String,
+    task: SyncedFileTask,
+) {
     tauri::async_runtime::spawn(async move {
-        if album_removal_pending(task.album_id) {
+        if album_removal_pending(task.album_id)
+            || crate::t_config::current_library_id().ok().as_deref() != Some(library_id.as_str())
+        {
             return;
         }
         let file_path_for_thumb = task.file_path.clone();
@@ -2915,29 +2954,32 @@ fn schedule_synced_file_processing(app_handle: tauri::AppHandle, task: SyncedFil
         let orientation = task.orientation;
         let file_id = task.file_id;
         let album_id = task.album_id;
-        let thumb_result = tauri::async_runtime::spawn_blocking(move || {
-            let album_sync_lock = album_sync_lock(album_id);
-            let _album_sync_guard = match album_sync_lock.lock() {
-                Ok(guard) => guard,
-                Err(_) => return Ok(None),
-            };
-            if album_removal_pending(album_id) || Album::get_album_by_id(album_id).is_err() {
-                return Ok(None);
-            }
-            if !AFile::is_album_visible(file_id)? {
-                return Ok(None);
-            }
-            AThumb::get_or_create_thumb(
-                file_id,
-                &file_path_for_thumb,
-                file_type,
-                orientation,
-                FOLDER_SYNC_THUMBNAIL_SIZE,
-                RawDisplayOptions::rendered_bright(),
-                false,
-                None,
-                None,
-            )
+        let thumb_library = library_id.clone();
+        let thumb_result = run_synced_file_work(SYNCED_FILE_WORK_PERMITS.clone(), move || {
+            crate::t_cmds::with_current_library(&thumb_library, || {
+                let album_sync_lock = album_sync_lock(album_id);
+                let _album_sync_guard = match album_sync_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return Ok(None),
+                };
+                if album_removal_pending(album_id) || Album::get_album_by_id(album_id).is_err() {
+                    return Ok(None);
+                }
+                if !AFile::is_album_visible(file_id)? {
+                    return Ok(None);
+                }
+                AThumb::get_or_create_thumb(
+                    file_id,
+                    &file_path_for_thumb,
+                    file_type,
+                    orientation,
+                    FOLDER_SYNC_THUMBNAIL_SIZE,
+                    RawDisplayOptions::rendered_bright(),
+                    false,
+                    None,
+                    None,
+                )
+            })
         })
         .await;
 
@@ -2948,6 +2990,7 @@ fn schedule_synced_file_processing(app_handle: tauri::AppHandle, task: SyncedFil
         let _ = app_handle.emit(
             "thumbnail_ready",
             serde_json::json!({
+                "library_id": library_id,
                 "album_id": task.album_id,
                 "file_ids": [task.file_id],
                 "invalidate": task.invalidate_thumbnail,
@@ -2961,24 +3004,33 @@ fn schedule_synced_file_processing(app_handle: tauri::AppHandle, task: SyncedFil
         let app_handle_for_embedding = app_handle.clone();
         let file_path = task.file_path.clone();
         let album_id = task.album_id;
-        let _ = tauri::async_runtime::spawn_blocking(move || {
-            let album_sync_lock = album_sync_lock(album_id);
-            let _album_sync_guard = match album_sync_lock.lock() {
-                Ok(guard) => guard,
-                Err(_) => return,
-            };
-            if album_removal_pending(album_id) || Album::get_album_by_id(album_id).is_err() {
-                return;
-            }
-            if !AFile::is_album_visible(task.file_id).unwrap_or(false) {
-                return;
-            }
-            let ai_state: tauri::State<crate::t_ai::AiState> = app_handle_for_embedding.state();
-            if let Err(e) = AFile::generate_embedding(&ai_state, task.file_id) {
-                eprintln!("Failed to generate embedding for {}: {}", file_path, e);
-            } else {
-                let _ = app_handle_for_embedding.emit("semantic-index-changed", serde_json::json!({"library_id": crate::t_config::current_library_id().unwrap_or_default(), "file_id": task.file_id}));
-            }
+        let _ = run_synced_file_work(SYNCED_FILE_WORK_PERMITS.clone(), move || {
+            let _ = crate::t_cmds::with_current_library(&library_id, || {
+                let album_sync_lock = album_sync_lock(album_id);
+                let _album_sync_guard = match album_sync_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return Ok(()),
+                };
+                if album_removal_pending(album_id) || Album::get_album_by_id(album_id).is_err() {
+                    return Ok(());
+                }
+                if !AFile::is_album_visible(task.file_id).unwrap_or(false) {
+                    return Ok(());
+                }
+                let ai_state: tauri::State<crate::t_ai::AiState> = app_handle_for_embedding.state();
+                // The library guard is already held; do not recursively acquire it.
+                if let Err(e) =
+                    AFile::generate_embedding_for_request(&ai_state, task.file_id, false)
+                {
+                    eprintln!("Failed to generate embedding for {}: {}", file_path, e);
+                } else {
+                    let _ = app_handle_for_embedding.emit(
+                        "semantic-index-changed",
+                        serde_json::json!({"library_id": library_id, "file_id": task.file_id}),
+                    );
+                }
+                Ok(())
+            });
         })
         .await;
     });
@@ -4426,6 +4478,153 @@ pub async fn index_album_worker(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod synced_processing_tests {
+    use super::*;
+    use std::sync::{
+        Condvar,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn large_sync_queue_leaves_blocking_capacity_for_commands_and_decoding() {
+        let path =
+            std::env::temp_dir().join(format!("lap-sync-queue-{}.png", uuid::Uuid::new_v4()));
+        image::RgbImage::new(3, 2).save(&path).unwrap();
+        let info = FileInfo::new(path.to_str().unwrap()).unwrap();
+        let source = crate::ai::media::Source {
+            path: path.to_string_lossy().into_owned(),
+            modified: info.modified,
+            size: info.file_size,
+            width: 3,
+            height: 2,
+            orientation: 6,
+        };
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .max_blocking_threads(3)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let permits = Arc::new(Semaphore::new(2));
+            let release = Arc::new((Mutex::new(false), Condvar::new()));
+            let active = Arc::new(AtomicUsize::new(0));
+            let peak = Arc::new(AtomicUsize::new(0));
+            let (entered, mut entries) = tokio::sync::mpsc::unbounded_channel();
+            let mut tasks = Vec::new();
+            for _ in 0..600 {
+                let (permits, release, active, peak, entered) = (
+                    permits.clone(),
+                    release.clone(),
+                    active.clone(),
+                    peak.clone(),
+                    entered.clone(),
+                );
+                tasks.push(tokio::spawn(run_synced_file_work(permits, move || {
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(count, Ordering::SeqCst);
+                    entered.send(()).unwrap();
+                    let (lock, ready) = &*release;
+                    drop(
+                        ready
+                            .wait_while(lock.lock().unwrap(), |released| !*released)
+                            .unwrap(),
+                    );
+                    active.fetch_sub(1, Ordering::SeqCst);
+                })));
+            }
+            for _ in 0..2 {
+                tokio::time::timeout(Duration::from_secs(2), entries.recv())
+                    .await
+                    .unwrap();
+            }
+            // Same shared pool used by command startup and image decoding. The
+            // 598 tasks still waiting for admission must not consume any threads.
+            let command = tokio::time::timeout(
+                Duration::from_secs(2),
+                tokio::task::spawn_blocking(move || {
+                    use crate::ai::{objects_jobs::Status, objects_journal as journal};
+                    let mut c = rusqlite::Connection::open_in_memory().unwrap();
+                    journal::ensure_schema(&c).unwrap();
+                    let initial = Status {
+                        library_id: "fixture".into(),
+                        job_id: "started".into(),
+                        running: true,
+                        phase: "preparing".into(),
+                        scope: "library".into(),
+                        ..Default::default()
+                    };
+                    journal::begin(
+                        &mut c,
+                        &initial,
+                        &journal::Request::default(),
+                        "fixture-profile",
+                        "fixture-model",
+                        "Fixture model",
+                        None,
+                    )
+                    .unwrap();
+                    let decoded = source.load().unwrap();
+                    assert_eq!((decoded.width(), decoded.height()), (2, 3));
+                    c.query_row("SELECT job_id FROM object_jobs", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .unwrap()
+                }),
+            )
+            .await;
+            *release.0.lock().unwrap() = true;
+            release.1.notify_all();
+            for task in tasks {
+                task.await.unwrap().unwrap();
+            }
+            assert_eq!(command.unwrap().unwrap(), "started");
+            assert_eq!(peak.load(Ordering::SeqCst), 2);
+            assert_eq!(permits.available_permits(), 2);
+        });
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn cancelling_the_waiter_does_not_release_a_running_workers_permit() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .max_blocking_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let permits = Arc::new(Semaphore::new(1));
+            let release = Arc::new((Mutex::new(false), Condvar::new()));
+            let worker_release = release.clone();
+            let (entered, ready) = tokio::sync::oneshot::channel();
+            let first = tokio::spawn(run_synced_file_work(permits.clone(), move || {
+                entered.send(()).unwrap();
+                let (lock, ready) = &*worker_release;
+                drop(
+                    ready
+                        .wait_while(lock.lock().unwrap(), |released| !*released)
+                        .unwrap(),
+                );
+            }));
+            ready.await.unwrap();
+            first.abort();
+            assert!(first.await.unwrap_err().is_cancelled());
+            let still_held = permits.available_permits() == 0;
+            let second = tokio::spawn(run_synced_file_work(permits.clone(), || 42));
+            *release.0.lock().unwrap() = true;
+            release.1.notify_all();
+            assert_eq!(second.await.unwrap().unwrap(), 42);
+            assert!(
+                still_held,
+                "the actual worker, not its async waiter, owns admission"
+            );
+            assert_eq!(permits.available_permits(), 1);
+        });
+    }
 }
 
 #[cfg(test)]

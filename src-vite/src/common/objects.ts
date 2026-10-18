@@ -162,7 +162,7 @@ export async function startObjectIndex(
   objectBusy.value = true;
   objectError.value = '';
   try {
-    const status = await invoke('start_object_index', {
+    const status = await invoke<any>('start_object_index', {
       libraryId,
       force: !!options.force,
       retryFailed: !!options.retryFailed,
@@ -172,9 +172,11 @@ export async function startObjectIndex(
       resumeFailed: !!options.resumeFailed,
     });
     if (libraryId === libConfig._libraryId) {
+      if (objectView.value) objectView.value = { ...objectView.value, status };
       sequence++;
       pending = null;
-      await refreshObjects();
+      // Coverage/history reads must not hold the start/stop controls busy.
+      void refreshObjects();
     }
     return status;
   } catch (e) {
@@ -191,7 +193,13 @@ export async function stopObjectIndex() {
   objectBusy.value = true;
   try {
     await invoke('cancel_object_index', { libraryId, jobId });
-    await refreshObjects();
+    if (libraryId === libConfig._libraryId) {
+      if (objectView.value?.status.jobId === jobId && objectView.value.status.running)
+        objectView.value.status.stopping = true;
+      sequence++;
+      pending = null;
+      void refreshObjects();
+    }
   } catch (e) {
     if (libraryId === libConfig._libraryId) objectError.value = String(e);
     throw e;
