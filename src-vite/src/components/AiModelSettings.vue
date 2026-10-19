@@ -14,7 +14,7 @@
     </label>
     <div v-if="error" role="alert" class="text-error text-xs whitespace-pre-wrap">{{ error }}</div>
     <div v-if="loading" class="loading loading-spinner loading-sm"></div>
-    <p v-if="draftDirty || apiKey" class="text-xs text-warning" role="status">{{ t('settings.ai_models.unsaved') }}</p>
+    <p v-if="draftDirty || apiKey || manifest.trim()" class="text-xs text-warning" role="status">{{ t('settings.ai_models.unsaved') }}</p>
     <template v-if="view">
       <div class="rounded-box border border-base-content/10 p-3 space-y-2">
         <label class="font-semibold text-sm" for="global-ai-model">{{ t('settings.ai_models.choose_model') }}</label>
@@ -146,12 +146,12 @@ const activeName = computed(() => aiModelDisplayName(modelOptions.value.find((ro
 const copy = (value: any) => JSON.parse(JSON.stringify(value));
 const draftBaseline = ref('');
 const draftDirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== draftBaseline.value);
-async function confirmDiscard() {
-  if (!draftDirty.value && !apiKey.value) return true;
+async function confirmDiscard(includeManifest = true) {
+  if (!draftDirty.value && !apiKey.value && (!includeManifest || !manifest.value.trim())) return true;
   return ask(t('settings.ai_models.discard_draft'), { kind: 'warning' });
 }
 async function changeTask(kind: string) {
-  if (busy.value || kind === task.value || !await confirmDiscard()) return;
+  if (busy.value || kind === task.value || !await confirmDiscard(false)) return;
   task.value = kind;
 }
 
@@ -222,7 +222,7 @@ async function selectModel(event: Event) {
   const select = event.target as HTMLSelectElement;
   const modelId = select.value;
   if (busy.value) { select.value = editingId.value; return; }
-  if (modelId !== editingId.value && !await confirmDiscard()) { select.value = editingId.value; return; }
+  if (modelId !== editingId.value && !await confirmDiscard(false)) { select.value = editingId.value; return; }
   choose(modelId);
   // Every catalog model can be configured here, even before download/API setup.
   // Only ready saved models trigger a real global switch; the active indicator
@@ -313,8 +313,11 @@ async function cancelDownload() {
     toast.error(state.message);
   }
 }
-function template() {
-  if (!selectedModel.value) return;
+async function template() {
+  if (!selectedModel.value || busy.value) return;
+  const modelId = editingId.value, previous = manifest.value;
+  if (previous.trim() && !await ask(t('settings.ai_models.replace_manifest'), { kind: 'warning' })) return;
+  if (busy.value || modelId !== editingId.value || previous !== manifest.value) return;
   const definition = copy(selectedModel.value.definition);
   definition.id = `custom-${definition.id}`;
   manifest.value = JSON.stringify(definition, null, 2);

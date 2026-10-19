@@ -23,11 +23,19 @@ function harness(invoke: any = async () => fixture()) {
     listen: async (name: string, cb: any) => { listeners[name] = cb; return () => delete listeners[name]; },
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({download,cancelDownload,downloadFeedback,downloading,busy,error,view,task,choose,refresh,draft,draftDirty,apiKey,selectModel,changeTask,confirmDiscard,persist});`, ctx);
+  const api: any = runInNewContext(`${script}\n;({download,cancelDownload,downloadFeedback,downloading,busy,error,view,task,choose,refresh,draft,draftDirty,apiKey,selectModel,changeTask,confirmDiscard,persist,manifest,template,importModel});`, ctx);
   api.view.value = fixture(); api.task.value = 'ocr'; api.choose(modelId);
   return { ctx, api, calls, notifications, mounted, unmount, listeners };
 }
 function deferred() { let resolve: any, reject: any; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
+test('model manifests participate in close protection and cannot be silently replaced by a template',async()=>{
+  const h=harness();h.api.manifest.value='{"id":"my-draft"}';h.ctx.ask=async()=>false;
+  assert.equal(await h.api.confirmDiscard(),false);assert.equal(await h.api.confirmDiscard(false),true);
+  await h.api.template();assert.equal(h.api.manifest.value,'{"id":"my-draft"}');
+  h.ctx.ask=async()=>true;await h.api.template();assert.match(h.api.manifest.value,/custom-rapidocr/);
+  const failing=harness(async()=>{throw Error('Invalid manifest');});failing.api.manifest.value='incomplete-json';
+  await failing.api.importModel();assert.equal(failing.api.manifest.value,'incomplete-json');
+});
 test('background configuration refresh keeps unsaved parameters and API keys instead of replacing the draft', async () => {
   const h = harness(); h.api.draft.value.parameters.threshold = 0.75; h.api.apiKey.value = 'fixture-only-not-a-real-key';
   assert.equal(h.api.draftDirty.value, true);
