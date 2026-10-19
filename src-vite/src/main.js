@@ -17,6 +17,7 @@ import '@/assets/app.css'
 import { applyAiConfiguration } from '@/common/aiModels'
 import { applyMapServices, migrateLegacyMapServices } from '@/common/mapServices'
 import { fileInfoRevision } from '@/common/fileInfoRefresh'
+import { installDesktopCloseProtection } from '@/common/desktopClose'
 
 // I18n
 import en from '@/locales/en.json'
@@ -148,7 +149,10 @@ app.use(router)
 app.use(i18n)
 
 // Mount the app
-app.mount('#app')
+installDesktopCloseProtection(key => i18n.global.t(key)).then(() => app.mount('#app')).catch(error => {
+  console.error('Window close protection could not be initialized', error);
+  app.mount('#app');
+});
 
 // Listen for events
 if (isMainWindow) {

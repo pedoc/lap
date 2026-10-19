@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 import { faceEditorPosition } from '../src/common/faceUi.ts';
+import { createPendingChangesRegistry } from '../src/common/pendingChanges.ts';
 
 const source = readFileSync(new URL('../src/components/FaceNameEditor.vue', import.meta.url), 'utf8');
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
@@ -11,10 +12,12 @@ const code = stripTypeScriptTypes(script).replace(/^import .*;\r?\n/gm, '');
 function harness({ assigned = true, failure = '' } = {}) {
   const calls: any[] = [], handlers: string[] = [], mounts: Array<() => void> = [], unmounts: Array<() => void> = [];
   const libConfig = { _libraryId: 'library-a' };
+  const registry=createPendingChangesRegistry();let accepted=true;
   const config = { settings: { ai: { faceProfile: 'profile-a' } } };
   const face = { id: 11, file_id: 5, person_id: assigned ? 7 : null, person_name: assigned ? 'Alice' : null };
   const ui = { pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const index = handlers.indexOf(id); if (index >= 0) handlers.splice(index, 1); } };
-  const api = runInNewContext(`${code}\n;({ openEditor, save, cancel, closeEditor, submitKey, editing, saving, name, mode, error, targetPersonId, anchor, panel, snapshot, searchPeople, selectCorrection });`, {
+  const api = runInNewContext(`${code}\n;({ openEditor, save, cancel, closeEditor, requestClose, submitKey, editing, saving, name, mode, error, targetPersonId, anchor, panel, snapshot, searchPeople, selectCorrection });`, {
+    pendingChanges:registry,ask:async()=>accepted,
     ref: (value: any) => ({ value }), computed: (getter: () => any) => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: (fn: () => void) => mounts.push(fn), onBeforeUnmount: (fn: () => void) => unmounts.push(fn), nextTick: async () => {},
     defineProps: () => ({ face, label: '1 · Alice', color: '#047857' }),
@@ -26,8 +29,15 @@ function harness({ assigned = true, failure = '' } = {}) {
     setTimeout, clearTimeout,
   });
   api.anchor.value = { getBoundingClientRect: () => ({ left: 200, top: 100, bottom: 125 }), focus: () => {} };
-  return { api, calls, handlers, libConfig, config, unmount: () => unmounts.forEach(fn => fn()) };
+  return { api, calls, handlers, libConfig, config, registry,confirm:(value:boolean)=>{accepted=value;},mount:()=>mounts.forEach(fn=>fn()),unmount: () => unmounts.forEach(fn => fn()) };
 }
+test('outside/escape close and window exit keep typed names when cancelled, including after reopening',async()=>{
+  const h=harness();h.mount();await h.api.openEditor();h.api.name.value='Unsaved name';h.confirm(false);
+  await h.api.requestClose();assert.equal(h.api.editing.value,true);assert.equal(h.api.name.value,'Unsaved name');
+  assert.equal(await h.registry.confirm(),false);h.confirm(true);await h.api.requestClose();assert.equal(h.api.editing.value,false);
+  await h.api.openEditor();h.api.name.value='Second draft';h.confirm(false);assert.equal(await h.registry.confirm(),false);h.unmount();
+  assert.equal(h.registry.hasPending(),false);
+});
 test('the editor is positioned next to the label and constrained to the visible viewport', () => {
   const position = faceEditorPosition({ left: 990, top: 650, bottom: 680 }, { width: 1000, height: 700 }, 300);
   assert.equal(position.left, '672px'); assert.equal(position.top, '344px');

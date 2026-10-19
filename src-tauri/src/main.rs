@@ -58,6 +58,7 @@ mod t_thumbnail_rebuild;
 mod t_storage;
 mod t_utils;
 mod t_video;
+mod t_window_exit;
 
 /// The main function is the entry point for the Tauri application.
 #[tokio::main]
@@ -213,20 +214,9 @@ async fn main() {
 
                 #[cfg(not(target_os = "macos"))]
                 {
-                    let app_handle = window.app_handle();
-
-                    // Close every other window first (image viewer, settings, ...),
-                    // then exit the process.
-                    let windows = app_handle.webview_windows();
-                    for (_, other_window) in windows {
-                        if other_window.label() != "main" {
-                            if let Err(err) = other_window.close() {
-                                eprintln!("Failed to close window: {}", err);
-                            }
-                        }
+                    if let Err(error) = t_window_exit::request(window.app_handle()) {
+                        eprintln!("Application exit cancelled: {error}");
                     }
-
-                    app_handle.exit(0);
                 }
             }
         })
@@ -234,6 +224,9 @@ async fn main() {
             t_menu::handle_menu_event(app, event);
         })
         .invoke_handler(tauri::generate_handler![
+            t_window_exit::get_pending_app_exit,
+            t_window_exit::cancel_app_exit,
+            t_window_exit::confirm_app_exit,
             t_drag::start_file_drag,
             t_drag::cancel_file_drag,
             // library
@@ -538,6 +531,12 @@ async fn main() {
     match run_result {
         Ok(app) => {
             app.run(move |app_handle, event| match event {
+                tauri::RunEvent::ExitRequested { api, .. } if !t_window_exit::allowed() => {
+                    api.prevent_exit();
+                    if let Err(error) = t_window_exit::request(app_handle) {
+                        eprintln!("Application exit cancelled: {error}");
+                    }
+                }
                 tauri::RunEvent::Ready => {
                     if aptabase_enabled {
                         let _ = app_handle.track_event("app_started", None);

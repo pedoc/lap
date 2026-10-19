@@ -17,7 +17,7 @@ function harness(invoke: any = async () => fixture()) {
   const calls: any[] = [], notifications: any[] = [], mounted: any[] = [], unmount: any[] = [], listeners: any = {};
   const toast = Object.fromEntries(['success', 'error', 'info'].map(kind => [kind, (message: string) => notifications.push({ kind, message })]));
   const t = (key: string, args: any = {}) => `${key} ${Object.values(args).join(' ')}`;
-  const ctx: any = { ...Vue, ...downloads, ...ai, defineExpose: () => {}, config: { settings: { ai: {} } }, useI18n: () => ({ t }), useToast: () => toast,
+  const ctx: any = { ...Vue, ...downloads, ...ai, pendingChanges:{register:()=>()=>{}},defineExpose: () => {}, config: { settings: { ai: {} } }, useI18n: () => ({ t }), useToast: () => toast,
     invoke: async (...args: any[]) => { calls.push(args); return invoke(...args); }, ask: async () => true,
     watch: () => {}, onMounted: (cb: any) => mounted.push(cb), onUnmounted: (cb: any) => unmount.push(cb),
     listen: async (name: string, cb: any) => { listeners[name] = cb; return () => delete listeners[name]; },
@@ -67,7 +67,9 @@ test('a late configuration request cannot switch back to a model selected before
 test('settings tab navigation and destruction consult model draft protection; plain Tab stays in the form', () => {
   const settings = readFileSync(new URL('../src/views/Settings.vue', import.meta.url), 'utf8');
   assert.match(settings, /@click="selectSettingsTab\(tab.id\)"/);
-  assert.match(settings, /onCloseRequested[\s\S]*?confirmDiscard\(\)[\s\S]*?appWindow.destroy\(\)/);
+  const close=readFileSync(new URL('../src/common/desktopClose.ts',import.meta.url),'utf8');
+  assert.match(close,/onCloseRequested[\s\S]*?prepare\(id\)[\s\S]*?window.destroy\(\)/);
+  assert.doesNotMatch(settings,/onCloseRequested/);
   assert.match(settings, /if \(!event.ctrlKey\) return/);
 });
 

@@ -127,6 +127,7 @@ import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
 import { useToast } from '@/common/toast';
 import { applyAiConfiguration, effectiveParameter, requiresIndexRebuild, requiresSelectionRebuild, formatGpuMemory, physicalGpuDevices, canActivateSavedModel, aiModelDisplayName, aiModelDescription, isRecommendedAiModel } from '@/common/aiModels';
+import { pendingChanges } from '@/common/pendingChanges';
 
 const { t } = useI18n();
 const toast = useToast();
@@ -135,6 +136,7 @@ const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task =
 const apiKey = ref(''), manifest = ref(''), error = ref(''), downloading = ref('');
 const downloadFeedback = ref<Record<string, ModelDownloadFeedback>>({});
 const loading = ref(false), busy = ref(false);
+const writeBusy = ref(false);
 let mounted = true, request = 0;
 const unlisten: Array<() => void> = [];
 const physicalDevices = computed(() => physicalGpuDevices(view.value?.runtime));
@@ -211,12 +213,15 @@ async function action(fn: () => Promise<void>) {
   finally { busy.value = false; }
 }
 async function persist(confirm = true) {
+  writeBusy.value = true;
+  try {
   if (confirm && isActive.value && requiresIndexRebuild(selectedModel.value.definition, selectedModel.value.configuration, draft.value, selectedModel.value.parameters)) {
     if (!await ask(t('settings.ai_models.rebuild_confirm'), { kind: 'warning' })) throw new Error('__cancelled__');
   }
   await invoke('save_ai_model', { modelId: editingId.value, configuration: copy(draft.value), apiKey: apiKey.value || null });
   draftBaseline.value = JSON.stringify(draft.value);
   apiKey.value = '';
+  } finally { writeBusy.value = false; }
 }
 async function selectModel(event: Event) {
   const select = event.target as HTMLSelectElement;
@@ -331,6 +336,12 @@ async function importModel() {
 }
 watch(task, () => { choose(view.value?.selection[task.value]); });
 onMounted(async () => {
+  unlisten.push(pendingChanges.register('model-settings', {
+    dirty: () => draftDirty.value || !!apiKey.value || !!manifest.value.trim(),
+    busy: () => writeBusy.value,
+    revision: () => JSON.stringify([editingId.value, draft.value, apiKey.value, manifest.value]),
+    confirm: () => confirmDiscard(),
+  }));
   const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr', 'detection'].includes(event.payload)) void changeTask(event.payload); });
   if (mounted) unlisten.push(offTask); else offTask();
   await refresh();

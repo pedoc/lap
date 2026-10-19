@@ -33,6 +33,7 @@ import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
 import { annotationEditorPosition } from '@/common/annotationUi';
+import { pendingChanges } from '@/common/pendingChanges';
 const props = defineProps<{ fileId: number; libraryId: string; result: any; lineIndex?: number; anchor?: { left: number; top: number; bottom: number }; currentFileId?: number }>();
 const emit = defineEmits(['close','saved']);
 const { t } = useI18n(), ui = useUIStore();
@@ -81,6 +82,11 @@ async function reset() {
 watch(() => [libConfig._libraryId,config.settings.ai?.ocrProfile,props.currentFileId], () => { if (!validContext()) stale.value = true; });
 onMounted(async () => {
   ui.pushInputHandler(handler);
+  stops.push(pendingChanges.register(handler, {
+    dirty: () => JSON.stringify(lines.value) !== baseline, busy: () => busy.value,
+    revision: () => JSON.stringify([props.libraryId,props.fileId,lines.value]),
+    confirm: () => ask(t('ocr.discard_draft'), { kind: 'warning' }),
+  }));
   if (inline.value && typeof window !== 'undefined') {
     window.addEventListener('resize', resize);
     if (typeof ResizeObserver !== 'undefined') {

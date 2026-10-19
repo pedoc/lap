@@ -1,4 +1,9 @@
 {
+  "workflow_close": {
+    "unsaved": "Recognition revisions or inputs are unsaved. Discard them and continue? Cancel keeps the drafts.",
+    "preparing": "Confirming close. Cancel to continue editing…",
+    "failed": "A window did not respond or its contents changed. Closing was cancelled; drafts are preserved. Please retry."
+  },
   "objects": {
     "undo_ignore": "Undo ignore",
     "ignore_pending": "Marked as a false positive. This box is removed only after saving. Undo ignore or cancel to keep it.",

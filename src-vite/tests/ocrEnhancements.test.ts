@@ -62,7 +62,7 @@ test('temporary direction override is explicit and never modifies global model c
 function editorHarness(annotation:any=null) {
   const calls:any[]=[],events:any[]=[],listeners:any={},mounts:any[]=[],unmounts:any[]=[];
   const source={text:'one\ntwo',lines:[{text:'one',bounds:[0,0,.5,.5]},{text:'two',bounds:[0,.5,.5,.5]}]};
-  const ctx:any={...Vue,annotationEditorPosition,defineExpose:()=>{},crypto:{randomUUID},config:Vue.reactive({settings:{ai:{ocrProfile:'model-a'}}}),libConfig:Vue.reactive({_libraryId:'library-a'}),
+  const ctx:any={...Vue,pendingChanges:{register:()=>()=>{}},annotationEditorPosition,defineExpose:()=>{},crypto:{randomUUID},config:Vue.reactive({settings:{ai:{ocrProfile:'model-a'}}}),libConfig:Vue.reactive({_libraryId:'library-a'}),
     props:{fileId:7,libraryId:'library-a',result:{profile:'model-a',sourceKey:'x'.repeat(64),document:source,modelDocument:source,annotation}},
     useI18n:()=>({t}),useUIStore:()=>({pushInputHandler(){},removeInputHandler(){}}),defineProps:()=>ctx.props,defineEmits:()=> (...args:any[])=>events.push(args),
     invoke:async(...args:any[])=>calls.push(args),ask:async()=>true,listen:async(name:string,cb:any)=>{listeners[name]=cb;return()=>delete listeners[name];},onMounted:(cb:any)=>mounts.push(cb),onBeforeUnmount:(cb:any)=>unmounts.push(cb),

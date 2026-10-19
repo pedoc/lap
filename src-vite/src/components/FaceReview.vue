@@ -76,6 +76,7 @@ import { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, 
 import ModalDialog from '@/components/ModalDialog.vue';
 import FaceNameEditor from '@/components/FaceNameEditor.vue';
 import PersonPicker from '@/components/PersonPicker.vue';
+import { pendingChanges } from '@/common/pendingChanges';
 const props = defineProps<{ person?: { id: number; name: string | null } | null }>();
 const personId = props.person?.id || null, personName = ref(props.person?.name || '');
 const emit = defineEmits(['cancel']);
@@ -100,12 +101,13 @@ const allSelected = computed(() => items.value.length > 0 && selectedItems.value
 const actions = computed<FaceReviewAction[]>(() => filter.value === 'ignored' ? ['restore'] : filter.value === 'stale' ? [] : filter.value === 'suggested' ? ['confirm', 'reject', 'assign_existing', 'assign_new', 'ignore', 'not_face'] : ['assign_existing', 'assign_new', 'ignore', 'not_face']);
 function current() { return alive && libraryId === libConfig._libraryId && profile === config.settings.ai?.faceProfile; }
 let leaving = false;
+let unregister = () => {};
 function hasDraft() { return !!(selected.value.length || pending.value || newName.value.trim()); }
 function leave(action: () => void) {
   if (!current() || busy.value || leaving) return false;
-  if (!hasDraft()) { action(); return true; }
+  if (!hasDraft() && !pendingChanges.hasPending('face')) { action(); return true; }
   leaving = true;
-  return ask(t('face_review.leave_confirm'), { kind: 'warning' }).then(accepted => {
+  return pendingChanges.confirm('face').then(accepted => {
     if (!accepted || !current() || busy.value) return false;
     action(); return true;
   }).finally(() => { leaving = false; });
@@ -176,6 +178,9 @@ watch(pending, () => { targetPerson.value = null; newName.value = ''; });
 watch(selected, () => { pending.value = null; });
 watch(() => [libConfig._libraryId, config.settings.ai?.faceProfile], () => { generation++; emit('cancel'); });
 onMounted(async () => {
+  unregister = pendingChanges.register(inputHandler, { scope: 'face', dirty: hasDraft, busy: () => busy.value,
+    revision: () => JSON.stringify([selected.value,pending.value,newName.value,targetPerson.value]),
+    confirm: () => ask(t('face_review.leave_confirm'), { kind: 'warning' }) });
   ui.pushInputHandler(inputHandler);
   window.addEventListener('resize', resize);
   await nextTick();
@@ -201,5 +206,5 @@ onMounted(async () => {
   });
   if (!alive) stopNames(); else unlistenNames = stopNames;
 });
-onBeforeUnmount(() => { alive = false; generation++; unlisten?.(); unlistenNames?.(); ui.removeInputHandler(inputHandler); window.removeEventListener('resize', resize); });
+onBeforeUnmount(() => { alive = false; generation++; unregister(); unlisten?.(); unlistenNames?.(); ui.removeInputHandler(inputHandler); window.removeEventListener('resize', resize); });
 </script>

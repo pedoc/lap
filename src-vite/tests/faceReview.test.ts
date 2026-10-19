@@ -21,7 +21,7 @@ function harness(handler?: (command: string, args: any) => Promise<any>, person:
   const libConfig = { _libraryId: 'library-a' }, config = { settings: { ai: { faceProfile: 'profile-a' } } };
   let confirm = true;
   const api = runInNewContext(`${code}\n;({load, refreshReview, updatesPending, apply, chooseCover, close, changeFilter, changePage, total, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root, targetPerson, newName, canSubmit, previews});`, {
-    ...helpers, ask: async () => confirm,
+    ...helpers, ask: async () => confirm, pendingChanges: { register:()=>()=>{},hasPending:()=>false,confirm:async()=>confirm },
     ref: (value: any) => ({ value }), computed: (getter: () => any) => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: (fn: () => void) => mounts.push(fn), onBeforeUnmount: (fn: () => void) => unmounts.push(fn), nextTick: async () => {},
     defineProps: () => ({ person }), defineEmits: () => (...args: any[]) => events.push(args), useI18n: () => ({ t: (key: string) => key }),

@@ -55,10 +55,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
 import { faceEditorPosition } from '@/common/faceUi';
+import { pendingChanges } from '@/common/pendingChanges';
 
 const props = defineProps<{ face: any; label: string; color: string }>();
 const { t } = useI18n();
@@ -70,6 +72,16 @@ const name = ref(''), search = ref(''), mode = ref('rename'), error = ref('');
 const targetPersonId = ref<number | null>(null), people = ref<any[]>([]), snapshot = ref<any>(null);
 const position = ref<any>({});
 let generation = 0, searchRequest = 0, searchTimer: ReturnType<typeof setTimeout> | null = null;
+let baseline = '', unregister = () => {};
+const revision = () => JSON.stringify([snapshot.value,mode.value,name.value,targetPersonId.value]);
+const dirty = () => editing.value && revision() !== baseline;
+let closeRequest: Promise<void> | null = null;
+function requestClose() {
+  if (!editing.value || saving.value) return;
+  if (!dirty()) { closeEditor(); return; }
+  if (!closeRequest) closeRequest = pendingChanges.confirmOne(inputHandler).then(accepted => { if (accepted && !saving.value) closeEditor(); }).finally(() => { closeRequest = null; });
+  return closeRequest;
+}
 const inputHandler = `FaceNameEditor:${props.face.id}:${Math.random().toString(36).slice(2)}`;
 const canSave = computed(() => currentContext() && (['unassign','confirm','ignore','not_face'].includes(mode.value) || (mode.value === 'assign_existing' ? targetPersonId.value != null : name.value.trim().length > 0)));
 function currentContext() {
@@ -88,6 +100,7 @@ async function openEditor() {
   name.value = props.face.person_name || '';
   mode.value = props.face.person_id != null ? 'rename' : 'assign_new';
   error.value = ''; search.value = ''; people.value = []; targetPersonId.value = null;
+  baseline = revision();
   editing.value = true; generation++;
   ui.pushInputHandler(inputHandler);
   placeEditor();
@@ -102,7 +115,7 @@ function closeEditor() {
 }
 function cancel() { if (!saving.value) closeEditor(); }
 function editorKey(event: KeyboardEvent) {
-  if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); cancel(); }
+  if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); void requestClose(); }
 }
 function submitKey(event: KeyboardEvent) {
   // Enter used to confirm Chinese/Japanese IME composition must not save a partial name.
@@ -150,18 +163,21 @@ async function save() {
 function outsidePointer(event: PointerEvent) {
   if (!editing.value || saving.value) return;
   const target = event.target as Node;
-  if (!panel.value?.contains(target) && !anchor.value?.contains(target)) closeEditor();
+  if (!panel.value?.contains(target) && !anchor.value?.contains(target)) void requestClose();
 }
 watch(() => [props.face.id, props.face.file_id, libConfig._libraryId, config.settings.ai?.faceProfile], () => { if (editing.value) closeEditor(); });
 onMounted(() => {
+  unregister = pendingChanges.register(inputHandler, { scope: 'face', dirty, busy: () => saving.value,
+    revision, confirm: () => ask(t('workflow_close.unsaved'), { kind: 'warning' }) });
   document.addEventListener('pointerdown', outsidePointer, true);
-  window.addEventListener('resize', cancel);
+  window.addEventListener('resize', placeEditor);
 });
 onBeforeUnmount(() => {
   generation++; searchRequest++;
   if (searchTimer) clearTimeout(searchTimer);
   ui.removeInputHandler(inputHandler);
+  unregister();
   document.removeEventListener('pointerdown', outsidePointer, true);
-  window.removeEventListener('resize', cancel);
+  window.removeEventListener('resize', placeEditor);
 });
 </script>

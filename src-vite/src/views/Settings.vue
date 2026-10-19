@@ -622,7 +622,6 @@ async function selectSettingsTab(id: number) {
     if (modelEditor === aiModelsRef.value) config.settings.tabIndex = id;
   } finally { changingTab = false; }
 }
-let unlistenCloseRequested: (() => void) | null = null;
 const SETTINGS_BASE_WIDTH = 600;
 const SETTINGS_BASE_HEIGHT = 620;
 const dbStorageDir = ref('');
@@ -1103,25 +1102,10 @@ onMounted(async () => {
   // Show window after mount
   await appWindow.show();
 
-  // Destroy on close so the settings WebView and its JS heap are released.
-  // Home.vue waits for this label to disappear before creating a replacement,
-  // which avoids the late-close IPC registry race.
-  unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
-    event.preventDefault();
-    try {
-      if (aiModelsRef.value && !await aiModelsRef.value.confirmDiscard()) return;
-      await appWindow.destroy();
-    } catch (destroyError) {
-      console.error('Failed to destroy settings window:', destroyError);
-    }
-  });
+  // Window destruction is coordinated centrally after all pending-change checks.
 });
 
 onUnmounted(() => {
-  if (unlistenCloseRequested) {
-    unlistenCloseRequested();
-    unlistenCloseRequested = null;
-  }
   if (unlistenAppResourcesProgress) {
     unlistenAppResourcesProgress();
     unlistenAppResourcesProgress = null;
