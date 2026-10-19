@@ -79,7 +79,7 @@
       <p v-if="previewError" role="alert" class="text-error text-xs break-all">{{ $t('smart_albums.preview_error',{error:previewError}) }}</p>
       <p v-if="preview" class="text-xs" :class="previewStale ? 'text-warning' : ''">{{ previewStale ? $t('smart_albums.preview_stale') : $t('smart_albums.preview_count',{count:preview.count}) }}</p>
       <div v-if="preview && !previewStale" class="flex gap-1 overflow-x-auto"><img v-for="file in preview.files" :key="file.id" :src="file.previewUrl" :title="file.name" class="w-12 h-12 object-cover rounded" /></div>
-      <SmartAlbumStatus v-if="hasSemanticRules(rules)" :params="queryParams()" @retry="previewResults" />
+      <SmartAlbumStatus v-if="hasAiRules(rules)" :params="queryParams()" @retry="previewResults" />
       <details v-if="includeIds.length || excludeIds.length" class="text-xs"><summary class="cursor-pointer">{{ $t('smart_albums.adjustments') }} — {{ $t('smart_albums.included',{count:includeIds.length}) }} / {{ $t('smart_albums.excluded',{count:excludeIds.length}) }}</summary>
         <div class="max-h-28 overflow-auto mt-2"><div v-for="id in includeIds" :key="'i'+id">+ #{{ id }} <button class="link" @click="includeIds = includeIds.filter(v=>v!==id)">{{ $t('smart_albums.reset') }}</button></div><div v-for="id in excludeIds" :key="'e'+id">− #{{ id }} <button class="link" @click="excludeIds = excludeIds.filter(v=>v!==id)">{{ $t('smart_albums.reset') }}</button></div></div>
         <button class="btn btn-ghost btn-xs mt-1" @click="includeIds=[];excludeIds=[]">{{ $t('smart_albums.clear_adjustments') }}</button>
@@ -104,7 +104,7 @@ import SmartAlbumStatus from './SmartAlbumStatus.vue';
 import { SMART_TAG_CATEGORIES } from '@/common/smartTags';
 import { useObjects } from '@/common/objects';
 import { OBJECT_STATES, objectClassName } from '@/common/objectUi';
-import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules } from '@/common/smartAlbums';
+import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules, hasAiRules } from '@/common/smartAlbums';
 import { listen } from '@tauri-apps/api/event';
 import { config, libConfig } from '@/common/config';
 import { getSmartQueryCountAndSum, getSmartQueryFiles, getSmartAlbumStatus, getFileThumbById } from '@/common/api';

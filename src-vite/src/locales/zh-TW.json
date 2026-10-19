@@ -213,7 +213,15 @@
     "execution_system": "最近執行後端：系統加速",
     "execution_accelerated": "最近執行後端：GPU 加速"
   },
-  "smart_albums": {"templates": {
+  "smart_albums": {
+    "recognition_title": "{task} · 圖庫索引",
+    "recognition_coverage": "已識別 {indexed} / {total} 張 · 待處理 {pending} · 失敗 {failed}",
+    "recognition_incomplete": "索引尚未完整，目前空結果不代表照片中沒有對應文字或物件。",
+    "recognition_settings": "配置與下載模型",
+    "recognition_pending": "處理圖庫未識別照片",
+    "recognition_failed": "重試圖庫識別失敗照片",
+    "recognition_confirm": "將使用目前全域模型處理目前圖庫的「{task}」任務，不限於此智慧相簿。已完成結果會保留，不會自動下載或切換模型。是否繼續？",
+    "templates": {
     "with_text": "包含文字的照片",
     "pending_text": "待辨識文字的照片",
     "with_objects": "檢出物件的照片",

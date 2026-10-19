@@ -56,6 +56,9 @@ export function hasOcrRules(rules: SmartRule[]): boolean {
   visitSmartRules(rules, rule => { if (['ocr_text', 'ocr_state'].includes(rule.field)) result = true; });
   return result;
 }
+export function hasAiRules(rules: SmartRule[]): boolean {
+  return hasSemanticRules(rules) || hasOcrRules(rules) || hasObjectRules(rules);
+}
 export function smartQueryParams(album: any) {
   return {
     version: 2,

@@ -183,7 +183,7 @@
       <ProgressBar :key="scanProgressSession" :percent="topProgressPercent" />
     </div>
 
-    <details v-if="activeSmartAlbum && (hasSemanticRules(activeSmartAlbum.query?.rules || []) || smartQueryError)" class="absolute top-12 right-2 z-40 max-w-[min(480px,90%)] bg-base-200 rounded-box shadow" :open="!!smartQueryError">
+    <details v-if="activeSmartAlbum && (hasAiRules(activeSmartAlbum.query?.rules || []) || smartQueryError)" class="absolute top-12 right-2 z-40 max-w-[min(480px,90%)] max-h-[70vh] overflow-auto bg-base-200 rounded-box shadow" :open="!!smartQueryError || totalFileCount === 0">
       <summary class="cursor-pointer px-2 py-1 text-xs" :class="smartQueryError ? 'text-error' : ''">{{ smartQueryError ? $t('smart_albums.failed') : $t('smart_albums.ai_status') }}</summary>
       <SmartAlbumStatus :params="smartQueryParams(activeSmartAlbum)" :error="smartQueryError" @retry="refreshActiveSmartAlbum" />
     </details>
@@ -805,7 +805,7 @@ import ContextMenu from '@/components/ContextMenu.vue';
 import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFileDragActive, isReturningNativeFileDrag, startNativeFileDrag } from '@/common/nativeDrag';
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
-import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules, isSmartFolder } from '@/common/smartAlbums';
+import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules, hasAiRules, isSmartFolder } from '@/common/smartAlbums';
 import { setMediaHidden } from '@/common/api';
 import { mediaTypeRules } from '@/common/mediaLifecycle';
 import { useFileMenuItems } from '@/common/fileMenu';

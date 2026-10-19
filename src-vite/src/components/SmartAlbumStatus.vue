@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="semantic || error || statusError"
+    v-if="semantic || ocr || objects || error || statusError"
     class="text-xs space-y-1 rounded-box bg-base-200 p-2"
   >
     <p v-if="error || statusError" role="alert" class="text-error break-all">
@@ -29,6 +29,8 @@
         {{ $t("smart_albums.analyse") }}
       </button>
     </template>
+    <SmartRecognitionStatus v-if="ocr" task="ocr" />
+    <SmartRecognitionStatus v-if="objects" task="objects" />
     <MessageBox
       v-if="confirmAnalysis"
       :title="$t('smart_albums.analyse')"
@@ -48,12 +50,15 @@ import {
   startSmartAlbumIndex,
   stopSmartAlbumIndex,
 } from "@/common/api";
-import { hasSemanticRules } from "@/common/smartAlbums";
+import { hasSemanticRules, hasOcrRules, hasObjectRules } from "@/common/smartAlbums";
 import { config, libConfig } from "@/common/config";
 import MessageBox from "./MessageBox.vue";
+import SmartRecognitionStatus from './SmartRecognitionStatus.vue';
 const props = defineProps<{ params: any; error?: string }>();
 const emit = defineEmits(["retry"]);
 const semantic = computed(() => hasSemanticRules(props.params?.rules || []));
+const ocr = computed(() => hasOcrRules(props.params?.rules || []));
+const objects = computed(() => hasObjectRules(props.params?.rules || []));
 const status = ref<any>(null);
 const statusError = ref("");
 const confirmAnalysis = ref(false);

@@ -2319,6 +2319,13 @@
     "cancelled": "任务已停止，已完成的结果保留，剩余照片不变。正在执行的网络请求最多需要 15 秒结束。"
   },
   "smart_albums": {
+    "recognition_title": "{task} · 图库索引",
+    "recognition_coverage": "已识别 {indexed} / {total} 张 · 待处理 {pending} · 失败 {failed}",
+    "recognition_incomplete": "索引尚未完整，当前空结果不代表照片中没有对应文字或对象。",
+    "recognition_settings": "配置与下载模型",
+    "recognition_pending": "处理图库未识别照片",
+    "recognition_failed": "重试图库识别失败照片",
+    "recognition_confirm": "将使用当前全局模型处理当前图库的「{task}」任务，不限于此智能相册。已完成结果会保留，不会自动下载或切换模型。是否继续？",
     "choose_reference": "选择参考照片",
     "photo_name": "按文件名搜索照片",
     "ai_status": "AI 索引状态",

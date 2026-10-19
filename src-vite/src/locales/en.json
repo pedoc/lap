@@ -2319,6 +2319,13 @@
     "cancelled": "Stopped. Completed results are retained; remaining photos are unchanged. An in-flight request may take up to 15 seconds to stop."
   },
   "smart_albums": {
+    "recognition_title": "{task} · Library index",
+    "recognition_coverage": "Indexed {indexed} / {total} photos · {pending} pending · {failed} failed",
+    "recognition_incomplete": "Indexing is incomplete. Empty results do not prove that photos contain no matching text or objects.",
+    "recognition_settings": "Configure and download models",
+    "recognition_pending": "Process pending library photos",
+    "recognition_failed": "Retry failed library photos",
+    "recognition_confirm": "Run {task} with the current global model for the current library, not just this smart album? Completed results are kept; models are not downloaded or switched automatically.",
     "choose_reference": "Choose reference photo",
     "photo_name": "Search photos by filename",
     "ai_status": "AI indexing status",
