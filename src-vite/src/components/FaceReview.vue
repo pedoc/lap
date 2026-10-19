@@ -3,7 +3,7 @@
     <div ref="root" tabindex="-1" class="flex flex-col min-h-0 h-full p-3 gap-3" role="region" :aria-label="t('face_review.title')" @keydown.esc.stop="close">
       <p class="text-xs opacity-70">{{ personId ? t('face_review.person_scope') : t('face_review.scope') }}</p>
       <div class="flex gap-1 flex-wrap" role="group" :aria-label="t('face_review.filters')">
-        <button v-for="tab in filters" :key="tab" type="button" class="btn btn-sm" :class="filter === tab ? 'btn-primary' : 'btn-ghost'" :disabled="busy" :aria-pressed="filter === tab" @click="filter = tab">
+        <button v-for="tab in filters" :key="tab" type="button" class="btn btn-sm" :class="filter === tab ? 'btn-primary' : 'btn-ghost'" :disabled="busy" :aria-pressed="filter === tab" @click="changeFilter(tab)">
           {{ t(`face_review.${tab}`) }} ({{ faceReviewCount(tab, counts) }})
         </button>
         <button type="button" class="btn btn-sm ml-auto" :disabled="busy || loading" @click="refreshReview">{{ t('face_review.refresh') }}</button>
@@ -54,9 +54,9 @@
       <div class="flex items-center justify-between text-xs shrink-0">
         <span>{{ t('face_review.total', { count: total }) }}</span>
         <div class="flex items-center gap-2">
-          <button type="button" class="btn btn-xs" :disabled="busy || loading || offset === 0" @click="offset = Math.max(0, offset - pageSize); load()">{{ t('face_review.previous') }}</button>
+          <button type="button" class="btn btn-xs" :disabled="busy || loading || offset === 0" @click="changePage(-1)">{{ t('face_review.previous') }}</button>
           <span>{{ Math.floor(offset / pageSize) + 1 }} / {{ Math.max(1, Math.ceil(total / pageSize)) }}</span>
-          <button type="button" class="btn btn-xs" :disabled="busy || loading || offset + pageSize >= total" @click="offset += pageSize; load()">{{ t('face_review.next') }}</button>
+          <button type="button" class="btn btn-xs" :disabled="busy || loading || offset + pageSize >= total" @click="changePage(1)">{{ t('face_review.next') }}</button>
         </div>
       </div>
     </div>
@@ -72,8 +72,7 @@ import { config, libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
 import { faceColor } from '@/common/faceUi';
 import { canUsePersonCover } from '@/common/personList';
-import { applyFaceRename } from '@/common/faceUpdates';
-import { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, type FaceReviewItem, type FaceReviewAction } from '@/common/faceReview';
+import { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, applyFaceReviewChange, type FaceReviewItem, type FaceReviewAction } from '@/common/faceReview';
 import ModalDialog from '@/components/ModalDialog.vue';
 import FaceNameEditor from '@/components/FaceNameEditor.vue';
 import PersonPicker from '@/components/PersonPicker.vue';
@@ -100,7 +99,24 @@ const selectedItems = computed(() => items.value.filter(item => selected.value.i
 const allSelected = computed(() => items.value.length > 0 && selectedItems.value.length === items.value.length);
 const actions = computed<FaceReviewAction[]>(() => filter.value === 'ignored' ? ['restore'] : filter.value === 'stale' ? [] : filter.value === 'suggested' ? ['confirm', 'reject', 'assign_existing', 'assign_new', 'ignore', 'not_face'] : ['assign_existing', 'assign_new', 'ignore', 'not_face']);
 function current() { return alive && libraryId === libConfig._libraryId && profile === config.settings.ai?.faceProfile; }
-function close() { if (!busy.value) emit('cancel'); }
+let leaving = false;
+function hasDraft() { return !!(selected.value.length || pending.value || newName.value.trim()); }
+function leave(action: () => void) {
+  if (!current() || busy.value || leaving) return false;
+  if (!hasDraft()) { action(); return true; }
+  leaving = true;
+  return ask(t('face_review.leave_confirm'), { kind: 'warning' }).then(accepted => {
+    if (!accepted || !current() || busy.value) return false;
+    action(); return true;
+  }).finally(() => { leaving = false; });
+}
+function close() { return leave(() => emit('cancel')); }
+function changeFilter(next: string) { if (next !== filter.value && filters.includes(next)) return leave(() => { filter.value = next; }); }
+function changePage(direction: number) {
+  const next = Math.max(0, offset.value + direction * pageSize);
+  if (next === offset.value || next >= total.value) return false;
+  return leave(() => { offset.value = next; void load(); });
+}
 function toggleAll() { selected.value = allSelected.value ? [] : items.value.map(faceReviewKey); pending.value = null; }
 function resize() { dialogWidth.value = Math.min(960, window.innerWidth - 24); dialogHeight.value = Math.min(760, window.innerHeight - 32); }
 async function refreshReview() {
@@ -175,15 +191,12 @@ onMounted(async () => {
   const stopNames = await listen('face-person-changed', (event: any) => {
     if (!current() || event.payload.library_id !== libraryId) return;
     if (event.payload.personId === personId && event.payload.mode === 'rename') personName.value = event.payload.name;
-    const before = items.value.find(item => item.faceId === event.payload.faceId)?.state;
-    if (!applyFaceRename(items.value, event.payload)) return;
-    if (before === 'suggested' && event.payload.reviewState === 'confirmed') {
-      counts.value.suggested = Math.max(0, (counts.value.suggested || 0) - 1); counts.value.confirmed = (counts.value.confirmed || 0) + 1;
-      if (filter.value === 'suggested') {
-        items.value = items.value.filter(item => item.faceId !== event.payload.faceId); total.value--;
-        const remaining = selected.value.filter(key => items.value.some(item => faceReviewKey(item) === key));
-        if (remaining.length !== selected.value.length) selected.value = remaining;
-      }
+    const update = applyFaceReviewChange(items.value, counts.value, event.payload, filter.value, personId);
+    if (!update.handled) { updatesPending.value = true; return; }
+    total.value = Math.max(0, total.value - update.removed.length);
+    if (update.removed.length) {
+      const remaining = selected.value.filter(key => !update.removed.includes(key));
+      if (remaining.length !== selected.value.length) selected.value = remaining;
     }
   });
   if (!alive) stopNames(); else unlistenNames = stopNames;

@@ -2113,6 +2113,7 @@
     "not_face_hint": "Hide this false-positive box and record the region as not a face. Re-detection of the same file filters overlapping detections. Restore it in People → Face review → Ignored / False positives. Photos and people are not deleted; this does not train or fine-tune a model."
   },
   "face_review": {
+    "leave_confirm": "Switching or closing clears your selection and unsubmitted operation. Continue?",
     "updates_pending": "New results are available. Your selection and edits are preserved; refresh after finishing your review.",
     "refresh_confirm": "Refreshing clears your selection and unsubmitted batch operation. Continue?",
     "title": "Face review",

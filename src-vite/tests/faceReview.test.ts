@@ -6,7 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, type FaceReviewItem } from '../src/common/faceReview.ts';
+import { faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, applyFaceReviewChange, type FaceReviewItem } from '../src/common/faceReview.ts';
 import { applyFaceRename } from '../src/common/faceUpdates.ts';
 import { faceColor } from '../src/common/faceUi.ts';
 import { canUsePersonCover } from '../src/common/personList.ts';
@@ -14,13 +14,13 @@ const item: FaceReviewItem = { faceId: 11, annotationId: null, fileId: 1, fileNa
 const source = readFileSync(new URL('../src/components/FaceReview.vue', import.meta.url), 'utf8');
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
 const code = stripTypeScriptTypes(script).replace(/^import .*;\r?\n/gm, '');
-const helpers = { canUsePersonCover, applyFaceRename, faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, faceColor };
+const helpers = { canUsePersonCover, applyFaceRename, faceReviewKey, faceReviewCanEdit, faceReviewCanApply, faceReviewCount, faceForEditor, faceColor, applyFaceReviewChange };
 function harness(handler?: (command: string, args: any) => Promise<any>, person: any = null) {
   const listeners: Record<string, (event: any) => void> = {};
   const calls: any[] = [], events: any[] = [], handlers: string[] = [], mounts: Array<() => any> = [], unmounts: Array<() => void> = [];
   const libConfig = { _libraryId: 'library-a' }, config = { settings: { ai: { faceProfile: 'profile-a' } } };
   let confirm = true;
-  const api = runInNewContext(`${code}\n;({load, refreshReview, updatesPending, apply, chooseCover, close, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root, targetPerson, newName, canSubmit, previews});`, {
+  const api = runInNewContext(`${code}\n;({load, refreshReview, updatesPending, apply, chooseCover, close, changeFilter, changePage, total, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root, targetPerson, newName, canSubmit, previews});`, {
     ...helpers, ask: async () => confirm,
     ref: (value: any) => ({ value }), computed: (getter: () => any) => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: (fn: () => void) => mounts.push(fn), onBeforeUnmount: (fn: () => void) => unmounts.push(fn), nextTick: async () => {},
@@ -205,6 +205,34 @@ test('inline renaming in the actual review listener retains previews, row object
   assert.equal(h.api.items.value[0], row); assert.equal(row.personName, 'Alice New'); assert.equal(row.state, 'confirmed');
   assert.equal(h.api.previews.value[key], 'cached-jpeg'); assert.equal(h.api.selectedItems.value.length, 1);
   assert.equal(h.calls.filter(c => c.command === 'get_face_review_page').length, requests); h.unmount();
+});
+test('inline reassignment and confirmation update the existing row and counts without a list reload', async () => {
+  const h=harness();await h.mount();h.api.filter.value='all';h.api.toggleAll();h.api.pending.value='assign_new';h.api.newName.value='Other batch draft';
+  const row=h.api.items.value[0],key=faceReviewKey(row);h.api.previews.value[key]='cached';const queries=h.calls.length;
+  const change={library_id:'library-a',mode:'assign_existing',faceId:11,fileId:1,previousPersonId:7,personId:8,name:'Bob',annotationId:9,reviewState:'confirmed'};
+  h.dispatch('face-person-changed',change);
+  assert.equal(h.api.items.value[0],row);assert.equal(row.personId,8);assert.equal(row.personName,'Bob');assert.equal(row.annotationId,9);
+  assert.equal(h.api.counts.value.suggested,0);assert.equal(h.api.counts.value.confirmed,1);assert.equal(h.api.previews.value[key],'cached');
+  assert.equal(h.api.selected.value.length,1);assert.equal(h.api.newName.value,'Other batch draft');assert.equal(h.calls.length,queries);
+  h.dispatch('face-person-changed',change);assert.equal(h.api.counts.value.confirmed,1);h.unmount();
+});
+test('ignoring a face removes only its row from active filters and preserves unrelated batch input',async()=>{
+  const h=harness();await h.mount();h.api.filter.value='all';h.api.items.value.push({...item,faceId:12});
+  h.api.selected.value=[faceReviewKey(h.api.items.value[1])];h.api.pending.value='assign_new';h.api.newName.value='Keep this';
+  h.dispatch('face-person-changed',{library_id:'library-a',mode:'not_face',faceId:11,fileId:1,personId:null,name:null,annotationId:10,reviewState:'not_face'});
+  assert.equal(h.api.items.value.length,1);assert.equal(h.api.items.value[0].faceId,12);assert.equal(h.api.selected.value.length,1);
+  assert.equal(h.api.pending.value,'assign_new');assert.equal(h.api.newName.value,'Keep this');assert.equal(h.api.counts.value.not_face,1);h.unmount();
+});
+test('assignment away from a person-scoped review removes the face without adding counts for another identity',async()=>{
+  const h=harness(undefined,{id:7,name:'Alice'});await h.mount();
+  h.dispatch('face-person-changed',{library_id:'library-a',mode:'assign_existing',faceId:11,fileId:1,personId:8,name:'Bob',annotationId:10,reviewState:'confirmed'});
+  assert.equal(h.api.items.value.length,0);assert.equal(h.api.counts.value.suggested,0);assert.equal(h.api.counts.value.confirmed||0,0);h.unmount();
+});
+test('review filter, page and close actions preserve unsubmitted input when their confirmation is cancelled',async()=>{
+  const h=harness();await h.api.load();h.api.total.value=100;h.api.offset.value=36;h.api.toggleAll();h.api.pending.value='assign_new';h.api.newName.value='Unsaved';h.confirm(false);
+  await h.api.changeFilter('ignored');await h.api.changePage(1);await h.api.close();
+  assert.equal(h.api.filter.value,'suggested');assert.equal(h.api.offset.value,36);assert.equal(h.api.newName.value,'Unsaved');assert.equal(h.events.length,0);
+  h.confirm(true);await h.api.close();assert.equal(h.events[0][0],'cancel');h.unmount();
 });
 
 test('person review renders cover selection only for active faces of that identity', async () => {
