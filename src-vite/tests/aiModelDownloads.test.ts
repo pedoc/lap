@@ -17,17 +17,51 @@ function harness(invoke: any = async () => fixture()) {
   const calls: any[] = [], notifications: any[] = [], mounted: any[] = [], unmount: any[] = [], listeners: any = {};
   const toast = Object.fromEntries(['success', 'error', 'info'].map(kind => [kind, (message: string) => notifications.push({ kind, message })]));
   const t = (key: string, args: any = {}) => `${key} ${Object.values(args).join(' ')}`;
-  const ctx: any = { ...Vue, ...downloads, ...ai, config: { settings: { ai: {} } }, useI18n: () => ({ t }), useToast: () => toast,
+  const ctx: any = { ...Vue, ...downloads, ...ai, defineExpose: () => {}, config: { settings: { ai: {} } }, useI18n: () => ({ t }), useToast: () => toast,
     invoke: async (...args: any[]) => { calls.push(args); return invoke(...args); }, ask: async () => true,
     watch: () => {}, onMounted: (cb: any) => mounted.push(cb), onUnmounted: (cb: any) => unmount.push(cb),
     listen: async (name: string, cb: any) => { listeners[name] = cb; return () => delete listeners[name]; },
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({download,cancelDownload,downloadFeedback,downloading,busy,error,view,task,choose});`, ctx);
+  const api: any = runInNewContext(`${script}\n;({download,cancelDownload,downloadFeedback,downloading,busy,error,view,task,choose,refresh,draft,draftDirty,apiKey,selectModel,changeTask,confirmDiscard,persist});`, ctx);
   api.view.value = fixture(); api.task.value = 'ocr'; api.choose(modelId);
   return { ctx, api, calls, notifications, mounted, unmount, listeners };
 }
 function deferred() { let resolve: any, reject: any; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
+test('background configuration refresh keeps unsaved parameters and API keys instead of replacing the draft', async () => {
+  const h = harness(); h.api.draft.value.parameters.threshold = 0.75; h.api.apiKey.value = 'fixture-only-not-a-real-key';
+  assert.equal(h.api.draftDirty.value, true);
+  await h.api.refresh(modelId);
+  assert.equal(h.api.draft.value.parameters.threshold, 0.75); assert.equal(h.api.apiKey.value, 'fixture-only-not-a-real-key');
+  assert.equal(h.calls.some(([command]) => command === 'save_ai_model'), false);
+});
+test('switching models, task types and closing requires explicit permission to discard unsaved configuration', async () => {
+  const h = harness();
+  h.api.view.value.models.push({ ...fixture().models[0], definition: { ...fixture().models[0].definition, id: 'second' } });
+  h.api.draft.value.parameters.threshold = 0.8;
+  h.ctx.ask = async () => false;
+  const select = { value: 'second' }; await h.api.selectModel({ target: select });
+  assert.equal(select.value, modelId); assert.equal(h.api.draft.value.parameters.threshold, 0.8);
+  await h.api.changeTask('face'); assert.equal(h.api.task.value, 'ocr'); assert.equal(await h.api.confirmDiscard(), false);
+  h.ctx.ask = async () => true; select.value = 'second'; await h.api.selectModel({ target: select });
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.draft.value.parameters)), {});
+  assert.equal(await h.api.confirmDiscard(), true);
+});
+test('a late configuration request cannot switch back to a model selected before the request completed', async () => {
+  const d = deferred(), h = harness(() => d.promise);
+  h.api.view.value.models.push({ ...fixture().models[0], definition: { ...fixture().models[0].definition, id: 'second' } });
+  const refresh = h.api.refresh(modelId); h.api.choose('second');
+  d.resolve(fixture()); await refresh;
+  assert.equal(h.api.draft.value.parameters.threshold, undefined);
+  h.api.draft.value.parameters.threshold = 0.9;
+  assert.equal(h.api.draftDirty.value, true);
+});
+test('settings tab navigation and destruction consult model draft protection; plain Tab stays in the form', () => {
+  const settings = readFileSync(new URL('../src/views/Settings.vue', import.meta.url), 'utf8');
+  assert.match(settings, /@click="selectSettingsTab\(tab.id\)"/);
+  assert.match(settings, /onCloseRequested[\s\S]*?confirmDiscard\(\)[\s\S]*?appWindow.destroy\(\)/);
+  assert.match(settings, /if \(!event.ctrlKey\) return/);
+});
 
 test('fast download rejection leaves a model-local error and visible notification', async () => {
   const h = harness(async (command: string) => { if (command === 'download_ai_model') throw 'ocr_detector from model source: HTTP 403 Forbidden'; return fixture(); });

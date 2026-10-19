@@ -112,6 +112,7 @@ function context() {
     objectFocus: Vue.ref(null),
     showObjectBoxes: Vue.ref(false),
     objectEdit: Vue.ref(null),
+    confirmObjectEditReplacement: () => true,
     objectEditActive: (fileId: number) =>
       ctx.objectEdit.value?.fileId === fileId,
     startObjectEdit: (fileId: number, photo: any, choices: any[], objectId?: string) => {
@@ -592,6 +593,38 @@ test('shared correction sessions select only existing boxes and permit adding mi
   assert.equal(api.objectEdit.value.boxes.length, 0);
   assert.equal(api.objectEdit.value.choices[0].key, dog.key);
   assert.equal(api.objectEdit.value.sourceKey, empty.sourceKey);
+});
+test('a new object edit cannot replace an unsaved or saving draft without confirmation', async () => {
+  const ctx = context();
+  const api = commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,hasObjectEditChanges,confirmObjectEditReplacement,cancelObjectEdit');
+  api.startObjectEdit(7, photo(), [dog]); api.objectEdit.value.boxes[0].reviewed = true;
+  const original = api.objectEdit.value;
+  assert.equal(api.hasObjectEditChanges(), true);
+  assert.equal(api.startObjectEdit(8, photo(), [dog]), false);
+  assert.equal(await api.confirmObjectEditReplacement(async () => false), false);
+  assert.equal(api.objectEdit.value, original);
+  let finish!: (accepted: boolean) => void;
+  const question = api.confirmObjectEditReplacement(() => new Promise(resolve => { finish = resolve; }));
+  api.cancelObjectEdit(); api.startObjectEdit(9, photo(), [dog]); finish(true);
+  assert.equal(await question, false); assert.equal(api.objectEdit.value.fileId, 9);
+  api.objectEdit.value.boxes[0].reviewed = true;
+  assert.equal(await api.confirmObjectEditReplacement(async () => true), true);
+  api.startObjectEdit(8, photo(), [dog]); api.objectEdit.value.busy = true;
+  assert.equal(api.confirmObjectEditReplacement(async () => true), false);
+  assert.equal(api.startObjectEdit(9, photo(), [dog]), false);
+});
+test('leaving and returning to a photo preserves its draft and validates the source before saving', async () => {
+  const ctx = context(), mounted: Array<() => any> = [];
+  ctx.onMounted = (callback: () => any) => mounted.push(callback);
+  ctx.invoke = async () => photo(); ctx.listen = async () => () => {};
+  Object.assign(ctx, commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,markObjectEditStale'));
+  const { usePhotoObjects } = commonModule('photoObjects', ctx, 'usePhotoObjects');
+  const id = Vue.ref(7), version = Vue.ref(1), scope = Vue.effectScope();
+  scope.run(() => usePhotoObjects(() => [id.value, version.value])); await tick();
+  ctx.startObjectEdit(7, photo(), [dog]); ctx.objectEdit.value.boxes[0].reviewed = true;
+  id.value = 8; await tick(); id.value = 7; await tick();
+  assert.equal(ctx.objectEdit.value.stale, false); assert.equal(ctx.objectEdit.value.boxes[0].reviewed, true);
+  version.value++; await tick(); assert.equal(ctx.objectEdit.value.stale, true); scope.stop();
 });
 test('inline category edits stay in the draft until save and preserve source and revision guards', async () => {
   const ctx = context(), calls: any[] = [];

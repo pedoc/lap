@@ -15,7 +15,7 @@
               ? 'bg-base-100 text-primary' 
               : 'hover:text-base-content hover:bg-base-100/30'
           ]"
-          @click="config.settings.tabIndex = tab.id"
+          @click="selectSettingsTab(tab.id)"
         >
           {{ $t(tab.label) }}
         </div>
@@ -382,7 +382,7 @@
 
         <!-- Search Tab -->
         <div v-else-if="config.settings.tabIndex === SETTINGS_TAB.IMAGE_SEARCH">
-          <AiModelSettings />
+          <AiModelSettings ref="aiModelsRef" />
         </div>
 
         <!-- Advanced Tab -->
@@ -611,6 +611,17 @@ const rawPreviewFields = [
 ];
 
 const appWindow = getCurrentWebviewWindow()
+const aiModelsRef = ref<{ confirmDiscard: () => Promise<boolean> } | null>(null);
+let changingTab = false;
+async function selectSettingsTab(id: number) {
+  if (changingTab || id === config.settings.tabIndex) return;
+  changingTab = true;
+  try {
+    const modelEditor = aiModelsRef.value;
+    if (modelEditor && !await modelEditor.confirmDiscard()) return;
+    if (modelEditor === aiModelsRef.value) config.settings.tabIndex = id;
+  } finally { changingTab = false; }
+}
 let unlistenCloseRequested: (() => void) | null = null;
 const SETTINGS_BASE_WIDTH = 600;
 const SETTINGS_BASE_HEIGHT = 620;
@@ -1098,6 +1109,7 @@ onMounted(async () => {
   unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
     event.preventDefault();
     try {
+      if (aiModelsRef.value && !await aiModelsRef.value.confirmDiscard()) return;
       await appWindow.destroy();
     } catch (destroyError) {
       console.error('Failed to destroy settings window:', destroyError);
@@ -1254,7 +1266,7 @@ watch(() => config.settings.face.enabled, (newValue) => {
 
 // Handle keyboard shortcuts
 function handleKeyDown(event: KeyboardEvent) {
-  const navigationKeys = ['Tab', 'Escape'];
+  const navigationKeys = ['Escape'];
 
   // Disable default behavior for certain keys
   if (navigationKeys.includes(event.key)) {
@@ -1263,8 +1275,11 @@ function handleKeyDown(event: KeyboardEvent) {
 
   switch (event.key) {
     case 'Tab': {
+      // Normal Tab belongs to form controls; only Ctrl+Tab changes settings tabs.
+      if (!event.ctrlKey) return;
+      event.preventDefault();
       const current = settingsTabs.findIndex(tab => tab.id === config.settings.tabIndex);
-      config.settings.tabIndex = settingsTabs[(current + 1) % settingsTabs.length].id;
+      void selectSettingsTab(settingsTabs[(current + (event.shiftKey ? -1 : 1) + settingsTabs.length) % settingsTabs.length].id);
       break;
     }
     case 'Escape':

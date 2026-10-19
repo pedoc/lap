@@ -54,8 +54,12 @@ export function usePhotoObjects(source: () => [number, unknown]) {
       ...source(),
       config.settings.ai?.detectionProfile,
     ],
-    (_value, previous) => {
-      if (previous) markObjectEditStale(Number(previous[1]), String(previous[0]));
+    (value, previous) => {
+      // Navigation is not a media change. Returning to the same photo validates
+      // the retained draft against the freshly fetched source/revision instead.
+      if (previous && value[0] === previous[0] && value[1] === previous[1] &&
+        (value[2] !== previous[2] || value[3] !== previous[3]))
+        markObjectEditStale(Number(previous[1]), String(previous[0]));
       result.value = null;
       error.value = '';
       revision.value++;

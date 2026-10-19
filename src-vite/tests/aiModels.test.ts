@@ -79,7 +79,7 @@ function selectorHarness({ confirmed = true, failure = '', partial = false, task
   let backend = { ...view.value.selection };
   const calls: any[] = [], errors: string[] = [], refreshed: string[] = [], confirmations: string[] = [];
   const handler = runInNewContext(`(${handlerSource})`, {
-    view, editingId, selectedModel, busy, choose, task: { value: task }, requiresSelectionRebuild, canActivateSavedModel,
+    view, editingId, selectedModel, busy, choose, task: { value: task }, requiresSelectionRebuild, canActivateSavedModel, confirmDiscard: async () => true,
     t: (key: string) => key,
     ask: async (message: string) => { confirmations.push(message); return confirmed; },
     action: async (fn: () => Promise<void>) => { try { await fn(); } catch (e: any) { errors.push(e.message); } },

@@ -2,7 +2,7 @@
   <div class="space-y-3">
     <p class="text-xs opacity-60">{{ t('settings.ai_models.intro') }}</p>
     <div class="flex gap-2">
-      <button v-for="kind in ['semantic', 'face', 'ocr', 'detection']" :key="kind" class="btn btn-sm" :class="task === kind ? 'btn-primary' : 'btn-ghost'" :disabled="busy" @click="task = kind">
+      <button v-for="kind in ['semantic', 'face', 'ocr', 'detection']" :key="kind" class="btn btn-sm" :class="task === kind ? 'btn-primary' : 'btn-ghost'" :disabled="busy" @click="changeTask(kind)">
         {{ t(`settings.ai_models.${kind}`) }}
       </button>
     </div>
@@ -14,6 +14,7 @@
     </label>
     <div v-if="error" role="alert" class="text-error text-xs whitespace-pre-wrap">{{ error }}</div>
     <div v-if="loading" class="loading loading-spinner loading-sm"></div>
+    <p v-if="draftDirty || apiKey" class="text-xs text-warning" role="status">{{ t('settings.ai_models.unsaved') }}</p>
     <template v-if="view">
       <div class="rounded-box border border-base-content/10 p-3 space-y-2">
         <label class="font-semibold text-sm" for="global-ai-model">{{ t('settings.ai_models.choose_model') }}</label>
@@ -142,21 +143,36 @@ const isRemote = computed(() => selectedModel.value?.definition.adapter === 'jin
 const isActive = computed(() => view.value?.selection[task.value] === editingId.value);
 const activeName = computed(() => aiModelDisplayName(modelOptions.value.find((row: any) => row.definition.id === view.value?.selection[task.value])?.definition) || '—');
 const copy = (value: any) => JSON.parse(JSON.stringify(value));
+const draftBaseline = ref('');
+const draftDirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== draftBaseline.value);
+async function confirmDiscard() {
+  if (!draftDirty.value && !apiKey.value) return true;
+  return ask(t('settings.ai_models.discard_draft'), { kind: 'warning' });
+}
+async function changeTask(kind: string) {
+  if (busy.value || kind === task.value || !await confirmDiscard()) return;
+  task.value = kind;
+}
 
 function choose(id: string) {
   const row = modelOptions.value.find((row: any) => row.definition.id === id);
   editingId.value = row ? id : '';
   draft.value = row ? copy(row.configuration) : null;
+  draftBaseline.value = JSON.stringify(draft.value);
   apiKey.value = '';
 }
 async function refresh(preferred?: string) {
   const generation = ++request;
+  const editingAtRequest = editingId.value, taskAtRequest = task.value;
   loading.value = true;
   try {
     const next: any = await invoke('get_ai_configuration');
     if (!mounted || generation !== request) return;
+    const preserveDraft = draftDirty.value || !!apiKey.value;
     view.value = next;
     applyAiConfiguration(config, next);
+    if (editingAtRequest !== editingId.value || taskAtRequest !== task.value) return;
+    if (preserveDraft && next.models.some((row: any) => row.definition.id === editingId.value)) return;
     choose(modelOptions.value.some((row: any) => row.definition.id === preferred) ? preferred! : next.selection[task.value]);
   } catch (e: any) {
     if (mounted) error.value = e?.message || String(e);
@@ -198,12 +214,14 @@ async function persist(confirm = true) {
     if (!await ask(t('settings.ai_models.rebuild_confirm'), { kind: 'warning' })) throw new Error('__cancelled__');
   }
   await invoke('save_ai_model', { modelId: editingId.value, configuration: copy(draft.value), apiKey: apiKey.value || null });
+  draftBaseline.value = JSON.stringify(draft.value);
   apiKey.value = '';
 }
 async function selectModel(event: Event) {
   const select = event.target as HTMLSelectElement;
   const modelId = select.value;
   if (busy.value) { select.value = editingId.value; return; }
+  if (modelId !== editingId.value && !await confirmDiscard()) { select.value = editingId.value; return; }
   choose(modelId);
   // Every catalog model can be configured here, even before download/API setup.
   // Only ready saved models trigger a real global switch; the active indicator
@@ -309,7 +327,7 @@ async function importModel() {
 }
 watch(task, () => { choose(view.value?.selection[task.value]); });
 onMounted(async () => {
-  const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr', 'detection'].includes(event.payload) && !busy.value) task.value = event.payload; });
+  const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr', 'detection'].includes(event.payload)) void changeTask(event.payload); });
   if (mounted) unlisten.push(offTask); else offTask();
   await refresh();
   const progressListener = await listen('ai-model-download-progress', (event: any) => {
@@ -323,4 +341,5 @@ onMounted(async () => {
   if (!mounted) configurationListener(); else unlisten.push(configurationListener);
 });
 onUnmounted(() => { mounted = false; request++; unlisten.forEach(fn => fn()); });
+defineExpose({ confirmDiscard });
 </script>

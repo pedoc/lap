@@ -302,6 +302,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { ask } from '@tauri-apps/plugin-dialog';
 import { config, libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
 import { useObjects, objectFocus, showObjectBoxes } from '@/common/objects';
@@ -316,6 +317,7 @@ import {
   objectEdit,
   objectEditActive,
   startObjectEdit,
+  confirmObjectEditReplacement,
   cancelObjectEdit,
   saveObjectEdit,
   type ObjectBoxDraft,
@@ -350,21 +352,31 @@ const document = computed(() => result.value?.document),
   );
 const choices = computed(() => (view.value?.classes || []).filter((choice: any) => choice.supported));
 const canCorrect = computed(() =>
-  props.ready && !loading.value && compatible.value && !!result.value?.sourceKey && choices.value.length > 0,
+  props.ready && !loading.value && compatible.value && !!result.value?.sourceKey && choices.value.length > 0 && !objectEdit.value?.busy,
 );
 const canEdit = computed(() =>
   props.ready && compatible.value && !!editing.value && !editing.value.busy && !editing.value.stale,
 );
 function beginCorrection(objectId?: string) {
   if (!canCorrect.value || editing.value) return;
-  objectFocus.value = null;
-  showObjectBoxes.value = true;
-  startObjectEdit(Number(props.fileId), result.value, choices.value, objectId);
-  const selectedBox = editing.value?.boxes.find((box) => box.id === objectId);
-  if (selectedBox) draftClass.value = selectedBox.class.key;
+  const library = libConfig._libraryId, fileId = Number(props.fileId), data = result.value;
+  const open = (accepted: boolean) => {
+    if (!accepted || library !== libConfig._libraryId || fileId !== Number(props.fileId) || data !== result.value || !canCorrect.value) return;
+    objectFocus.value = null;
+    showObjectBoxes.value = true;
+    startObjectEdit(fileId, data, choices.value, objectId);
+    const selectedBox = editing.value?.boxes.find((box) => box.id === objectId);
+    if (selectedBox) draftClass.value = selectedBox.class.key;
+  };
+  const answer = confirmObjectEditReplacement(() => ask(t('objects.discard_draft'), { kind: 'warning' }));
+  return typeof answer === 'boolean' ? open(answer) : answer.then(open);
 }
 function startDrawing() {
-  if (!editing.value) beginCorrection();
+  if (!editing.value) {
+    const library = libConfig._libraryId, fileId = props.fileId;
+    const pending = beginCorrection();
+    if (pending) return pending.then(() => { if (library === libConfig._libraryId && fileId === props.fileId && canEdit.value) editing.value!.drawing = true; });
+  }
   if (!canEdit.value) return;
   editing.value!.drawing = true;
 }

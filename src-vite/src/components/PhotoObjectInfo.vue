@@ -56,7 +56,7 @@
         ><button
           v-if="!editing"
           class="btn btn-xs"
-          :disabled="busy || loading || !result.sourceKey || !choices.length"
+          :disabled="busy || objectEdit?.busy || loading || !result.sourceKey || !choices.length"
           @click="draw"
         >
           {{ t('objects.draw_box') }}
@@ -213,6 +213,7 @@ import {
   objectEdit,
   objectEditActive,
   startObjectEdit,
+  confirmObjectEditReplacement,
   saveObjectEdit,
   cancelObjectEdit,
 } from '@/common/objectEditing';
@@ -285,17 +286,18 @@ function focus(object: any) {
 function draw() {
   const data = result.value;
   if (!data?.document || !data.sourceKey || loading.value || !choices.value.length) return;
-  objectFocus.value = null;
-  startObjectEdit(Number(props.file.id), data, choices.value);
-  if (objectEdit.value) objectEdit.value.drawing = true;
-  showObjectBoxes.value = true;
-  // In grid/list mode the editor has no canvas until the parent opens preview.
-  emit('focus-object', {
-    libraryId: libConfig._libraryId,
-    fileId: Number(props.file.id),
-    profile: data.profile,
-    objectId: '',
-  });
+  const libraryId = libConfig._libraryId, fileId = Number(props.file.id);
+  const open = (accepted: boolean) => {
+    if (!accepted || libraryId !== libConfig._libraryId || fileId !== Number(props.file?.id) || data !== result.value) return;
+    objectFocus.value = null;
+    startObjectEdit(fileId, data, choices.value);
+    if (!objectEditActive(fileId)) return;
+    objectEdit.value!.drawing = true;
+    showObjectBoxes.value = true;
+    emit('focus-object', { libraryId, fileId, profile: data.profile, objectId: '' });
+  };
+  const answer = confirmObjectEditReplacement(() => ask(t('objects.discard_draft'), { kind: 'warning' }));
+  return typeof answer === 'boolean' ? open(answer) : answer.then(open);
 }
 async function mergeCandidates() {
   const data = result.value;

@@ -30,9 +30,30 @@ export interface ObjectEditSession {
   busy: boolean;
   error: string;
   stale: boolean;
+  baseline: string;
 }
 
 export const objectEdit = ref<ObjectEditSession | null>(null);
+
+export function hasObjectEditChanges(session = objectEdit.value) {
+  return !!session && JSON.stringify(session.boxes) !== session.baseline;
+}
+
+// The common clean path stays synchronous. A replacement of a real draft must
+// be explicitly approved, and a late confirmation cannot discard a newer draft.
+export function confirmObjectEditReplacement(confirm: () => Promise<boolean>): boolean | Promise<boolean> {
+  const session = objectEdit.value;
+  if (!session) return true;
+  if (session.busy) return false;
+  if (!hasObjectEditChanges(session)) return true;
+  const signature = JSON.stringify(session.boxes);
+  const library = libConfig._libraryId;
+  return confirm().then(accepted => {
+    if (!accepted || library !== libConfig._libraryId || objectEdit.value !== session || session.busy || JSON.stringify(session.boxes) !== signature) return false;
+    objectEdit.value = null;
+    return true;
+  });
+}
 
 function classFrom(value: any): ObjectClassDraft {
   return {
@@ -57,6 +78,8 @@ export function startObjectEdit(
 ) {
   const document = photo?.document;
   if (!document?.objects) return;
+  const existing = objectEdit.value;
+  if (existing && (existing.busy || hasObjectEditChanges(existing))) return false;
   const classes = new Map<string, ObjectClassDraft>();
   for (const choice of choices || []) {
     const item = classFrom(choice);
@@ -99,7 +122,9 @@ export function startObjectEdit(
     busy: false,
     error: '',
     stale: false,
+    baseline: JSON.stringify(boxes),
   };
+  return true;
 }
 
 export function markObjectEditStale(fileId: number, libraryId = libConfig._libraryId) {

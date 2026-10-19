@@ -1,5 +1,6 @@
 {
   "objects": {
+    "discard_draft": "Another photo has unsaved object revisions. Discard that draft and start a new revision? Cancel keeps the draft so you can return to the original photo.",
     "model_hint": "Downloadable local object detection. Each export has its own fixed input size and preprocessing contract. Choose lighter or accuracy-oriented models; GPU-first by default, with isolated model parameters and a finite category set, not identity recognition.",
     "title": "Objects",
     "states": "Recognition status",
@@ -1945,6 +1946,8 @@
       "proxy_test_success": "Google is reachable through the proxy."
     },
     "ai_models": {
+      "unsaved": "Configuration has unsaved changes. Background refresh keeps your input; switching or closing asks first.",
+      "discard_draft": "Model configuration or API key has unsaved changes. Discard them and continue?",
       "download_license_confirm": "{model} uses {license}. Its code and model-weight licensing differs from Apache-2.0; review the applicable terms before redistribution or integration. Continue downloading?",
       "detection": "Object detection",
       "ocr": "OCR",
