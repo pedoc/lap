@@ -7,7 +7,8 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { ocrSelectionRect, ocrAutomationReady } from '../src/common/ocrUi.ts';
+import { ocrSelectionRect, ocrAutomationReady, ocrSourceLineIndex } from '../src/common/ocrUi.ts';
+import { annotationEditorPosition } from '../src/common/annotationUi.ts';
 const read=(name:string)=>readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');
 const locale=JSON.parse(readFileSync(new URL('../src/locales/zh-CN.json',import.meta.url),'utf8'));
 const t=(key:string)=>key.split('.').reduce((value,key)=>value?.[key],locale)||key;
@@ -61,19 +62,54 @@ test('temporary direction override is explicit and never modifies global model c
 function editorHarness(annotation:any=null) {
   const calls:any[]=[],events:any[]=[],listeners:any={},mounts:any[]=[],unmounts:any[]=[];
   const source={text:'one\ntwo',lines:[{text:'one',bounds:[0,0,.5,.5]},{text:'two',bounds:[0,.5,.5,.5]}]};
-  const ctx:any={...Vue,crypto:{randomUUID},config:Vue.reactive({settings:{ai:{ocrProfile:'model-a'}}}),libConfig:Vue.reactive({_libraryId:'library-a'}),
+  const ctx:any={...Vue,annotationEditorPosition,defineExpose:()=>{},crypto:{randomUUID},config:Vue.reactive({settings:{ai:{ocrProfile:'model-a'}}}),libConfig:Vue.reactive({_libraryId:'library-a'}),
     props:{fileId:7,libraryId:'library-a',result:{profile:'model-a',sourceKey:'x'.repeat(64),document:source,modelDocument:source,annotation}},
     useI18n:()=>({t}),useUIStore:()=>({pushInputHandler(){},removeInputHandler(){}}),defineProps:()=>ctx.props,defineEmits:()=> (...args:any[])=>events.push(args),
     invoke:async(...args:any[])=>calls.push(args),ask:async()=>true,listen:async(name:string,cb:any)=>{listeners[name]=cb;return()=>delete listeners[name];},onMounted:(cb:any)=>mounts.push(cb),onBeforeUnmount:(cb:any)=>unmounts.push(cb),
   };
   const script=stripTypeScriptTypes(read('OcrTextEditor').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'');
-  const scope=Vue.effectScope();const api:any=scope.run(()=>runInNewContext(`${script};({save,reset,lines,stale,restoreLine,source})`,ctx));
+  const scope=Vue.effectScope();const api:any=scope.run(()=>runInNewContext(`${script};({save,reset,lines,stale,restoreLine,source,visibleLines,requestClose})`,ctx));
   return{ctx,api,calls,events,listeners,mount:async()=>{for(const cb of mounts)await cb();},dispose:()=>{unmounts.forEach(cb=>cb());scope.stop();}};
 }
 test('human edit saves only text/ignore overrides with optimistic source and revision guards',async()=>{
   const h=editorHarness();h.api.lines.value[0].text='correct';h.api.lines.value[1].ignored=true;await h.api.save();
   assert.equal(h.calls[0][0],'save_ocr_text');assert.equal(h.calls[0][1].sourceKey,'x'.repeat(64));assert.equal(h.calls[0][1].expectedRevision,'');
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0][1].lines)),[{text:'correct',ignored:false},{text:'two',ignored:true}]);assert.equal(h.ctx.props.result.document.lines[0].text,'one');assert.equal(h.events[0][0],'saved');h.dispose();
+});
+test('inline OCR maps displayed frames past ignored and empty lines to their immutable source indices',()=>{
+  const bounds=[[0,0,.5,.2],[0,.2,.5,.2],[0,.4,.5,.2],[0,.6,.5,.2]];
+  const source={lines:bounds.map((bounds,index)=>({text:`line ${index}`,bounds}))};
+  const result={annotation:{source,lines:[{text:'ignored',ignored:true},{text:'   ',ignored:false},{text:'corrected',ignored:false},{text:'last',ignored:false}]},document:{lines:[{text:'corrected',bounds:bounds[2]},{text:'last',bounds:bounds[3]}]}};
+  assert.equal(ocrSourceLineIndex(result,0),2);assert.equal(ocrSourceLineIndex(result,1),3);
+  assert.equal(ocrSourceLineIndex(result,2),null);assert.equal(ocrSourceLineIndex(result,-1),null);
+  result.document.lines[0].bounds=bounds[0];assert.equal(ocrSourceLineIndex(result,0),null);
+});
+test('inline OCR changes just one source row while saving the full guarded annotation vector',async()=>{
+  const h=editorHarness();h.ctx.props.lineIndex=1;h.ctx.props.currentFileId=7;
+  assert.equal(h.api.visibleLines.value.length,1);assert.equal(h.api.visibleLines.value[0].index,1);
+  h.api.visibleLines.value[0].line.text='corrected second';await h.api.save();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0][1].lines)),[{text:'one',ignored:false},{text:'corrected second',ignored:false}]);
+  assert.equal(h.calls[0][1].fileId,7);assert.equal(h.calls[0][1].sourceKey,'x'.repeat(64));h.dispose();
+});
+test('inline OCR preserves the draft after failed saves and after a cancelled close; another photo cannot receive it',async()=>{
+  const h=editorHarness();h.ctx.props.lineIndex=0;h.ctx.props.currentFileId=7;
+  h.api.lines.value[0].text='draft';h.ctx.ask=async()=>false;
+  assert.equal(await h.api.requestClose(),false);assert.equal(h.events.length,0);
+  h.ctx.invoke=async()=>{throw Error('Revision conflict');};await h.api.save();
+  assert.equal(h.api.lines.value[0].text,'draft');assert.equal(h.events.length,0);
+  h.ctx.props.currentFileId=8;await h.api.save();assert.equal(h.api.lines.value[0].text,'draft');
+  h.ctx.ask=async()=>true;assert.equal(await h.api.requestClose(),true);assert.equal(h.events[0][0],'close');h.dispose();
+});
+test('the compiled inline OCR editor renders one line beside its frame without a full-screen modal',async()=>{
+  const h=editorHarness();h.ctx.props.lineIndex=1;h.ctx.props.anchor={left:950,top:720,bottom:744};
+  const {descriptor}=parse(read('OcrTextEditor')),imports:any={};
+  const code=stripTypeScriptTypes(compileScript(descriptor,{id:'ocr-inline-real',inlineTemplate:true}).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g,(_m,names)=>{for(const name of names.split(',')){const[original,alias]=name.trim().split(/\s+as\s+/);imports[alias||original]=(Vue as any)[original];}return '';})
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'').replace('export default','const component=');
+  const component=runInNewContext(`${code};component`,{...h.ctx,...imports});
+  const ssr:any={};await renderToString(Vue.createSSRApp(component,h.ctx.props),ssr);const html=ssr.teleports.body;
+  assert.equal((html.match(/<textarea/g)||[]).length,1);assert.match(html,/two/);assert.doesNotMatch(html,/aria-modal="true"|fixed inset-0/);
+  assert.match(html,/left:672px/);assert.match(html,/第 .* 行/);h.dispose();
 });
 test('manual editor retains its original model snapshot rather than rebinding new model line numbers',()=>{
   const h=editorHarness({source:{text:'old model',lines:[{text:'old model',bounds:[0,0,1,1]}]},lines:[{text:'human',ignored:true}],revision:'rev-a'});

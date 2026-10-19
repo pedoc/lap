@@ -40,6 +40,22 @@ export function ocrGeometryCompatible(width: number, height: number, sourceWidth
   return Math.abs((width / height) / (sourceWidth / sourceHeight) - 1) < 0.02;
 }
 
+// The effective document omits ignored AND empty lines. Map a displayed frame
+// back to the immutable source before updating the full annotation vector.
+export function ocrSourceLineIndex(result: any, displayedIndex: number): number | null {
+  if (!Number.isSafeInteger(displayedIndex) || displayedIndex < 0) return null;
+  const visible = result?.document?.lines?.[displayedIndex];
+  if (!visible) return null;
+  if (!result.annotation) return displayedIndex;
+  const source = result.annotation.source?.lines, edits = result.annotation.lines;
+  if (!Array.isArray(source) || !Array.isArray(edits) || source.length !== edits.length) return null;
+  const indices = edits.map((edit: any, index: number) => ({ edit, index }))
+    .filter(({ edit }: any) => !edit.ignored && String(edit.text || '').trim().length > 0);
+  const selected = indices[displayedIndex];
+  if (!selected || selected.edit.text !== visible.text || JSON.stringify(source[selected.index]?.bounds) !== JSON.stringify(visible.bounds)) return null;
+  return selected.index;
+}
+
 // A specific sidebar filter already communicates the OCR state. Only mixed
 // results need state labels; never leave an empty panel over the photograph.
 export function ocrThumbnailPresentation(summary: { state: string; excerpt?: string } | null | undefined, filter: unknown) {

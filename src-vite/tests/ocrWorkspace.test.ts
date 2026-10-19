@@ -6,7 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript, compileTemplate } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { OCR_STATES, normalizeOcrState, ocrThumbnailPresentation, textSegments, ocrFrameStyle, ocrGeometryCompatible, ocrSelectionIds } from '../src/common/ocrUi.ts';
+import { OCR_STATES, normalizeOcrState, ocrThumbnailPresentation, textSegments, ocrFrameStyle, ocrGeometryCompatible, ocrSelectionIds, ocrSourceLineIndex } from '../src/common/ocrUi.ts';
 import { SIDEBAR } from '../src/common/constants.ts';
 const read = (name: string) => readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
 const cn = JSON.parse(readFileSync(new URL('../src/locales/zh-CN.json', import.meta.url), 'utf8'));
@@ -70,7 +70,7 @@ test('task banner persists scope and saved-stop feedback away from OCR and hides
 });
 function overlayHarness(invoke: any) {
   const watches: any[] = [], mounts: any[] = [], unmounts: any[] = [], events: any = {}, located: any[] = [];
-  const ctx: any = { ...baseContext(null), ocrFocus: Vue.ref(null), ocrShowBoxes: Vue.ref(false), ocrFrameStyle, ocrGeometryCompatible,
+  const ctx: any = { ...baseContext(null), ocrFocus: Vue.ref(null), ocrShowBoxes: Vue.ref(false), ocrFrameStyle, ocrGeometryCompatible, ocrSourceLineIndex,
     props: Vue.reactive({ fileId: 7, fileVersion: 1, width: 1000, height: 800, zoom: 1, ready: true }),
     invoke, defineProps: () => ctx.props, defineEmits: () => (_name: string, bounds: any) => located.push(bounds),
     watch: (...args: any[]) => { watches.push(args); return (Vue.watch as any)(...args); },
@@ -80,7 +80,7 @@ function overlayHarness(invoke: any) {
   ctx.libConfig = Vue.reactive(ctx.libConfig); ctx.config = Vue.reactive(ctx.config);
   const source = stripTypeScriptTypes(read('OcrImageOverlay').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${source};({document,focusLine,compatible})`, ctx));
+  const api: any = scope.run(() => runInNewContext(`${source};({document,focusLine,compatible,openLineEditor,setLineElement,editor,editorRef,editorSaved,selectedLine})`, ctx));
   return { ctx, api, events, located, mount: async () => { for (const cb of mounts) await cb(); }, dispose: () => { unmounts.forEach(cb => cb()); scope.stop(); } };
 }
 test('overlay ignores stale photo responses and clears private OCR text before refetching', async () => {
@@ -98,6 +98,23 @@ test('line focus locates once, does not steal panning and rejects mismatched pre
   h.ctx.props.ready = false; await tick(); h.ctx.props.ready = true; await tick(); assert.equal(h.located.length,1);
   h.ctx.props.width = 800; h.ctx.props.height = 1000; await tick(); h.api.focusLine(0); await tick(); assert.equal(h.located.length,1);
   h.ctx.props.width = 1000; h.ctx.props.height = 800; await tick(); assert.equal(h.located.length,2); h.dispose();
+});
+test('clicking an OCR frame opens guarded inline editing without zooming and protects a previous line draft', async () => {
+  const bounds = [0.1, 0.1, 0.3, 0.2];
+  const h = overlayHarness(async () => ({ profile: 'model-a', sourceKey: 'x'.repeat(64), document: { text: 'one\ntwo', imageWidth: 1000, imageHeight: 800, lines: [{text:'one',bounds},{text:'two',bounds:[.1,.4,.3,.2]}] } }));
+  await tick();
+  h.api.setLineElement(0, { getBoundingClientRect: () => ({ left: 100, top: 80, bottom: 240 }) });
+  h.api.setLineElement(1, { getBoundingClientRect: () => ({ left: 100, top: 320, bottom: 480 }) });
+  await h.api.openLineEditor(0);
+  assert.equal(h.api.editor.value.fileId, 7); assert.equal(h.api.editor.value.lineIndex, 0);
+  assert.equal(h.api.editor.value.result.sourceKey, 'x'.repeat(64)); assert.equal(h.api.editor.value.anchor.left, 100);
+  assert.equal(h.located.length, 0); assert.equal(h.api.selectedLine.value, 0);
+  const original = h.api.editor.value;
+  h.api.editorRef.value = { requestClose: async () => false }; await h.api.openLineEditor(1);
+  assert.equal(h.api.editor.value, original);
+  h.ctx.props.ready = false; await h.api.openLineEditor(1); assert.equal(h.api.editor.value, original);
+  assert.match(read('OcrImageOverlay'), /@click\.stop="openLineEditor\(index\)"/);
+  h.dispose();
 });
 
 function refreshHarness(options: any = {}) {

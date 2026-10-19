@@ -2517,6 +2517,8 @@
   }
 ,
   "ocr": {
+    "correct_line_hint": "{text} · Click to edit or ignore this line",
+    "discard_draft": "Text revisions have not been saved. Discard these changes?",
     "smart_text": "Image text",
     "smart_state": "Text recognition status",
     "smart_hint": "Uses valid results for the current global model, with human edits taking priority. Text does not contain applies only to recognized results, not pending or failed photos. Albums update as recognition and edits complete.",
