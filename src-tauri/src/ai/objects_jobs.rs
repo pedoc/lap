@@ -16,6 +16,7 @@ pub struct Status {
     pub stopping: bool,
     pub cancelled: bool,
     pub total: usize,
+    pub prepared: usize,
     pub completed: usize,
     pub succeeded: usize,
     pub failed: usize,
@@ -163,6 +164,65 @@ fn targets(
 fn persist(c: &Connection, job: &Job) -> Result<(), String> {
     let status = job.status.lock().map_err(|e| e.to_string())?.clone();
     super::objects_journal::save_status(c, &status)
+}
+fn publish_progress(app: &AppHandle, job: &Job) {
+    let snapshot = job.status.lock().ok().map(|status| status.clone());
+    if let Some(snapshot) = snapshot {
+        let _ = app.emit("object-job-progress", snapshot);
+    }
+}
+
+fn prepare_sources(
+    c: &mut Connection,
+    job: &Job,
+    ids: &[i64],
+    selected: &std::collections::BTreeMap<i64, String>,
+    check: impl Fn() -> Result<(), String>,
+    mut notify: impl FnMut(&Status),
+) -> Result<(), String> {
+    let job_id = {
+        let mut status = job.status.lock().map_err(|e| e.to_string())?;
+        status.total = ids.len();
+        status.prepared = 0;
+        status.phase = "preparing".into();
+        status.job_id.clone()
+    };
+    let mut last_emit: Option<std::time::Instant> = None;
+    super::objects_journal::plan_sources(
+        c,
+        &job_id,
+        ids,
+        check,
+        |c, id| {
+            if let Some(key) = selected.get(&id) {
+                return Ok(key.clone());
+            }
+            media::source_optional_on(c, id)?
+                .map(|source| source.stamp_key())
+                .unwrap_or_else(|| {
+                    Ok(
+                        blake3::hash(format!("unavailable:{job_id}:{id}").as_bytes())
+                            .to_hex()
+                            .to_string(),
+                    )
+                })
+        },
+        |prepared| {
+            let snapshot = {
+                let mut status = job.status.lock().map_err(|e| e.to_string())?;
+                status.prepared = prepared;
+                status.clone()
+            };
+            if prepared == ids.len()
+                || last_emit
+                    .is_none_or(|last| last.elapsed() >= std::time::Duration::from_millis(150))
+            {
+                notify(&snapshot);
+                last_emit = Some(std::time::Instant::now());
+            }
+            Ok(())
+        },
+    )
 }
 #[tauri::command]
 pub async fn start_object_index(
@@ -322,7 +382,7 @@ pub async fn start_object_index(
             library_id: library_id.clone(),
             job_id: uuid::Uuid::new_v4().to_string(),
             running: true,
-            phase: "preparing".into(),
+            phase: "selecting".into(),
             scope,
             scope_name,
             automatic,
@@ -386,31 +446,26 @@ pub async fn start_object_index(
                     )?,
                     },
                 };
+                check(&job, &library_id)?;
                 if !replayed {
-                    journal::plan_sources(
+                    prepare_sources(
                         &mut c,
-                        &job_id,
+                        &job,
                         &ids,
+                        &request.selected_sources,
                         || check(&job, &library_id),
-                        |c, id| {
-                            if let Some(key)=request.selected_sources.get(&id){return Ok(key.clone());}
-                            media::source_optional_on(c, id)?
-                                .map(|source| source.stamp_key())
-                                .unwrap_or_else(|| {
-                                    Ok(blake3::hash(
-                                        format!("unavailable:{job_id}:{id}").as_bytes(),
-                                    )
-                                    .to_hex()
-                                    .to_string())
-                                })
+                        |snapshot| {
+                            let _ = app_handle.emit("object-job-progress", snapshot);
                         },
                     )?;
                 }
                 {
                     let mut status = job.status.lock().map_err(|e| e.to_string())?;
                     status.total = ids.len();
+                    status.prepared = ids.len();
                     status.phase = "waiting".into();
                 }
+                publish_progress(&app_handle, &job);
                 persist(&c, &job)?;
                 if ids.is_empty() {
                     return Ok::<(), String>(());
@@ -418,10 +473,13 @@ pub async fn start_object_index(
                 // Loading sessions also consumes the shared inference lane, but not for the entire library.
                 let mut backend = {
                     let _lane = vision_jobs::claim(Task::Detection, || check(&job, &library_id))?;
+                    job.status.lock().map_err(|e| e.to_string())?.phase = "loading".into();
+                    publish_progress(&app_handle, &job);
                     super::adapters::create_object_backend(&model)?
                 };
                 job.status.lock().map_err(|e| e.to_string())?.execution =
                     serde_json::json!(super::runtime::reports(&model));
+                let mut began_indexing = false;
                 for id in ids {
                     check(&job, &library_id)?;
                     let source = {
@@ -453,6 +511,10 @@ pub async fn start_object_index(
                     job.status.lock().map_err(|e| e.to_string())?.phase = "waiting".into();
                     let _lane = vision_jobs::claim(Task::Detection, || check(&job, &library_id))?;
                     job.status.lock().map_err(|e| e.to_string())?.phase = "indexing".into();
+                    if !began_indexing {
+                        publish_progress(&app_handle, &job);
+                        began_indexing = true;
+                    }
                     let mut result = source.load().and_then(|image| {
                         backend.detect_objects(&image, &|| check(&job, &library_id))
                     });
@@ -525,6 +587,7 @@ pub async fn start_object_index(
                 }
                 .into();
             }
+            publish_progress(&app_handle, &job);
             // Only touch the current library. An old task's last item ledger remains recoverable after switching back.
             if let Ok(_guard) = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read() {
                 if media::check_library(&library_id).is_ok() {
@@ -582,6 +645,80 @@ pub async fn cancel_object_index(library_id: String, job_id: String) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_library_preparation_registers_the_real_plan_and_reports_preparation_separately() {
+        let mut c = media::tests::db(11470);
+        store::ensure_schema(&c).unwrap();
+        let initial = Status {
+            library_id: "fixture".into(),
+            job_id: uuid::Uuid::new_v4().to_string(),
+            running: true,
+            phase: "selecting".into(),
+            scope: "library".into(),
+            ..Default::default()
+        };
+        super::super::objects_journal::begin(
+            &mut c,
+            &initial,
+            &Default::default(),
+            "fixture-profile",
+            "fixture-model",
+            "Fixture",
+            None,
+        )
+        .unwrap();
+        let ids = targets(&c, "fixture-profile", false, false, None, None, None).unwrap();
+        assert_eq!(ids.len(), 11470);
+        let job = Job {
+            cancel: AtomicBool::new(false),
+            status: Mutex::new(initial),
+        };
+        let mut observed = Vec::new();
+        let started = std::time::Instant::now();
+        prepare_sources(
+            &mut c,
+            &job,
+            &ids,
+            &Default::default(),
+            || Ok(()),
+            |status| {
+                assert!(
+                    job.status.try_lock().is_ok(),
+                    "notifications must not hold the task mutex"
+                );
+                assert_eq!(status.phase, "preparing");
+                assert_eq!(
+                    status.completed, 0,
+                    "preparing a source is not successful recognition"
+                );
+                observed.push(status.prepared);
+            },
+        )
+        .unwrap();
+        assert_eq!(observed.first(), Some(&0));
+        assert_eq!(observed.last(), Some(&ids.len()));
+        assert!(observed.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM object_job_items WHERE length(source_key)=64",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            11470
+        );
+        assert!(
+            c.query_row("SELECT planned FROM object_jobs", [], |r| r
+                .get::<_, bool>(0))
+                .unwrap()
+        );
+        eprintln!(
+            "Prepared {} real task ledger items in {:?}",
+            ids.len(),
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn automatic_checks_cancel_changed_policies_but_do_not_authorize_manual_jobs() {
         let job = Job {

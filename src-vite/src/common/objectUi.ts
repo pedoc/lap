@@ -160,8 +160,10 @@ export function validateObjectScope(options: {
 export function objectTaskPhase(status: any) {
   if (status?.running && status?.stopping) return 'stopping';
   const phases = [
+    'selecting',
     'preparing',
     'waiting',
+    'loading',
     'indexing',
     'finished',
     'failed',
@@ -175,6 +177,19 @@ export function objectTaskPhase(status: any) {
       : status?.error
         ? 'failed'
         : 'finished';
+}
+export function objectTaskProgress(status: any) {
+  const count = (value: unknown) => Number.isFinite(Number(value)) ? Math.max(0, Math.floor(Number(value))) : 0;
+  const total = count(status?.total);
+  if (status?.phase === 'selecting' || (status?.phase === 'preparing' && !total))
+    return { key: 'objects.preparation_selecting', args: {}, value: undefined, max: 1 };
+  if (status?.phase === 'preparing') {
+    const prepared = Math.min(total, count(status?.prepared));
+    return { key: 'objects.preparation_progress', args: { prepared, total }, value: prepared, max: total };
+  }
+  if (status?.phase === 'loading')
+    return { key: 'objects.preparation_loading', args: {}, value: undefined, max: Math.max(1, total) };
+  return { key: 'objects.progress', args: status || {}, value: total ? count(status?.completed) : undefined, max: Math.max(1, total) };
 }
 export function objectExecution(sessions: any[]) {
   const rows = Array.isArray(sessions) ? sessions : [];

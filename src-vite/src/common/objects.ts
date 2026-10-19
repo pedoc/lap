@@ -22,6 +22,18 @@ let pending: Promise<void> | null = null,
   timer: ReturnType<typeof setInterval> | undefined,
   refreshTimer: ReturnType<typeof setTimeout> | undefined;
 const stops: Array<() => void> = [];
+function acceptObjectProgress(next: any) {
+  const current = objectView.value?.status;
+  if (!current || next?.libraryId !== libConfig._libraryId || !next.jobId || next.jobId !== current.jobId) return false;
+  const stages: Record<string, number> = { selecting: 0, preparing: 1, waiting: 2, loading: 3, indexing: 4 };
+  if (next.running && (!current.running || Number(next.completed || 0) < Number(current.completed || 0) ||
+    Number(next.prepared || 0) < Number(current.prepared || 0) ||
+    (stages[next.phase] ?? -1) < (stages[current.phase] ?? -1))) return false;
+  sequence++;
+  pending = null; // A coverage read started before this event cannot rewind task progress.
+  objectView.value = { ...objectView.value, status: { ...next, stopping: !!next.running && (!!next.stopping || !!current.stopping) } };
+  return true;
+}
 export function refreshObjects(): Promise<void> {
   if (pending) return pending;
   const libraryId = libConfig._libraryId,
@@ -82,6 +94,7 @@ export function useObjects() {
     );
     stops.push(watch(() => libConfig.library?.counts?.all, scheduleRefresh));
     for (const name of [
+      'object-job-progress',
       'object-index-updated',
       'object-annotations-changed',
       'object-automation-changed',
@@ -93,6 +106,10 @@ export function useObjects() {
       'refresh-content',
     ]) {
       void listen(name, (event: any) => {
+        if (name === 'object-job-progress') {
+          acceptObjectProgress(event.payload);
+          return;
+        }
         const library = event.payload?.libraryId || event.payload?.library_id;
         if (library && library !== libConfig._libraryId) return;
         if (
@@ -172,7 +189,8 @@ export async function startObjectIndex(
       resumeFailed: !!options.resumeFailed,
     });
     if (libraryId === libConfig._libraryId) {
-      if (objectView.value) objectView.value = { ...objectView.value, status };
+      if (objectView.value && objectView.value.status?.jobId !== status.jobId)
+        objectView.value = { ...objectView.value, status };
       sequence++;
       pending = null;
       // Coverage/history reads must not hold the start/stop controls busy.

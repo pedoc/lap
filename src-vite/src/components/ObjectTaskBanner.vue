@@ -31,11 +31,11 @@
     <progress
       v-if="view.status.running"
       class="progress progress-primary w-full"
-      :value="view.status.completed"
-      :max="Math.max(1, view.status.total)"
+      :value="taskProgress.value"
+      :max="taskProgress.max"
     />
     <p class="text-xs" aria-live="polite">
-      {{ t('objects.progress', view.status) }}
+      {{ t(taskProgress.key, taskProgress.args) }}
     </p>
     <p v-if="view.status.cancelled" class="text-xs opacity-60">
       {{ t('objects.saved') }}
@@ -62,11 +62,12 @@ import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { SIDEBAR } from '@/common/constants';
-import { objectTaskPhase } from '@/common/objectUi';
+import { objectTaskPhase, objectTaskProgress } from '@/common/objectUi';
 import { useObjects } from '@/common/objects';
 const { t } = useI18n(),
   { view, error, busy, stop } = useObjects(),
   dismissed = ref('');
+const taskProgress = computed(() => objectTaskProgress(view.value?.status));
 const visible = computed(
   () =>
     config.main.sidebarIndex !== SIDEBAR.OBJECTS &&

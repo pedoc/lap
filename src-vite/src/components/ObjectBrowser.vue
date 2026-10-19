@@ -112,8 +112,8 @@
           <progress
             v-if="view.status.running"
             class="progress progress-primary w-full"
-            :value="view.status.completed"
-            :max="Math.max(1, view.status.total)"
+            :value="taskProgress.value"
+            :max="taskProgress.max"
           />
           <p class="text-xs" aria-live="polite">
             {{
@@ -122,7 +122,7 @@
                   objectTaskPhase(view.status),
               )
             }}
-            · {{ t('objects.progress', view.status) }}
+            · {{ t(taskProgress.key, taskProgress.args) }}
           </p>
           <p v-if="view.status.cancelled" class="text-xs opacity-60">
             {{ t('objects.saved') }}
@@ -194,11 +194,12 @@ import { ask } from '@tauri-apps/plugin-dialog';
 import { config, libConfig } from '@/common/config';
 import ObjectTaskHistory from './ObjectTaskHistory.vue';
 import ObjectAutoSettings from './ObjectAutoSettings.vue';
-import { OBJECT_STATES, objectClassName, objectTaskPhase, objectExecution } from '@/common/objectUi';
+import { OBJECT_STATES, objectClassName, objectTaskPhase, objectTaskProgress, objectExecution } from '@/common/objectUi';
 import { useObjects, openObjectSettings } from '@/common/objects';
 const { t } = useI18n();
 const { view, error, busy, start, stop } = useObjects();
 const execution = computed(() => objectExecution(view.value?.sessions));
+const taskProgress = computed(() => objectTaskProgress(view.value?.status));
 const query = ref(''),
   allClasses = ref(false);
 const name = (label: any) => objectClassName(label, t);

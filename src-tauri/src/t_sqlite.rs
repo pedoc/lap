@@ -3233,6 +3233,13 @@ impl AFile {
             WHERE primary_file.live_photo_video_id IS NOT NULL AND {})", Self::album_scan_predicate("primary_file"))
     }
 
+    /// Point reads must seek the companion index, not rebuild the entire library's
+    /// companion list for every photo in an indexing task.
+    pub(crate) fn live_photo_companion_point_condition() -> String {
+        format!("NOT EXISTS (SELECT 1 FROM afiles primary_file
+            WHERE primary_file.live_photo_video_id=a.id AND {})", Self::album_scan_predicate("primary_file"))
+    }
+
     // build the base SQL query
     fn build_base_query() -> String {
         format!(
@@ -3700,7 +3707,7 @@ impl AFile {
     }
 
     // Single-folder queries should not materialize exclusions across the library.
-    fn album_filter_predicate(alias: &str) -> String {
+    pub(crate) fn album_filter_predicate(alias: &str) -> String {
         format!("EXISTS (SELECT 1 FROM afolders scope_folder JOIN albums scope_album
             ON scope_album.id = scope_folder.album_id WHERE scope_folder.id = {alias}.folder_id AND {})",
             Self::album_joined_filter_predicate(alias, "scope_folder", "scope_album"))

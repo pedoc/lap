@@ -167,7 +167,7 @@ fn text_condition_for_profile(
 }
 fn stamp(c: &Connection, id: i64) -> Result<Option<(Option<i64>, i64)>, String> {
     c.query_row(
-        &format!("SELECT a.modified_at,a.size {} AND a.id=?1", media::base()),
+        &format!("SELECT a.modified_at,a.size {} AND a.id=?1", media::point_base()),
         [id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
@@ -812,6 +812,7 @@ mod tests {
             &[1, 3],
             || Ok(()),
             |c, id| super::super::media::source_on(c, id)?.stamp_key(),
+            |_| Ok(()),
         )
         .unwrap();
         store_for_job(

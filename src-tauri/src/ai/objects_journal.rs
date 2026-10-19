@@ -160,11 +160,18 @@ pub fn plan(
     ids: &[i64],
     check: impl Fn() -> Result<(), String>,
 ) -> Result<(), String> {
-    plan_sources(c, id, ids, check, |_, file| {
-        Ok(blake3::hash(file.to_string().as_bytes())
-            .to_hex()
-            .to_string())
-    })
+    plan_sources(
+        c,
+        id,
+        ids,
+        check,
+        |_, file| {
+            Ok(blake3::hash(file.to_string().as_bytes())
+                .to_hex()
+                .to_string())
+        },
+        |_| Ok(()),
+    )
 }
 pub fn plan_sources(
     c: &mut Connection,
@@ -172,7 +179,10 @@ pub fn plan_sources(
     ids: &[i64],
     check: impl Fn() -> Result<(), String>,
     source: impl Fn(&Connection, i64) -> Result<String, String>,
+    mut progress: impl FnMut(usize) -> Result<(), String>,
 ) -> Result<(), String> {
+    check()?;
+    progress(0)?;
     let tx = c.transaction().map_err(|e| e.to_string())?;
     {
         let mut insert = tx
@@ -189,6 +199,9 @@ pub fn plan_sources(
             insert
                 .execute(params![id, file, key])
                 .map_err(|e| e.to_string())?;
+            if (index + 1) % 256 == 0 && index + 1 < ids.len() {
+                progress(index + 1)?;
+            }
         }
     }
     check()?;
@@ -202,7 +215,8 @@ pub fn plan_sources(
     {
         return Err("Task plan is missing or already prepared".into());
     }
-    tx.commit().map_err(|e| e.to_string())
+    tx.commit().map_err(|e| e.to_string())?;
+    progress(ids.len())
 }
 pub fn expected_source(c: &Connection, job: &str, file: i64) -> Result<String, String> {
     c.query_row("SELECT source_key FROM object_job_items WHERE job_id=?1 AND file_id=?2",params![job,file],|r|r.get::<_,Option<String>>(0)).optional().map_err(|e|e.to_string())?.flatten().filter(|key|key.len()==64&&key.bytes().all(|c|c.is_ascii_hexdigit())).ok_or("Saved task source identity is missing; start a new task instead of replaying unverified IDs".into())
@@ -381,6 +395,87 @@ pub fn list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn planning_progress_is_bounded_and_cancellation_rolls_back_unfinished_plans() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut c = db();
+        let initial = status();
+        begin(
+            &mut c,
+            &initial,
+            &Default::default(),
+            "p",
+            "m",
+            "Model",
+            None,
+        )
+        .unwrap();
+        let ids: Vec<_> = (1..=513).collect();
+        let mut progress = Vec::new();
+        plan_sources(
+            &mut c,
+            &initial.job_id,
+            &ids,
+            || Ok(()),
+            |_, id| Ok(id.to_string()),
+            |prepared| {
+                progress.push(prepared);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(progress, vec![0, 256, 512, 513]);
+        let cancelled = status();
+        begin(
+            &mut c,
+            &cancelled,
+            &Default::default(),
+            "p",
+            "m",
+            "Model",
+            None,
+        )
+        .unwrap();
+        let stop = AtomicBool::new(false);
+        assert!(
+            plan_sources(
+                &mut c,
+                &cancelled.job_id,
+                &ids,
+                || if stop.load(Ordering::SeqCst) {
+                    Err("stopped".into())
+                } else {
+                    Ok(())
+                },
+                |_, id| Ok(id.to_string()),
+                |prepared| {
+                    if prepared >= 256 {
+                        stop.store(true, Ordering::SeqCst);
+                    }
+                    Ok(())
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM object_job_items WHERE job_id=?1",
+                [&cancelled.job_id],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert!(
+            !c.query_row(
+                "SELECT planned FROM object_jobs WHERE job_id=?1",
+                [&cancelled.job_id],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap()
+        );
+    }
+
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         ensure_schema(&c).unwrap();

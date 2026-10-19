@@ -182,6 +182,85 @@ function commonModule(name: string, ctx: any, expose: string) {
   ).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace(/^export /gm, '');
   return runInNewContext(`${code};({${expose}})`, ctx);
 }
+test('preparation and model loading have their own progress, never fake recognition counts', () => {
+  const selecting = objectHelpers.objectTaskProgress({ running: true, phase: 'selecting', total: 0 });
+  assert.equal(selecting.value, undefined);
+  assert.equal(selecting.key, 'objects.preparation_selecting');
+  const preparing = objectHelpers.objectTaskProgress({ running: true, phase: 'preparing', prepared: 256, total: 11470, completed: 0 });
+  assert.equal(preparing.value, 256);
+  assert.equal(preparing.max, 11470);
+  assert.equal(preparing.key, 'objects.preparation_progress');
+  assert.equal(preparing.args.prepared, 256);
+  const loading = objectHelpers.objectTaskProgress({ phase: 'loading', total: 11470 });
+  assert.equal(loading.value, undefined);
+  assert.equal(loading.key, 'objects.preparation_loading');
+  assert.equal(objectHelpers.objectTaskPhase({ phase: 'selecting', running: true }), 'selecting');
+  assert.equal(objectHelpers.objectTaskPhase({ phase: 'loading', running: true }), 'loading');
+  assert.equal(objectHelpers.objectTaskProgress({ phase: 'preparing', total: 0 }).value, undefined);
+  assert.equal(objectHelpers.objectTaskProgress({ phase: 'indexing', total: 11470, completed: 3 }).value, 3);
+});
+test('preparation events supersede stale reads without crossing tasks, rewinding stages or undoing stop', async () => {
+  let finish!: (value: any) => void;
+  const api = commonModule('objects', {
+    ...Vue, libConfig: { _libraryId: 'A' },
+    invoke: () => new Promise(resolve => { finish = resolve; }),
+  }, 'objectView,refreshObjects,acceptObjectProgress');
+  const initial = { libraryId: 'A', jobId: 'new', running: true, phase: 'preparing', prepared: 0, total: 11470, completed: 0 };
+  api.objectView.value = { eligible: 11470, status: initial };
+  const read = api.refreshObjects();
+  assert.equal(api.acceptObjectProgress({ ...initial, prepared: 256 }), true);
+  finish({ eligible: 11470, status: initial });
+  await read;
+  assert.equal(api.objectView.value.status.prepared, 256);
+  for (const invalid of [{ ...initial, prepared: 128 }, { ...initial, libraryId: 'B', prepared: 512 }, { ...initial, jobId: 'old', prepared: 512 }])
+    assert.equal(api.acceptObjectProgress(invalid), false);
+  assert.equal(api.acceptObjectProgress({ ...initial, phase: 'loading', prepared: 11470 }), true);
+  assert.equal(api.acceptObjectProgress({ ...initial, phase: 'preparing', prepared: 11470 }), false);
+  api.objectView.value.status.stopping = true;
+  assert.equal(api.acceptObjectProgress({ ...initial, phase: 'indexing', prepared: 11470 }), true);
+  assert.equal(api.objectView.value.status.stopping, true);
+  assert.equal(api.acceptObjectProgress({ ...initial, running: false, phase: 'stopped', prepared: 11470, cancelled: true }), true);
+  assert.equal(api.acceptObjectProgress({ ...initial, phase: 'indexing', prepared: 11470 }), false);
+});
+test('workspace and floating banner render preparation counts and indeterminate collection/loading', async () => {
+  const ctx = context();
+  ctx.t = (key: string, args: any = {}) => t(key).replace(/\{(\w+)\}/g, (_match: string, name: string) => String(args[name] ?? ''));
+  ctx.useI18n = () => ({ t: ctx.t });
+  const view = Vue.ref<any>({ modelInstalled: true, eligible: 11470, indexed: 0, failed: 0, pending: 11470, status: { jobId: 'new', running: true, phase: 'selecting', total: 0, completed: 0, prepared: 0 } });
+  ctx.useObjects = () => ({ view, error: Vue.ref(''), busy: Vue.ref(false) });
+  for (const name of ['ObjectBrowser', 'ObjectTaskBanner']) {
+    ctx.config.main.sidebarIndex = name === 'ObjectTaskBanner' ? SIDEBAR.LIBRARY : SIDEBAR.OBJECTS;
+    let html = await renderToString(Vue.createSSRApp(component(name, ctx)));
+    assert.match(html, /正在收集/);
+    assert.doesNotMatch(html, /0\s*\/\s*0/);
+    assert.doesNotMatch(html.match(/<progress[^>]*>/)?.[0] || '', /value=/);
+    view.value.status = { ...view.value.status, phase: 'preparing', total: 11470, prepared: 256 };
+    html = await renderToString(Vue.createSSRApp(component(name, ctx)));
+    assert.match(html, /已准备 256 \/ 11470/);
+    assert.match(html.match(/<progress[^>]*>/)?.[0] || '', /value="256"/);
+    view.value.status.phase = 'loading';
+    html = await renderToString(Vue.createSSRApp(component(name, ctx)));
+    assert.match(html, /首次加载/);
+    assert.doesNotMatch(html.match(/<progress[^>]*>/)?.[0] || '', /value=/);
+    view.value.status = { ...view.value.status, phase: 'selecting', total: 0, prepared: 0 };
+  }
+});
+test('a delayed initial start reply cannot overwrite a newer preparation status', async () => {
+  const requests: Array<{ name: string; resolve: (value: any) => void }> = [];
+  const api = commonModule('objects', {
+    ...Vue, validateObjectScope, libConfig: { _libraryId: 'A' },
+    invoke: (name: string) => new Promise(resolve => requests.push({ name, resolve })),
+  }, 'objectView,startObjectIndex');
+  api.objectView.value = { status: { jobId: 'old', running: false } };
+  const start = api.startObjectIndex();
+  const latest = { libraryId: 'A', jobId: 'new', running: true, phase: 'loading', prepared: 11470, total: 11470 };
+  api.objectView.value.status = latest;
+  requests[0].resolve({ ...latest, phase: 'selecting', prepared: 0, total: 0 });
+  await start;
+  assert.equal(api.objectView.value.status.phase, 'loading');
+  requests[1].resolve({ status: latest });
+  await tick();
+});
 test('object start and stop stay usable while coverage refresh is pending', async () => {
   const requests: Array<{ name: string; args: any; resolve: (value: any) => void }> = [];
   const ctx = {
