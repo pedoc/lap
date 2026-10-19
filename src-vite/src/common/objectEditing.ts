@@ -13,6 +13,7 @@ export interface ObjectBoxDraft {
   bounds: [number, number, number, number];
   score: number | null;
   reviewed: boolean;
+  ignored?: boolean;
 }
 export interface ObjectEditSession {
   libraryId: string;
@@ -104,6 +105,7 @@ export function startObjectEdit(
           ? null
           : Number(object.score),
       reviewed: !!object.reviewed,
+      ignored: false,
     } as ObjectBoxDraft;
   });
   objectEdit.value = {
@@ -155,7 +157,7 @@ export async function saveObjectEdit() {
     const document = {
       imageWidth: snapshot.imageWidth,
       imageHeight: snapshot.imageHeight,
-      objects: snapshot.boxes.map((box) => ({
+      objects: snapshot.boxes.filter(box => !box.ignored).map((box) => ({
         id: box.id,
         class: {
           key: box.class.key,

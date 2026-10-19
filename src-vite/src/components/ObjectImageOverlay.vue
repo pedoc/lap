@@ -48,7 +48,7 @@
           :data-object-box="box.id"
           class="absolute"
           :class="editing.drawing ? 'pointer-events-none' : 'pointer-events-auto'"
-          :style="editBoxStyle(box.bounds, index, selected(box.id))"
+          :style="[editBoxStyle(box.bounds, index, selected(box.id)), box.ignored ? { opacity: 0.55, borderStyle: 'dashed' } : {}]"
           @mousedown.stop.prevent="beginBox($event, box)"
         >
           <button
@@ -104,7 +104,7 @@
             ref="classSelect"
             :value="inlineBox.class.key"
             class="select select-sm w-full mt-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50 disabled:cursor-not-allowed"
-            :disabled="!canEdit"
+            :disabled="!canEdit || inlineBox.ignored"
             @change="setBoxClass(inlineBox, ($event.target as HTMLSelectElement).value)"
           >
             <option v-for="choice in editing.choices" :key="choice.key" :value="choice.key">
@@ -114,13 +114,14 @@
         </label>
         <div class="flex flex-wrap items-center justify-between gap-2">
           <label class="flex items-center gap-1 text-xs">
-            <input v-model="inlineBox.reviewed" type="checkbox" class="checkbox checkbox-xs" :disabled="!canEdit" />
+            <input v-model="inlineBox.reviewed" type="checkbox" class="checkbox checkbox-xs" :disabled="!canEdit || inlineBox.ignored" />
             {{ t('objects.confirm') }}
           </label>
-          <button type="button" class="btn btn-xs btn-ghost text-error" :disabled="!canEdit" @click="removeBox(inlineBox)">
-            {{ t('objects.ignore') }}
+          <button type="button" class="btn btn-xs btn-ghost text-error" :disabled="!canEdit" :aria-pressed="!!inlineBox.ignored" @click="toggleIgnored(inlineBox)">
+            {{ t(inlineBox.ignored ? 'objects.undo_ignore' : 'objects.ignore') }}
           </button>
         </div>
+        <p v-if="inlineBox.ignored" role="status" class="text-xs text-warning">{{ t('objects.ignore_pending') }}</p>
         <p class="text-xs opacity-60">{{ t('objects.edit_hint') }}</p>
         <p v-if="editing.error || editing.stale" role="alert" class="text-xs text-warning whitespace-pre-wrap break-words">
           {{ editing.stale ? t('objects.stale') : editing.error }}
@@ -204,7 +205,7 @@
           t('objects.select_hint')
         }}</span>
       </div>
-      <p v-if="removedCount && !editing.drawing" role="status" class="absolute bottom-3 left-3 z-40 rounded-box bg-base-100/95 px-3 py-2 text-xs">
+      <p v-if="removedCount && !editing.drawing && !inlineBox" role="status" class="absolute bottom-3 left-3 z-40 rounded-box bg-base-100/95 px-3 py-2 text-xs">
         {{ t('objects.removed_hint', { count: removedCount }) }}
       </p>
       <p
@@ -412,7 +413,7 @@ const inlineBox = computed(() => {
   return session.boxes.find((box) => box.id === session.selected[0]) || null;
 });
 const removedCount = computed(() => editing.value
-  ? (document.value?.objects || []).filter((object: any) => !boxById(object.id)).length
+  ? (document.value?.objects || []).filter((object: any) => !boxById(object.id) || boxById(object.id)?.ignored).length
   : 0,
 );
 function placeInlineEditor() {
@@ -665,7 +666,7 @@ function cancelDraw() {
 }
 function setBoxClass(box: ObjectBoxDraft, key: string) {
   const session = editing.value;
-  if (!session || !canEdit.value) return;
+  if (!session || !canEdit.value || box.ignored) return;
   const choice = session?.choices.find((c) => c.key === key);
   if (!choice) return;
   if (choice.key !== box.class.key) {
@@ -686,14 +687,13 @@ function applyClassToSelected() {
 function confirmSelected() {
   const session = editing.value;
   if (!session || !canEdit.value) return;
-  for (const box of session.boxes.filter((b) => session.selected.includes(b.id)))
+  for (const box of session.boxes.filter((b) => session.selected.includes(b.id) && !b.ignored))
     box.reviewed = true;
 }
-function removeBox(box: { id: string }) {
+function toggleIgnored(box: ObjectBoxDraft) {
   const session = editing.value;
   if (!session || !canEdit.value) return;
-  session.boxes = session.boxes.filter((b) => b.id !== box.id);
-  session.selected = session.selected.filter((id) => id !== box.id);
+  box.ignored = !box.ignored;
 }
 function removeSelected() {
   const session = editing.value;

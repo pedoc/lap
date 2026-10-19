@@ -633,7 +633,7 @@ test('inline category edits stay in the draft until save and preserve source and
   ctx.invoke = async (command: string, args: any) => calls.push({ command, args });
   ctx.useObjects = () => ({ view: Vue.ref({ classes: [dog, cat].map((label) => ({ ...label, supported: true })) }) });
   Object.assign(ctx, commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,objectEditActive,saveObjectEdit,cancelObjectEdit'));
-  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,inlineBox,setBoxClass,removeBox,removedCount');
+  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,inlineBox,setBoxClass,toggleIgnored,removedCount');
   h.api.beginCorrection(observation.id);
   h.api.setBoxClass(h.api.inlineBox.value, cat.key);
   assert.equal(h.api.inlineBox.value.class.key, cat.key);
@@ -650,15 +650,15 @@ test('inline category edits stay in the draft until save and preserve source and
   assert.equal(calls[0].args.document.objects[0].class.key, cat.key);
   assert.equal(ctx.objectEdit.value, null);
   h.api.beginCorrection(observation.id);
-  h.api.removeBox(h.api.inlineBox.value);
-  assert.equal(h.api.inlineBox.value, null);
+  h.api.toggleIgnored(h.api.inlineBox.value);
+  assert.equal(h.api.inlineBox.value.ignored, true);
   assert.equal(h.api.removedCount.value, 1);
-  assert.equal(ctx.objectEdit.value.boxes.length, 0);
+  assert.equal(ctx.objectEdit.value.boxes.length, 1);
   assert.equal(calls.length, 1, 'ignoring a false positive must still require Save');
   ctx.cancelObjectEdit();
   assert.equal(ctx.result.value.document.objects.length, 1, 'Cancel leaves the original detection intact');
   h.api.beginCorrection(observation.id);
-  h.api.removeBox(h.api.inlineBox.value);
+  h.api.toggleIgnored(h.api.inlineBox.value);
   await ctx.saveObjectEdit();
   assert.equal(calls[1].args.document.objects.length, 0);
   h.dispose();
@@ -669,7 +669,7 @@ test('inline correction failures retain the draft and lock edits while saving or
   ctx.useObjects = () => ({ view: Vue.ref({ classes: [dog, cat].map((label) => ({ ...label, supported: true })) }) });
   ctx.invoke = async () => { throw new Error('Revision conflict'); };
   Object.assign(ctx, commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,objectEditActive,saveObjectEdit,cancelObjectEdit'));
-  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,inlineBox,canEdit,setBoxClass,removeBox,startDrawing');
+  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,inlineBox,canEdit,setBoxClass,toggleIgnored,startDrawing');
   h.api.beginCorrection(observation.id);
   h.api.setBoxClass(h.api.inlineBox.value, cat.key);
   await ctx.saveObjectEdit();
@@ -680,7 +680,7 @@ test('inline correction failures retain the draft and lock edits while saving or
     ctx.objectEdit.value[state] = true;
     assert.equal(h.api.canEdit.value, false);
     h.api.setBoxClass(h.api.inlineBox.value, dog.key);
-    h.api.removeBox(h.api.inlineBox.value);
+    h.api.toggleIgnored(h.api.inlineBox.value);
     h.api.startDrawing();
     assert.equal(ctx.objectEdit.value.boxes.length, 1);
     assert.equal(h.api.inlineBox.value.class.key, cat.key);
@@ -688,6 +688,21 @@ test('inline correction failures retain the draft and lock edits while saving or
     ctx.objectEdit.value[state] = false;
   }
   h.dispose();
+});
+test('ignored boxes remain selected after save failure and never leak draft-only flags into persisted objects', async () => {
+  const ctx = context(), calls: any[] = []; let fail = true;
+  ctx.invoke = async (_command: string, args: any) => { if (fail) throw Error('Save failed'); calls.push(args); };
+  const api = commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,hasObjectEditChanges,saveObjectEdit');
+  const data = photo(); data.document.objects.push({ ...observation, id: 'kept' });
+  api.startObjectEdit(7, data, [dog], observation.id);
+  const draft = api.objectEdit.value; draft.boxes[0].ignored = true;
+  assert.equal(api.hasObjectEditChanges(), true);
+  await api.saveObjectEdit();
+  assert.equal(api.objectEdit.value, draft); assert.equal(draft.boxes[0].ignored, true); assert.equal(draft.selected[0], observation.id);
+  assert.match(draft.error, /Save failed/); assert.equal(draft.busy, false);
+  fail = false; await api.saveObjectEdit();
+  assert.equal(calls[0].document.objects.length, 1); assert.equal(calls[0].document.objects[0].id, 'kept');
+  assert.equal('ignored' in calls[0].document.objects[0], false); assert.equal(api.objectEdit.value, null);
 });
 test('drawing a missed object immediately selects its inline editor without a second edit step', () => {
   const ctx = context();
@@ -798,10 +813,10 @@ test('compiled box and contextual form events support direct click, cancel, igno
     patchProp: (node, key, _previous, value) => { node.props[key] = value; },
   });
   const root = element('root'), app = renderer.createApp(component('ObjectImageOverlay', ctx), props);
-  const text = (node: any): string => node.text + node.children.map(text).join('');
+  const text = (node: any): string => node.tag === '#comment' ? '' : node.text + node.children.map(text).join('');
   const find = (test: (node: any) => boolean) => { const node = descendants(root).find(test); assert.ok(node); return node; };
   const click = async (node: any) => { await node.props.onClick({ stopPropagation() {}, preventDefault() {} }); await tick(); };
-  const button = (label: string) => find((node) => node.tag === 'button' && text(node) === label);
+  const button = (label: string) => find((node) => node.tag === 'button' && text(node).trim() === label);
   app.mount(root);
   try {
     await click(find((node) => node.props['aria-label'] === '狗'));
@@ -815,8 +830,13 @@ test('compiled box and contextual form events support direct click, cancel, igno
     assert.equal(calls.length, 0);
     await click(find((node) => node.props['aria-label'] === '狗'));
     await click(button(t('objects.ignore')));
-    assert.equal(ctx.objectEdit.value.boxes.length, 0);
-    assert.match(text(root), /已移除 1 个框，保存修订后生效/);
+    assert.equal(ctx.objectEdit.value.boxes.length, 1);
+    assert.equal(ctx.objectEdit.value.boxes[0].ignored, true);
+    assert.ok(find((node) => node.props['data-object-correction'] !== undefined));
+    assert.match(text(root), /此框已标为误报，保存后才会移除/);
+    await click(button(t('objects.undo_ignore')));
+    assert.equal(ctx.objectEdit.value.boxes[0].ignored, false);
+    await click(button(t('objects.ignore')));
     assert.equal(calls.length, 0);
     await click(button(t('objects.save')));
     assert.equal(calls[0].command, 'save_object_annotations');

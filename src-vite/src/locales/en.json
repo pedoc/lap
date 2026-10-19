@@ -1,5 +1,7 @@
 {
   "objects": {
+    "undo_ignore": "Undo ignore",
+    "ignore_pending": "Marked as a false positive. This box is removed only after saving. Undo ignore or cancel to keep it.",
     "discard_draft": "Another photo has unsaved object revisions. Discard that draft and start a new revision? Cancel keeps the draft so you can return to the original photo.",
     "model_hint": "Downloadable local object detection. Each export has its own fixed input size and preprocessing contract. Choose lighter or accuracy-oriented models; GPU-first by default, with isolated model parameters and a finite category set, not identity recognition.",
     "title": "Objects",
