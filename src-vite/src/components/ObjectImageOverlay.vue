@@ -1,6 +1,10 @@
 <template>
   <template v-if="editing">
-    <div class="absolute inset-0 pointer-events-none overflow-hidden">
+    <div
+      ref="editLayer"
+      class="absolute inset-0 pointer-events-none overflow-hidden"
+      @keydown.escape.stop.prevent="!editing.busy && cancelObjectEdit()"
+    >
       <div
         v-if="compatible"
         class="absolute"
@@ -41,15 +45,22 @@
         <div
           v-for="(box, index) in editing.boxes"
           :key="box.id"
+          :data-object-box="box.id"
           class="absolute"
           :class="editing.drawing ? 'pointer-events-none' : 'pointer-events-auto'"
           :style="editBoxStyle(box.bounds, index, selected(box.id))"
           @mousedown.stop.prevent="beginBox($event, box)"
         >
-          <span
-            class="absolute left-0 top-0 origin-top-left bg-base-100/95 text-base-content rounded px-1 py-0.5 text-xs whitespace-nowrap shadow"
+          <button
+            type="button"
+            data-object-label
+            class="absolute left-0 top-0 origin-top-left bg-base-100/95 text-base-content rounded px-1 py-0.5 text-xs whitespace-nowrap shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
             :style="{ transform: `scale(${1 / Math.max(0.01, zoom)})` }"
-            >{{ index + 1 }} · {{ name(box.class) }}</span
+            :disabled="!canEdit"
+            @mousedown.stop
+            @dblclick.stop
+            @click.stop="selectBox(box.id, $event)"
+            >{{ index + 1 }} · {{ name(box.class) }} <span aria-hidden="true">✎</span></button
           >
           <template v-if="selected(box.id)">
             <button
@@ -60,49 +71,6 @@
               @mousedown.stop.prevent="beginBox($event, box, corner)"
               @dblclick.stop
             />
-            <div
-              v-if="editing.selected.length === 1"
-              class="absolute left-0 bottom-0 translate-y-full pt-1 flex items-center gap-1 origin-top-left"
-              :style="{ transform: `translateY(100%) scale(${1 / Math.max(0.01, zoom)})` }"
-              @mousedown.stop
-              @dblclick.stop
-            >
-              <select
-                :value="box.class.key"
-                class="select select-xs bg-base-100/95 shadow"
-                :aria-label="t('objects.set_class')"
-                :disabled="editing.busy || editing.stale"
-                @change="
-                  setBoxClass(box, ($event.target as HTMLSelectElement).value)
-                "
-              >
-                <option
-                  v-for="choice in editing.choices"
-                  :key="choice.key"
-                  :value="choice.key"
-                >
-                  {{ name(choice) }}
-                </option>
-              </select>
-              <label class="btn btn-xs bg-base-100/95 shadow"
-                ><input
-                  type="checkbox"
-                  class="checkbox checkbox-xs"
-                  :checked="box.reviewed"
-                  :disabled="editing.busy || editing.stale"
-                  @change="
-                    box.reviewed = ($event.target as HTMLInputElement).checked
-                  "
-                />{{ t('objects.confirm') }}</label
-              >
-              <button
-                class="btn btn-xs btn-ghost text-error bg-base-100/95 shadow"
-                :disabled="editing.busy || editing.stale"
-                @click.stop="removeBox(box)"
-              >
-                {{ t('objects.delete_box') }}
-              </button>
-            </div>
           </template>
         </div>
       </div>
@@ -112,10 +80,69 @@
       >
         {{ t('objects.geometry') }}
       </p>
+      <section
+        v-if="inlineBox"
+        ref="inlinePanel"
+        data-object-correction
+        role="dialog"
+        :aria-label="t('objects.correct_box_title', { name: name(inlineBox.class) })"
+        :aria-busy="editing.busy"
+        class="absolute z-50 pointer-events-auto rounded-box border border-base-content/20 bg-base-100 text-base-content p-3 shadow-xl overflow-auto space-y-2 text-sm cursor-default"
+        :style="inlinePosition || { visibility: 'hidden' }"
+        @pointerdown.stop
+        @mousedown.stop
+        @click.stop
+        @dblclick.stop
+        @wheel.stop
+        @keydown.stop
+        @keydown.escape.stop.prevent="!editing.busy && cancelObjectEdit()"
+      >
+        <p class="font-medium">{{ t('objects.correct_box_title', { name: name(inlineBox.class) }) }}</p>
+        <label class="block text-xs">
+          {{ t('objects.set_class') }}
+          <select
+            ref="classSelect"
+            :value="inlineBox.class.key"
+            class="select select-sm w-full mt-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="!canEdit"
+            @change="setBoxClass(inlineBox, ($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="choice in editing.choices" :key="choice.key" :value="choice.key">
+              {{ name(choice) }}
+            </option>
+          </select>
+        </label>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <label class="flex items-center gap-1 text-xs">
+            <input v-model="inlineBox.reviewed" type="checkbox" class="checkbox checkbox-xs" :disabled="!canEdit" />
+            {{ t('objects.confirm') }}
+          </label>
+          <button type="button" class="btn btn-xs btn-ghost text-error" :disabled="!canEdit" @click="removeBox(inlineBox)">
+            {{ t('objects.ignore') }}
+          </button>
+        </div>
+        <p class="text-xs opacity-60">{{ t('objects.edit_hint') }}</p>
+        <p v-if="editing.error || editing.stale" role="alert" class="text-xs text-warning whitespace-pre-wrap break-words">
+          {{ editing.stale ? t('objects.stale') : editing.error }}
+        </p>
+        <div class="flex flex-wrap items-center gap-1">
+          <button type="button" class="btn btn-xs" :disabled="!canEdit" @click="startDrawing">{{ t('objects.draw_box') }}</button>
+          <div class="flex-1" />
+          <button type="button" class="btn btn-xs" :disabled="editing.busy" @click="cancelObjectEdit">{{ t('objects.cancel') }}</button>
+          <button type="button" class="btn btn-xs btn-primary min-w-20" :disabled="!canEdit" @click="saveObjectEdit">
+            <span v-if="editing.busy" class="loading loading-spinner loading-xs" aria-hidden="true" />
+            {{ t('objects.save') }}
+          </button>
+        </div>
+      </section>
       <div
+        v-if="!inlineBox || !inlinePosition"
         class="absolute top-3 left-3 z-40 flex flex-wrap items-center gap-1 pointer-events-auto"
+        @pointerdown.stop
         @mousedown.stop
         @dblclick.stop
+        @wheel.stop
+        @keydown.stop
       >
         <button
           class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
@@ -126,7 +153,7 @@
         </button>
         <button
           class="btn btn-sm btn-primary bg-base-100/90"
-          :disabled="editing.busy || editing.stale"
+          :disabled="!canEdit"
           @click.stop="saveObjectEdit"
         >
           {{ t('objects.save') }}
@@ -135,7 +162,7 @@
           class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
           :class="editing.drawing ? 'text-primary' : ''"
           :aria-pressed="editing.drawing"
-          :disabled="editing.busy || editing.stale"
+          :disabled="!canEdit"
           @click.stop="editing.drawing = !editing.drawing"
         >
           {{ t('objects.draw_box') }}
@@ -144,27 +171,30 @@
           v-model="draftClass"
           class="select select-sm bg-base-100/90 border-base-content/15"
           :aria-label="t('objects.set_class')"
-          :disabled="editing.busy || editing.stale"
+          :disabled="!canEdit"
         >
           <option v-for="choice in editing.choices" :key="choice.key" :value="choice.key">
             {{ name(choice) }}
           </option>
         </select>
-        <template v-if="editing.selected.length">
+        <template v-if="editing.selected.length > 1">
           <button
             class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
+            :disabled="!canEdit"
             @click.stop="applyClassToSelected"
           >
             {{ t('objects.apply_class') }}
           </button>
           <button
             class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
+            :disabled="!canEdit"
             @click.stop="confirmSelected"
           >
             {{ t('objects.confirm') }}
           </button>
           <button
             class="btn btn-sm btn-ghost text-error bg-base-100/90"
+            :disabled="!canEdit"
             @click.stop="removeSelected"
           >
             {{ t('objects.delete_box') }} ({{ editing.selected.length }})
@@ -174,6 +204,9 @@
           t('objects.select_hint')
         }}</span>
       </div>
+      <p v-if="removedCount && !editing.drawing" role="status" class="absolute bottom-3 left-3 z-40 rounded-box bg-base-100/95 px-3 py-2 text-xs">
+        {{ t('objects.removed_hint', { count: removedCount }) }}
+      </p>
       <p
         v-if="editing.drawing"
         class="absolute bottom-3 left-3 z-40 rounded-box bg-base-100/90 px-3 py-2 text-xs"
@@ -181,7 +214,7 @@
         {{ t('objects.draw_hint') }}
       </p>
       <p
-        v-if="editing.error || editing.stale"
+        v-if="(editing.error || editing.stale) && (!inlineBox || !inlinePosition)"
         class="absolute bottom-3 right-3 z-40 max-w-sm rounded-box bg-base-100/95 border border-base-content/15 p-2 text-xs text-warning whitespace-pre-wrap break-words"
         role="alert"
       >
@@ -206,6 +239,7 @@
         <button
           v-for="(object, index) in document.objects"
           :key="object.id"
+          type="button"
           class="absolute pointer-events-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
           :style="
             objectBoxStyle(
@@ -219,14 +253,17 @@
           "
           :title="t('objects.correct_box_hint', { name: name(object.class) })"
           :aria-label="name(object.class)"
+          :disabled="!canCorrect"
+          @pointerdown.stop
           @mousedown.stop
-          @dblclick.stop="beginCorrection(object.id)"
-          @click.stop="focus(object)"
+          @keydown.stop
+          @dblclick.stop
+          @click.stop="beginCorrection(object.id)"
         >
           <span
             class="absolute left-0 top-0 origin-top-left bg-base-100/95 text-base-content rounded px-1 py-0.5 text-xs whitespace-nowrap shadow"
             :style="{ transform: `scale(${1 / Math.max(0.01, zoom)})` }"
-            >{{ index + 1 }} · {{ name(object.class) }}</span
+            >{{ index + 1 }} · {{ name(object.class) }} <span aria-hidden="true">✎</span></span
           >
         </button>
       </div>
@@ -249,9 +286,9 @@
         class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
         :disabled="!canCorrect"
         :title="loading || !choices.length ? t('objects.loading') : !compatible ? t('objects.geometry') : t('objects.edit_hint')"
-        @click.stop="beginCorrection()"
+        @click.stop="startDrawing"
       >
-        {{ t('objects.edit') }}
+        {{ t('objects.draw_box') }}
       </button>
       <p
         v-if="showObjectBoxes && !compatible"
@@ -263,15 +300,17 @@
   </template>
 </template>
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
+import { useUIStore } from '@/stores/uiStore';
 import { useObjects, objectFocus, showObjectBoxes } from '@/common/objects';
 import { usePhotoObjects } from '@/common/photoObjects';
 import {
   objectBoxStyle,
   objectGeometryCompatible,
   objectClassName,
+  objectEditorPosition,
 } from '@/common/objectUi';
 import {
   objectEdit,
@@ -279,6 +318,7 @@ import {
   startObjectEdit,
   cancelObjectEdit,
   saveObjectEdit,
+  type ObjectBoxDraft,
 } from '@/common/objectEditing';
 const props = defineProps<{
   fileId?: number;
@@ -295,6 +335,8 @@ const props = defineProps<{
 const emit = defineEmits<{ locate: [bounds: number[]] }>(),
   { t } = useI18n();
 const { view } = useObjects();
+const ui = useUIStore();
+const inputHandler = `ObjectEdit-${Math.random().toString(36).slice(2)}`;
 const { result, loading } = usePhotoObjects(() => [
   Number(props.fileId),
   props.fileVersion,
@@ -310,12 +352,31 @@ const choices = computed(() => (view.value?.classes || []).filter((choice: any) 
 const canCorrect = computed(() =>
   props.ready && !loading.value && compatible.value && !!result.value?.sourceKey && choices.value.length > 0,
 );
+const canEdit = computed(() =>
+  props.ready && compatible.value && !!editing.value && !editing.value.busy && !editing.value.stale,
+);
 function beginCorrection(objectId?: string) {
   if (!canCorrect.value || editing.value) return;
+  objectFocus.value = null;
   showObjectBoxes.value = true;
   startObjectEdit(Number(props.fileId), result.value, choices.value, objectId);
   const selectedBox = editing.value?.boxes.find((box) => box.id === objectId);
   if (selectedBox) draftClass.value = selectedBox.class.key;
+}
+function startDrawing() {
+  if (!editing.value) beginCorrection();
+  if (!canEdit.value) return;
+  editing.value!.drawing = true;
+}
+function selectBox(id: string, event?: MouseEvent) {
+  if (!canEdit.value) return;
+  const box = boxById(id);
+  if (!box) return;
+  const session = editing.value!;
+  session.selected = event && (event.ctrlKey || event.shiftKey || event.metaKey)
+    ? session.selected.includes(id) ? session.selected.filter((selected) => selected !== id) : [...session.selected, id]
+    : [id];
+  draftClass.value = box.class.key;
 }
 const name = (label: any) => objectClassName(label, t);
 const active = computed(() =>
@@ -329,6 +390,57 @@ const cornerHandles = ['nw', 'ne', 'sw', 'se'] as const;
 const draftClass = ref('');
 const drawRect = ref<[number, number, number, number] | null>(null);
 const editSvg = ref<SVGSVGElement | null>(null);
+const editLayer = ref<HTMLElement | null>(null);
+const inlinePanel = ref<HTMLElement | null>(null);
+const classSelect = ref<HTMLSelectElement | null>(null);
+const inlinePosition = ref<ReturnType<typeof objectEditorPosition> | null>(null);
+const inlineBox = computed(() => {
+  const session = editing.value;
+  if (!props.ready || !compatible.value || session?.drawing || session?.selected.length !== 1) return null;
+  return session.boxes.find((box) => box.id === session.selected[0]) || null;
+});
+const removedCount = computed(() => editing.value
+  ? (document.value?.objects || []).filter((object: any) => !boxById(object.id)).length
+  : 0,
+);
+function placeInlineEditor() {
+  const layer = editLayer.value, panel = inlinePanel.value;
+  const frame = Array.from(layer?.querySelectorAll<HTMLElement>('[data-object-box]') || [])
+    .find((element) => element.dataset.objectBox === inlineBox.value?.id);
+  const anchor = frame?.querySelector('[data-object-label]')?.getBoundingClientRect();
+  if (!layer || !panel || !anchor) { inlinePosition.value = null; return; }
+  const viewport = layer.getBoundingClientRect();
+  inlinePosition.value = objectEditorPosition({
+    left: anchor.left - viewport.left,
+    top: anchor.top - viewport.top,
+    bottom: anchor.bottom - viewport.top,
+  }, viewport, panel.offsetHeight);
+}
+let resizeObserver: ResizeObserver | undefined;
+function observeInlineEditor() {
+  resizeObserver?.disconnect();
+  if (editLayer.value) resizeObserver?.observe(editLayer.value);
+  if (inlinePanel.value) resizeObserver?.observe(inlinePanel.value);
+  placeInlineEditor();
+}
+watch([editLayer, inlinePanel], observeInlineEditor, { flush: 'post' });
+watch(() => [
+  inlineBox.value?.id, ...(inlineBox.value?.bounds || []),
+  props.x, props.y, props.width, props.height, props.zoom, props.rotate,
+], placeInlineEditor, { flush: 'post' });
+watch(() => inlineBox.value?.id, async (id) => {
+  if (!id) return;
+  await nextTick();
+  classSelect.value?.focus({ preventScroll: true });
+});
+watch(() => !!editing.value, (active) => {
+  ui.removeInputHandler(inputHandler);
+  if (active) ui.pushInputHandler(inputHandler);
+}, { immediate: true });
+onMounted(() => {
+  if (typeof ResizeObserver !== 'undefined') resizeObserver = new ResizeObserver(placeInlineEditor);
+  observeInlineEditor();
+});
 let gesture:
   | {
       type: 'move' | 'resize';
@@ -412,7 +524,7 @@ function beginBox(
   corner?: string,
 ) {
   const session = editing.value;
-  if (!session || session.busy || session.stale || session.drawing || event.button !== 0) return;
+  if (!session || !canEdit.value || session.drawing || event.button !== 0) return;
   const p = point(event);
   if (!p) return;
   const id = box.id;
@@ -455,7 +567,7 @@ function beginBox(
   window.addEventListener('pointerup', onWindowUp);
 }
 function onWindowMove(event: PointerEvent) {
-  if (!gesture || editing.value?.busy || editing.value?.stale) return;
+  if (!gesture || !canEdit.value) return;
   const box = boxById(gesture.id);
   const p = point(event);
   if (!box || !p) return;
@@ -485,7 +597,7 @@ function onWindowUp() {
 }
 function beginDraw(event: PointerEvent) {
   const session = editing.value;
-  if (!session?.drawing || session.busy || session.stale || event.button !== 0) return;
+  if (!session?.drawing || !canEdit.value || event.button !== 0) return;
   const p = point(event);
   if (!p) return;
   drawRect.value = null;
@@ -499,7 +611,7 @@ function beginDraw(event: PointerEvent) {
   editSvg.value?.setPointerCapture(event.pointerId);
 }
 function moveDraw(event: PointerEvent) {
-  if (!editing.value?.drawing || !gesture || gesture.id !== '__draw__') return;
+  if (!canEdit.value || !editing.value?.drawing || !gesture || gesture.id !== '__draw__') return;
   const p = point(event);
   if (!p) return;
   const l = Math.min(gesture.anchor.x, p.x),
@@ -509,7 +621,7 @@ function moveDraw(event: PointerEvent) {
   drawRect.value = [l, t, r - l, b - t];
 }
 function finishDraw(event: PointerEvent) {
-  if (!editing.value?.drawing || !gesture || gesture.id !== '__draw__') return;
+  if (!canEdit.value || !editing.value?.drawing || !gesture || gesture.id !== '__draw__') return;
   moveDraw(event);
   gesture = undefined;
   if (editSvg.value?.hasPointerCapture(event.pointerId))
@@ -533,47 +645,47 @@ function finishDraw(event: PointerEvent) {
   session.selected = [
     session.boxes[session.boxes.length - 1].id,
   ];
+  session.drawing = false;
 }
 function cancelDraw() {
   drawRect.value = null;
   gesture = undefined;
 }
-function setBoxClass(box: { class: { key: string; name: string; sourceId: string } }, key: string) {
+function setBoxClass(box: ObjectBoxDraft, key: string) {
   const session = editing.value;
-  if (!session || session.busy || session.stale) return;
+  if (!session || !canEdit.value) return;
   const choice = session?.choices.find((c) => c.key === key);
   if (!choice) return;
   if (choice.key !== box.class.key) {
     box.class = { ...choice };
     box.score = null;
+    box.reviewed = true;
   }
+  draftClass.value = box.class.key;
 }
 function applyClassToSelected() {
   const session = editing.value;
   const choice = session?.choices.find((c) => c.key === draftClass.value) || session?.choices[0];
-  if (!session || session.busy || session.stale || !choice) return;
+  if (!session || !canEdit.value || !choice) return;
   for (const box of session.boxes.filter((b) => session.selected.includes(b.id))) {
-    if (choice.key !== box.class.key) {
-      box.class = { ...choice };
-      box.score = null;
-    }
+    setBoxClass(box, choice.key);
   }
 }
 function confirmSelected() {
   const session = editing.value;
-  if (!session || session.busy || session.stale) return;
+  if (!session || !canEdit.value) return;
   for (const box of session.boxes.filter((b) => session.selected.includes(b.id)))
     box.reviewed = true;
 }
 function removeBox(box: { id: string }) {
   const session = editing.value;
-  if (!session || session.busy || session.stale) return;
+  if (!session || !canEdit.value) return;
   session.boxes = session.boxes.filter((b) => b.id !== box.id);
   session.selected = session.selected.filter((id) => id !== box.id);
 }
 function removeSelected() {
   const session = editing.value;
-  if (!session || session.busy || session.stale) return;
+  if (!session || !canEdit.value) return;
   const ids = new Set(session.selected);
   session.boxes = session.boxes.filter((b) => !ids.has(b.id));
   session.selected = [];
@@ -589,16 +701,11 @@ watch(
   },
   { immediate: true },
 );
-onBeforeUnmount(onWindowUp);
-function focus(object: any) {
-  showObjectBoxes.value = true;
-  objectFocus.value = {
-    libraryId: libConfig._libraryId,
-    fileId: Number(props.fileId),
-    profile: config.settings.ai?.detectionProfile || '',
-    objectId: object.id,
-  };
-}
+onBeforeUnmount(() => {
+  onWindowUp();
+  resizeObserver?.disconnect();
+  ui.removeInputHandler(inputHandler);
+});
 let lastFocus: any = null;
 watch([active, document, () => props.ready, compatible], () => {
   if (

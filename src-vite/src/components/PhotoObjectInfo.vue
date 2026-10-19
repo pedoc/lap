@@ -43,12 +43,13 @@
         ><button
           v-if="!editing"
           class="btn btn-xs"
-          :disabled="busy"
-          @click="edit"
+          :disabled="busy || loading || !result.sourceKey || !choices.length"
+          @click="draw"
         >
-          {{ t('objects.edit') }}
+          {{ t('objects.draw_box') }}
         </button>
       </div>
+      <p v-if="!editing" class="text-xs opacity-60">{{ t('objects.inline_hint') }}</p>
       <div
         v-if="reviewAvailable && !editing"
         class="rounded-box border border-base-content/10 p-2 space-y-2"
@@ -259,11 +260,12 @@ function focus(object: any) {
   };
   emit('focus-object', objectFocus.value);
 }
-function edit() {
+function draw() {
   const data = result.value;
-  if (!data?.document) return;
+  if (!data?.document || !data.sourceKey || loading.value || !choices.value.length) return;
   objectFocus.value = null;
   startObjectEdit(Number(props.file.id), data, choices.value);
+  if (objectEdit.value) objectEdit.value.drawing = true;
   showObjectBoxes.value = true;
   // In grid/list mode the editor has no canvas until the parent opens preview.
   emit('focus-object', {

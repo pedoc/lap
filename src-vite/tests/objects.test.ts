@@ -31,9 +31,11 @@ const read = (name: string) =>
 const cn = JSON.parse(
   readFileSync(new URL('../src/locales/zh-CN.json', import.meta.url), 'utf8'),
 );
-const t = (key: string) =>
-  key.split('.').reduce((value, key) => value?.[key], cn) || key;
+const t = (key: string, args: Record<string, unknown> = {}) =>
+  String(key.split('.').reduce((value, key) => value?.[key], cn) || key)
+    .replace(/\{(\w+)\}/g, (_match, name) => String(args[name] ?? ''));
 const dog = { key: 'coco2017-80@1:16', name: 'dog', sourceId: 16 };
+const cat = { key: 'coco2017-80@1:15', name: 'cat', sourceId: 15 };
 const observation = {
   id: 'original-1',
   class: dog,
@@ -67,6 +69,7 @@ function context() {
     ObjectAutoSettings: () => Vue.h('aside'),
     t,
     useI18n: () => ({ t }),
+    useUIStore: () => ({ pushInputHandler: () => {}, removeInputHandler: () => {} }),
     config: Vue.reactive({
       main: { sidebarIndex: SIDEBAR.OBJECTS },
       settings: { ai: { detectionProfile: 'p1' } },
@@ -224,7 +227,7 @@ test('preparation events supersede stale reads without crossing tasks, rewinding
 });
 test('workspace and floating banner render preparation counts and indeterminate collection/loading', async () => {
   const ctx = context();
-  ctx.t = (key: string, args: any = {}) => t(key).replace(/\{(\w+)\}/g, (_match: string, name: string) => String(args[name] ?? ''));
+  ctx.t = t;
   ctx.useI18n = () => ({ t: ctx.t });
   const view = Vue.ref<any>({ modelInstalled: true, eligible: 11470, indexed: 0, failed: 0, pending: 11470, status: { jobId: 'new', running: true, phase: 'selecting', total: 0, completed: 0, prepared: 0 } });
   ctx.useObjects = () => ({ view, error: Vue.ref(''), busy: Vue.ref(false) });
@@ -488,18 +491,19 @@ test('object sidebar category and state navigation are mutually exclusive', () =
   assert.equal(ctx.libConfig.objects.minCount, 1);
   h.dispose();
 });
-test('human editor opens a shared session carrying the full detection geometry', async () => {
+test('drawing a missed object opens the photo canvas without a standalone correction button', async () => {
   const ctx = context(),
     calls: any[] = [], events: any[] = [];
   ctx.invoke = async (...args: any[]) => calls.push(args);
   ctx.defineEmits = () => (name: string, payload: any) => events.push({ name, payload });
   ctx.objectFocus.value = { libraryId: 'A', fileId: 7, profile: 'p1', objectId: observation.id };
-  const h = script('PhotoObjectInfo', ctx, 'edit,editing');
-  h.api.edit();
+  const h = script('PhotoObjectInfo', ctx, 'draw,editing');
+  h.api.draw();
   assert.equal(ctx.objectEdit.value.fileId, 7);
   assert.equal(ctx.objectEdit.value.sourceKey, 'a'.repeat(64));
   assert.deepEqual(ctx.objectEdit.value.boxes[0].bounds, [0.1, 0.2, 0.3, 0.4]);
   assert.equal(h.api.editing.value, true);
+  assert.equal(ctx.objectEdit.value.drawing, true);
   assert.equal(ctx.showObjectBoxes.value, true);
   assert.equal(ctx.objectFocus.value, null, 'opening a correction canvas must not zoom to an old focus');
   assert.equal(events[0].name, 'focus-object');
@@ -508,26 +512,33 @@ test('human editor opens a shared session carrying the full detection geometry',
   assert.equal(events[0].payload.profile, 'p1');
   const content = read('Content');
   assert.match(content, /@object-focus="!showFilmstripLayout && \(showQuickView = true\)"/);
+  const html = await renderToString(Vue.createSSRApp(component('PhotoObjectInfo', context()), { file: ctx.props.file }));
+  assert.match(html, /画框/);
+  assert.doesNotMatch(html, /人工修正|objects\.edit/);
   h.dispose();
 });
-test('image viewers expose manual correction without the details pane, even for zero detections', async () => {
+test('image viewers expose drawing but no separate correction button, including zero detections', async () => {
   const ctx = context();
   const props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
   let html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), props));
-  assert.match(html, /人工修正/);
+  assert.match(html, /画框/);
+  assert.doesNotMatch(html, /人工修正|objects\.edit/);
   assert.doesNotMatch(html, /disabled/);
   ctx.result.value.document.objects = [];
   ctx.result.value.modelDocument.objects = [];
   html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), props));
-  assert.match(html, /人工修正/);
+  assert.match(html, /画框/);
   assert.doesNotMatch(html, /disabled/);
   assert.doesNotMatch(html, /对象标记框/);
   ctx.result.value.document = null;
   html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), props));
-  assert.doesNotMatch(html, /人工修正/);
+  assert.doesNotMatch(html, /画框/);
 });
-test('correcting a box opens the existing editor with that box selected and its class active', async () => {
+test('clicking a box opens its contextual editor without locating or zooming the image', async () => {
   const ctx = context();
+  const events: any[] = [];
+  ctx.defineEmits = () => (...args: any[]) => events.push(args);
+  ctx.objectFocus.value = { libraryId: 'A', fileId: 7, profile: 'p1', objectId: observation.id };
   ctx.props = Vue.reactive({ fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false });
   const h = script('ObjectImageOverlay', ctx, 'beginCorrection,canCorrect,draftClass');
   assert.equal(h.api.canCorrect.value, true);
@@ -536,7 +547,17 @@ test('correcting a box opens the existing editor with that box selected and its 
   assert.deepEqual([...ctx.objectEdit.value.selected], [observation.id]);
   assert.equal(h.api.draftClass.value, dog.key);
   assert.equal(ctx.showObjectBoxes.value, true);
-  assert.match(read('ObjectImageOverlay'), /@dblclick\.stop="beginCorrection\(object\.id\)"/);
+  assert.equal(ctx.objectFocus.value, null);
+  await tick();
+  assert.equal(events.length, 0);
+  assert.match(read('ObjectImageOverlay'), /@click\.stop="beginCorrection\(object\.id\)"/);
+  assert.doesNotMatch(read('ObjectImageOverlay'), /@dblclick\.stop="beginCorrection/);
+  const html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), ctx.props));
+  assert.match(html, /data-object-correction/);
+  assert.match(html, /更正：狗/);
+  assert.match(html, /忽略误报/);
+  assert.match(html, /保存修订/);
+  assert.match(html, /取消/);
   h.dispose();
 });
 test('manual correction cannot start against an unready or incompatible image', () => {
@@ -569,13 +590,211 @@ test('shared correction sessions select only existing boxes and permit adding mi
   assert.equal(api.objectEdit.value.choices[0].key, dog.key);
   assert.equal(api.objectEdit.value.sourceKey, empty.sourceKey);
 });
+test('inline category edits stay in the draft until save and preserve source and revision guards', async () => {
+  const ctx = context(), calls: any[] = [];
+  ctx.props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
+  ctx.result.value.annotation = { revision: 'r1' };
+  ctx.invoke = async (command: string, args: any) => calls.push({ command, args });
+  ctx.useObjects = () => ({ view: Vue.ref({ classes: [dog, cat].map((label) => ({ ...label, supported: true })) }) });
+  Object.assign(ctx, commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,objectEditActive,saveObjectEdit,cancelObjectEdit'));
+  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,inlineBox,setBoxClass,removeBox,removedCount');
+  h.api.beginCorrection(observation.id);
+  h.api.setBoxClass(h.api.inlineBox.value, cat.key);
+  assert.equal(h.api.inlineBox.value.class.key, cat.key);
+  assert.equal(h.api.inlineBox.value.score, null);
+  assert.equal(h.api.inlineBox.value.reviewed, true);
+  assert.equal(ctx.result.value.document.objects[0].class.key, dog.key);
+  assert.equal(calls.length, 0);
+  await ctx.saveObjectEdit();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'save_object_annotations');
+  assert.equal(calls[0].args.profile, 'p1');
+  assert.equal(calls[0].args.sourceKey, ctx.result.value.sourceKey);
+  assert.equal(calls[0].args.expectedRevision, 'r1');
+  assert.equal(calls[0].args.document.objects[0].class.key, cat.key);
+  assert.equal(ctx.objectEdit.value, null);
+  h.api.beginCorrection(observation.id);
+  h.api.removeBox(h.api.inlineBox.value);
+  assert.equal(h.api.inlineBox.value, null);
+  assert.equal(h.api.removedCount.value, 1);
+  assert.equal(ctx.objectEdit.value.boxes.length, 0);
+  assert.equal(calls.length, 1, 'ignoring a false positive must still require Save');
+  ctx.cancelObjectEdit();
+  assert.equal(ctx.result.value.document.objects.length, 1, 'Cancel leaves the original detection intact');
+  h.api.beginCorrection(observation.id);
+  h.api.removeBox(h.api.inlineBox.value);
+  await ctx.saveObjectEdit();
+  assert.equal(calls[1].args.document.objects.length, 0);
+  h.dispose();
+});
+test('inline correction failures retain the draft and lock edits while saving or stale', async () => {
+  const ctx = context();
+  ctx.props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
+  ctx.useObjects = () => ({ view: Vue.ref({ classes: [dog, cat].map((label) => ({ ...label, supported: true })) }) });
+  ctx.invoke = async () => { throw new Error('Revision conflict'); };
+  Object.assign(ctx, commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,objectEditActive,saveObjectEdit,cancelObjectEdit'));
+  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,inlineBox,canEdit,setBoxClass,removeBox,startDrawing');
+  h.api.beginCorrection(observation.id);
+  h.api.setBoxClass(h.api.inlineBox.value, cat.key);
+  await ctx.saveObjectEdit();
+  assert.equal(h.api.inlineBox.value.class.key, cat.key);
+  assert.match(ctx.objectEdit.value.error, /Revision conflict/);
+  assert.equal(ctx.objectEdit.value.busy, false);
+  for (const state of ['busy', 'stale']) {
+    ctx.objectEdit.value[state] = true;
+    assert.equal(h.api.canEdit.value, false);
+    h.api.setBoxClass(h.api.inlineBox.value, dog.key);
+    h.api.removeBox(h.api.inlineBox.value);
+    h.api.startDrawing();
+    assert.equal(ctx.objectEdit.value.boxes.length, 1);
+    assert.equal(h.api.inlineBox.value.class.key, cat.key);
+    assert.equal(ctx.objectEdit.value.drawing, false);
+    ctx.objectEdit.value[state] = false;
+  }
+  h.dispose();
+});
+test('drawing a missed object immediately selects its inline editor without a second edit step', () => {
+  const ctx = context();
+  ctx.props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
+  ctx.result.value.document.objects = [];
+  ctx.DOMPoint = class {
+    x: number; y: number;
+    constructor(x: number, y: number) { this.x = x; this.y = y; }
+    matrixTransform() { return this; }
+  };
+  const h = script('ObjectImageOverlay', ctx, 'startDrawing,beginDraw,finishDraw,editSvg,inlineBox');
+  h.api.editSvg.value = { getScreenCTM: () => ({ inverse: () => ({}) }), setPointerCapture: () => {}, hasPointerCapture: () => false };
+  h.api.startDrawing();
+  assert.equal(ctx.objectEdit.value.drawing, true);
+  h.api.beginDraw({ button: 0, clientX: 100, clientY: 160, pointerId: 1 });
+  h.api.finishDraw({ clientX: 300, clientY: 400, pointerId: 1 });
+  assert.equal(ctx.objectEdit.value.drawing, false);
+  assert.equal(ctx.objectEdit.value.boxes.length, 1);
+  assert.equal(h.api.inlineBox.value.id, ctx.objectEdit.value.boxes[0].id);
+  [0.1, 0.2, 0.2, 0.3].forEach((value, index) => assert.ok(Math.abs(h.api.inlineBox.value.bounds[index] - value) < 1e-8));
+  assert.equal(h.api.inlineBox.value.reviewed, true);
+  assert.equal(h.api.inlineBox.value.score, null);
+  h.dispose();
+});
+test('contextual editors stay upright and within small, resized or edge-adjacent viewports', () => {
+  const position = objectHelpers.objectEditorPosition({ left: 950, top: 750, bottom: 774 }, { width: 1000, height: 800 }, 230);
+  assert.equal(position.left, '672px');
+  assert.equal(position.top, '514px');
+  assert.equal(position.width, '320px');
+  assert.equal(position.maxHeight, '784px');
+  for (const anchor of [{ left: -500, top: -500, bottom: -480 }, { left: 9999, top: 9999, bottom: 10019 }]) {
+    const position = objectHelpers.objectEditorPosition(anchor, { width: 240, height: 180 }, 230);
+    assert.ok(parseFloat(position.left) >= 8);
+    assert.ok(parseFloat(position.top) >= 8);
+    assert.ok(parseFloat(position.left) + parseFloat(position.width) <= 232);
+    assert.ok(parseFloat(position.top) + parseFloat(position.maxHeight) <= 172);
+    assert.equal('transform' in position, false);
+  }
+});
+test('single-box controls own keyboard input and batch operations remain available', async () => {
+  const ctx = context(), handlers = new Set<string>(), teardown: Array<() => void> = [];
+  ctx.props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
+  ctx.result.value.document.objects.push({ ...observation, id: 'second', bounds: [0.6, 0.1, 0.2, 0.2] });
+  ctx.useUIStore = () => ({ pushInputHandler: (id: string) => handlers.add(id), removeInputHandler: (id: string) => handlers.delete(id) });
+  ctx.onBeforeUnmount = (off: () => void) => teardown.push(off);
+  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,inlineBox,selectBox,confirmSelected,removeSelected');
+  h.api.beginCorrection(observation.id);
+  await tick();
+  assert.equal(handlers.size, 1);
+  h.api.selectBox('second');
+  assert.equal(h.api.inlineBox.value.id, 'second');
+  h.api.selectBox(observation.id, { ctrlKey: true });
+  assert.equal(ctx.objectEdit.value.selected.length, 2);
+  assert.equal(h.api.inlineBox.value, null);
+  h.api.confirmSelected();
+  assert.equal(ctx.objectEdit.value.boxes.every((box: any) => box.reviewed), true);
+  const html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', { ...ctx, useUIStore: () => ({ pushInputHandler: () => {}, removeInputHandler: () => {} }) }), ctx.props));
+  assert.match(html, /标为所选类别/);
+  assert.match(html, /删除 \(2\)/);
+  assert.doesNotMatch(html, /data-object-correction/);
+  h.api.removeSelected();
+  assert.equal(ctx.objectEdit.value.boxes.length, 0);
+  for (const off of teardown) off();
+  assert.equal(handlers.size, 0);
+  h.dispose();
+});
+test('compiled box and contextual form events support direct click, cancel, ignore and save', async () => {
+  const ctx = context(), calls: any[] = [];
+  const props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
+  ctx.showObjectBoxes.value = true;
+  ctx.useObjects = () => ({ view: Vue.ref({ classes: [dog, cat].map((label) => ({ ...label, supported: true })) }) });
+  ctx.invoke = async (command: string, args: any) => calls.push({ command, args });
+  Object.assign(ctx, commonModule('objectEditing', ctx, 'objectEdit,startObjectEdit,objectEditActive,saveObjectEdit,cancelObjectEdit'));
+  // Use Vue's actual renderer and compiled template events. Only host layout is
+  // synthetic; this is not a browser/native drag-and-drop acceptance test.
+  const descendants = (node: any): any[] => node.children.flatMap((child: any) => [child, ...descendants(child)]);
+  const element = (tag: string, text = ''): any => ({
+    tag, text, children: [], props: {}, parent: null, listeners: {},
+    get dataset() { return { objectBox: this.props['data-object-box'] }; },
+    get tagName() { return this.tag.toUpperCase(); },
+    get type() { return this.props.type; },
+    get value() { return this.props.value; },
+    set value(value) { this.props.value = value; },
+    get options() { return descendants(this).filter((node) => node.tag === 'option'); },
+    addEventListener(name: string, listener: any) { this.listeners[name] = listener; },
+    removeEventListener(name: string) { delete this.listeners[name]; },
+    get offsetHeight() { return this.tag === 'section' ? 230 : 24; },
+    getBoundingClientRect() { return this.props['data-object-label'] !== undefined
+      ? { left: 100, top: 160, bottom: 184, width: 80, height: 24 }
+      : { left: 0, top: 0, bottom: 800, width: 1000, height: 800 }; },
+    querySelectorAll(selector: string) { return descendants(this).filter((node) => selector === '[data-object-box]' && node.props['data-object-box'] !== undefined); },
+    querySelector(selector: string) { return descendants(this).find((node) => selector === '[data-object-label]' && node.props['data-object-label'] !== undefined); },
+    focus() {},
+  });
+  const remove = (node: any) => {
+    if (node.parent) node.parent.children.splice(node.parent.children.indexOf(node), 1);
+    node.parent = null;
+  };
+  const renderer = Vue.createRenderer<any, any>({
+    createElement: (tag) => element(tag), createText: (text) => element('#text', text), createComment: (text) => element('#comment', text),
+    insert: (node, parent, anchor) => {
+      remove(node);
+      parent.children.splice(anchor ? parent.children.indexOf(anchor) : parent.children.length, 0, node);
+      node.parent = parent;
+    },
+    remove, setElementText: (node, text) => { node.text = text; node.children = []; }, setText: (node, text) => { node.text = text; },
+    parentNode: (node) => node.parent, nextSibling: (node) => node.parent?.children[node.parent.children.indexOf(node) + 1] || null,
+    patchProp: (node, key, _previous, value) => { node.props[key] = value; },
+  });
+  const root = element('root'), app = renderer.createApp(component('ObjectImageOverlay', ctx), props);
+  const text = (node: any): string => node.text + node.children.map(text).join('');
+  const find = (test: (node: any) => boolean) => { const node = descendants(root).find(test); assert.ok(node); return node; };
+  const click = async (node: any) => { await node.props.onClick({ stopPropagation() {}, preventDefault() {} }); await tick(); };
+  const button = (label: string) => find((node) => node.tag === 'button' && text(node) === label);
+  app.mount(root);
+  try {
+    await click(find((node) => node.props['aria-label'] === '狗'));
+    assert.ok(find((node) => node.props['data-object-correction'] !== undefined));
+    const select = find((node) => node.tag === 'select');
+    select.props.onChange({ target: { value: cat.key } });
+    await tick();
+    assert.equal(ctx.objectEdit.value.boxes[0].class.key, cat.key);
+    await click(button(t('objects.cancel')));
+    assert.equal(ctx.objectEdit.value, null);
+    assert.equal(calls.length, 0);
+    await click(find((node) => node.props['aria-label'] === '狗'));
+    await click(button(t('objects.ignore')));
+    assert.equal(ctx.objectEdit.value.boxes.length, 0);
+    assert.match(text(root), /已移除 1 个框，保存修订后生效/);
+    assert.equal(calls.length, 0);
+    await click(button(t('objects.save')));
+    assert.equal(calls[0].command, 'save_object_annotations');
+    assert.equal(calls[0].args.document.objects.length, 0);
+    assert.equal(ctx.objectEdit.value, null);
+  } finally { app.unmount(); }
+});
 test('changing the selected photo does not transfer its edit session', async () => {
   const ctx = context(),
     calls: any[] = [];
   ctx.props = Vue.reactive(ctx.props);
   ctx.invoke = async (...args: any[]) => calls.push(args);
-  const h = script('PhotoObjectInfo', ctx, 'edit,editing');
-  h.api.edit();
+  const h = script('PhotoObjectInfo', ctx, 'draw,editing');
+  h.api.draw();
   assert.equal(h.api.editing.value, true);
   ctx.props.file.id = 8;
   await tick();
