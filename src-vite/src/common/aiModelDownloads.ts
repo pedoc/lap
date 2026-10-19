@@ -1,5 +1,7 @@
 export type ModelDownloadPhase = 'connecting' | 'downloading' | 'verifying' | 'installing' | 'complete' | 'cancelling';
 export interface ModelDownloadFeedback {
+  jobId?: string;
+  revision?: number;
   state: 'downloading' | 'completed' | 'failed' | 'cancelled';
   name: string;
   phase: ModelDownloadPhase;
@@ -9,8 +11,8 @@ export interface ModelDownloadFeedback {
   file: string;
   message: string;
 }
-export function beginModelDownload(name: string): ModelDownloadFeedback {
-  return { state: 'downloading', name, phase: 'connecting', progress: 0, received: 0, total: 0, file: '', message: '' };
+export function beginModelDownload(name: string, jobId?: string): ModelDownloadFeedback {
+  return { jobId, state: 'downloading', name, phase: 'connecting', progress: 0, received: 0, total: 0, file: '', message: '' };
 }
 export function modelDownloadError(error: unknown): string {
   if (typeof error === 'string') return error.trim() || 'Unknown error';
@@ -25,6 +27,11 @@ export function isModelDownloadCancelled(error: unknown) {
   return /^download cancel(?:led|ed)$/i.test(modelDownloadError(error).trim());
 }
 export function applyModelDownloadProgress(state: ModelDownloadFeedback, event: any) {
+  if (event.jobId && state.jobId && event.jobId !== state.jobId) return;
+  if (typeof event.revision === 'number') {
+    if (!Number.isSafeInteger(event.revision) || event.revision <= (state.revision ?? 0)) return;
+    state.revision = event.revision;
+  } else if (state.revision) return;
   if (state.state !== 'downloading') return;
   const number = (value: any) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
   const progress = number(event.progress), received = number(event.received), total = number(event.total);
@@ -39,6 +46,7 @@ export function applyModelDownloadProgress(state: ModelDownloadFeedback, event: 
     else if (state.progress >= 100) state.phase = 'complete';
     else if (state.received > 0) state.phase = 'downloading';
   }
+  if (['completed', 'failed', 'cancelled'].includes(event.state)) state.state = event.state;
 }
 export function formatModelDownloadBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B';

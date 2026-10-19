@@ -17,13 +17,13 @@ function harness(invoke: any = async () => fixture()) {
   const calls: any[] = [], notifications: any[] = [], mounted: any[] = [], unmount: any[] = [], listeners: any = {};
   const toast = Object.fromEntries(['success', 'error', 'info'].map(kind => [kind, (message: string) => notifications.push({ kind, message })]));
   const t = (key: string, args: any = {}) => `${key} ${Object.values(args).join(' ')}`;
-  const ctx: any = { ...Vue, ...downloads, ...ai, pendingChanges:{register:()=>()=>{}},defineExpose: () => {}, config: { settings: { ai: {} } }, useI18n: () => ({ t }), useToast: () => toast,
+  const ctx: any = { ...Vue, ...downloads, ...ai, crypto, pendingChanges:{register:()=>()=>{}},defineExpose: () => {}, config: { settings: { ai: {} } }, useI18n: () => ({ t }), useToast: () => toast,
     invoke: async (...args: any[]) => { calls.push(args); return invoke(...args); }, ask: async () => true,
     watch: () => {}, onMounted: (cb: any) => mounted.push(cb), onUnmounted: (cb: any) => unmount.push(cb),
     listen: async (name: string, cb: any) => { listeners[name] = cb; return () => delete listeners[name]; },
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({download,cancelDownload,downloadFeedback,downloading,busy,error,view,task,choose,refresh,draft,draftDirty,apiKey,selectModel,changeTask,confirmDiscard,persist,manifest,template,importModel});`, ctx);
+  const api: any = runInNewContext(`${script}\n;({download,cancelDownload,receiveDownload,activeDownload,downloadFeedback,downloading,busy,error,view,task,choose,refresh,draft,draftDirty,apiKey,selectModel,changeTask,confirmDiscard,persist,manifest,template,importModel});`, ctx);
   api.view.value = fixture(); api.task.value = 'ocr'; api.choose(modelId);
   return { ctx, api, calls, notifications, mounted, unmount, listeners };
 }
@@ -158,4 +158,41 @@ test('resume notices clear on recovery and progress resets only when the server 
   downloads.applyModelDownloadProgress(state,{progress:0,received:0,total:100,restart:true,phase:'downloading'});
   assert.equal(state.progress,0);assert.equal(state.received,0);
   downloads.applyModelDownloadProgress(state,{progress:999,received:0,restart:true});assert.equal(state.progress,100);
+});
+test('a recreated settings component restores the backend snapshot and cancels that exact job', async () => {
+  const snapshot = {modelId,jobId:crypto.randomUUID(),revision:12,state:'downloading',phase:'downloading',progress:44,received:44,total:100};
+  const first=harness(async()=>({...fixture(),modelDownload:snapshot}));await first.mounted[0]();
+  assert.equal(first.api.downloading.value,modelId);first.unmount[0]();
+  const reopened=harness(async()=>({...fixture(),modelDownload:snapshot}));await reopened.mounted[0]();
+  assert.equal(reopened.api.activeDownload.value.progress,44);assert.equal(reopened.api.busy.value,false);
+  reopened.api.task.value='face';assert.equal(reopened.api.activeDownload.value.jobId,snapshot.jobId);
+  await reopened.api.cancelDownload();
+  assert.equal(reopened.calls.at(-1)[0],'cancel_ai_model_download');assert.equal(reopened.calls.at(-1)[1].jobId,snapshot.jobId);
+  reopened.listeners['ai-model-download-progress']({payload:{...snapshot,revision:13,state:'cancelled'}});
+  assert.equal(reopened.api.downloading.value,'');assert.equal(reopened.api.downloadFeedback.value[modelId].state,'cancelled');
+  assert.match(source,/data-global-model-download/);
+});
+test('listeners are installed before snapshot loading; an old snapshot cannot undo a terminal event',async()=>{
+  const pending=deferred(),h=harness(()=>pending.promise),jobId=crypto.randomUUID();
+  const starting=h.mounted[0]();for(let i=0;i<8;i++)await Promise.resolve();
+  assert.ok(h.listeners['ai-model-download-progress']);
+  h.api.receiveDownload({modelId,jobId,revision:8,state:'cancelled',phase:'downloading',progress:30});
+  pending.resolve({...fixture(),modelDownload:{modelId,jobId,revision:7,state:'downloading',progress:20}});await starting;
+  assert.equal(h.api.downloadFeedback.value[modelId].state,'cancelled');assert.equal(h.api.downloading.value,'');
+});
+test('old invocation completion and old progress never clear or overwrite a newer job for the same model',async()=>{
+  const pending=deferred(),h=harness(async command=>command==='download_ai_model'?pending.promise:fixture());
+  const run=h.api.download(modelId),oldJob=h.api.downloadFeedback.value[modelId].jobId,newJob=crypto.randomUUID();
+  h.api.receiveDownload({modelId,jobId:oldJob,revision:20,state:'completed',phase:'complete',progress:100});
+  h.api.receiveDownload({modelId,jobId:newJob,revision:21,state:'downloading',phase:'connecting',progress:0});
+  pending.resolve();await run;
+  h.api.receiveDownload({modelId,jobId:oldJob,revision:20,state:'completed',progress:100});
+  assert.equal(h.api.downloading.value,modelId);assert.equal(h.api.activeDownload.value.jobId,newJob);assert.equal(h.api.activeDownload.value.progress,0);
+});
+test('a reopened settings window shows the latest failed or completed download without restarting it',async()=>{
+  for(const state of ['failed','completed']){
+    const h=harness(async()=>({...fixture(state==='completed'),modelDownload:{modelId,jobId:crypto.randomUUID(),revision:1,state,phase:state==='completed'?'complete':'connecting',progress:state==='completed'?100:0,message:state==='failed'?'HTTP 403':''}}));
+    await h.mounted[0]();assert.equal(h.api.downloadFeedback.value[modelId].state,state);assert.equal(h.api.downloading.value,'');
+    assert.equal(h.calls.some(([name])=>name==='download_ai_model'),false);
+  }
 });

@@ -15,6 +15,15 @@
     <div v-if="error" role="alert" class="text-error text-xs whitespace-pre-wrap">{{ error }}</div>
     <div v-if="loading" class="loading loading-spinner loading-sm"></div>
     <p v-if="draftDirty || apiKey || manifest.trim()" class="text-xs text-warning" role="status">{{ t('settings.ai_models.unsaved') }}</p>
+    <div v-if="activeDownload && !modelOptions.some((row: any) => row.definition.id === downloading)" class="rounded-box border border-primary/30 p-3 space-y-2 text-xs" aria-live="polite" data-global-model-download>
+      <p>{{ activeDownload.name }} · {{ t('model_download.phases.' + activeDownload.phase) }}</p>
+      <progress class="progress progress-primary w-full" :value="activeDownload.progress" max="100"></progress>
+      <div class="flex justify-between items-center gap-2">
+        <span>{{ activeDownload.progress.toFixed(0) }}% · {{ formatModelDownloadBytes(activeDownload.received) }}</span>
+        <button class="btn btn-xs" :disabled="['cancelling', 'installing', 'complete'].includes(activeDownload.phase)" @click="cancelDownload">{{ t('settings.ai_models.cancel') }}</button>
+      </div>
+      <p v-if="activeDownload.message" class="text-warning whitespace-pre-wrap">{{ activeDownload.message }}</p>
+    </div>
     <template v-if="view">
       <div class="rounded-box border border-base-content/10 p-3 space-y-2">
         <label class="font-semibold text-sm" for="global-ai-model">{{ t('settings.ai_models.choose_model') }}</label>
@@ -88,7 +97,7 @@
           <p class="text-[10px] opacity-50">{{ row.definition.license }}</p>
           <div class="flex flex-wrap items-center gap-2 pt-1">
             <span class="text-xs">{{ row.definition.files.length ? (row.installed ? t('settings.ai_models.ready') : t('settings.ai_models.missing')) : t('settings.ai_models.online_service') }}</span>
-            <button type="button" v-if="row.definition.files.length" class="btn btn-xs" :disabled="busy" @click="download(row.definition.id)">{{ row.installed ? t('settings.ai_models.reinstall') : t('settings.ai_models.download') }}</button>
+            <button type="button" v-if="row.definition.files.length" class="btn btn-xs" :disabled="busy || !!downloading" @click="download(row.definition.id)">{{ row.installed ? t('settings.ai_models.reinstall') : t('settings.ai_models.download') }}</button>
             <button v-if="row.definition.files.length" class="btn btn-xs" :disabled="busy" @click="openDirectory(row.definition.id)">{{ t('settings.ai_models.open_directory') }}</button>
           </div>
           <div v-if="downloadFeedback[row.definition.id]" class="space-y-1 text-xs" aria-live="polite" :data-model-download="row.definition.id">
@@ -135,6 +144,25 @@ const requestedTask = typeof window !== 'undefined' ? new URLSearchParams(window
 const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task = ref(requestedTask && ['semantic', 'face', 'ocr', 'detection'].includes(requestedTask) ? requestedTask : 'semantic');
 const apiKey = ref(''), manifest = ref(''), error = ref(''), downloading = ref('');
 const downloadFeedback = ref<Record<string, ModelDownloadFeedback>>({});
+const activeDownload = computed(() => downloadFeedback.value[downloading.value]);
+let downloadRevision = 0;
+function receiveDownload(payload: any) {
+  if (!mounted || !payload?.modelId) return;
+  if (payload.jobId && Number.isSafeInteger(payload.revision) && payload.revision > 0) {
+    if (payload.revision <= downloadRevision) return;
+    downloadRevision = payload.revision;
+    const id = payload.modelId;
+    if (downloadFeedback.value[id]?.jobId !== payload.jobId) {
+      const model = view.value?.models.find((row: any) => row.definition.id === id);
+      downloadFeedback.value[id] = beginModelDownload(aiModelDisplayName(model?.definition) || id, payload.jobId);
+    }
+    applyModelDownloadProgress(downloadFeedback.value[id], payload);
+    downloading.value = downloadFeedback.value[id].state === 'downloading' ? id : '';
+  } else if (payload.modelId === downloading.value) {
+    const state = downloadFeedback.value[downloading.value];
+    if (state) applyModelDownloadProgress(state, payload);
+  }
+}
 const loading = ref(false), busy = ref(false);
 const writeBusy = ref(false);
 let mounted = true, request = 0;
@@ -173,6 +201,11 @@ async function refresh(preferred?: string) {
     if (!mounted || generation !== request) return;
     const preserveDraft = draftDirty.value || !!apiKey.value;
     view.value = next;
+    receiveDownload(next.modelDownload);
+    for (const row of next.models) {
+      const state = downloadFeedback.value[row.definition.id];
+      if (state) state.name = aiModelDisplayName(row.definition) || row.definition.id;
+    }
     applyAiConfiguration(config, next);
     if (editingAtRequest !== editingId.value || taskAtRequest !== task.value) return;
     if (preserveDraft && next.models.some((row: any) => row.definition.id === editingId.value)) return;
@@ -279,20 +312,24 @@ async function openDirectory(modelId: string) {
   await action(async () => { await invoke('open_ai_model_directory', { modelId }); });
 }
 async function download(modelId: string) {
+  if (downloading.value) return;
   await action(async () => {
     const model = view.value?.models.find((row: any) => row.definition.id === modelId);
     if (/^AGPL-/i.test(model?.definition.license || '') && !await ask(t('settings.ai_models.download_license_confirm', { model: aiModelDisplayName(model?.definition), license: model.definition.license }), { kind: 'warning' })) return;
-    const feedback = beginModelDownload(aiModelDisplayName(model?.definition) || modelId);
+    const requestId = crypto.randomUUID();
+    const feedback = beginModelDownload(aiModelDisplayName(model?.definition) || modelId, requestId);
     downloadFeedback.value[modelId] = feedback;
     // Mutate the reactive entry, not the raw object used to create it.
     const state = downloadFeedback.value[modelId];
     downloading.value = modelId;
     try {
-      await invoke('download_ai_model', { modelId });
+      await invoke('download_ai_model', { modelId, requestId });
+      if (!mounted || downloadFeedback.value[modelId]?.jobId !== requestId) return;
       state.state = 'completed'; state.phase = 'complete'; state.progress = 100;
       toast.success(t('model_download.success', { model: state.name }));
       await refresh(editingId.value);
     } catch (e) {
+      if (!mounted || downloadFeedback.value[modelId]?.jobId !== requestId || state.state === 'completed') return;
       if (isModelDownloadCancelled(e)) {
         state.state = 'cancelled'; state.message = '';
         toast.info(t('model_download.cancelled'));
@@ -302,7 +339,9 @@ async function download(modelId: string) {
         toast.error(message, { duration: 6000 });
         throw new Error(message);
       }
-    } finally { downloading.value = ''; }
+    } finally {
+      if (downloadFeedback.value[modelId]?.jobId === requestId && downloading.value === modelId) downloading.value = '';
+    }
   });
 }
 async function cancelDownload() {
@@ -310,7 +349,7 @@ async function cancelDownload() {
   if (!modelId || !state || state.state !== 'downloading' || state.phase === 'complete') return;
   const previousPhase = state.phase;
   state.phase = 'cancelling';
-  try { await invoke('cancel_ai_model_download', { modelId }); }
+  try { await invoke('cancel_ai_model_download', { modelId, jobId: state.jobId }); }
   catch (e) {
     if (state.state !== 'downloading') return;
     state.phase = previousPhase;
@@ -344,16 +383,14 @@ onMounted(async () => {
   }));
   const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr', 'detection'].includes(event.payload)) void changeTask(event.payload); });
   if (mounted) unlisten.push(offTask); else offTask();
-  await refresh();
   const progressListener = await listen('ai-model-download-progress', (event: any) => {
-    if (event.payload?.modelId === downloading.value) {
-      const state = downloadFeedback.value[downloading.value];
-      if (state) applyModelDownloadProgress(state, event.payload);
-    }
+    receiveDownload(event.payload);
+    if (event.payload?.state === 'completed' && !busy.value) void refresh(editingId.value);
   });
   if (!mounted) progressListener(); else unlisten.push(progressListener);
   const configurationListener = await listen('ai-configuration-changed', () => { if (!busy.value) void refresh(editingId.value); });
   if (!mounted) configurationListener(); else unlisten.push(configurationListener);
+  if (mounted) await refresh();
 });
 onUnmounted(() => { mounted = false; request++; unlisten.forEach(fn => fn()); });
 defineExpose({ confirmDiscard });

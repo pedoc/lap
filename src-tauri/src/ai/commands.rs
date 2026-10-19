@@ -29,6 +29,7 @@ pub struct ConfigurationView {
     pub ocr_profile: String,
     pub detection_profile: String,
     pub runtime: super::runtime::RuntimeInfo,
+    pub model_download: Option<Value>,
 }
 pub fn view() -> Result<ConfigurationView, String> {
     let config = settings::snapshot()?;
@@ -73,6 +74,7 @@ pub fn view() -> Result<ConfigurationView, String> {
         default_selection: settings::Selection::default(),
         models,
         runtime: super::runtime::info(),
+        model_download: assets::download_snapshot()?,
     })
 }
 fn changed(app: &AppHandle) -> Result<(), String> {
@@ -270,13 +272,13 @@ pub async fn delete_ai_model(app_handle: AppHandle, model_id: String) -> Result<
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub async fn download_ai_model(app_handle: AppHandle, model_id: String) -> Result<(), String> {
+pub async fn download_ai_model(app_handle: AppHandle, model_id: String, request_id: Option<String>) -> Result<(), String> {
     let model = settings::snapshot()?
         .catalog()
         .into_iter()
         .find(|m| m.id == model_id)
         .ok_or("Unknown model ID")?;
-    assets::download(app_handle.clone(), model).await?;
+    assets::download(app_handle.clone(), model, request_id).await?;
     changed(&app_handle)
 }
 #[tauri::command]
@@ -297,8 +299,8 @@ pub async fn open_ai_model_directory(model_id: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn cancel_ai_model_download(model_id: String) -> Result<(), String> {
-    assets::cancel(&model_id)
+pub fn cancel_ai_model_download(model_id: String, job_id: Option<String>) -> Result<(), String> {
+    assets::cancel(&model_id, job_id.as_deref())
 }
 #[tauri::command]
 pub async fn test_ai_model(app_handle: AppHandle, model_id: String) -> Result<Value, String> {

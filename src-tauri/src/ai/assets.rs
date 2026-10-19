@@ -9,7 +9,58 @@ use std::{
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 static DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-static CANCEL: Mutex<Option<(String, tokio::sync::watch::Sender<bool>)>> = Mutex::new(None);
+static CANCEL: Mutex<Option<(String, String, tokio::sync::watch::Sender<bool>)>> = Mutex::new(None);
+#[derive(Default)]
+struct DownloadState {
+    revision: u64,
+    snapshot: Option<serde_json::Value>,
+}
+static DOWNLOAD_STATE: Mutex<DownloadState> = Mutex::new(DownloadState {
+    revision: 0,
+    snapshot: None,
+});
+impl DownloadState {
+    fn update(
+        &mut self,
+        job_id: &str,
+        model_id: &str,
+        payload: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut next = if self.snapshot.as_ref().is_some_and(|s| s["jobId"] == job_id) {
+            self.snapshot.clone().unwrap_or_default()
+        } else {
+            json!({"state":"downloading","phase":"connecting","progress":0,"received":0,"total":0,"file":"","message":""})
+        };
+        if let (Some(target), Some(fields)) = (next.as_object_mut(), payload.as_object()) {
+            target.extend(fields.clone());
+        }
+        self.revision += 1;
+        next["modelId"] = json!(model_id);
+        next["jobId"] = json!(job_id);
+        next["revision"] = json!(self.revision);
+        self.snapshot = Some(next.clone());
+        next
+    }
+}
+pub fn download_snapshot() -> Result<Option<serde_json::Value>, String> {
+    Ok(DOWNLOAD_STATE
+        .lock()
+        .map_err(|e| e.to_string())?
+        .snapshot
+        .clone())
+}
+fn publish_download(
+    job_id: &str,
+    model_id: &str,
+    payload: serde_json::Value,
+    emit: &impl Fn(serde_json::Value),
+) {
+    if let Ok(mut state) = DOWNLOAD_STATE.lock() {
+        let next = state.update(job_id, model_id, payload);
+        drop(state);
+        emit(next);
+    }
+}
 pub fn directory(model: &ModelDefinition) -> Result<PathBuf, String> {
     model.validate()?;
     #[cfg(test)]
@@ -108,9 +159,9 @@ impl Drop for DownloadCancellation {
         }
     }
 }
-pub fn cancel(model_id: &str) -> Result<(), String> {
-    if let Some((id, tx)) = CANCEL.lock().map_err(|e| e.to_string())?.as_ref() {
-        if id != model_id {
+pub fn cancel(model_id: &str, job_id: Option<&str>) -> Result<(), String> {
+    if let Some((id, job, tx)) = CANCEL.lock().map_err(|e| e.to_string())?.as_ref() {
+        if id != model_id || job_id.is_some_and(|expected| expected != job) {
             return Err("Another model is downloading; cancellation target does not match".into());
         }
         let _ = tx.send(true);
@@ -350,17 +401,30 @@ async fn retry_delay(
         _=cancelled.changed()=>Err("Download canceled".into()),
     }
 }
-pub async fn download(app: AppHandle, model: ModelDefinition) -> Result<(), String> {
+pub async fn download(
+    app: AppHandle,
+    model: ModelDefinition,
+    request_id: Option<String>,
+) -> Result<(), String> {
     model.validate()?;
     let client = crate::t_network::client()?;
-    download_with_client(model, client, move |payload| {
+    download_with_id(model, client, request_id, move |payload| {
         let _ = app.emit("ai-model-download-progress", payload);
     })
     .await
 }
+#[cfg(test)]
 async fn download_with_client(
     model: ModelDefinition,
     client: reqwest::Client,
+    emit: impl Fn(serde_json::Value) + Send + Sync,
+) -> Result<(), String> {
+    download_with_id(model, client, None, emit).await
+}
+async fn download_with_id(
+    model: ModelDefinition,
+    client: reqwest::Client,
+    request_id: Option<String>,
     emit: impl Fn(serde_json::Value) + Send + Sync,
 ) -> Result<(), String> {
     model.validate()?;
@@ -370,9 +434,38 @@ async fn download_with_client(
     let _lock = DOWNLOAD_LOCK
         .try_lock()
         .map_err(|_| "Another model download is already running")?;
+    let job_id = match request_id {
+        Some(id) => uuid::Uuid::parse_str(&id)
+            .map_err(|_| "Invalid model download request ID")?
+            .to_string(),
+        None => uuid::Uuid::new_v4().to_string(),
+    };
     let (tx, mut cancelled) = tokio::sync::watch::channel(false);
-    *CANCEL.lock().map_err(|e| e.to_string())? = Some((model.id.clone(), tx));
+    *CANCEL.lock().map_err(|e| e.to_string())? = Some((model.id.clone(), job_id.clone(), tx));
     let _cancel_guard = DownloadCancellation;
+    publish_download(&job_id, &model.id, json!({}), &emit);
+    let result = install_with_client(&model, &client, &mut cancelled, |payload| {
+        publish_download(&job_id, &model.id, payload, &emit);
+    })
+    .await;
+    // Publish the terminal snapshot before releasing DOWNLOAD_LOCK; an older job must
+    // never overwrite a newer job's snapshot when a settings window is recreated.
+    let terminal = match &result {
+        Ok(()) => json!({"state":"completed","phase":"complete","progress":100,"message":""}),
+        Err(error) if matches!(error.as_str(), "Download canceled" | "Download cancelled") => {
+            json!({"state":"cancelled","message":""})
+        }
+        Err(error) => json!({"state":"failed","message":error}),
+    };
+    publish_download(&job_id, &model.id, terminal, &emit);
+    result
+}
+async fn install_with_client(
+    model: &ModelDefinition,
+    client: &reqwest::Client,
+    cancelled: &mut tokio::sync::watch::Receiver<bool>,
+    emit: impl Fn(serde_json::Value) + Send + Sync,
+) -> Result<(), String> {
     let target = directory(&model)?;
     let parent = target.parent().ok_or("Invalid model directory")?;
     tokio::fs::create_dir_all(parent)
@@ -392,7 +485,7 @@ async fn download_with_client(
     for (index, artifact) in model.files.iter().enumerate() {
         let completed = received;
         let path = staging.join(artifact_filename(&artifact.role));
-        received+=stream_artifact(&client,artifact,&path,&mut cancelled,|phase,written,message,restart| {
+        received+=stream_artifact(client,artifact,&path,cancelled,|phase,written,message,restart| {
             let bytes=completed+written;
             let progress=if total>0 {(bytes as f64/total as f64*100.).min(99.)}else{index as f64/model.files.len() as f64*100.};
             emit(json!({"modelId":model.id,"file":artifact.role,"phase":phase,"progress":progress,"received":bytes,"total":total,"message":message.unwrap_or(""),"restart":restart}));
@@ -433,6 +526,29 @@ async fn download_with_client(
 #[cfg(test)]
 mod directory_tests {
     use super::*;
+    #[test]
+    fn download_snapshots_preserve_terminal_details_and_reset_for_a_new_job() {
+        let mut state = DownloadState::default();
+        let first = state.update(
+            "job-a",
+            "model-a",
+            json!({"progress":42,"received":42,"total":100,"phase":"downloading"}),
+        );
+        let failed = state.update(
+            "job-a",
+            "model-a",
+            json!({"state":"failed","message":"HTTP 403"}),
+        );
+        assert!(failed["revision"].as_u64().unwrap() > first["revision"].as_u64().unwrap());
+        assert_eq!(failed["received"], 42);
+        assert_eq!(failed["state"], "failed");
+        assert_eq!(state.snapshot, Some(failed.clone()));
+        let next = state.update("job-b", "model-a", json!({}));
+        assert_eq!(next["progress"], 0);
+        assert_eq!(next["message"], "");
+        assert_eq!(next["state"], "downloading");
+        assert!(next["revision"].as_u64().unwrap() > failed["revision"].as_u64().unwrap());
+    }
     fn temp_path() -> PathBuf {
         std::env::temp_dir().join(format!("lap-model-directory-test-{}", uuid::Uuid::new_v4()))
     }
