@@ -73,10 +73,11 @@
         <div class="flex flex-wrap gap-2">
           <button class="btn btn-sm" :disabled="busy" @click="draft.parameters = {}">{{ t('settings.ai_models.defaults') }}</button>
           <button class="btn btn-sm btn-primary" :disabled="busy" @click="save">{{ t('settings.ai_models.save') }}</button>
-          <button class="btn btn-sm" :disabled="busy || !selectedModel.installed" @click="test">{{ t('settings.ai_models.test') }}</button>
+          <button class="btn btn-sm" :disabled="busy || !selectedModel.installed" @click="test">{{ t('settings.ai_models.save_and_test') }}</button>
           <button v-if="!selectedModel.builtin" class="btn btn-sm btn-ghost text-error" :disabled="busy || isActive" @click="remove">{{ t('settings.ai_models.delete') }}</button>
         </div>
         <p class="text-xs opacity-50">{{ t('settings.ai_models.save_hint') }}</p>
+        <p class="text-xs opacity-60">{{ t('settings.ai_models.test_persistence_hint') }}</p>
       </div>
       <OcrIndexPanel v-if="task === 'ocr'" />
       <div class="rounded-box border border-base-content/10 p-3 space-y-3">

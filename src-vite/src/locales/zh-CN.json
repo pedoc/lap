@@ -1946,6 +1946,8 @@
       "proxy_test_success": "通过代理成功访问 Google。"
     },
     "ai_models": {
+      "save_and_test": "保存并测试",
+      "test_persistence_hint": "「保存并测试」会先保存当前参数和密钥，再运行模型；测试失败不会撤销已保存的配置。在线测试仍需确认上传。",
       "unsaved": "配置尚未保存。后台刷新会保留输入，切换或关闭前会确认。",
       "discard_draft": "模型配置或 API 密钥尚未保存，是否放弃修改并继续？",
       "download_license_confirm": "{model} 使用 {license}，其代码与模型权重的许可条件不同于 Apache-2.0；分发或集成前请核对适用条款。是否继续下载？",

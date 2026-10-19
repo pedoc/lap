@@ -2054,6 +2054,8 @@
       "proxy_test_success": "已透過代理成功連線至 Google。"
     },
     "ai_models": {
+      "save_and_test": "儲存並測試",
+      "test_persistence_hint": "「儲存並測試」會先儲存目前參數和金鑰，再執行模型；測試失敗不會撤銷已儲存的配置。線上測試仍需確認上傳。",
       "unsaved": "配置尚未儲存。背景重新整理會保留輸入，切換或關閉前會確認。",
       "discard_draft": "模型配置或 API 金鑰尚未儲存，是否放棄修改並繼續？",
       "download_license_confirm": "{model} 使用 {license}，其程式碼與模型權重的授權條件不同於 Apache-2.0；散布或整合前請核對適用條款。是否繼續下載？",

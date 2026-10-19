@@ -141,6 +141,15 @@ test('settings has no instance creation, cloning or per-library activation UI', 
   assert.doesNotMatch(component, /newInstance|cloneInstance|instanceId|libraryId|_ai_instance/);
   assert.match(component, /:value="editingId"[^>]*@change="selectModel"/);
 });
+test('the diagnostic button explicitly discloses that it saves configuration before testing', () => {
+  assert.match(component, /@click="test">\{\{ t\('settings.ai_models.save_and_test'\) \}\}/);
+  assert.match(component, /settings.ai_models.test_persistence_hint/);
+  for (const language of ['en','zh-CN','zh-TW']) {
+    const locale=JSON.parse(readFileSync(new URL(`../src/locales/${language}.json`,import.meta.url),'utf8'));
+    assert.ok(locale.settings.ai_models.save_and_test);
+    assert.ok(locale.settings.ai_models.test_persistence_hint);
+  }
+});
 
 const imageComponent = readFileSync(new URL('../src/components/Image.vue', import.meta.url), 'utf8');
 const faceWatchStart = imageComponent.indexOf('watch(() => [props.fileId, config.settings.face.enabled,');
