@@ -5,9 +5,20 @@
     @keydown.stop
     data-photo-objects
   >
-    <div class="flex items-center justify-between gap-2">
-      <h3 class="text-sm font-medium">{{ t('objects.title') }}</h3>
+    <div class="flex items-center gap-1">
       <button
+        type="button"
+        data-info-section-toggle="objects"
+        class="flex flex-1 min-w-0 items-center gap-1 text-left text-base-content/70 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        :aria-expanded="expanded"
+        @keydown.stop
+        @click.stop="toggleExpanded"
+      >
+        <IconRight class="w-3 h-3 shrink-0 transition-transform duration-200" :class="{ 'rotate-90': expanded }" aria-hidden="true" />
+        <span class="py-1 font-bold uppercase text-xs tracking-wide text-base-content/30">{{ t('objects.title') }}</span>
+      </button>
+      <button
+        v-if="expanded"
         class="btn btn-xs btn-ghost"
         :disabled="taskBusy || view?.status.running || busy"
         @click="recognize"
@@ -15,6 +26,8 @@
         {{ t(result?.indexed ? 'objects.reidentify' : 'objects.recognize') }}
       </button>
     </div>
+    <Transition @before-enter="onBeforeEnter" @enter="onEnter" @after-enter="onAfterEnter" @leave="onLeave">
+    <div v-show="expanded" class="pl-4 space-y-3 overflow-hidden" data-info-section-content="objects">
     <p v-if="loading" class="text-xs opacity-60">{{ t('objects.loading') }}</p>
     <p
       v-if="error || actionError || result?.error"
@@ -180,10 +193,14 @@
     <p v-else-if="!loading && !result?.error" class="text-xs opacity-60">
       {{ t('objects.pending_hint') }}
     </p>
+    </div>
+    </Transition>
   </section>
 </template>
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { IconRight } from '@/common/icons';
+import { onBeforeEnter, onEnter, onAfterEnter, onLeave } from '@/common/infoPanelTransition';
 import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { ask } from '@tauri-apps/plugin-dialog';
@@ -203,6 +220,11 @@ const props = defineProps<{ file: any }>(),
   emit = defineEmits(['focus-object']),
   { t } = useI18n();
 const { view, busy: taskBusy, start } = useObjects();
+const expanded = computed(() => config.infoPanel?.showObjects !== false);
+function toggleExpanded() {
+  config.infoPanel ||= {};
+  config.infoPanel.showObjects = !expanded.value;
+}
 const { result, error, loading, refresh } = usePhotoObjects(() => [
   Number(props.file?.id),
   props.file?.modified_at,

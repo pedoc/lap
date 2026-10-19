@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
+import * as infoPanelTransition from '../src/common/infoPanelTransition.ts';
 import { renderToString } from 'vue/server-renderer';
 import {
   OBJECT_STATES,
@@ -64,6 +65,8 @@ const tick = async () => {
 function context() {
   const ctx: any = {
     ...Vue,
+    ...infoPanelTransition,
+    IconRight: () => Vue.h('svg', { 'aria-hidden': 'true' }),
     ...objectHelpers,
     ObjectTaskHistory: () => Vue.h('aside'),
     ObjectAutoSettings: () => Vue.h('aside'),
@@ -819,6 +822,44 @@ test('photo details mark truncated and human results, including nullable class c
   assert.match(html, /previous model/);
   assert.match(html, /结果已截断/);
   assert.doesNotMatch(html, /null%|NaN%|80%/);
+});
+test('object section collapse is independent, remembered across photos and preserves the edit draft', async () => {
+  const ctx = context();
+  ctx.props = Vue.reactive(ctx.props);
+  ctx.config.infoPanel = { showOcr: true, showObjects: true };
+  ctx.startObjectEdit(7, photo(), [dog]);
+  ctx.objectEdit.value.boxes[0].class.name = 'draft';
+  const draft = ctx.objectEdit.value;
+  let h = script('PhotoObjectInfo', ctx, 'expanded,toggleExpanded');
+  h.api.toggleExpanded();
+  assert.equal(h.api.expanded.value, false);
+  assert.equal(ctx.config.infoPanel.showObjects, false);
+  assert.equal(ctx.config.infoPanel.showOcr, true);
+  assert.equal(ctx.objectEdit.value, draft);
+  assert.equal(ctx.objectEdit.value.boxes[0].class.name, 'draft');
+  ctx.props.file.id = 8;
+  await tick();
+  assert.equal(h.api.expanded.value, false);
+  h.dispose();
+  h = script('PhotoObjectInfo', { ...ctx }, 'expanded,toggleExpanded');
+  assert.equal(h.api.expanded.value, false);
+  h.api.toggleExpanded();
+  assert.equal(h.api.expanded.value, true);
+  h.dispose();
+});
+test('object section keeps its title and mounted content when folded but hides header actions', async () => {
+  const ctx = context();
+  ctx.config.infoPanel = { showObjects: false };
+  let html = await renderToString(Vue.createSSRApp(component('PhotoObjectInfo', ctx), { file: ctx.props.file }));
+  assert.match(html, /data-info-section-toggle="objects"[^>]*aria-expanded="false"/);
+  assert.match(html, /data-info-section-content="objects"[^>]*style="display:none;"/);
+  assert.doesNotMatch(html, /重新识别对象/);
+  assert.match(html, /狗/); // v-show preserves the document and any unsaved controls.
+  ctx.config.infoPanel.showObjects = true;
+  html = await renderToString(Vue.createSSRApp(component('PhotoObjectInfo', ctx), { file: ctx.props.file }));
+  assert.match(html, /aria-expanded="true"/);
+  assert.match(html, /重新识别对象/);
+  assert.doesNotMatch(html, /display:none/);
 });
 test('object overlays reuse the image transform and suppress incompatible preview geometry', async () => {
   const ctx = context();

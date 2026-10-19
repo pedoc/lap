@@ -45,6 +45,8 @@ export const useConfigStore = defineStore('configStore', {
       histogramChannels: 15,     // histogram channel mask (L=1, R=2, G=4, B=8; 0=none, 15=all)
       showBasicInfo: true,       // show basic info
       showMetadata: true,        // show metadata
+      showOcr: true,             // show recognized image text
+      showObjects: true,         // show detected objects
       showMap: true,             // show map
       mapTheme: 0,               // 0: standard, 2: satellite
     },

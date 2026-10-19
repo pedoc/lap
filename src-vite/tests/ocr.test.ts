@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
+import * as infoPanelTransition from '../src/common/infoPanelTransition.ts';
 import { renderToString } from 'vue/server-renderer';
 import { textSegments, ocrSelectionIds } from '../src/common/ocrUi.ts';
 import { SIDEBAR } from '../src/common/constants.ts';
@@ -14,7 +15,7 @@ const read = (name: string) => readFileSync(new URL(`../src/components/${name}.v
 function harness(name: string, invoke: any = async () => ({})) {
   const watches: any[] = [], mounted: any[] = [], unmount: any[] = [], calls: any[] = [];
   const listeners: any = {}; const timers: Array<() => void> = [];
-  const ctx: any = { ...Vue, OcrAutoSettings: () => Vue.h('aside'), config: { main: { sidebarIndex: 0 }, settings: { ai: {} } }, libConfig: { _libraryId: 'A', ocr: { text: '' }, search: {} }, props: { file: { id: 7, file_type: 1 } }, useI18n: () => ({ t: (key: string) => key }), defineProps: () => ctx.props, defineEmits: () => () => {}, textSegments, SIDEBAR, ocrSelectionIds,
+  const ctx: any = { ...Vue, ...infoPanelTransition, IconRight: () => Vue.h('svg', { 'aria-hidden': 'true' }), OcrAutoSettings: () => Vue.h('aside'), config: { main: { sidebarIndex: 0 }, settings: { ai: {} } }, libConfig: { _libraryId: 'A', ocr: { text: '' }, search: {} }, props: { file: { id: 7, file_type: 1 } }, useI18n: () => ({ t: (key: string) => key }), defineProps: () => ctx.props, defineEmits: () => () => {}, textSegments, SIDEBAR, ocrSelectionIds,
     invoke: async (...args: any[]) => { calls.push(args); return invoke(...args); }, ask: async () => true,
     watch: (_: any, cb: any) => { watches.push(cb); return () => {}; }, onMounted: (cb: any) => mounted.push(cb), onBeforeUnmount: (cb: any) => unmount.push(cb),
     setTimeout: (cb: () => void) => { timers.push(cb); return timers.length; }, clearTimeout: () => {},
@@ -24,7 +25,7 @@ function harness(name: string, invoke: any = async () => ({})) {
   Object.assign(ctx, runInNewContext(`(()=>{${module};return {useOcr,startOcr,ocrFocus,ocrShowBoxes};})()`, ctx));
   const source = read(name);
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({refresh,${name === 'OcrIndexPanel' ? 'start:run,stop,view,refresh' : 'recognize,result'},error,busy});`, ctx);
+  const api: any = runInNewContext(`${script}\n;({refresh,${name === 'OcrIndexPanel' ? 'start:run,stop,view,refresh' : 'recognize,result,expanded,toggleExpanded,editor'},error,busy});`, ctx);
   // Mount the shared controller once, leaving photo-specific hooks to tests.
   mounted.shift()();
   return { ctx, api, watches, mounted: mounted.length ? mounted : [async () => {}], unmount: [() => unmount.forEach(cb => cb())], calls, listeners, source, timers };
@@ -83,6 +84,43 @@ test('photo OCR template escapes recognized text and displays per-line confidenc
   const component = runInNewContext(`${code}\n;component`, { ...h.ctx, ...imports, watch: () => {}, ref: (value: any) => Vue.ref(value === null ? { indexed: true, document } : value) });
   const html = await renderToString(Vue.createSSRApp(component, { file: { id: 7, file_type: 1 } }));
   assert.match(html, /中文/); assert.match(html, /94%/); assert.match(html, /&lt;script&gt;/); assert.doesNotMatch(html, /<script>/);
+});
+
+test('OCR section remembers independent collapse state without clearing results or an open editor', () => {
+  const h = harness('PhotoOcrInfo');
+  h.ctx.config = Vue.reactive(h.ctx.config);
+  h.ctx.config.infoPanel = { showObjects: true };
+  h.api.result.value = { indexed: true, document: { text: 'recognized text', lines: [] } };
+  h.api.editor.value = { fileId: 7, draft: 'unsaved text' };
+  const result = h.api.result.value, editor = h.api.editor.value;
+  assert.equal(h.api.expanded.value, true);
+  h.api.toggleExpanded();
+  assert.equal(h.api.expanded.value, false);
+  assert.equal(h.ctx.config.infoPanel.showOcr, false);
+  assert.equal(h.ctx.config.infoPanel.showObjects, true);
+  assert.equal(h.api.result.value, result);
+  assert.equal(h.api.editor.value, editor);
+  h.ctx.props.file.id = 8;
+  assert.equal(h.api.expanded.value, false);
+  h.api.toggleExpanded();
+  assert.equal(h.api.expanded.value, true);
+  h.unmount[0]();
+});
+
+test('collapsed OCR sections retain an accessible title and hide content and header actions', async () => {
+  const h = harness('PhotoOcrInfo');
+  h.ctx.config.infoPanel = { showOcr: false };
+  const { descriptor } = parse(h.source), imports: any = {};
+  const code = stripTypeScriptTypes(compileScript(descriptor, { id: 'ocr-section-collapse', inlineTemplate: true }).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_m, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
+  const component = runInNewContext(`${code};component`, { ...h.ctx, ...imports });
+  const html = await renderToString(Vue.createSSRApp(component, { file: h.ctx.props.file }));
+  assert.match(html, /data-info-section-toggle="ocr"[^>]*aria-expanded="false"/);
+  assert.match(html, /data-info-section-content="ocr"[^>]*style="display:none;"/);
+  assert.match(html, /ocr.photo_title/);
+  assert.doesNotMatch(html, /ocr.recognize|ocr.reidentify|ocr.edit_title/);
+  h.unmount[0]();
 });
 
 test('reindex confirmation cannot cross a library switch', async () => {

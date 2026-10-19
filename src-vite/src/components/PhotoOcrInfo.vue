@@ -1,10 +1,18 @@
 <template>
   <OcrTextEditor v-if="editor" v-bind="editor" @close="editor = undefined" @saved="editorSaved" />
   <section v-if="supported" class="border-t border-base-content/5 px-1 py-3 space-y-2">
-    <div class="flex items-center justify-between gap-2"><h3 class="text-xs font-semibold opacity-60">{{ t('ocr.photo_title') }}</h3>
-      <button class="btn btn-xs" :disabled="busy || !result?.indexed" @click="openEditor">{{ t('ocr.edit_title') }}</button>
-      <button class="btn btn-xs" :disabled="busy || taskBusy || taskView?.status.running" @click="recognize">{{ t(processing ? 'ocr.recognizing' : result?.indexed ? 'ocr.reidentify' : 'ocr.recognize') }}</button>
+    <div class="flex items-center gap-1">
+      <button type="button" data-info-section-toggle="ocr" class="flex flex-1 min-w-0 items-center gap-1 text-left text-base-content/70 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" :aria-expanded="expanded" @keydown.stop @click.stop="toggleExpanded">
+        <IconRight class="w-3 h-3 shrink-0 transition-transform duration-200" :class="{ 'rotate-90': expanded }" aria-hidden="true" />
+        <span class="py-1 font-bold uppercase text-xs tracking-wide text-base-content/30">{{ t('ocr.photo_title') }}</span>
+      </button>
+      <template v-if="expanded">
+        <button class="btn btn-xs" :disabled="busy || !result?.indexed" @click="openEditor">{{ t('ocr.edit_title') }}</button>
+        <button class="btn btn-xs" :disabled="busy || taskBusy || taskView?.status.running" @click="recognize">{{ t(processing ? 'ocr.recognizing' : result?.indexed ? 'ocr.reidentify' : 'ocr.recognize') }}</button>
+      </template>
     </div>
+    <Transition @before-enter="onBeforeEnter" @enter="onEnter" @after-enter="onAfterEnter" @leave="onLeave">
+    <div v-show="expanded" class="pl-4 space-y-2 overflow-hidden" data-info-section-content="ocr">
     <div v-if="result?.document?.text" class="flex gap-2 flex-wrap">
       <button class="btn btn-xs" @click="copyText">{{ t(copied ? 'ocr.copied' : 'ocr.copy_all') }}</button>
       <label class="flex items-center gap-1 text-xs"><input v-model="ocrShowBoxes" type="checkbox" class="checkbox checkbox-xs" />{{ t('ocr.boxes') }}</label>
@@ -28,10 +36,14 @@
         </div>
       </details>
     </template>
+    </div>
+    </Transition>
   </section>
 </template>
 <script setup lang="ts">
 import OcrTextEditor from './OcrTextEditor.vue';
+import { IconRight } from '@/common/icons';
+import { onBeforeEnter, onEnter, onAfterEnter, onLeave } from '@/common/infoPanelTransition';
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -43,6 +55,11 @@ import { config, libConfig } from '@/common/config';
 const props = defineProps<{ file: any }>();
 const { t } = useI18n();
 const emit = defineEmits(['focus-line']);
+const expanded = computed(() => config.infoPanel?.showOcr !== false);
+function toggleExpanded() {
+  config.infoPanel ||= {};
+  config.infoPanel.showOcr = !expanded.value;
+}
 const { view: taskView, busy: taskBusy } = useOcr();
 const copied = ref(false), editor = ref<any>();
 function openEditor() { if (result.value?.document) editor.value = { fileId:Number(props.file.id),libraryId:libConfig._libraryId,result:JSON.parse(JSON.stringify(result.value)) }; }

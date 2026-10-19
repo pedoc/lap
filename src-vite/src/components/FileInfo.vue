@@ -473,6 +473,7 @@ import { addressForFile, addressPath, addressLabel, addressSelection } from '@/c
 import { useToast } from '@/common/toast';
 import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
+import { onBeforeEnter, onEnter, onAfterEnter, onLeave } from '@/common/infoPanelTransition';
 import { isWebViewVideoPlaybackDisabled, getGStreamerAvailability } from '@/common/video';
 import { isOriginalUnavailable } from '@/common/availability';
 import { getTagsForFile, renameFile, editImage, getAlbum, getFileCollections, getFileInfo, getMotionPhotoVideoPath, revealPath, getFacesForFile, getPersonThumbnail } from '@/common/api';
@@ -1047,32 +1048,6 @@ function navigatePerson(person: { id: number; name: string }) {
   emit('navigatePerson', { personId: person.id, personName: person.name });
 }
 
-const onBeforeEnter = (el: any) => {
-  el.style.opacity = '0';
-  el.style.height = '0';
-}
-
-const onEnter = (el: any) => {
-  el.style.transition = 'all 0.1s ease';
-  // Check scrollHeight to know final height
-  el.style.height = el.scrollHeight + 'px';
-  el.style.opacity = '1';
-}
-
-const onAfterEnter = (el: any) => {
-  el.style.height = '';
-}
-
-const onLeave = (el: any) => {
-  el.style.transition = 'all 0.1s ease';
-  // Force height back to explicit pixel value for animation
-  el.style.height = el.scrollHeight + 'px';
-  // Force repaint to ensure transition triggers
-  // eslint-disable-next-line no-unused-expressions
-  el.offsetHeight; 
-  el.style.height = '0';
-  el.style.opacity = '0';
-}
 defineExpose({
   quickSave
 });
