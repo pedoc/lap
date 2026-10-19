@@ -19,8 +19,9 @@ function harness(handler?: (command: string, args: any) => Promise<any>, person:
   const listeners: Record<string, (event: any) => void> = {};
   const calls: any[] = [], events: any[] = [], handlers: string[] = [], mounts: Array<() => any> = [], unmounts: Array<() => void> = [];
   const libConfig = { _libraryId: 'library-a' }, config = { settings: { ai: { faceProfile: 'profile-a' } } };
-  const api = runInNewContext(`${code}\n;({load, apply, chooseCover, close, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root, targetPerson, newName, canSubmit, previews});`, {
-    ...helpers,
+  let confirm = true;
+  const api = runInNewContext(`${code}\n;({load, refreshReview, updatesPending, apply, chooseCover, close, toggleAll, filter, offset, items, counts, selected, selectedItems, pending, busy, error, loading, root, targetPerson, newName, canSubmit, previews});`, {
+    ...helpers, ask: async () => confirm,
     ref: (value: any) => ({ value }), computed: (getter: () => any) => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: (fn: () => void) => mounts.push(fn), onBeforeUnmount: (fn: () => void) => unmounts.push(fn), nextTick: async () => {},
     defineProps: () => ({ person }), defineEmits: () => (...args: any[]) => events.push(args), useI18n: () => ({ t: (key: string) => key }),
@@ -33,8 +34,31 @@ function harness(handler?: (command: string, args: any) => Promise<any>, person:
       return null;
     }, listen: async (name: string, callback: (event: any) => void) => { listeners[name] = callback; return () => { delete listeners[name]; }; },
   });
-  return { api, calls, events, handlers, libConfig, config, dispatch: (name: string, payload: any) => listeners[name]?.({ payload }), mount: async () => { for (const mount of mounts) await mount(); }, unmount: () => unmounts.forEach(fn => fn()) };
+  return { api, calls, events, handlers, libConfig, config, confirm: (value: boolean) => { confirm = value; }, dispatch: (name: string, payload: any) => listeners[name]?.({ payload }), mount: async () => { for (const mount of mounts) await mount(); }, unmount: () => unmounts.forEach(fn => fn()) };
 }
+test('background inference preserves review rows, previews, selection and a partially entered batch name', async () => {
+  const h = harness(); await h.mount(); await new Promise(resolve => setImmediate(resolve));
+  const rows = h.api.items.value; h.api.toggleAll(); h.api.pending.value = 'assign_new'; h.api.newName.value = 'Draft name';
+  h.api.previews.value[faceReviewKey(rows[0])] = 'cached';
+  const count = h.calls.length;
+  h.dispatch('face-data-changed', { library_id: 'other' });
+  assert.equal(h.api.updatesPending.value, false);
+  for (let i = 0; i < 100; i++) h.dispatch('face-data-changed', { library_id: 'library-a', file_id: i });
+  assert.equal(h.api.items.value, rows); assert.equal(h.api.previews.value[faceReviewKey(rows[0])], 'cached');
+  assert.equal(h.api.selected.value.length, 1); assert.equal(h.api.pending.value, 'assign_new'); assert.equal(h.api.newName.value, 'Draft name');
+  assert.equal(h.api.updatesPending.value, true); assert.equal(h.calls.length, count);
+  h.confirm(false); await h.api.refreshReview(); assert.equal(h.api.newName.value, 'Draft name'); assert.equal(h.calls.length, count);
+  h.confirm(true); await h.api.refreshReview(); assert.equal(h.api.selected.value.length, 0); assert.equal(h.api.updatesPending.value, false);
+  h.unmount();
+});
+test('an update arriving during a manual refresh remains visible rather than being acknowledged by an older read', async () => {
+  let resolve!: (value: any) => void;
+  const h = harness(async command => command === 'get_face_review_page' ? new Promise(done => { resolve = done; }) : null);
+  await h.mount();
+  h.dispatch('face-data-changed', { library_id: 'library-a', file_id: 8 });
+  resolve({ items: [item], total: 1, counts: {} }); await new Promise(done => setImmediate(done));
+  assert.equal(h.api.updatesPending.value, true); h.unmount();
+});
 test('review actions distinguish suggested, manual, ignored and stale states', () => {
   assert.equal(faceReviewCanApply('confirm', [item]), true);
   assert.equal(faceReviewCanApply('reject', [{ ...item, state: 'confirmed', annotationId: 2 }]), false);

@@ -6,8 +6,9 @@
         <button v-for="tab in filters" :key="tab" type="button" class="btn btn-sm" :class="filter === tab ? 'btn-primary' : 'btn-ghost'" :disabled="busy" :aria-pressed="filter === tab" @click="filter = tab">
           {{ t(`face_review.${tab}`) }} ({{ faceReviewCount(tab, counts) }})
         </button>
-        <button type="button" class="btn btn-sm ml-auto" :disabled="busy || loading" @click="load">{{ t('face_review.refresh') }}</button>
+        <button type="button" class="btn btn-sm ml-auto" :disabled="busy || loading" @click="refreshReview">{{ t('face_review.refresh') }}</button>
       </div>
+      <p v-if="updatesPending" class="text-xs text-warning" role="status">{{ t('face_review.updates_pending') }}</p>
       <p v-if="filter === 'stale'" class="text-xs text-warning">{{ t('face_review.stale_hint') }}</p>
       <p v-else-if="filter === 'ignored'" class="text-xs opacity-70">{{ t('face_review.restore_hint') }}</p>
       <div class="flex flex-wrap items-center gap-2">
@@ -64,6 +65,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { ask } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
@@ -87,6 +89,8 @@ const filter = ref(personId ? 'all' : 'suggested'), offset = ref(0), pageSize = 
 const items = ref<FaceReviewItem[]>([]), total = ref(0), counts = ref<Record<string, number>>({});
 const previews = ref<Record<string, string>>({}), selected = ref<string[]>([]);
 const loading = ref(false), busy = ref(false), error = ref(''), pending = ref<FaceReviewAction | null>(null);
+const updatesPending = ref(false);
+let dataRevision = 0;
 const targetPerson = ref<{ id: number; name: string | null } | null>(null), newName = ref('');
 const canSubmit = computed(() => pending.value && faceReviewCanApply(pending.value, selectedItems.value) && (pending.value === 'assign_existing' ? targetPerson.value != null : pending.value === 'assign_new' ? newName.value.trim().length > 0 : true));
 const dialogWidth = ref(Math.min(960, window.innerWidth - 24)), dialogHeight = ref(Math.min(760, window.innerHeight - 32));
@@ -99,14 +103,21 @@ function current() { return alive && libraryId === libConfig._libraryId && profi
 function close() { if (!busy.value) emit('cancel'); }
 function toggleAll() { selected.value = allSelected.value ? [] : items.value.map(faceReviewKey); pending.value = null; }
 function resize() { dialogWidth.value = Math.min(960, window.innerWidth - 24); dialogHeight.value = Math.min(760, window.innerHeight - 32); }
+async function refreshReview() {
+  if (!current() || busy.value || loading.value) return;
+  if ((selected.value.length || pending.value || newName.value.trim()) && !await ask(t('face_review.refresh_confirm'), { kind: 'warning' })) return;
+  if (current() && !busy.value) await load();
+}
 async function load() {
   if (!current()) return;
   const ticket = ++generation;
+  const revision = dataRevision;
   loading.value = true; selected.value = []; pending.value = null; previews.value = {};
   try {
     const result: any = await invoke('get_face_review_page', { request: { libraryId, filter: filter.value, personId, offset: offset.value, limit: pageSize } });
     if (!current() || ticket !== generation) return;
     items.value = result.items; total.value = result.total; counts.value = result.counts;
+    updatesPending.value = revision !== dataRevision;
     if (offset.value > 0 && !result.items.length) { offset.value = Math.max(0, Math.floor(Math.max(0, result.total - 1) / pageSize) * pageSize); return load(); }
     void loadPreviews(result.items, ticket);
   } catch (e: any) { if (current() && ticket === generation) { items.value = []; error.value = e?.message || String(e); } }
@@ -155,7 +166,11 @@ onMounted(async () => {
   if (!alive) return;
   root.value?.focus({ preventScroll: true });
   void load();
-  const stop = await listen('face-data-changed', (event: any) => { if (current() && event.payload.library_id === libraryId) void load(); });
+  // Reviewing is an explicit snapshot: background inference must not replace
+  // rows, destroy an inline editor or clear a batch selection/name mid-action.
+  const stop = await listen('face-data-changed', (event: any) => {
+    if (current() && event.payload.library_id === libraryId) { dataRevision++; updatesPending.value = true; }
+  });
   if (!alive) stop(); else unlisten = stop;
   const stopNames = await listen('face-person-changed', (event: any) => {
     if (!current() || event.payload.library_id !== libraryId) return;
@@ -164,7 +179,11 @@ onMounted(async () => {
     if (!applyFaceRename(items.value, event.payload)) return;
     if (before === 'suggested' && event.payload.reviewState === 'confirmed') {
       counts.value.suggested = Math.max(0, (counts.value.suggested || 0) - 1); counts.value.confirmed = (counts.value.confirmed || 0) + 1;
-      if (filter.value === 'suggested') { items.value = items.value.filter(item => item.faceId !== event.payload.faceId); total.value--; selected.value = selected.value.filter(key => items.value.some(item => faceReviewKey(item) === key)); }
+      if (filter.value === 'suggested') {
+        items.value = items.value.filter(item => item.faceId !== event.payload.faceId); total.value--;
+        const remaining = selected.value.filter(key => items.value.some(item => faceReviewKey(item) === key));
+        if (remaining.length !== selected.value.length) selected.value = remaining;
+      }
     }
   });
   if (!alive) stopNames(); else unlistenNames = stopNames;
