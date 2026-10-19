@@ -17,7 +17,7 @@
       <button class="btn btn-xs" @click="copyText">{{ t(copied ? 'ocr.copied' : 'ocr.copy_all') }}</button>
       <label class="flex items-center gap-1 text-xs"><input v-model="ocrShowBoxes" type="checkbox" class="checkbox checkbox-xs" />{{ t('ocr.boxes') }}</label>
     </div>
-    <p v-if="result?.annotation" class="text-xs text-primary">{{ t('ocr.edit_provenance', { model: result.annotation.modelName }) }}</p>
+    <p v-if="result?.annotation" class="text-xs text-primary">{{ result.annotation.source?.lines?.length ? t('ocr.edit_provenance', { model: result.annotation.modelName }) : t('ocr.manual_only') }}</p>
     <details v-if="result?.annotation" class="text-xs opacity-60"><summary class="cursor-pointer">{{ t('ocr.current_model_result') }}</summary><p class="whitespace-pre-wrap select-text">{{ result.modelDocument?.text || t('ocr.not_indexed') }}</p></details>
     <p class="text-xs opacity-50">{{ t('ocr.photo_hint') }}</p>
     <p v-if="result?.document?.rotationDegrees || result?.document?.deskewDegrees" class="text-xs opacity-60">{{ t('ocr.rotation_applied', { rotation: result.document.rotationDegrees || 0, tilt: result.document.deskewDegrees || 0 }) }}</p>

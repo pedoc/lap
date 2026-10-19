@@ -1,6 +1,16 @@
 <template>
-  <OcrRegionTool v-bind="props" />
+  <OcrRegionTool ref="regionTool" v-bind="props" :merge-busy="preparing || !!editor" @add="addManual" @merge="mergeRegion" />
+  <div v-if="preparing || editError" class="absolute bottom-3 left-3 z-40 max-w-80 rounded-box bg-base-100/95 p-3 text-xs pointer-events-auto" role="status" @mousedown.stop>
+    <span v-if="preparing" class="loading loading-spinner loading-xs"></span>
+    <span v-if="editError" class="text-error whitespace-pre-wrap">{{ editError }}</span>
+    <button v-if="editError" class="btn btn-xs btn-ghost ml-2" :aria-label="t('ocr.dismiss')" @click="editError = ''">×</button>
+  </div>
   <OcrTextEditor v-if="editor" :key="editorKey" ref="editorRef" v-bind="editor" :current-file-id="fileId" @close="editor = undefined" @saved="editorSaved" />
+  <div v-if="ready && editor?.fileId === fileId && editor?.additions?.length" class="absolute inset-0 pointer-events-none overflow-hidden">
+    <div class="absolute" :style="{width:`${width}px`,height:`${height}px`,transform:`translate(${x}px, ${y}px) scale(${zoom}) rotate(${rotate}deg)`}">
+      <div v-for="(line,index) in editor.additions" :key="index" class="absolute" :style="ocrFrameStyle(line.bounds,width,height,zoom,true)"></div>
+    </div>
+  </div>
   <template v-if="ready && document?.lines?.length">
     <div v-if="ocrShowBoxes && compatible" class="absolute inset-0 pointer-events-none overflow-hidden">
       <div class="absolute" :style="{ width: `${width}px`, height: `${height}px`, transform: `translate(${x}px, ${y}px) scale(${zoom}) rotate(${rotate}deg)`, transition: transition ? 'transform 0.2s ease-out' : 'none' }">
@@ -23,13 +33,14 @@ import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { SIDEBAR } from '@/common/constants';
 import { ocrFocus, ocrShowBoxes } from '@/common/ocr';
-import { ocrFrameStyle, ocrGeometryCompatible, ocrSourceLineIndex } from '@/common/ocrUi';
+import { ocrFrameStyle, ocrGeometryCompatible, ocrSourceLineIndex, ocrManualAdditions } from '@/common/ocrUi';
 const props = defineProps<{ fileId?: number; fileVersion?: number; width: number; height: number; x: number; y: number; zoom: number; rotate: number; ready: boolean; transition: boolean }>();
 const emit = defineEmits<{ locate: [bounds: number[]] }>();
 const { t } = useI18n();
 const document = ref<any>(null), revision = ref(0);
 const photo = ref<any>(null), editor = ref<any>(), editorRef = ref<{ requestClose: () => Promise<boolean> } | null>(null);
 const editorKey = ref(0);
+const regionTool = ref<{close: () => void} | null>(null), preparing = ref(false), editError = ref('');
 const lineElements = new Map<number, HTMLElement>();
 let editedDisplayLine = -1;
 function setLineElement(index: number, element: any) { if (element) lineElements.set(index, element); else lineElements.delete(index); }
@@ -50,7 +61,29 @@ async function openLineEditor(index: number) {
   editorKey.value++;
   editor.value = { libraryId, fileId, result: JSON.parse(JSON.stringify(result)), lineIndex: sourceLine, anchor };
 }
-function editorSaved() { editor.value = undefined; ocrFocus.value = null; revision.value++; }
+function editorSaved() { editor.value = undefined; regionTool.value?.close(); ocrFocus.value = null; revision.value++; }
+async function openAdditions(candidates: Array<{text:string;bounds:number[]}>, anchor?: any, extraction?: any) {
+  if (!props.ready || !props.fileId || preparing.value) return;
+  const fileId=props.fileId, libraryId=libConfig._libraryId, profile=config.settings.ai?.ocrProfile || '', fileVersion=props.fileVersion;
+  if (editorRef.value && !await editorRef.value.requestClose()) return;
+  if (disposed || fileId!==props.fileId || libraryId!==libConfig._libraryId || fileVersion!==props.fileVersion || profile!==(config.settings.ai?.ocrProfile || '') || !props.ready) return;
+  preparing.value=true; editError.value='';
+  try {
+    const result:any=await invoke('prepare_ocr_manual',{libraryId,fileId,profile,previewAspect:props.width/props.height});
+    if (disposed || fileId!==props.fileId || libraryId!==libConfig._libraryId || fileVersion!==props.fileVersion || profile!==(config.settings.ai?.ocrProfile || '') || !props.ready) return;
+    if (extraction && (extraction.profile!==result.profile || extraction.sourceVersion!==result.sourceVersion)) throw new Error(t('ocr.edit_stale'));
+    const additions=ocrManualAdditions(result,candidates);
+    if (!additions.length) throw new Error(t('ocr.no_new_lines'));
+    const start=result.annotation?.lines?.length ?? result.modelDocument?.lines?.length ?? 0;
+    editedDisplayLine=-1; ocrFocus.value=null; editorKey.value++;
+    editor.value={libraryId,fileId,result,additions,...(additions.length===1 && anchor ? {lineIndex:start,anchor} : {})};
+    if (!extraction) regionTool.value?.close();
+  } catch(e) {
+    if (!disposed && fileId===props.fileId && libraryId===libConfig._libraryId) editError.value=String(e);
+  } finally { preparing.value=false; }
+}
+function addManual(line: any) { return openAdditions([line],line.anchor); }
+function mergeRegion(extraction: any) { return openAdditions(extraction.lines,undefined,extraction); }
 watch(() => [props.x,props.y,props.zoom,props.rotate,props.width,props.height,props.ready], async () => {
   await nextTick();
   if (editor.value?.fileId === props.fileId && props.ready) {

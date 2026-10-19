@@ -5,20 +5,21 @@
         <header class="p-3 border-b border-base-content/10 flex items-center justify-between"><h2 class="font-semibold">{{ inline ? t('ocr.edit_line', { index: (lineIndex || 0) + 1 }) : t('ocr.edit_title') }}</h2><button class="btn btn-sm btn-ghost" :disabled="busy" :aria-label="t('ocr.dismiss')" @click="requestClose">×</button></header>
         <div class="overflow-auto p-4 space-y-3">
           <p class="text-xs opacity-60">{{ t('ocr.edit_hint') }}</p>
-          <p v-if="result.annotation" class="text-xs text-primary">{{ t('ocr.edit_provenance', { model: result.annotation.modelName }) }}</p>
+          <p v-if="result.annotation" class="text-xs text-primary">{{ source.lines.length ? t('ocr.edit_provenance', { model: result.annotation.modelName }) : t('ocr.manual_only') }}</p>
           <div v-for="({line,index}) in visibleLines" :key="index" class="rounded-box border border-base-content/10 p-3 space-y-2" :class="line.ignored ? 'opacity-60' : ''">
-            <div class="flex items-center justify-between gap-2"><label class="text-xs flex items-center gap-2"><input v-model="line.ignored" type="checkbox" class="checkbox checkbox-xs" :disabled="busy || stale" />{{ t('ocr.ignore_line') }}</label><button class="btn btn-xs btn-ghost" :disabled="busy || stale" @click="restoreLine(index)">{{ t('ocr.restore_line') }}</button></div>
+            <div class="flex items-center justify-between gap-2"><label class="text-xs flex items-center gap-2"><input v-model="line.ignored" type="checkbox" class="checkbox checkbox-xs" :disabled="busy || stale" />{{ t('ocr.ignore_line') }}</label><button class="btn btn-xs btn-ghost" :disabled="busy || stale" @click="restoreLine(index)">{{ t(source.lines[index] ? 'ocr.restore_line' : 'ocr.remove_added') }}</button></div>
             <textarea ref="textInputs" v-model="line.text" class="textarea textarea-bordered w-full text-sm select-text" rows="2" maxlength="65536" :disabled="busy || stale || line.ignored" :aria-label="t('ocr.edit_line', { index: index + 1 })" @keydown.stop></textarea>
-            <details class="text-xs opacity-60"><summary class="cursor-pointer">{{ t('ocr.model_original') }}</summary><p class="whitespace-pre-wrap select-text">{{ source.lines[index]?.text }}</p></details>
+            <details v-if="source.lines[index]" class="text-xs opacity-60"><summary class="cursor-pointer">{{ t('ocr.model_original') }}</summary><p class="whitespace-pre-wrap select-text">{{ source.lines[index].text }}</p></details>
+            <p v-else class="text-xs text-primary">{{ t('ocr.manual_line') }}</p>
           </div>
           <p v-if="!lines.length" class="text-sm opacity-60">{{ t('ocr.empty') }}</p>
           <p v-if="stale" role="alert" class="text-sm text-warning">{{ t('ocr.edit_stale') }}</p>
           <p v-if="error" role="alert" class="text-sm text-error whitespace-pre-wrap break-words">{{ error }}</p>
         </div>
         <footer class="p-4 border-t border-base-content/10 flex flex-wrap items-center gap-2">
-          <button v-if="result.annotation && !inline" class="btn btn-sm btn-ghost text-warning" :disabled="busy || stale" @click="reset">{{ t('ocr.reset_manual') }}</button>
+          <button v-if="result.annotation && !inline && !additions?.length" class="btn btn-sm btn-ghost text-warning" :disabled="busy || stale" @click="reset">{{ t('ocr.reset_manual') }}</button>
           <button class="btn btn-sm ml-auto" :disabled="busy" @click="emit('close')">{{ t('ocr.cancel_edit') }}</button>
-          <button class="btn btn-sm btn-primary min-w-24" :disabled="busy || stale" @click="save"><span v-if="busy" class="loading loading-spinner loading-xs"></span>{{ t('ocr.save_edit') }}</button>
+          <button class="btn btn-sm btn-primary min-w-24" :disabled="busy || stale || !canSave" @click="save"><span v-if="busy" class="loading loading-spinner loading-xs"></span>{{ t('ocr.save_edit') }}</button>
         </footer>
       </section>
     </div>
@@ -34,15 +35,20 @@ import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
 import { annotationEditorPosition } from '@/common/annotationUi';
 import { pendingChanges } from '@/common/pendingChanges';
-const props = defineProps<{ fileId: number; libraryId: string; result: any; lineIndex?: number; anchor?: { left: number; top: number; bottom: number }; currentFileId?: number }>();
+const props = defineProps<{ fileId: number; libraryId: string; result: any; lineIndex?: number; anchor?: { left: number; top: number; bottom: number }; currentFileId?: number; additions?: Array<{text: string; bounds: number[]}> }>();
 const emit = defineEmits(['close','saved']);
 const { t } = useI18n(), ui = useUIStore();
 // Snapshot ownership is independent from the current model's future line numbers.
 const source = JSON.parse(JSON.stringify(props.result.annotation?.source || props.result.modelDocument || props.result.document));
-const lines = ref<Array<{ text: string; ignored: boolean }>>(props.result.annotation ? JSON.parse(JSON.stringify(props.result.annotation.lines)) : source.lines.map((line: any) => ({ text: line.text, ignored: false })));
+const lines = ref<Array<{ text: string; ignored: boolean; bounds?: number[] }>>(props.result.annotation ? JSON.parse(JSON.stringify(props.result.annotation.lines)) : source.lines.map((line: any) => ({ text: line.text, ignored: false })));
 const baseline = JSON.stringify(lines.value);
+const addedFrom = lines.value.length;
+// Capture the baseline BEFORE inserting additions so even an untouched new box
+// is protected when closing the editor or the application.
+lines.value.push(...(props.additions || []).map(line => ({ text: line.text, bounds: [...line.bounds], ignored: false })));
+const canSave = computed(() => !props.additions?.length || lines.value.some((line,index) => index >= addedFrom && !line.ignored && !!line.text.trim()));
 const inline = computed(() => Number.isSafeInteger(props.lineIndex));
-const visibleLines = computed(() => lines.value.map((line,index) => ({line,index})).filter(({index}) => !inline.value || index === props.lineIndex));
+const visibleLines = computed(() => lines.value.map((line,index) => ({line,index})).filter(({index}) => inline.value ? index === props.lineIndex : !props.additions?.length || index >= addedFrom));
 const panel = ref<HTMLElement | null>(null), textInputs = ref<HTMLTextAreaElement[]>([]);
 const viewport = ref({ width: typeof window === 'undefined' ? 1000 : window.innerWidth, height: typeof window === 'undefined' ? 800 : window.innerHeight });
 const panelHeight = ref(300);
@@ -54,19 +60,23 @@ const profile = props.result.profile, revision = props.result.annotation?.revisi
 const handler = `OcrTextEditor-${crypto.randomUUID()}`;
 let disposed = false;
 const stops: Array<() => void> = [];
-function restoreLine(index: number) { lines.value[index] = { text: source.lines[index].text, ignored: false }; }
+function restoreLine(index: number) {
+  if (source.lines[index]) lines.value[index] = { text: source.lines[index].text, ignored: false };
+  else if (lines.value[index]) lines.value[index].ignored = true;
+}
 function validContext() { return !disposed && !stale.value && props.libraryId === libConfig._libraryId && (props.currentFileId === undefined || props.currentFileId === props.fileId) && (!config.settings.ai?.ocrProfile || profile === config.settings.ai.ocrProfile); }
 async function requestClose() {
   if (busy.value) return false;
-  if (JSON.stringify(lines.value) !== baseline && !await ask(t('ocr.discard_draft'), { kind: 'warning' })) return false;
-  if (disposed || busy.value) return false;
+  const snapshot=JSON.stringify(lines.value);
+  if (snapshot !== baseline && !await ask(t('ocr.discard_draft'), { kind: 'warning' })) return false;
+  if (disposed || busy.value || snapshot!==JSON.stringify(lines.value)) return false;
   emit('close'); return true;
 }
 async function save() {
-  if (!validContext() || busy.value) return;
+  if (!validContext() || busy.value || !canSave.value) return;
   busy.value = true; error.value = '';
   try {
-    await invoke('save_ocr_text', { libraryId: props.libraryId, fileId: props.fileId, profile, expectedRevision: revision, sourceKey, lines: lines.value.map(line => ({ text: line.text, ignored: line.ignored })) });
+    await invoke('save_ocr_text', { libraryId: props.libraryId, fileId: props.fileId, profile, expectedRevision: revision, sourceKey, manualSourceKey: props.result.manualSourceKey, lines: lines.value.map(line => ({ text: line.text, ignored: line.ignored, ...(line.bounds ? {bounds:line.bounds} : {}) })) });
     if (!disposed) emit('saved');
   } catch (e) { if (!disposed) error.value = String(e); }
   finally { busy.value = false; }

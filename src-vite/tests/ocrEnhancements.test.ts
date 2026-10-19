@@ -7,23 +7,25 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { ocrSelectionRect, ocrAutomationReady, ocrSourceLineIndex } from '../src/common/ocrUi.ts';
+import { ocrSelectionRect, ocrAutomationReady, ocrSourceLineIndex, ocrManualAdditions } from '../src/common/ocrUi.ts';
 import { annotationEditorPosition } from '../src/common/annotationUi.ts';
 const read=(name:string)=>readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');
 const locale=JSON.parse(readFileSync(new URL('../src/locales/zh-CN.json',import.meta.url),'utf8'));
 const t=(key:string)=>key.split('.').reduce((value,key)=>value?.[key],locale)||key;
 const tick=async()=>{await Vue.nextTick();await new Promise(resolve=>setImmediate(resolve));};
 function regionHarness(invoke:any=async()=>({document:{text:'one\ntwo',lines:[{text:'one'},{text:'two'}]}})) {
-  const calls:any[]=[],mounted:any[]=[],unmount:any[]=[],listeners:any={},copied:string[]=[];
+  const calls:any[]=[],mounted:any[]=[],unmount:any[]=[],listeners:any={},copied:string[]=[],events:any[]=[];
   const ctx:any={...Vue,crypto:{randomUUID},ocrSelectionRect,ocrBusy:Vue.ref(false),navigator:{clipboard:{writeText:async(text:string)=>copied.push(text)}},useI18n:()=>({t}),useUIStore:()=>({removeInputHandler(){},pushInputHandler(){}}),
+    defineEmits:()=> (...args:any[])=>events.push(args),defineExpose:()=>{},
+    DOMPoint:class { x:number;y:number;constructor(x:number,y:number){this.x=x;this.y=y;} matrixTransform(matrix:any){return matrix.transform(this.x,this.y);} },
     props:Vue.reactive({fileId:7,fileVersion:1,width:1000,height:800,x:0,y:0,zoom:1,rotate:0,ready:true}),
     config:Vue.reactive({settings:{ai:{ocrProfile:'model-a'}}}),libConfig:Vue.reactive({_libraryId:'library-a'}),
     defineProps:()=>ctx.props,onMounted:(cb:any)=>mounted.push(cb),onBeforeUnmount:(cb:any)=>unmount.push(cb),listen:async(name:string,cb:any)=>{listeners[name]=cb;return()=>delete listeners[name];},
     invoke:async(...args:any[])=>{calls.push(args);return invoke(...args);},
   };
   const script=stripTypeScriptTypes(read('OcrRegionTool').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'');
-  const scope=Vue.effectScope();const api:any=scope.run(()=>runInNewContext(`${script};({recognize,output,selected,copy,busy,error,close,rotation})`,ctx));
-  return{ctx,api,calls,copied,listeners,mount:async()=>{for(const cb of mounted)await cb();},dispose:()=>{unmount.forEach(cb=>cb());scope.stop();}};
+  const scope=Vue.effectScope();const api:any=scope.run(()=>runInNewContext(`${script};({recognize,output,selected,copy,busy,error,close,rotation,merge,toggleSelection,begin,move,finish,canvas,mode,selecting})`,ctx));
+  return{ctx,api,calls,copied,events,listeners,mount:async()=>{for(const cb of mounted)await cb();},dispose:()=>{unmount.forEach(cb=>cb());scope.stop();}};
 }
 test('region selection clamps to the source and supports dragging in any direction',()=>{
   assert.deepEqual(ocrSelectionRect({x:.8,y:.9},{x:.2,y:.3})?.map(n=>Number(n.toFixed(3))),[.2,.3,.6,.6]);
@@ -59,18 +61,62 @@ test('temporary direction override is explicit and never modifies global model c
   h.api.rotation.value='model';await h.api.recognize([0,0,1,1]);assert.equal(h.calls.filter(([name])=>name==='extract_ocr_region')[1][1].rotation,null);h.dispose();
 });
 
-function editorHarness(annotation:any=null) {
-  const calls:any[]=[],events:any[]=[],listeners:any={},mounts:any[]=[],unmounts:any[]=[];
+function editorHarness(annotation:any=null, extra:any={}) {
+  const calls:any[]=[],events:any[]=[],listeners:any={},mounts:any[]=[],unmounts:any[]=[],guards:any[]=[];
   const source={text:'one\ntwo',lines:[{text:'one',bounds:[0,0,.5,.5]},{text:'two',bounds:[0,.5,.5,.5]}]};
-  const ctx:any={...Vue,pendingChanges:{register:()=>()=>{}},annotationEditorPosition,defineExpose:()=>{},crypto:{randomUUID},config:Vue.reactive({settings:{ai:{ocrProfile:'model-a'}}}),libConfig:Vue.reactive({_libraryId:'library-a'}),
-    props:{fileId:7,libraryId:'library-a',result:{profile:'model-a',sourceKey:'x'.repeat(64),document:source,modelDocument:source,annotation}},
+  const ctx:any={...Vue,pendingChanges:{register:(_id:any,guard:any)=>{guards.push(guard);return()=>{};}},annotationEditorPosition,defineExpose:()=>{},crypto:{randomUUID},config:Vue.reactive({settings:{ai:{ocrProfile:'model-a'}}}),libConfig:Vue.reactive({_libraryId:'library-a'}),
+    props:{fileId:7,libraryId:'library-a',result:{profile:'model-a',sourceKey:'x'.repeat(64),document:source,modelDocument:source,annotation},...extra},
     useI18n:()=>({t}),useUIStore:()=>({pushInputHandler(){},removeInputHandler(){}}),defineProps:()=>ctx.props,defineEmits:()=> (...args:any[])=>events.push(args),
     invoke:async(...args:any[])=>calls.push(args),ask:async()=>true,listen:async(name:string,cb:any)=>{listeners[name]=cb;return()=>delete listeners[name];},onMounted:(cb:any)=>mounts.push(cb),onBeforeUnmount:(cb:any)=>unmounts.push(cb),
   };
   const script=stripTypeScriptTypes(read('OcrTextEditor').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'');
   const scope=Vue.effectScope();const api:any=scope.run(()=>runInNewContext(`${script};({save,reset,lines,stale,restoreLine,source,visibleLines,requestClose})`,ctx));
-  return{ctx,api,calls,events,listeners,mount:async()=>{for(const cb of mounts)await cb();},dispose:()=>{unmounts.forEach(cb=>cb());scope.stop();}};
+  return{ctx,api,calls,events,listeners,guards,mount:async()=>{for(const cb of mounts)await cb();},dispose:()=>{unmounts.forEach(cb=>cb());scope.stop();}};
 }
+test('manual drawing transforms rotated/zoomed pointer coordinates and never invokes a model',async()=>{
+  const h=regionHarness();h.api.canvas.value={getScreenCTM:()=>({inverse:()=>({transform:(x:number,y:number)=>({x:(y-20)/2,y:(1000-x)/2})})}),setPointerCapture(){},hasPointerCapture:()=>true,releasePointerCapture(){},focus(){}};
+  h.api.toggleSelection('manual');h.api.begin({button:0,pointerId:1,clientX:900,clientY:220});
+  await h.api.finish({pointerId:1,clientX:500,clientY:620});
+  assert.equal(h.calls.length,0);assert.equal(h.events[0][0],'add');
+  assert.deepEqual(Array.from(h.events[0][1].bounds,(n:any)=>Number(n.toFixed(4))),[.1,.0625,.2,.25]);
+  assert.equal(h.events[0][1].anchor.left,500);h.dispose();
+});
+test('regional merge is explicit, uses selected original-photo boxes and carries the source version',async()=>{
+  const lines=[{text:'one',bounds:[.1,.2,.3,.1]},{text:'two',bounds:[.4,.5,.3,.1]}];
+  const h=regionHarness(async()=>({profile:'model-a',sourceVersion:'v1',document:{text:'one\ntwo',lines}}));
+  await h.api.recognize([.1,.2,.7,.5]);assert.equal(h.events.length,0);h.api.selected.value[1]=false;h.api.merge();
+  assert.equal(h.events[0][0],'merge');assert.equal(h.events[0][1].sourceVersion,'v1');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.events[0][1].lines)),[lines[0]]);
+  assert.equal(h.calls.some(([name])=>name==='save_ocr_text'),false);h.dispose();
+});
+test('added boxes are dirty immediately, preserve bounds on save and are removable without changing source lines',async()=>{
+  const h=editorHarness(null,{additions:[{text:'missed',bounds:[.2,.3,.5,.1]}],lineIndex:2});await h.mount();
+  assert.equal(h.guards[0].dirty(),true);assert.equal(h.api.visibleLines.value.length,1);assert.equal(h.api.visibleLines.value[0].index,2);
+  h.ctx.ask=async()=>false;assert.equal(await h.api.requestClose(),false);assert.equal(h.events.length,0);
+  await h.api.save();assert.deepEqual(Array.from(h.calls[0][1].lines[2].bounds),[.2,.3,.5,.1]);
+  assert.equal(h.ctx.props.result.modelDocument.lines.length,2);h.api.restoreLine(2);assert.equal(h.api.lines.value[2].ignored,true);h.dispose();
+});
+test('an unrecognized photo can save a manual seed without starting OCR or downloading a model',async()=>{
+  const empty={text:'',lines:[],imageWidth:1000,imageHeight:800};
+  const h=editorHarness(null,{result:{profile:'model-a',sourceKey:'seed',manualSourceKey:'photo-version',document:empty,modelDocument:empty},additions:[{text:'',bounds:[.1,.2,.3,.1]}]});
+  await h.api.save();assert.equal(h.calls.length,0);h.api.lines.value[0].text='manual 中文';await h.api.save();
+  assert.equal(h.calls[0][0],'save_ocr_text');assert.equal(h.calls[0][1].manualSourceKey,'photo-version');
+  assert.equal(h.calls.some(([name])=>name==='start_ocr_index'||name==='download_ai_model'),false);h.dispose();
+});
+test('persisted manual lines remain editable after omitted rows and retain all appended geometry',()=>{
+  const source={lines:[{text:'ignored original',bounds:[0,0,.5,.2]}]};
+  const result={annotation:{source,lines:[{text:'ignored original',ignored:true},{text:'new',ignored:false,bounds:[.1,.3,.5,.1]}]},document:{lines:[{text:'new',bounds:[.1,.3,.5,.1]}]}};
+  assert.equal(ocrSourceLineIndex(result,0),1);
+  const h=editorHarness(result.annotation,{lineIndex:1});h.api.lines.value[1].text='corrected';assert.deepEqual(Array.from(h.api.lines.value[1].bounds),[.1,.3,.5,.1]);h.dispose();
+});
+test('merging already-present regional lines is idempotent without suppressing distinct boxes or corrected text',()=>{
+  const line={text:'invoice',bounds:[.1,.2,.3,.1]},other={text:'invoice',bounds:[.6,.2,.3,.1]};
+  assert.equal(ocrManualAdditions({document:{lines:[line]}},[line]).length,0);
+  assert.equal(ocrManualAdditions({document:{lines:[line]}},[other]).length,1);
+  assert.equal(ocrManualAdditions({document:{lines:[line]}},[{...line,text:'corrected'}]).length,1);
+  assert.equal(ocrManualAdditions({document:{lines:[]}},[line,line]).length,1);
+  assert.equal(ocrManualAdditions({},[{text:'bad',bounds:[.9,0,.5,1]}]).length,0);
+});
 test('human edit saves only text/ignore overrides with optimistic source and revision guards',async()=>{
   const h=editorHarness();h.api.lines.value[0].text='correct';h.api.lines.value[1].ignored=true;await h.api.save();
   assert.equal(h.calls[0][0],'save_ocr_text');assert.equal(h.calls[0][1].sourceKey,'x'.repeat(64));assert.equal(h.calls[0][1].expectedRevision,'');

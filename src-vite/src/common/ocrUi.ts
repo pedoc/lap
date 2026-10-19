@@ -48,12 +48,32 @@ export function ocrSourceLineIndex(result: any, displayedIndex: number): number 
   if (!visible) return null;
   if (!result.annotation) return displayedIndex;
   const source = result.annotation.source?.lines, edits = result.annotation.lines;
-  if (!Array.isArray(source) || !Array.isArray(edits) || source.length !== edits.length) return null;
+  if (!Array.isArray(source) || !Array.isArray(edits) || source.length > edits.length) return null;
   const indices = edits.map((edit: any, index: number) => ({ edit, index }))
     .filter(({ edit }: any) => !edit.ignored && String(edit.text || '').trim().length > 0);
   const selected = indices[displayedIndex];
-  if (!selected || selected.edit.text !== visible.text || JSON.stringify(source[selected.index]?.bounds) !== JSON.stringify(visible.bounds)) return null;
+  const bounds = selected && (source[selected.index]?.bounds || selected.edit.bounds);
+  if (!selected || selected.edit.text !== visible.text || JSON.stringify(bounds) !== JSON.stringify(visible.bounds)) return null;
   return selected.index;
+}
+
+// Region extraction already returns original-photo coordinates. Do not crop or
+// scale them a second time, and do not insert the same visible line twice.
+export function ocrManualAdditions(result: any, candidates: Array<{ text: string; bounds: number[] }>) {
+  const known = [...(result?.document?.lines || [])];
+  return candidates.filter(line => {
+    const b = line.bounds;
+    if (!Array.isArray(b) || b.length !== 4 || !b.every(Number.isFinite) || b[0] < 0 || b[1] < 0 || b[2] <= 0 || b[3] <= 0 || b[0]+b[2] > 1.000001 || b[1]+b[3] > 1.000001) return false;
+    const duplicate = known.some((other: any) => {
+      const a = other.bounds;
+      if (line.text.trim() !== String(other.text || '').trim() || !Array.isArray(a)) return false;
+      const intersection = Math.max(0,Math.min(a[0]+a[2],b[0]+b[2])-Math.max(a[0],b[0])) * Math.max(0,Math.min(a[1]+a[3],b[1]+b[3])-Math.max(a[1],b[1]));
+      return intersection / (a[2]*a[3]+b[2]*b[3]-intersection) >= .7;
+    });
+    if (duplicate) return false;
+    known.push(line);
+    return true;
+  }).map(line => ({text:line.text, bounds:[...line.bounds]}));
 }
 
 // A specific sidebar filter already communicates the OCR state. Only mixed

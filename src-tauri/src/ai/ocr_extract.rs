@@ -54,6 +54,7 @@ fn restore_crop(mut document: Document, crop: [u32; 4], source: (u32, u32)) -> D
 pub struct Extraction {
     pub document: Document,
     pub profile: String,
+    pub source_version: String,
 }
 #[tauri::command]
 pub async fn cancel_ocr_extraction(library_id: String, request_id: String) -> Result<(), String> {
@@ -105,7 +106,7 @@ pub async fn extract_ocr_region(
         check()?; source.verify()?;
         let current=source_on(&*crate::t_sqlite::open_conn()?,file_id)?;
         if current.path!=source.path || current.modified!=source.modified || current.size!=source.size { return Err("Photo changed during extraction; retry".into()); }
-        Ok(Extraction{document,profile:model.profile()})
+        Ok(Extraction{document,profile:model.profile(),source_version:source.stamp_key()?})
     }).await.map_err(|e|e.to_string())?
 }
 #[cfg(test)]

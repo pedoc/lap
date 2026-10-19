@@ -6,7 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript, compileTemplate } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { OCR_STATES, normalizeOcrState, ocrThumbnailPresentation, textSegments, ocrFrameStyle, ocrGeometryCompatible, ocrSelectionIds, ocrSourceLineIndex } from '../src/common/ocrUi.ts';
+import { OCR_STATES, normalizeOcrState, ocrThumbnailPresentation, textSegments, ocrFrameStyle, ocrGeometryCompatible, ocrSelectionIds, ocrSourceLineIndex, ocrManualAdditions } from '../src/common/ocrUi.ts';
 import { SIDEBAR } from '../src/common/constants.ts';
 const read = (name: string) => readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
 const cn = JSON.parse(readFileSync(new URL('../src/locales/zh-CN.json', import.meta.url), 'utf8'));
@@ -70,7 +70,7 @@ test('task banner persists scope and saved-stop feedback away from OCR and hides
 });
 function overlayHarness(invoke: any) {
   const watches: any[] = [], mounts: any[] = [], unmounts: any[] = [], events: any = {}, located: any[] = [];
-  const ctx: any = { ...baseContext(null), ocrFocus: Vue.ref(null), ocrShowBoxes: Vue.ref(false), ocrFrameStyle, ocrGeometryCompatible, ocrSourceLineIndex,
+  const ctx: any = { ...baseContext(null), ocrFocus: Vue.ref(null), ocrShowBoxes: Vue.ref(false), ocrFrameStyle, ocrGeometryCompatible, ocrSourceLineIndex, ocrManualAdditions,
     props: Vue.reactive({ fileId: 7, fileVersion: 1, width: 1000, height: 800, zoom: 1, ready: true }),
     invoke, defineProps: () => ctx.props, defineEmits: () => (_name: string, bounds: any) => located.push(bounds),
     watch: (...args: any[]) => { watches.push(args); return (Vue.watch as any)(...args); },
@@ -80,7 +80,7 @@ function overlayHarness(invoke: any) {
   ctx.libConfig = Vue.reactive(ctx.libConfig); ctx.config = Vue.reactive(ctx.config);
   const source = stripTypeScriptTypes(read('OcrImageOverlay').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${source};({document,focusLine,compatible,openLineEditor,setLineElement,editor,editorRef,editorSaved,selectedLine})`, ctx));
+  const api: any = scope.run(() => runInNewContext(`${source};({document,focusLine,compatible,openLineEditor,setLineElement,editor,editorRef,editorSaved,selectedLine,addManual,mergeRegion,preparing,editError,regionTool})`, ctx));
   return { ctx, api, events, located, mount: async () => { for (const cb of mounts) await cb(); }, dispose: () => { unmounts.forEach(cb => cb()); scope.stop(); } };
 }
 test('overlay ignores stale photo responses and clears private OCR text before refetching', async () => {
@@ -115,6 +115,28 @@ test('clicking an OCR frame opens guarded inline editing without zooming and pro
   h.ctx.props.ready = false; await h.api.openLineEditor(1); assert.equal(h.api.editor.value, original);
   assert.match(read('OcrImageOverlay'), /@click\.stop="openLineEditor\(index\)"/);
   h.dispose();
+});
+test('manual add prepares a fresh source snapshot and opens beside the new box without recognition',async()=>{
+  const calls:any[]=[],empty={text:'',lines:[],imageWidth:1000,imageHeight:800};let closed=0;
+  const h=overlayHarness(async(command:string,args:any)=>{calls.push([command,args]);return{profile:'model-a',sourceKey:'seed',sourceVersion:'v1',manualSourceKey:'v1',document:empty,modelDocument:empty};});await tick();
+  h.api.regionTool.value={close:()=>closed++};await h.api.addManual({text:'',bounds:[.1,.2,.4,.1],anchor:{left:20,top:30,bottom:50}});
+  assert.equal(calls.at(-1)[0],'prepare_ocr_manual');assert.equal(h.api.editor.value.lineIndex,0);assert.equal(h.api.editor.value.result.manualSourceKey,'v1');
+  assert.equal(h.api.editor.value.additions.length,1);assert.equal(closed,1);assert.equal(calls.some(([name])=>name==='save_ocr_text'||name==='start_ocr_index'),false);h.dispose();
+});
+test('a regional merge cannot cross a changed source, and a cancelled previous draft remains untouched',async()=>{
+  const empty={text:'',lines:[],imageWidth:1000,imageHeight:800};
+  const h=overlayHarness(async()=>({profile:'model-a',sourceVersion:'new-version',sourceKey:'seed',document:empty,modelDocument:empty}));await tick();
+  await h.api.mergeRegion({profile:'model-a',sourceVersion:'old-version',lines:[{text:'old private',bounds:[.1,.1,.4,.1]}]});
+  assert.equal(h.api.editor.value,undefined);assert.ok(h.api.editError.value);
+  const draft={fileId:7};h.api.editor.value=draft;h.api.editorRef.value={requestClose:async()=>false};
+  await h.api.addManual({text:'',bounds:[.1,.1,.4,.1]});assert.equal(h.api.editor.value.fileId,7);assert.equal(h.api.editor.value.additions,undefined);h.dispose();
+});
+test('late manual preparation does not show an editor for a different photo',async()=>{
+  let resolve:any;const empty={text:'',lines:[],imageWidth:1000,imageHeight:800};
+  const h=overlayHarness(async(command:string)=>command==='prepare_ocr_manual'?new Promise(r=>resolve=r):{document:empty});await tick();
+  const pending=h.api.addManual({text:'',bounds:[.1,.1,.4,.1]});h.ctx.props.fileId=8;await tick();
+  resolve({profile:'model-a',sourceKey:'seed',document:empty,modelDocument:empty});await pending;
+  assert.equal(h.api.editor.value,undefined);assert.equal(h.api.preparing.value,false);h.dispose();
 });
 
 function refreshHarness(options: any = {}) {
