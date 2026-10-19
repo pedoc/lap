@@ -527,6 +527,18 @@ async fn install_with_client(
 mod directory_tests {
     use super::*;
     #[test]
+    fn download_cancellation_rejects_an_old_job_for_the_same_model() {
+        let _lock = DOWNLOAD_LOCK.try_lock().unwrap();
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        *CANCEL.lock().unwrap() = Some(("model".into(), "new-job".into(), tx));
+        let _guard = DownloadCancellation;
+        assert!(cancel("model", Some("old-job")).is_err());
+        assert!(cancel("other-model", Some("new-job")).is_err());
+        assert!(!*rx.borrow());
+        cancel("model", Some("new-job")).unwrap();
+        assert!(*rx.borrow());
+    }
+    #[test]
     fn download_snapshots_preserve_terminal_details_and_reset_for_a_new_job() {
         let mut state = DownloadState::default();
         let first = state.update(

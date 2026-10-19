@@ -44,4 +44,7 @@ test('native close and Quit paths cannot directly bypass the frontend approval b
   assert.doesNotMatch(main,/other_window.close\(\)/);
   const adapter=readFileSync(new URL('../src/common/desktopClose.ts',import.meta.url),'utf8');
   assert.match(adapter,/coordinateClose/);assert.match(adapter,/getAllWebviewWindows/);assert.match(adapter,/120_000/);
+  const updater=readFileSync(new URL('../src/common/updater.ts',import.meta.url),'utf8');
+  assert.match(updater,/invoke\('request_app_restart'\)/);assert.doesNotMatch(updater,/await relaunch\(/);
+  assert.match(main,/t_window_exit::request_app_restart/);
 });

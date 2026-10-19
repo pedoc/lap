@@ -11003,9 +11003,8 @@ async function openImageViewer(
         videoRef.value?.pause();  // pause video playing in preview pane
       });
 
-      imageWindow.once('tauri://close-requested', () => {
+      imageWindow.once('tauri://destroyed', () => {
         isImageViewerWindowOpen.value = false;
-        imageWindow?.close();
       });
 
       imageWindow.once('tauri://error', (e) => {

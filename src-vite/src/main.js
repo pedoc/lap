@@ -18,6 +18,7 @@ import { applyAiConfiguration } from '@/common/aiModels'
 import { applyMapServices, migrateLegacyMapServices } from '@/common/mapServices'
 import { fileInfoRevision } from '@/common/fileInfoRefresh'
 import { installDesktopCloseProtection } from '@/common/desktopClose'
+import { clearIndexRecoveryInfo } from '@/common/api'
 
 // I18n
 import en from '@/locales/en.json'
@@ -148,8 +149,26 @@ app.config.globalProperties.$invoke = invoke
 app.use(router)
 app.use(i18n)
 
+// Cleanup belongs to the approved exit transaction, never an independent close
+// listener: cancelling a draft dialog must not pause scans or clear recovery.
+async function flushAppStateBeforeExit() {
+  if (!faceLibrary._initialized) return;
+  const previous = faceLibrary.index.status;
+  if (previous === 1) faceLibrary.index.status = 2;
+  try {
+    await faceLibrary.save({ throwOnError: true });
+    await clearIndexRecoveryInfo();
+  } catch (error) {
+    if (previous === 1 && faceLibrary.index.status === 2) {
+      faceLibrary.index.status = previous;
+      await faceLibrary.save().catch(() => {});
+    }
+    throw error;
+  }
+}
+
 // Mount the app
-installDesktopCloseProtection(key => i18n.global.t(key)).then(() => app.mount('#app')).catch(error => {
+installDesktopCloseProtection(key => i18n.global.t(key), flushAppStateBeforeExit).then(() => app.mount('#app')).catch(error => {
   console.error('Window close protection could not be initialized', error);
   app.mount('#app');
 });

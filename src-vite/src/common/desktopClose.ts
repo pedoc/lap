@@ -6,7 +6,7 @@ import { pendingChanges, coordinateClose } from './pendingChanges';
 import { objectEdit, hasObjectEditChanges } from './objectEditing';
 import { useToast } from './toast';
 
-export async function installDesktopCloseProtection(t: (key: string) => string) {
+export async function installDesktopCloseProtection(t: (key: string) => string, beforeExit: () => Promise<void> = async () => {}) {
   const window = getCurrentWebviewWindow(), label = window.label;
   const tokens = new Map<string, NonNullable<Awaited<ReturnType<typeof pendingChanges.prepare>>>>();
   const cancelled = new Set<string>();
@@ -74,6 +74,8 @@ export async function installDesktopCloseProtection(t: (key: string) => string) 
         release: () => emitTo(target, 'app-close-check', { requestId: id, stage: 'release' }),
       });
       committed = await coordinateClose(participants, async () => {
+        await beforeExit();
+        for (const participant of participants) if (!await participant.validate()) throw new Error('A draft changed before exit');
         const now = await getAllWebviewWindows();
         if (now.some(item => !labels.includes(item.label))) throw new Error('A window was opened during exit confirmation');
         await invoke('confirm_app_exit', { requestId: id });

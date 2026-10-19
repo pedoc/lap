@@ -228,7 +228,7 @@ export const useLibraryStore = defineStore('libraryStore', {
       }
     },
 
-    async save() {
+    async save(options = {}) {
       if (this._libraryId && this._initialized) {
         try {
           // These panels now obtain their counts from live grouped aggregates.
@@ -292,6 +292,7 @@ export const useLibraryStore = defineStore('libraryStore', {
           lastSavedPayloads.set(this._libraryId, payload);
         } catch (error) {
           console.error('Failed to save library state:', error);
+          if (options.throwOnError) throw error;
         }
       }
     },

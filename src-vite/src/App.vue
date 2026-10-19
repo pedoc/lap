@@ -18,7 +18,6 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useConfigStore } from '@/stores/configStore';
 import { useLibraryStore } from '@/stores/libraryStore';
 import { useUIStore } from '@/stores/uiStore';
-import { clearIndexRecoveryInfo } from '@/common/api';
 import { isMac, setTheme, SCALE_VALUES } from '@/common/utils';
 import { matchesShortcut } from '@/common/shortcuts';
 import ToastContainer from '@/components/ToastContainer.vue';
@@ -30,8 +29,6 @@ useOcrActivity();
 const libConfig = useLibraryStore();
 const isReady = ref(false);
 const config = useConfigStore();
-let unlistenMainCloseRequested = null;
-let isHandlingMainClose = false;
 
 // Auto-save library state when any config changes
 watch(() => libConfig.$state, () => {
@@ -57,52 +54,6 @@ onMounted(async () => {
     applyMainWindowScale(Number(config.settings.scale || 1));
     if (import.meta.env.PROD) {
       window.addEventListener('contextmenu', handleContextMenu);
-    }
-    if (typeof win.onCloseRequested === 'function') {
-      unlistenMainCloseRequested = await win.onCloseRequested(async (event) => {
-        if (isHandlingMainClose) return;
-        isHandlingMainClose = true;
-
-        try {
-          event.preventDefault();
-
-          if (isMac) {
-            // macOS convention: close hides the window; the app stays alive and
-            // can be reopened from the Dock. Quitting still uses the native menu.
-            await win.hide();
-            return;
-          }
-
-          try {
-            if (libConfig._initialized) {
-              // Mark scanning as paused so it won't auto-resume on restart
-              if (libConfig.index.status === 1) {
-                libConfig.index.status = 2;
-              }
-              // Normal close → clear recovery trace (crash leaves it intact)
-              await clearIndexRecoveryInfo();
-              await libConfig.save();
-            }
-          } finally {
-            await win.close();
-          }
-        } finally {
-          isHandlingMainClose = false;
-        }
-      });
-    } else {
-      unlistenMainCloseRequested = await win.listen('tauri://close-requested', async () => {
-        if (isMac) {
-          await win.hide();
-        } else if (libConfig._initialized) {
-          // Mark scanning as paused so it won't auto-resume on restart
-          if (libConfig.index.status === 1) {
-            libConfig.index.status = 2;
-          }
-          await clearIndexRecoveryInfo();
-          await libConfig.save();
-        }
-      });
     }
   }
 
@@ -133,8 +84,6 @@ onUnmounted(async () => {
       window.removeEventListener('contextmenu', handleContextMenu);
     }
   }
-  unlistenMainCloseRequested?.();
-  unlistenMainCloseRequested = null;
 });
 
 const handleKeyDown = (event) => {

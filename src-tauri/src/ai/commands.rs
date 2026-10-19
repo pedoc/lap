@@ -272,7 +272,11 @@ pub async fn delete_ai_model(app_handle: AppHandle, model_id: String) -> Result<
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub async fn download_ai_model(app_handle: AppHandle, model_id: String, request_id: Option<String>) -> Result<(), String> {
+pub async fn download_ai_model(
+    app_handle: AppHandle,
+    model_id: String,
+    request_id: Option<String>,
+) -> Result<(), String> {
     let model = settings::snapshot()?
         .catalog()
         .into_iter()

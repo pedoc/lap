@@ -1,6 +1,6 @@
 import { computed, ref, type Ref } from 'vue';
 import { check, type Update, type DownloadEvent } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
+import { invoke } from '@tauri-apps/api/core';
 import { getNetworkProxy, openExternalUrl } from '@/common/api';
 import { useToast, type ToastPlacement } from '@/common/toast';
 
@@ -242,7 +242,7 @@ export function useAppUpdater(localeMsg: Ref<any>, options: AppUpdaterOptions = 
 
     if (isUpdateReadyToRestart.value) {
       try {
-        await relaunch();
+        await invoke('request_app_restart');
       } catch (error: unknown) {
         const message = getErrorMessage(error, localeMsg.value.settings.about.auto_update.failed_install);
         console.error('Failed to relaunch after update:', error);

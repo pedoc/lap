@@ -227,6 +227,7 @@ async fn main() {
             t_window_exit::get_pending_app_exit,
             t_window_exit::cancel_app_exit,
             t_window_exit::confirm_app_exit,
+            t_window_exit::request_app_restart,
             t_drag::start_file_drag,
             t_drag::cancel_file_drag,
             // library
