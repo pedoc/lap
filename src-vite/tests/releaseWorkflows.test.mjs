@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 
 const release = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8');
 const windows = readFileSync(new URL('../../.github/workflows/release-windows.yml', import.meta.url), 'utf8');
+const macosConfig = readFileSync(new URL('../../src-tauri/tauri.macos.conf.json', import.meta.url), 'utf8');
+const windowsConfig = readFileSync(new URL('../../src-tauri/tauri.windows.conf.json', import.meta.url), 'utf8');
 
 function job(source, name) {
   const match = source.match(new RegExp(`^  ${name}:\\r?\\n([\\s\\S]*?)(?=^  [a-z][a-z-]*:|$(?![\\s\\S]))`, 'm'));
@@ -56,4 +58,10 @@ test('Windows publish steps all target the selected release and merge updater pl
   assert.match(publish, /\.platforms\[\$key\] =/);
   assert.match(publish, /merge_entry "windows-x86_64"/);
   assert.match(publish, /merge_entry "windows-aarch64"/);
+});
+
+test('platform bundle configs do not require removed downloaded resources', () => {
+  for (const config of [macosConfig, windowsConfig]) {
+    assert.doesNotMatch(config, /resources\/(models|ffmpeg)\//);
+  }
 });

@@ -18,8 +18,6 @@
       "minimumSystemVersion": "11.0"
     },
     "resources": {
-      "resources/models/*": "models",
-      "resources/ffmpeg/*": "ffmpeg",
       "infoplist/de.lproj/*": "de.lproj",
       "infoplist/en.lproj/*": "en.lproj",
       "infoplist/es.lproj/*": "es.lproj",

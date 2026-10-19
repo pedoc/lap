@@ -13,11 +13,5 @@
         "zoomHotkeysEnabled": true
       }
     ]
-  },
-  "bundle": {
-    "resources": {
-      "resources/models/*": "models",
-      "resources/ffmpeg/*": "ffmpeg"
-    }
   }
 }
