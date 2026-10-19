@@ -189,7 +189,7 @@
       </p>
     </div>
   </template>
-  <template v-else-if="ready && document?.objects?.length">
+  <template v-else-if="ready && document">
     <div
       v-if="showObjectBoxes && compatible"
       class="absolute inset-0 pointer-events-none overflow-hidden"
@@ -217,10 +217,10 @@
               index,
             )
           "
-          :title="name(object.class)"
+          :title="t('objects.correct_box_hint', { name: name(object.class) })"
           :aria-label="name(object.class)"
           @mousedown.stop
-          @dblclick.stop
+          @dblclick.stop="beginCorrection(object.id)"
           @click.stop="focus(object)"
         >
           <span
@@ -237,12 +237,21 @@
       @dblclick.stop
     >
       <button
+        v-if="document.objects.length"
         class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
         :class="showObjectBoxes ? 'text-primary' : ''"
         :aria-pressed="showObjectBoxes"
         @click.stop="showObjectBoxes = !showObjectBoxes"
       >
         {{ t('objects.boxes') }} · {{ document.objects.length }}
+      </button>
+      <button
+        class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
+        :disabled="!canCorrect"
+        :title="loading || !choices.length ? t('objects.loading') : !compatible ? t('objects.geometry') : t('objects.edit_hint')"
+        @click.stop="beginCorrection()"
+      >
+        {{ t('objects.edit') }}
       </button>
       <p
         v-if="showObjectBoxes && !compatible"
@@ -257,7 +266,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
-import { objectFocus, showObjectBoxes } from '@/common/objects';
+import { useObjects, objectFocus, showObjectBoxes } from '@/common/objects';
 import { usePhotoObjects } from '@/common/photoObjects';
 import {
   objectBoxStyle,
@@ -267,6 +276,7 @@ import {
 import {
   objectEdit,
   objectEditActive,
+  startObjectEdit,
   cancelObjectEdit,
   saveObjectEdit,
 } from '@/common/objectEditing';
@@ -284,7 +294,8 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ locate: [bounds: number[]] }>(),
   { t } = useI18n();
-const { result } = usePhotoObjects(() => [
+const { view } = useObjects();
+const { result, loading } = usePhotoObjects(() => [
   Number(props.fileId),
   props.fileVersion,
 ]);
@@ -295,6 +306,17 @@ const document = computed(() => result.value?.document),
   editing = computed(() =>
     objectEditActive(Number(props.fileId)) ? objectEdit.value : null,
   );
+const choices = computed(() => (view.value?.classes || []).filter((choice: any) => choice.supported));
+const canCorrect = computed(() =>
+  props.ready && !loading.value && compatible.value && !!result.value?.sourceKey && choices.value.length > 0,
+);
+function beginCorrection(objectId?: string) {
+  if (!canCorrect.value || editing.value) return;
+  showObjectBoxes.value = true;
+  startObjectEdit(Number(props.fileId), result.value, choices.value, objectId);
+  const selectedBox = editing.value?.boxes.find((box) => box.id === objectId);
+  if (selectedBox) draftClass.value = selectedBox.class.key;
+}
 const name = (label: any) => objectClassName(label, t);
 const active = computed(() =>
   objectFocus.value?.libraryId === libConfig._libraryId &&

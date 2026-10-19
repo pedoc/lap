@@ -108,7 +108,7 @@ function context() {
     objectEdit: Vue.ref(null),
     objectEditActive: (fileId: number) =>
       ctx.objectEdit.value?.fileId === fileId,
-    startObjectEdit: (fileId: number, photo: any, choices: any[]) => {
+    startObjectEdit: (fileId: number, photo: any, choices: any[], objectId?: string) => {
       ctx.objectEdit.value = {
         libraryId: ctx.libConfig._libraryId,
         fileId,
@@ -126,7 +126,7 @@ function context() {
           score: o.score ?? null,
           reviewed: o.reviewed,
         })),
-        selected: [],
+        selected: objectId && photo.document.objects.some((object: any) => object.id === objectId) ? [objectId] : [],
         drawing: false,
         busy: false,
         error: '',
@@ -490,15 +490,84 @@ test('object sidebar category and state navigation are mutually exclusive', () =
 });
 test('human editor opens a shared session carrying the full detection geometry', async () => {
   const ctx = context(),
-    calls: any[] = [];
+    calls: any[] = [], events: any[] = [];
   ctx.invoke = async (...args: any[]) => calls.push(args);
+  ctx.defineEmits = () => (name: string, payload: any) => events.push({ name, payload });
+  ctx.objectFocus.value = { libraryId: 'A', fileId: 7, profile: 'p1', objectId: observation.id };
   const h = script('PhotoObjectInfo', ctx, 'edit,editing');
   h.api.edit();
   assert.equal(ctx.objectEdit.value.fileId, 7);
   assert.equal(ctx.objectEdit.value.sourceKey, 'a'.repeat(64));
   assert.deepEqual(ctx.objectEdit.value.boxes[0].bounds, [0.1, 0.2, 0.3, 0.4]);
   assert.equal(h.api.editing.value, true);
+  assert.equal(ctx.showObjectBoxes.value, true);
+  assert.equal(ctx.objectFocus.value, null, 'opening a correction canvas must not zoom to an old focus');
+  assert.equal(events[0].name, 'focus-object');
+  assert.equal(events[0].payload.fileId, 7);
+  assert.equal(events[0].payload.libraryId, 'A');
+  assert.equal(events[0].payload.profile, 'p1');
+  const content = read('Content');
+  assert.match(content, /@object-focus="!showFilmstripLayout && \(showQuickView = true\)"/);
   h.dispose();
+});
+test('image viewers expose manual correction without the details pane, even for zero detections', async () => {
+  const ctx = context();
+  const props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
+  let html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), props));
+  assert.match(html, /人工修正/);
+  assert.doesNotMatch(html, /disabled/);
+  ctx.result.value.document.objects = [];
+  ctx.result.value.modelDocument.objects = [];
+  html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), props));
+  assert.match(html, /人工修正/);
+  assert.doesNotMatch(html, /disabled/);
+  assert.doesNotMatch(html, /对象标记框/);
+  ctx.result.value.document = null;
+  html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), props));
+  assert.doesNotMatch(html, /人工修正/);
+});
+test('correcting a box opens the existing editor with that box selected and its class active', async () => {
+  const ctx = context();
+  ctx.props = Vue.reactive({ fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false });
+  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,canCorrect,draftClass');
+  assert.equal(h.api.canCorrect.value, true);
+  h.api.beginCorrection(observation.id);
+  assert.equal(ctx.objectEdit.value.fileId, 7);
+  assert.deepEqual([...ctx.objectEdit.value.selected], [observation.id]);
+  assert.equal(h.api.draftClass.value, dog.key);
+  assert.equal(ctx.showObjectBoxes.value, true);
+  assert.match(read('ObjectImageOverlay'), /@dblclick\.stop="beginCorrection\(object\.id\)"/);
+  h.dispose();
+});
+test('manual correction cannot start against an unready or incompatible image', () => {
+  const ctx = context();
+  ctx.props = Vue.reactive({ fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: false, transition: false });
+  const h = script('ObjectImageOverlay', ctx, 'beginCorrection,canCorrect');
+  h.api.beginCorrection();
+  assert.equal(ctx.objectEdit.value, null);
+  ctx.props.ready = true;
+  ctx.props.height = 1000;
+  h.api.beginCorrection();
+  assert.equal(ctx.objectEdit.value, null);
+  ctx.props.height = 800;
+  h.api.beginCorrection();
+  assert.equal(ctx.objectEdit.value.fileId, 7);
+  h.dispose();
+});
+test('shared correction sessions select only existing boxes and permit adding missed detections', () => {
+  const api = commonModule('objectEditing', {
+    ref: Vue.ref, libConfig: { _libraryId: 'A' }, invoke: async () => {},
+  }, 'objectEdit,startObjectEdit');
+  api.startObjectEdit(7, photo(), [dog], observation.id);
+  assert.deepEqual([...api.objectEdit.value.selected], [observation.id]);
+  api.startObjectEdit(7, photo(), [dog], 'missing-box');
+  assert.equal(api.objectEdit.value.selected.length, 0);
+  const empty = photo();
+  empty.document.objects = [];
+  api.startObjectEdit(7, empty, [dog]);
+  assert.equal(api.objectEdit.value.boxes.length, 0);
+  assert.equal(api.objectEdit.value.choices[0].key, dog.key);
+  assert.equal(api.objectEdit.value.sourceKey, empty.sourceKey);
 });
 test('changing the selected photo does not transfer its edit session', async () => {
   const ctx = context(),

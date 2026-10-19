@@ -262,7 +262,16 @@ function focus(object: any) {
 function edit() {
   const data = result.value;
   if (!data?.document) return;
+  objectFocus.value = null;
   startObjectEdit(Number(props.file.id), data, choices.value);
+  showObjectBoxes.value = true;
+  // In grid/list mode the editor has no canvas until the parent opens preview.
+  emit('focus-object', {
+    libraryId: libConfig._libraryId,
+    fileId: Number(props.file.id),
+    profile: data.profile,
+    objectId: '',
+  });
 }
 async function mergeCandidates() {
   const data = result.value;

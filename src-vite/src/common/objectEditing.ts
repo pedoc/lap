@@ -53,6 +53,7 @@ export function startObjectEdit(
   fileId: number,
   photo: any,
   choices: any[],
+  objectId?: string,
 ) {
   const document = photo?.document;
   if (!document?.objects) return;
@@ -93,7 +94,7 @@ export function startObjectEdit(
     truncated: !!document.truncated,
     choices: [...classes.values()],
     boxes,
-    selected: [],
+    selected: typeof objectId === 'string' && boxes.some((box) => box.id === objectId) ? [objectId] : [],
     drawing: false,
     busy: false,
     error: '',
