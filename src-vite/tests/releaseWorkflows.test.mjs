@@ -23,6 +23,7 @@ test('tag releases call Windows only after the shared release has been published
   assert.match(job(release, 'release'), /draft: false/);
   assert.match(job(release, 'signing-preflight'), /TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(job(release, 'build'), /needs: \[setup, signing-preflight\]/);
+  assert.doesNotMatch(job(release, 'signing-preflight'), /grep -q 'untrusted comment:'/);
 });
 
 test('Windows accepts reusable and manual inputs through the shared inputs context', () => {
@@ -40,6 +41,7 @@ test('Windows accepts reusable and manual inputs through the shared inputs conte
   assert.match(job(windows, 'setup'), /"target":"aarch64-pc-windows-msvc"/);
   assert.match(job(windows, 'signing-preflight'), /TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(job(windows, 'build-windows'), /needs: \[setup, signing-preflight\]/);
+  assert.doesNotMatch(job(windows, 'signing-preflight'), /grep -q 'untrusted comment:'/);
 });
 
 test('Windows builds the exact release tag rather than the workflow branch', () => {

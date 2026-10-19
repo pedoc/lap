@@ -67,11 +67,7 @@ jobs:
             echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is missing. Configure the repository Actions secret before publishing."
             exit 1
           fi
-          if ! grep -q 'untrusted comment:' <<< "${TAURI_SIGNING_PRIVATE_KEY}"; then
-            echo "TAURI_SIGNING_PRIVATE_KEY is not a minisign/Tauri private key."
-            exit 1
-          fi
-          echo "Updater signing secrets are present and have the expected key format."
+          echo "Updater signing secrets are present."
   build:
     needs: [setup, signing-preflight]
     runs-on: ${{ matrix.platform }}

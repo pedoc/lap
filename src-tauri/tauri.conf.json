@@ -1,6 +1,6 @@
 {
   "productName": "Lap",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "identifier": "com.julyx10.lap",
   "build": {
     "beforeBuildCommand": "pnpm --dir ../src-vite build",
@@ -67,7 +67,7 @@
       "endpoints": [
         "https://github.com/pedoc/lap/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDczNTZFQ0ExNjE5N0VDMzUKUldRMTdKZGhvZXhXY3cvbXU4a0U3VGI5U25aeE1tVHZGTXJZOHhWeHcwT01WUGNWRDhqaVdXbkgK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYxNTYzMUI2RDA3NEU0NkQKUldSdDVIVFF0akZXWWJ6TkNZbjhsZVQ2THhiNWJ4K2hJeis4VEpCS2t4S3B0YXFlUlBSTm1NL2EK"
     }
   }
 }
