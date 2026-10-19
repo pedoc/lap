@@ -101,19 +101,19 @@ pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         "help_readme" => {
             let _ = opener::open(format!(
                 "{}/blob/main/README.md",
-                option_env!("CARGO_PKG_REPOSITORY").unwrap_or("https://github.com/julyx10/lap")
+                option_env!("CARGO_PKG_REPOSITORY").unwrap_or("https://github.com/pedoc/lap")
             ));
         }
         "help_privacy" => {
             let _ = opener::open(format!(
                 "{}/blob/main/PRIVACY.md",
-                option_env!("CARGO_PKG_REPOSITORY").unwrap_or("https://github.com/julyx10/lap")
+                option_env!("CARGO_PKG_REPOSITORY").unwrap_or("https://github.com/pedoc/lap")
             ));
         }
         "help_report_issue" => {
             let _ = opener::open(format!(
                 "{}/issues",
-                option_env!("CARGO_PKG_REPOSITORY").unwrap_or("https://github.com/julyx10/lap")
+                option_env!("CARGO_PKG_REPOSITORY").unwrap_or("https://github.com/pedoc/lap")
             ));
         }
         _ => {}
