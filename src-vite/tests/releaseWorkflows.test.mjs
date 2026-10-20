@@ -28,6 +28,8 @@ test('tag releases call Windows only after the shared release has been published
   assert.doesNotMatch(job(release, 'signing-preflight'), /grep -q 'untrusted comment:'/);
   assert.match(release, /APPLE_SIGNING_AVAILABLE/);
   assert.match(job(release, 'build'), /Build \(macOS unsigned\)/);
+  assert.match(job(release, 'build'), /prepare-native-runtime\.mjs/);
+  assert.match(job(release, 'build'), /pnpm --dir \.\.\/src-vite build/);
 });
 
 test('Windows accepts reusable and manual inputs through the shared inputs context', () => {

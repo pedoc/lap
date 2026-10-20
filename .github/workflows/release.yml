@@ -139,6 +139,21 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: src-vite
 
+      - name: Ensure CI frontend build command
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const configPath = 'src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          const command = config.build?.beforeBuildCommand || '';
+          if (command.includes('prepare-native-runtime.mjs') && !fs.existsSync('scripts/prepare-native-runtime.mjs')) {
+            config.build.beforeBuildCommand = 'pnpm --dir ../src-vite build';
+            fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+            console.log('prepare-native-runtime.mjs is absent from this release ref; using the standard frontend build.');
+          }
+          NODE
+
       - name: Clear cached Linux bundle artifacts
         if: startsWith(matrix.target, 'x86_64-unknown-linux') || startsWith(matrix.target, 'aarch64-unknown-linux')
         shell: bash
