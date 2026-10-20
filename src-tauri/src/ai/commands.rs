@@ -77,7 +77,7 @@ pub fn view() -> Result<ConfigurationView, String> {
         model_download: assets::download_snapshot()?,
     })
 }
-fn changed(app: &AppHandle) -> Result<(), String> {
+pub(super) fn changed(app: &AppHandle) -> Result<(), String> {
     let payload = view()?;
     app.emit("ai-configuration-changed", payload)
         .map_err(|e| e.to_string())

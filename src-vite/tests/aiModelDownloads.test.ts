@@ -17,7 +17,7 @@ function harness(invoke: any = async () => fixture()) {
   const calls: any[] = [], notifications: any[] = [], mounted: any[] = [], unmount: any[] = [], listeners: any = {};
   const toast = Object.fromEntries(['success', 'error', 'info'].map(kind => [kind, (message: string) => notifications.push({ kind, message })]));
   const t = (key: string, args: any = {}) => `${key} ${Object.values(args).join(' ')}`;
-  const ctx: any = { ...Vue, ...downloads, ...ai, crypto, pendingChanges:{register:()=>()=>{}},defineExpose: () => {}, config: { settings: { ai: {} } }, useI18n: () => ({ t }), useToast: () => toast,
+  const ctx: any = { ...Vue, ...downloads, ...ai, crypto, CudaRuntimeSettings:()=>Vue.h('aside'), pendingChanges:{register:()=>()=>{}},defineExpose: () => {}, config: { settings: { ai: {} } }, useI18n: () => ({ t }), useToast: () => toast,
     invoke: async (...args: any[]) => { calls.push(args); return invoke(...args); }, ask: async () => true,
     watch: () => {}, onMounted: (cb: any) => mounted.push(cb), onUnmounted: (cb: any) => unmount.push(cb),
     listen: async (name: string, cb: any) => { listeners[name] = cb; return () => delete listeners[name]; },

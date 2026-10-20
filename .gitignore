@@ -3,6 +3,7 @@
 .continue/
 .cargo/
 target/
+/src-tauri/resources/lap_cuda_bridge.dll
 skills/
 .DS_Store
 .env

@@ -48,26 +48,23 @@ impl AiEngine {
     }
     pub fn encode_text(&mut self, text: &str) -> Result<Vec<f32>, String> {
         let _lane = ai::vision_jobs::claim(Task::Semantic, || Ok(()))?;
-        self.ensure_active_inner()?;
-        let result = self
-            .backend
-            .as_mut()
-            .ok_or("No semantic model")?
-            .encode_text(text);
-        if let Err(ref error) = result {
-            let model = ai::settings::active(Task::Semantic)?;
-            if ai::runtime::is_auto(&model, "text") && ai::runtime::used_acceleration(&model) {
-                ai::runtime::force_cpu(&model, error);
-                self.backend = None;
-                self.ensure_active_inner()?;
-                return self
-                    .backend
-                    .as_mut()
-                    .ok_or("No semantic model")?
-                    .encode_text(text);
+        let model = self.ensure_active_inner()?;
+        for attempt in 0..3 {
+            let result = self
+                .backend
+                .as_mut()
+                .ok_or("No semantic model")?
+                .encode_text(text);
+            if let Err(ref error) = result {
+                if attempt < 2 && ai::runtime::recover_acceleration(&model, Some("text"), error) {
+                    self.backend = None;
+                    self.ensure_active_inner()?;
+                    continue;
+                }
             }
+            return result;
         }
-        result
+        Err("Semantic backend retries exhausted".into())
     }
     pub fn encode_image(&mut self, path: &str) -> Result<Vec<f32>, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -75,26 +72,23 @@ impl AiEngine {
     }
     pub fn encode_image_from_bytes(&mut self, bytes: &[u8]) -> Result<Vec<f32>, String> {
         let _lane = ai::vision_jobs::claim(Task::Semantic, || Ok(()))?;
-        self.ensure_active_inner()?;
-        let result = self
-            .backend
-            .as_mut()
-            .ok_or("No semantic model")?
-            .encode_image(bytes);
-        if let Err(ref error) = result {
-            let model = ai::settings::active(Task::Semantic)?;
-            if ai::runtime::is_auto(&model, "vision") && ai::runtime::used_acceleration(&model) {
-                ai::runtime::force_cpu(&model, error);
-                self.backend = None;
-                self.ensure_active_inner()?;
-                return self
-                    .backend
-                    .as_mut()
-                    .ok_or("No semantic model")?
-                    .encode_image(bytes);
+        let model = self.ensure_active_inner()?;
+        for attempt in 0..3 {
+            let result = self
+                .backend
+                .as_mut()
+                .ok_or("No semantic model")?
+                .encode_image(bytes);
+            if let Err(ref error) = result {
+                if attempt < 2 && ai::runtime::recover_acceleration(&model, Some("vision"), error) {
+                    self.backend = None;
+                    self.ensure_active_inner()?;
+                    continue;
+                }
             }
+            return result;
         }
-        result
+        Err("Semantic backend retries exhausted".into())
     }
 }
 #[derive(Clone)]

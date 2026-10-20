@@ -71,6 +71,7 @@
           </div>
           <p class="opacity-60">{{ t('settings.ai_models.gpu_hint') }}</p>
           <button class="btn btn-xs" :disabled="busy" @click="refreshRuntime">{{ t('settings.ai_models.refresh_devices') }}</button>
+          <CudaRuntimeSettings />
         </div>
         <div v-for="spec in selectedModel.parameters" :key="spec.key" class="flex items-center justify-between gap-3 text-xs">
           <div>{{ t(`settings.ai_models.parameters.${spec.key}`) }}<div v-if="spec.affectsIndex" class="opacity-50">{{ t('settings.ai_models.rebuild_parameter') }}</div></div>
@@ -128,6 +129,7 @@
 <script setup lang="ts">
 import { beginModelDownload, applyModelDownloadProgress, modelDownloadError, isModelDownloadCancelled, formatModelDownloadBytes, type ModelDownloadFeedback } from '@/common/aiModelDownloads';
 import OcrIndexPanel from './OcrIndexPanel.vue';
+import CudaRuntimeSettings from './CudaRuntimeSettings.vue';
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';

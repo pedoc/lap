@@ -138,7 +138,12 @@ impl ParameterSpec {
             reload_session: index
                 || matches!(
                     key,
-                    "threads" | "device" | "gpu_device_id" | "timeout_seconds"
+                    "threads"
+                        | "device"
+                        | "gpu_device_id"
+                        | "timeout_seconds"
+                        | "cuda_device_id"
+                        | "cuda_memory_limit_mb"
                 ),
             options: Vec::new(),
         }
@@ -177,6 +182,21 @@ pub fn parameters(task: Task, adapter: Adapter) -> Vec<ParameterSpec> {
         });
     }
     if adapter != Adapter::JinaEmbeddings {
+        p.push(ParameterSpec::number("cuda_device_id", 0., 0., 31., 1., false));
+        p.push(ParameterSpec::number(
+            "cuda_memory_limit_mb", 0., 0., 65536., 128., false,
+        ));
+        p.push(ParameterSpec {
+            key: "cuda_max_workspace".into(),
+            kind: "choice".into(),
+            default: json!(false),
+            min: 0.,
+            max: 0.,
+            step: 0.,
+            affects_index: false,
+            reload_session: true,
+            options: vec![json!(false), json!(true)],
+        });
         p.push(ParameterSpec::number(
             "gpu_device_id",
             -1.0,

@@ -43,9 +43,7 @@ impl PaddleOcr {
         let recognizer = runtime::local_session(model, "recognizer")?;
         let dictionary = if model.definition.adapter == Adapter::RapidOcrOnnx {
             recognizer
-                .metadata()
-                .map_err(|e| e.to_string())?
-                .custom("character")
+                .custom_metadata("character")
                 .map_err(|e| e.to_string())?
                 .ok_or("RapidOCR recognizer has no embedded 'character' dictionary")?
         } else {
@@ -71,19 +69,31 @@ impl PaddleOcr {
         })
     }
     pub fn probe(&mut self) -> Result<(), String> {
-        let result = self.probe_once();
-        if let Err(error) = &result {
-            if self.retry_on_cpu(error)? {
-                return self.probe_once();
+        for attempt in 0..3 {
+            let result = self.probe_once();
+            if let Err(error) = &result {
+                if attempt < 2 && self.retry_acceleration(error)? {
+                    continue;
+                }
             }
+            return result;
         }
-        result
+        Err("OCR backend retries exhausted".into())
     }
-    fn retry_on_cpu(&mut self, error: &str) -> Result<bool, String> {
+    fn retry_acceleration(&mut self, error: &str) -> Result<bool, String> {
         if !automatic_gpu_failure(error, &runtime::reports(&self.model)) {
             return Ok(false);
         }
-        runtime::force_cpu(&self.model, error);
+        let role = if error.starts_with("OCR detection failed:") {
+            Some("ocr_detector")
+        } else {
+            Some("recognizer")
+        };
+        if !runtime::recover_acceleration(&self.model, role, error) {
+            return Ok(false);
+        }
+        self.detector.unload();
+        self.recognizer.unload();
         let model = self.model.clone();
         *self = Self::new(&model)?;
         Ok(true)
@@ -111,18 +121,21 @@ impl PaddleOcr {
         image: &DynamicImage,
         cancel: &dyn Fn() -> Result<(), String>,
     ) -> Result<Document, String> {
-        cancel()?;
-        let result = self.recognize_once(image, cancel);
-        if let Err(error) = &result {
-            // Never turn cancellation, invalid model contracts or explicit GPU errors
-            // into a silent CPU retry. Only the failing automatic GPU stage qualifies.
+        for attempt in 0..3 {
             cancel()?;
-            if self.retry_on_cpu(error)? {
+            let result = self.recognize_once(image, cancel);
+            if let Err(error) = &result {
+                // Never turn cancellation, invalid model contracts or explicit GPU errors
+                // into a silent CPU retry. Only the failing automatic GPU stage qualifies.
                 cancel()?;
-                return self.recognize_once(image, cancel);
+                if attempt < 2 && self.retry_acceleration(error)? {
+                    cancel()?;
+                    continue;
+                }
             }
+            return result;
         }
-        result
+        Err("OCR backend retries exhausted".into())
     }
     fn recognize_once(
         &mut self,

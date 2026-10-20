@@ -1478,6 +1478,27 @@
     }
   },
   "settings": {
+    "cuda": {
+      "title": "CUDA 运行组件",
+      "intro": "可选下载 CUDA 12 / cuDNN 9 依赖，不修改系统驱动或 PATH，无需安装完整 CUDA Toolkit。安装后测试所选模型，自动模式会优先尝试 CUDA。",
+      "install": "下载 CUDA 组件",
+      "verify": "检测 CUDA",
+      "warmup_hint": "正在加载并验证 CUDA。首次加载大型运行库可能需要较长时间；关闭设置不会中止检测，请勿重复启动。",
+      "downloaded": "组件已下载，请检测 CUDA 并测试所选模型。",
+      "failed": "CUDA 组件下载失败",
+      "diagnostics": "查看检测详情",
+      "confirm": "将下载约 {size} 的 NVIDIA CUDA/cuDNN 与 ONNX Runtime 运行库，仅用于本机推理。下载使用应用代理；原始文件不上传。第三方许可将保存在组件目录。是否继续？",
+      "states": {
+        "unsupported": "当前平台不支持此可选组件",
+        "driver_missing": "未检测到可用 NVIDIA CUDA 驱动／设备",
+        "bridge_missing": "软件包缺少 CUDA 桥接模块，请重新构建或安装",
+        "not_installed": "未安装 CUDA 运行组件",
+        "installed": "组件已安装，尚未验证；请检测 CUDA",
+        "checking": "正在验证 CUDA 运算…",
+        "ready": "CUDA 矩阵运算已验证通过（具体模型仍需单独测试）",
+        "failed": "CUDA 初始化或运算验证失败，请查看详情"
+      }
+    },
     "general": {
       "title": "通用",
       "section_language": "语言与地区",
@@ -1997,6 +2018,9 @@
       "reset_warning": "全局使用此模型？不兼容的自动 AI 结果会重建。人工确认的人物、姓名和人脸标注会保留；原文件发生变化的区域需要重新复核。不会修改原始媒体文件。",
       "delete_confirm": "移除此未启用的自定义模型及其配置？不会删除已下载的模型文件。",
       "parameters": {
+        "cuda_device_id": "CUDA 设备编号（独立于 DirectML）",
+        "cuda_memory_limit_mb": "CUDA 显存池上限（MiB，0 为自动）",
+        "cuda_max_workspace": "CUDA 允许更大 cuDNN 工作区（更多显存）",
         "object_confidence": "检测分数阈值",
         "object_nms_iou": "同类去重 IoU（0 为关闭）",
         "object_max_results": "每张图最大检出数量",

@@ -29,17 +29,22 @@ pub fn face_backend(model: &ResolvedModel) -> Result<Box<dyn FacePipeline>, Stri
 }
 
 pub fn semantic_backend(model: &ResolvedModel) -> Result<Box<dyn MultimodalEmbedder>, String> {
-    let result = create_semantic_backend(model);
-    if let Err(ref error) = result {
-        if model.definition.adapter == Adapter::ClipOnnx
-            && (super::runtime::is_auto(model, "text") || super::runtime::is_auto(model, "vision"))
-            && super::runtime::used_acceleration(model)
-        {
-            super::runtime::force_cpu(model, error);
-            return create_semantic_backend(model);
+    for attempt in 0..3 {
+        let result = create_semantic_backend(model);
+        if let Err(ref error) = result {
+            if model.definition.adapter == Adapter::ClipOnnx
+                && attempt < 2
+                && (super::runtime::is_auto(model, "text")
+                    || super::runtime::is_auto(model, "vision"))
+                && super::runtime::used_acceleration(model)
+                && super::runtime::recover_acceleration(model, None, error)
+            {
+                continue;
+            }
         }
+        return result;
     }
-    result
+    Err("Semantic backend initialization retries exhausted".into())
 }
 
 pub mod objects;

@@ -1601,6 +1601,27 @@
     }
   },
   "settings": {
+    "cuda": {
+      "title": "CUDA 執行元件",
+      "intro": "可選下載 CUDA 12 / cuDNN 9 相依元件，不修改系統驅動或 PATH，無需安裝完整 CUDA Toolkit。安裝後測試所選模型，自動模式會優先嘗試 CUDA。",
+      "install": "下載 CUDA 元件",
+      "verify": "檢測 CUDA",
+      "warmup_hint": "正在載入並驗證 CUDA。首次載入大型執行程式庫可能需要較長時間；關閉設定不會中止檢測，請勿重複啟動。",
+      "downloaded": "元件已下載，請檢測 CUDA 並測試所選模型。",
+      "failed": "CUDA 元件下載失敗",
+      "diagnostics": "查看檢測詳情",
+      "confirm": "將下載約 {size} 的 NVIDIA CUDA/cuDNN 與 ONNX Runtime 執行程式庫，僅用於本機推理。下載使用應用程式代理；原始檔案不會上傳。第三方授權將儲存於元件目錄。是否繼續？",
+      "states": {
+        "unsupported": "目前平台不支援此可選元件",
+        "driver_missing": "未偵測到可用 NVIDIA CUDA 驅動／裝置",
+        "bridge_missing": "軟體包缺少 CUDA 橋接模組，請重新建構或安裝",
+        "not_installed": "未安裝 CUDA 執行元件",
+        "installed": "元件已安裝，尚未驗證；請檢測 CUDA",
+        "checking": "正在驗證 CUDA 運算…",
+        "ready": "CUDA 矩陣運算已驗證通過（具體模型仍需單獨測試）",
+        "failed": "CUDA 初始化或運算驗證失敗，請查看詳情"
+      }
+    },
     "general": {
       "title": "一般",
       "section_language": "語言與地區",
@@ -2119,6 +2140,9 @@
       "reset_warning": "全域使用此模型？不相容的自動 AI 結果會重建。人工確認的人物、姓名和人臉標註會保留；原始檔案變更的區域需要重新複核。不會修改原始媒體檔案。",
       "delete_confirm": "移除此未啟用的自訂模型及其設定？不會刪除已下載的模型檔案。",
       "parameters": {
+        "cuda_device_id": "CUDA 裝置編號（獨立於 DirectML）",
+        "cuda_memory_limit_mb": "CUDA 顯存池上限（MiB，0 為自動）",
+        "cuda_max_workspace": "CUDA 允許更大 cuDNN 工作區（更多顯存）",
         "object_confidence": "检测分数阈值",
         "object_nms_iou": "同类去重 IoU（0 为关闭）",
         "object_max_results": "每张图最大检出数量",

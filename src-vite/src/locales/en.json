@@ -1478,6 +1478,27 @@
     }
   },
   "settings": {
+    "cuda": {
+      "title": "CUDA runtime component",
+      "intro": "Optional CUDA 12 / cuDNN 9 libraries. No driver or PATH changes, and no full CUDA Toolkit required. Test your model after installation; Automatic tries CUDA first.",
+      "install": "Download CUDA component",
+      "verify": "Check CUDA",
+      "warmup_hint": "Loading and verifying CUDA. The first load of large libraries may take a while; closing Settings does not cancel verification. Do not start it again.",
+      "downloaded": "Component downloaded. Check CUDA and test your selected model.",
+      "failed": "CUDA component download failed",
+      "diagnostics": "Diagnostic details",
+      "confirm": "Download about {size} of NVIDIA CUDA/cuDNN and ONNX Runtime libraries for local inference? The application proxy is used. Original files are never uploaded. Third-party licenses are saved with the component.",
+      "states": {
+        "unsupported": "This optional component is unsupported on this platform",
+        "driver_missing": "No usable NVIDIA CUDA driver/device detected",
+        "bridge_missing": "The CUDA bridge is missing from this package; rebuild or reinstall",
+        "not_installed": "CUDA runtime component not installed",
+        "installed": "Installed, not yet verified; run Check CUDA",
+        "checking": "Verifying CUDA computation…",
+        "ready": "CUDA matrix computation verified (individual models still require testing)",
+        "failed": "CUDA initialization or computation check failed; see details"
+      }
+    },
     "general": {
       "title": "General",
       "section_language": "Language & region",
@@ -1997,6 +2018,9 @@
       "reset_warning": "Use this model globally? Incompatible automatic AI results will be rebuilt. Human-confirmed people, names and face annotations are preserved; regions whose source files changed require review. Original media files are not modified.",
       "delete_confirm": "Remove this inactive custom model and its configuration? Downloaded model files will not be deleted.",
       "parameters": {
+        "cuda_device_id": "CUDA device ordinal (separate from DirectML)",
+        "cuda_memory_limit_mb": "CUDA memory arena limit (MiB; 0 = automatic)",
+        "cuda_max_workspace": "Allow larger CUDA/cuDNN workspace (more VRAM)",
         "object_confidence": "Detection score threshold",
         "object_nms_iou": "NMS IoU (0 = off)",
         "object_max_results": "Maximum objects per image",

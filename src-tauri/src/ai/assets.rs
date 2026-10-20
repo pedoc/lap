@@ -189,7 +189,7 @@ fn artifact_network_error(error: reqwest::Error, artifact: &super::types::Artifa
 }
 /// An interrupted stream can resume only when the server acknowledges the exact byte range.
 /// SHA-256 remains mandatory; partial data is confined to the staging directory.
-async fn stream_artifact(
+pub(super) async fn stream_artifact(
     client: &reqwest::Client,
     artifact: &super::types::Artifact,
     path: &std::path::Path,

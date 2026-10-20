@@ -171,7 +171,7 @@ test('actual model settings template distinguishes quality recommendation and sa
   const row=(id:string,name:string)=>({definition:{id,name,task:'ocr',adapter:'rapid_ocr_onnx',dimension:1,files:[{}],license:'Apache-2.0',description:'Local model'},installed:true,builtin:true,configuration:{parameters:{}},values:{},parameters:[],sessions:[]});
   const view={selection:{ocr:'rapidocr-pp-ocrv5'},defaultSelection:{ocr:'rapidocr-pp-ocrv5-server'},runtime:{devices:[],providers:[]},models:[row('rapidocr-pp-ocrv5-server','RapidOCR · PP-OCRv5 Server'),row('ppocr-v5-zh','PP-OCRv5 中英日文字识别'),row('rapidocr-pp-ocrv5','RapidOCR · PP-OCRv5 Mobile')]};
   let nulls=0,empties=0;
-  const component=runInNewContext(`${code}\n;component`,{...h.ctx,...imports,...AiModels,watch:()=>{},useToast:()=>({success(){}}),OcrIndexPanel:()=>Vue.h('aside'),ref:(value:any)=>Vue.ref(value===null&&nulls++===0?view:value==='semantic'?'ocr':value===''&&empties++===0?view.selection.ocr:value)});
+  const component=runInNewContext(`${code}\n;component`,{...h.ctx,...imports,...AiModels,watch:()=>{},useToast:()=>({success(){}}),OcrIndexPanel:()=>Vue.h('aside'),CudaRuntimeSettings:()=>Vue.h('aside'),ref:(value:any)=>Vue.ref(value===null&&nulls++===0?view:value==='semantic'?'ocr':value===''&&empties++===0?view.selection.ocr:value)});
   const html=await renderToString(Vue.createSSRApp(component));
   assert.match(html,/PP-OCRv5 Server/);assert.match(html,/PP-OCRv5 Mobile/);assert.match(html,/PP-OCRv5 中英日文字识别 · Server/);
   assert.match(html,/ocr.quality_hint/);assert.match(html,/ocr.quality_recommended/);assert.equal(view.selection.ocr,'rapidocr-pp-ocrv5');

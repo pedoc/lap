@@ -15,6 +15,8 @@ Run frontend commands from `src-vite`:
 
 For Rust checks, run `cargo fmt --check` and `cargo check` from `src-tauri`. A full desktop build requires the platform's Tauri prerequisites and may download native/model assets; see `CONTRIBUTING.md` and `.github/workflows/pr-build.yml`.
 
+On Windows, run `node scripts/prepare-native-runtime.mjs` from the repository root before a first standalone Cargo check/build. Tauri development/build hooks do this automatically. It builds only the small optional CUDA bridge, not the CUDA runtime packages. Bridge/wire tests: `cargo test --manifest-path crates/Cargo.toml --locked -p lap-ai-runtime-wire`.
+
 ## Coding Style
 
 Follow the existing style in nearby files. Use idiomatic Rust, explicit `Result`/`Option` error handling, and avoid production panics. For Vue, use `<script setup>`, small composable components, and existing Tailwind conventions. Keep frontend utilities in `src-vite/src/common`, and name tests after the behavior or module they cover (for example, `montageLayout.test.ts`). Format Rust with `cargo fmt`; avoid unrelated formatting changes.

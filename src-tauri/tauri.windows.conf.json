@@ -1,4 +1,9 @@
 {
+  "bundle": {
+    "resources": {
+      "resources/lap_cuda_bridge.dll": "resources/lap_cuda_bridge.dll"
+    }
+  },
   "app": {
     "windows": [
       {

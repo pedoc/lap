@@ -7,7 +7,7 @@ use serde::Serialize;
 use std::{
     cell::Cell,
     collections::BTreeMap,
-    ops::{Deref, DerefMut},
+    ops::{Deref, Index},
     path::PathBuf,
     sync::{
         Mutex,
@@ -44,6 +44,7 @@ pub struct SessionReport {
 static INFO: Mutex<Option<RuntimeInfo>> = Mutex::new(None);
 static REPORTS: Mutex<BTreeMap<(String, String), SessionReport>> = Mutex::new(BTreeMap::new());
 static FORCED_CPU: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+static SKIP_CUDA: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 thread_local! {static PROFILING:Cell<bool>=const {Cell::new(false)};}
 pub fn generation() -> u64 {
@@ -55,6 +56,9 @@ pub fn refresh() {
     }
     if let Ok(mut forced) = FORCED_CPU.lock() {
         forced.clear();
+    }
+    if let Ok(mut skipped) = SKIP_CUDA.lock() {
+        skipped.clear();
     }
     GENERATION.fetch_add(1, Ordering::SeqCst);
 }
@@ -110,6 +114,15 @@ pub fn info() -> RuntimeInfo {
         available: coreml,
         reason: "macOS CoreML may use GPU, Neural Engine and CPU; model support varies".into(),
     });
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    let (cuda, cuda_reason) = {
+        let status = super::cuda_assets::status();
+        (
+            matches!(status.state.as_str(), "installed" | "ready"),
+            status.reason,
+        )
+    };
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     let cuda = {
         #[cfg(feature = "ai-cuda")]
         {
@@ -123,7 +136,17 @@ pub fn info() -> RuntimeInfo {
             false
         }
     };
-    providers.push(ProviderInfo{id:"cuda".into(),available:cuda,reason:if cfg!(feature="ai-cuda"){ "Requires compatible NVIDIA drivers, CUDA 12 and cuDNN libraries; tested when creating a session".into()}else{"CUDA is not built into this package; enable the ai-cuda build feature with matching runtime dependencies".into()}});
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    let cuda_reason = if cfg!(feature = "ai-cuda") {
+        "Requires compatible NVIDIA drivers, CUDA and cuDNN libraries".into()
+    } else {
+        "CUDA is not built into this package; enable the ai-cuda feature with matching runtime dependencies".into()
+    };
+    providers.push(ProviderInfo {
+        id: "cuda".into(),
+        available: cuda,
+        reason: cuda_reason,
+    });
     let info = RuntimeInfo {
         providers,
         devices: inventory.devices,
@@ -154,6 +177,45 @@ pub fn force_cpu(model: &ResolvedModel, reason: &str) {
     }
     GENERATION.fetch_add(1, Ordering::SeqCst);
 }
+fn fallback_provider(reports: &[SessionReport], role: Option<&str>) -> Option<&'static str> {
+    let automatic: Vec<_> = reports
+        .iter()
+        .filter(|r| r.requested == "auto" && role.is_none_or(|role| r.role == role))
+        .collect();
+    if automatic.iter().any(|r| r.selected == "cuda") {
+        Some("directml")
+    } else if automatic.iter().any(|r| r.selected != "cpu") {
+        Some("cpu")
+    } else {
+        None
+    }
+}
+/// Advance a failed automatic backend, never silently change an explicit device.
+pub fn recover_acceleration(model: &ResolvedModel, role: Option<&str>, reason: &str) -> bool {
+    match fallback_provider(&reports(model), role) {
+        Some("directml") => {
+            if let Ok(mut skipped) = SKIP_CUDA.lock() {
+                skipped
+                    .entry(model.session_key())
+                    .or_insert_with(|| reason.to_string());
+            }
+            GENERATION.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+        Some("cpu") => {
+            let cuda = SKIP_CUDA
+                .lock()
+                .ok()
+                .and_then(|s| s.get(&model.session_key()).cloned());
+            let reason = cuda
+                .map(|cuda| format!("CUDA: {cuda}; next GPU: {reason}"))
+                .unwrap_or_else(|| reason.into());
+            force_cpu(model, &reason);
+            true
+        }
+        _ => false,
+    }
+}
 pub fn is_auto(model: &ResolvedModel, role: &str) -> bool {
     requested(model, role) == "auto"
 }
@@ -183,29 +245,127 @@ pub fn with_profiling<T>(operation: impl FnOnce() -> T) -> T {
     let _reset = Reset(previous);
     operation()
 }
+enum Backend {
+    Native(Session),
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    Cuda(super::cuda::CudaSession),
+}
+pub struct SessionMetadata {
+    pub inputs: Vec<ort::session::Input>,
+    pub outputs: Vec<ort::session::Output>,
+}
 pub struct SessionHandle {
-    session: Session,
+    backend: Option<Backend>,
+    metadata: SessionMetadata,
     key: String,
     role: String,
     trace_prefix: Option<PathBuf>,
 }
 impl Deref for SessionHandle {
-    type Target = Session;
-    fn deref(&self) -> &Session {
-        &self.session
+    type Target = SessionMetadata;
+    fn deref(&self) -> &SessionMetadata {
+        &self.metadata
     }
 }
-impl DerefMut for SessionHandle {
-    fn deref_mut(&mut self) -> &mut Session {
-        &mut self.session
+pub enum RuntimeOutputs<'s> {
+    Native(ort::session::SessionOutputs<'s>),
+    Owned(Vec<(String, ort::value::DynValue)>),
+}
+impl RuntimeOutputs<'_> {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Native(o) => o.len(),
+            Self::Owned(o) => o.len(),
+        }
+    }
+    pub fn get(&self, name: impl AsRef<str>) -> Option<&ort::value::DynValue> {
+        match self {
+            Self::Native(o) => o.get(name),
+            Self::Owned(o) => o.iter().find(|(n, _)| n == name.as_ref()).map(|(_, v)| v),
+        }
+    }
+    #[allow(dead_code)]
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &ort::value::DynValue)> {
+        (0..self.len()).map(|i| {
+            let name = match self {
+                Self::Native(o) => o.keys().nth(i).unwrap_or(""),
+                Self::Owned(o) => o[i].0.as_str(),
+            };
+            (name, &self[i])
+        })
+    }
+}
+impl Index<usize> for RuntimeOutputs<'_> {
+    type Output = ort::value::DynValue;
+    fn index(&self, index: usize) -> &Self::Output {
+        match self {
+            Self::Native(o) => &o[index],
+            Self::Owned(o) => &o[index].1,
+        }
+    }
+}
+impl Index<&str> for RuntimeOutputs<'_> {
+    type Output = ort::value::DynValue;
+    fn index(&self, name: &str) -> &Self::Output {
+        self.get(name).expect("validated ONNX output name")
+    }
+}
+impl SessionHandle {
+    pub fn run<'s, 'i, 'v: 'i, const N: usize>(
+        &'s mut self,
+        values: impl Into<ort::session::SessionInputs<'i, 'v, N>>,
+    ) -> ort::Result<RuntimeOutputs<'s>> {
+        match self
+            .backend
+            .as_mut()
+            .ok_or_else(|| ort::Error::new("The failed ONNX session has been released"))?
+        {
+            Backend::Native(session) => session.run(values).map(RuntimeOutputs::Native),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            Backend::Cuda(session) => session
+                .run(values.into())
+                .map(RuntimeOutputs::Owned)
+                .map_err(ort::Error::new),
+        }
+    }
+    pub fn custom_metadata(&self, key: &str) -> ort::Result<Option<String>> {
+        match self
+            .backend
+            .as_ref()
+            .ok_or_else(|| ort::Error::new("The ONNX session has been released"))?
+        {
+            Backend::Native(session) => session.metadata()?.custom(key),
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            Backend::Cuda(session) => Ok(session.custom(key)),
+        }
     }
 }
 impl Drop for SessionHandle {
     fn drop(&mut self) {
+        self.unload();
+    }
+}
+impl SessionHandle {
+    pub fn unload(&mut self) {
+        let Some(mut backend) = self.backend.take() else {
+            return;
+        };
         #[cfg(test)]
         eprintln!("GPU debug: drop {}", self.role);
-        if let Some(prefix) = &self.trace_prefix {
-            if let Ok(path) = self.session.end_profiling() {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        if let Backend::Cuda(session) = &mut backend {
+            let counts = session.close();
+            if !counts.is_empty() {
+                if let Ok(mut reports) = REPORTS.lock() {
+                    if let Some(report) = reports.get_mut(&(self.key.clone(), self.role.clone())) {
+                        report.operators = counts;
+                    }
+                }
+            }
+            return;
+        }
+        if let (Some(prefix), Backend::Native(session)) = (&self.trace_prefix, &mut backend) {
+            if let Ok(path) = session.end_profiling() {
                 let counts = std::fs::read(&path)
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -243,7 +403,12 @@ fn build(
     provider: &str,
     device: Option<i32>,
     trace: &Option<PathBuf>,
-) -> Result<Session, String> {
+) -> Result<Backend, String> {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    if provider == "cuda" {
+        return super::cuda::CudaSession::open(model, role, device.unwrap_or(0), trace)
+            .map(Backend::Cuda);
+    }
     #[cfg(test)]
     eprintln!("GPU debug: begin {provider}/{role} device={device:?}");
     let mut builder = Session::builder()
@@ -301,13 +466,29 @@ fn build(
         "cuda" => {
             #[cfg(feature = "ai-cuda")]
             {
+                let mut provider = ort::execution_providers::CUDAExecutionProvider::default()
+                    .with_device_id(device.unwrap_or(0))
+                    .with_arena_extend_strategy(
+                        ort::execution_providers::ArenaExtendStrategy::SameAsRequested,
+                    )
+                    .with_conv_max_workspace(
+                        model
+                            .values
+                            .get("cuda_max_workspace")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                    );
+                let limit = model
+                    .values
+                    .get("cuda_memory_limit_mb")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.)
+                    .clamp(0., 65536.) as usize;
+                if limit > 0 {
+                    provider = provider.with_memory_limit(limit.saturating_mul(1024 * 1024));
+                }
                 builder = builder
-                    .with_execution_providers([
-                        ort::execution_providers::CUDAExecutionProvider::default()
-                            .with_device_id(device.unwrap_or(0))
-                            .build()
-                            .error_on_failure(),
-                    ])
+                    .with_execution_providers([provider.build().error_on_failure()])
                     .map_err(|e| e.to_string())?;
             }
             #[cfg(not(feature = "ai-cuda"))]
@@ -381,11 +562,13 @@ fn build(
         if super::onnx_patch::disable_reshape_allowzero(&mut bytes) > 0 {
             return builder
                 .commit_from_memory(&bytes)
+                .map(Backend::Native)
                 .map_err(|e| format!("Cannot create {provider} session for {role}: {e}"));
         }
     }
     builder
         .commit_from_file(artifact)
+        .map(Backend::Native)
         .map_err(|e| format!("Cannot create {provider} session for {role}: {e}"))
 }
 fn needs_reshape_compatibility(model: &ResolvedModel, role: &str) -> bool {
@@ -516,6 +699,17 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
         .with(|mode| mode.get())
         .then(|| std::env::temp_dir().join(format!("lap-ai-profile-{}", uuid::Uuid::new_v4())));
     let mut failures = Vec::new();
+    let skipped_cuda = if desired == "auto" {
+        SKIP_CUDA
+            .lock()
+            .ok()
+            .and_then(|s| s.get(&model.session_key()).cloned())
+    } else {
+        None
+    };
+    if let Some(reason) = &skipped_cuda {
+        failures.push(format!("CUDA inference failed: {reason}"));
+    }
     if desired == "auto" {
         if let Some(reason) = &forced {
             failures.push(reason.clone());
@@ -523,6 +717,9 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
     }
     let candidates = provider_candidates(&desired, forced.is_some());
     for provider in candidates {
+        if provider == "cuda" && skipped_cuda.is_some() {
+            continue;
+        }
         let Some(info) = runtime.providers.iter().find(|p| p.id == provider) else {
             return Err("Unknown execution provider".into());
         };
@@ -545,13 +742,20 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
                 }
                 ids.into_iter().map(Some).collect()
             }
-            "cuda" => vec![Some(configured.max(0))],
+            "cuda" => vec![Some(
+                model
+                    .values
+                    .get("cuda_device_id")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|id| id as i32)
+                    .unwrap_or(configured.max(0)),
+            )],
             _ => vec![None],
         };
         let explicit_device = provider != "directml" || configured >= 0;
         for device in devices {
             match build(model, role, provider, device, &trace) {
-                Ok(session) => {
+                Ok(backend) => {
                     if desired == "auto" && provider == "cpu" && failures.is_empty() {
                         failures.push("No available GPU execution provider; using CPU".into());
                     }
@@ -567,8 +771,30 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
                     if let Ok(mut reports) = REPORTS.lock() {
                         reports.insert((key.clone(), role.into()), report);
                     }
+                    let (inputs, outputs) = match &backend {
+                        Backend::Native(s) => (&s.inputs, &s.outputs),
+                        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+                        Backend::Cuda(s) => (&s.inputs, &s.outputs),
+                    };
+                    let metadata = SessionMetadata {
+                        inputs: inputs
+                            .iter()
+                            .map(|i| ort::session::Input {
+                                name: i.name.clone(),
+                                input_type: i.input_type.clone(),
+                            })
+                            .collect(),
+                        outputs: outputs
+                            .iter()
+                            .map(|o| ort::session::Output {
+                                name: o.name.clone(),
+                                output_type: o.output_type.clone(),
+                            })
+                            .collect(),
+                    };
                     return Ok(SessionHandle {
-                        session,
+                        backend: Some(backend),
+                        metadata,
                         key,
                         role: role.into(),
                         trace_prefix: trace,
@@ -603,6 +829,43 @@ pub fn local_session(model: &ResolvedModel, role: &str) -> Result<SessionHandle,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inference_fallback_tries_another_gpu_before_cpu_and_respects_explicit_roles() {
+        let report = |role: &str, requested: &str, selected: &str| SessionReport {
+            role: role.into(),
+            requested: requested.into(),
+            selected: selected.into(),
+            device_id: Some(0),
+            fallback_reason: None,
+            operators: BTreeMap::new(),
+        };
+        assert_eq!(
+            fallback_provider(&[report("detector", "auto", "cuda")], Some("detector")),
+            Some("directml")
+        );
+        assert_eq!(
+            fallback_provider(&[report("detector", "auto", "directml")], Some("detector")),
+            Some("cpu")
+        );
+        assert_eq!(
+            fallback_provider(&[report("detector", "cuda", "cuda")], Some("detector")),
+            None
+        );
+        assert_eq!(
+            fallback_provider(
+                &[
+                    report("embedding", "auto", "cuda"),
+                    report("detector", "cpu", "cpu")
+                ],
+                Some("detector")
+            ),
+            None
+        );
+        assert_eq!(
+            fallback_provider(&[report("detector", "auto", "cpu")], None),
+            None
+        );
+    }
     #[test]
     fn reshape_compatibility_only_applies_to_the_verified_export() {
         let mut model = crate::ai::settings::Configuration::default()

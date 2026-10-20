@@ -77,21 +77,28 @@ impl OnnxObjects {
         image: &DynamicImage,
         check: &dyn Fn() -> Result<(), String>,
     ) -> Result<ObjectDocument, String> {
-        check()?;
-        let result = self.detect_once(image, check);
-        if let Err(error) = &result {
+        for attempt in 0..3 {
             check()?;
-            if error.starts_with("Object inference failed:")
-                && runtime::is_auto(&self.model, "detector")
-                && runtime::used_acceleration(&self.model)
-            {
-                runtime::force_cpu(&self.model, error);
-                let model = self.model.clone();
-                *self = Self::new(&model)?;
-                return self.detect_once(image, check);
+            let result = self.detect_once(image, check);
+            if let Err(error) = &result {
+                check()?;
+                if error.starts_with("Object inference failed:")
+                    && attempt < 2
+                    && runtime::is_auto(&self.model, "detector")
+                    && runtime::used_acceleration(&self.model)
+                {
+                    if !runtime::recover_acceleration(&self.model, Some("detector"), error) {
+                        return result;
+                    }
+                    self.session.unload();
+                    let model = self.model.clone();
+                    *self = Self::new(&model)?;
+                    continue;
+                }
             }
+            return result;
         }
-        result
+        Err("Object backend retries exhausted".into())
     }
     fn detect_once(
         &mut self,

@@ -1,0 +1,68 @@
+{
+  "id": "cuda12-ort122-cudnn98-win64-v1",
+  "packages": [
+    {
+      "role": "onnxruntime",
+      "package": "onnxruntime-gpu",
+      "version": "1.22.0",
+      "prefix": "onnxruntime/capi/",
+      "url": "https://files.pythonhosted.org/packages/1e/47/313ee7998ef63dd7533200966972056fc5f3c7dd3bdfd9c49ae833bb5108/onnxruntime_gpu-1.22.0-cp311-cp311-win_amd64.whl",
+      "sha256": "0f1719f7cca76075b398a7d0466ead62d78fd2b8c0ea053dcf65d80c813103e8",
+      "size": 214923507
+    },
+    {
+      "role": "cublas",
+      "package": "nvidia-cublas-cu12",
+      "version": "12.8.4.1",
+      "prefix": "nvidia/cublas/bin/",
+      "url": "https://files.pythonhosted.org/packages/70/61/7d7b3c70186fb651d0fbd35b01dbfc8e755f69fd58f817f3d0f642df20c3/nvidia_cublas_cu12-12.8.4.1-py3-none-win_amd64.whl",
+      "sha256": "47e9b82132fa8d2b4944e708049229601448aaad7e6f296f630f2d1a32de35af",
+      "size": 567544208
+    },
+    {
+      "role": "cudnn",
+      "package": "nvidia-cudnn-cu12",
+      "version": "9.8.0.87",
+      "prefix": "nvidia/cudnn/bin/",
+      "url": "https://files.pythonhosted.org/packages/39/6a/5e9910b2b2c9dcddee9aaef372b3db0f08b9f7eaf1d462f859461a79caf9/nvidia_cudnn_cu12-9.8.0.87-py3-none-win_amd64.whl",
+      "sha256": "b4b5cfddc32aa4180f9d390ee99e9a9f55a89e7087329b41aba4319327e22466",
+      "size": 684630375
+    },
+    {
+      "role": "cudart",
+      "package": "nvidia-cuda-runtime-cu12",
+      "version": "12.8.90",
+      "prefix": "nvidia/cuda_runtime/bin/",
+      "url": "https://files.pythonhosted.org/packages/30/a5/a515b7600ad361ea14bfa13fb4d6687abf500adc270f19e89849c0590492/nvidia_cuda_runtime_cu12-12.8.90-py3-none-win_amd64.whl",
+      "sha256": "c0c6027f01505bfed6c3b21ec546f69c687689aad5f1a377554bc6ca4aa993a8",
+      "size": 944318
+    },
+    {
+      "role": "cufft",
+      "package": "nvidia-cufft-cu12",
+      "version": "11.3.3.83",
+      "prefix": "nvidia/cufft/bin/",
+      "url": "https://files.pythonhosted.org/packages/7d/ec/ce1629f1e478bb5ccd208986b5f9e0316a78538dd6ab1d0484f012f8e2a1/nvidia_cufft_cu12-11.3.3.83-py3-none-win_amd64.whl",
+      "sha256": "7a64a98ef2a7c47f905aaf8931b69a3a43f27c55530c698bb2ed7c75c0b42cb7",
+      "size": 192216559
+    },
+    {
+      "role": "curand",
+      "package": "nvidia-curand-cu12",
+      "version": "10.3.9.90",
+      "prefix": "nvidia/curand/bin/",
+      "url": "https://files.pythonhosted.org/packages/b9/75/70c05b2f3ed5be3bb30b7102b6eb78e100da4bbf6944fd6725c012831cab/nvidia_curand_cu12-10.3.9.90-py3-none-win_amd64.whl",
+      "sha256": "f149a8ca457277da854f89cf282d6ef43176861926c7ac85b2a0fbd237c587ec",
+      "size": 62765309
+    },
+    {
+      "role": "nvrtc",
+      "package": "nvidia-cuda-nvrtc-cu12",
+      "version": "12.8.93",
+      "prefix": "nvidia/cuda_nvrtc/bin/",
+      "url": "https://files.pythonhosted.org/packages/45/51/52a3d84baa2136cc8df15500ad731d74d3a1114d4c123e043cb608d4a32b/nvidia_cuda_nvrtc_cu12-12.8.93-py3-none-win_amd64.whl",
+      "sha256": "7a4b6b2904850fe78e0bd179c4b655c404d4bb799ef03ddc60804247099ae909",
+      "size": 73586838
+    }
+  ]
+}

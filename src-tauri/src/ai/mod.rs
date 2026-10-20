@@ -29,6 +29,9 @@ pub mod ocr_smart;
 pub mod persons;
 pub mod remote;
 pub mod runtime;
+pub mod cuda_assets;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub mod cuda;
 pub mod settings;
 pub mod types;
 

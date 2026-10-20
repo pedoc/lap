@@ -100,29 +100,32 @@ impl FaceEngine {
                 .is_some_and(|(loaded, active)| loaded.session_key() == active.session_key())
     }
     fn process(&mut self, image: &DynamicImage) -> Result<(Vec<FaceData>, (u32, u32)), String> {
-        let _lane=crate::ai::vision_jobs::claim(crate::ai::types::Task::Face,||Ok(()))?;
-        let result = self
-            .backend
-            .as_mut()
-            .ok_or("No face model loaded")?
-            .process(image);
-        if let Err(ref error) = result {
-            let model = self.model.clone().ok_or("No face model loaded")?;
-            if (crate::ai::runtime::is_auto(&model, "detector")
-                || crate::ai::runtime::is_auto(&model, "embedding"))
-                && crate::ai::runtime::used_acceleration(&model)
-            {
-                crate::ai::runtime::force_cpu(&model, error);
-                self.backend = None;
-                self.load_model(model)?;
-                return self
+        let _lane = crate::ai::vision_jobs::claim(crate::ai::types::Task::Face, || Ok(()))?;
+        for attempt in 0..3 {
+            let result = self
+                .backend
+                .as_mut()
+                .ok_or("No face model loaded")?
+                .process(image);
+            if let Err(ref error) = result {
+                let model = self.model.clone().ok_or("No face model loaded")?;
+                let role = self
                     .backend
-                    .as_mut()
-                    .ok_or("No face model loaded")?
-                    .process(image);
+                    .as_ref()
+                    .and_then(|b| b.diagnostics())
+                    .map(|r| r.stage);
+                let role = role
+                    .as_deref()
+                    .filter(|role| matches!(*role, "detector" | "embedding"));
+                if attempt < 2 && crate::ai::runtime::recover_acceleration(&model, role, error) {
+                    self.backend = None;
+                    self.load_model(model)?;
+                    continue;
+                }
             }
+            return result;
         }
-        result
+        Err("Face backend retries exhausted".into())
     }
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn process_image(&mut self, path: &str) -> Result<(Vec<FaceData>, (u32, u32)), String> {
@@ -462,30 +465,50 @@ pub fn run_face_indexing(
 }
 
 impl crate::ai::capabilities::FaceDetector for FaceEngine {
-    fn detect(&mut self,image:&DynamicImage)->Result<Vec<FaceBox>,String>{
-        let _lane=crate::ai::vision_jobs::claim(crate::ai::types::Task::Face,||Ok(()))?;
-        let result=self.backend.as_mut().ok_or("No face model loaded")?.detect(image);
-        if let Err(ref error)=result {
-            let model=self.model.clone().ok_or("No face model loaded")?;
-            if crate::ai::runtime::is_auto(&model,"detector") && crate::ai::runtime::used_acceleration(&model) {
-                crate::ai::runtime::force_cpu(&model,error);self.load_model(model)?;
-                return self.backend.as_mut().ok_or("No face model loaded")?.detect(image);
+    fn detect(&mut self, image: &DynamicImage) -> Result<Vec<FaceBox>, String> {
+        let _lane = crate::ai::vision_jobs::claim(crate::ai::types::Task::Face, || Ok(()))?;
+        for attempt in 0..3 {
+            let result = self
+                .backend
+                .as_mut()
+                .ok_or("No face model loaded")?
+                .detect(image);
+            if let Err(ref error) = result {
+                let model = self.model.clone().ok_or("No face model loaded")?;
+                if attempt < 2
+                    && crate::ai::runtime::recover_acceleration(&model, Some("detector"), error)
+                {
+                    self.backend = None;
+                    self.load_model(model)?;
+                    continue;
+                }
             }
+            return result;
         }
-        result
+        Err("Face detector retries exhausted".into())
     }
 }
 impl crate::ai::capabilities::FaceEmbedder for FaceEngine {
-    fn embed_face(&mut self,image:&DynamicImage,face:&FaceBox)->Result<Vec<f32>,String>{
-        let _lane=crate::ai::vision_jobs::claim(crate::ai::types::Task::Face,||Ok(()))?;
-        let result=self.backend.as_mut().ok_or("No face model loaded")?.embed_face(image,face);
-        if let Err(ref error)=result {
-            let model=self.model.clone().ok_or("No face model loaded")?;
-            if crate::ai::runtime::is_auto(&model,"embedding") && crate::ai::runtime::used_acceleration(&model) {
-                crate::ai::runtime::force_cpu(&model,error);self.load_model(model)?;
-                return self.backend.as_mut().ok_or("No face model loaded")?.embed_face(image,face);
+    fn embed_face(&mut self, image: &DynamicImage, face: &FaceBox) -> Result<Vec<f32>, String> {
+        let _lane = crate::ai::vision_jobs::claim(crate::ai::types::Task::Face, || Ok(()))?;
+        for attempt in 0..3 {
+            let result = self
+                .backend
+                .as_mut()
+                .ok_or("No face model loaded")?
+                .embed_face(image, face);
+            if let Err(ref error) = result {
+                let model = self.model.clone().ok_or("No face model loaded")?;
+                if attempt < 2
+                    && crate::ai::runtime::recover_acceleration(&model, Some("embedding"), error)
+                {
+                    self.backend = None;
+                    self.load_model(model)?;
+                    continue;
+                }
             }
+            return result;
         }
-        result
+        Err("Face embedding retries exhausted".into())
     }
 }
