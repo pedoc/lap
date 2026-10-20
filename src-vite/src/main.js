@@ -137,6 +137,26 @@ app.config.globalProperties.$invoke = invoke
 app.use(router)
 app.use(i18n)
 
+// Apply restored preferences once per WebView storage, before rendering. The
+// backend settings have already been applied before any startup workers ran.
+async function restoreUiPreferences() {
+  if (!isMainWindow) return;
+  try {
+    const restored = await invoke('get_restored_ui_preferences');
+    if (!restored || localStorage.getItem('lap-restored-preferences') === restored.revision) return;
+    const { applyBackupPreferences } = await import('@/common/backupPreferences');
+    applyBackupPreferences(config, restored.preferences);
+    // Restored languages may not have been loaded by the lazy startup path.
+    config.settings.language = await initializeLanguage(config.settings.language);
+    localStorage.setItem('lap-restored-preferences', restored.revision);
+  } catch (error) {
+    console.error('Could not restore UI preferences', error);
+    if (String(error).startsWith('Settings restore failed:')) {
+      useToast().error(i18n.global.t('settings.database.restore_apply_failed'), { duration: 10000 });
+    }
+  }
+}
+
 // Cleanup belongs to the approved exit transaction, never an independent close
 // listener: cancelling a draft dialog must not pause scans or clear recovery.
 async function flushAppStateBeforeExit() {
@@ -161,11 +181,14 @@ function mountApp() {
   performance.mark('startup-app-mounted');
   if (isMainWindow) void invoke('record_startup_stage', { stage: 'app-mounted' }).catch(console.error);
 }
-// Install the shared multi-window draft/exit transaction before mounting.
-installDesktopCloseProtection(key => i18n.global.t(key), flushAppStateBeforeExit).then(mountApp).catch(error => {
-  console.error('Window close protection could not be initialized', error);
-  mountApp();
-});
+// Wait for both restored preferences and the shared draft/exit transaction.
+// A close-protection failure must not bypass a still-pending settings restore.
+Promise.all([
+  restoreUiPreferences(),
+  installDesktopCloseProtection(key => i18n.global.t(key), flushAppStateBeforeExit).catch(error => {
+    console.error('Window close protection could not be initialized', error);
+  }),
+]).then(mountApp);
 
 // Listen for events
 if (isMainWindow) {

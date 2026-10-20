@@ -34,6 +34,82 @@ test('startup defers filesystem probes without warming up or changing capability
   assert.match(main, /applyMapServices/);
 });
 
+test('restored backend settings are applied before privacy, proxy and database startup', () => {
+  const main = read('../../src-tauri/src/main.rs');
+  const setup = main.slice(main.indexOf('.setup(|_app|'));
+  const restore = setup.indexOf('t_storage::apply_pending_settings()');
+  assert.ok(setup.indexOf('t_config::set_app_identifier') < restore);
+  for (const operation of ['t_private_lock::start_auto_lock', 't_webview_proxy::initialize', 't_sqlite::create_db']) {
+    assert.ok(restore < setup.indexOf(operation), operation);
+  }
+  assert.equal((setup.match(/t_private_lock::start_auto_lock/g) || []).length, 1);
+  assert.match(setup, /t_startup::mark.*?setup-started/s);
+});
+
+test('restored UI language finishes lazy loading before its revision is acknowledged', async () => {
+  const main = read('../src/main.js');
+  const body = main.slice(main.indexOf('async function restoreUiPreferences()'), main.indexOf('// Cleanup belongs'))
+    .replace(/^\s*const \{ applyBackupPreferences \} = await import\([^\n]+\);\r?\n/m, '');
+  let finishLanguage!: (language: string) => void;
+  const language = new Promise<string>(resolve => { finishLanguage = resolve; });
+  const events: string[] = [];
+  const saved = new Map<string, string>();
+  const config = { settings: { language: 'en' } };
+  const restore = runInNewContext(`${body}; restoreUiPreferences`, {
+    isMainWindow: true, config,
+    invoke: async () => ({ revision: 'restored-v1', preferences: { settings: { language: 'zh-TW' } } }),
+    applyBackupPreferences: (store: any, preferences: any) => {
+      store.settings.language = preferences.settings.language;
+      events.push('applied');
+    },
+    initializeLanguage: async (requested: string) => {
+      events.push(`loading:${requested}`);
+      return language;
+    },
+    localStorage: {
+      getItem: (key: string) => saved.get(key),
+      setItem: (key: string, value: string) => { events.push('acknowledged'); saved.set(key, value); },
+    },
+    console: { error: (error: unknown) => { throw error; } },
+  });
+  const restoring = restore();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events, ['applied', 'loading:zh-TW']);
+  assert.equal(saved.has('lap-restored-preferences'), false);
+  finishLanguage('zh-TW');
+  await restoring;
+  assert.equal(config.settings.language, 'zh-TW');
+  assert.equal(saved.get('lap-restored-preferences'), 'restored-v1');
+  assert.equal(events.at(-1), 'acknowledged');
+});
+
+test('close-protection failure cannot mount the app before restored preferences are ready', async () => {
+  const main = read('../src/main.js');
+  const body = main.slice(main.indexOf('// Mount the app'), main.indexOf('// Listen for events'));
+  let finishRestore!: () => void;
+  const restored = new Promise<void>(resolve => { finishRestore = resolve; });
+  let mounts = 0, failures = 0;
+  const marks: string[] = [];
+  const boot = runInNewContext(body, {
+    restoreUiPreferences: () => restored,
+    installDesktopCloseProtection: async () => { throw new Error('fixture registration failure'); },
+    flushAppStateBeforeExit: () => {},
+    i18n: { global: { t: (key: string) => key } },
+    app: { mount: () => { mounts++; } },
+    performance: { mark: (name: string) => marks.push(name) },
+    isMainWindow: true,
+    invoke: async () => {},
+    console: { error: () => { failures++; } },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(failures, 1);
+  assert.equal(mounts, 0);
+  finishRestore();
+  await boot;
+  assert.equal(mounts, 1);
+  assert.deepEqual(marks, ['startup-app-mounted']);
+});
+
 test('all local analysis paths stop before opening a cloud-only original', () => {
   for (const [path, start, end, readToken] of [
     ['../../src-tauri/src/ai/media.rs', 'pub(crate) fn load(', 'pub(crate) fn source_on(', 'load_oriented_image_blocking'],

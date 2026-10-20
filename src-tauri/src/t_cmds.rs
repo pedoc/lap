@@ -4090,24 +4090,41 @@ pub fn get_db_storage_info() -> Result<Vec<t_storage::DbStorageInfo>, String> {
 }
 
 #[tauri::command]
-pub fn backup_databases(
+pub async fn backup_databases(
     library_ids: Vec<String>,
     dest_path: String,
+    preferences: Option<serde_json::Value>,
 ) -> Result<t_storage::BackupResult, String> {
-    t_storage::backup_databases(&library_ids, &dest_path)
+    tauri::async_runtime::spawn_blocking(move || {
+        t_storage::backup_databases(&library_ids, &dest_path, preferences)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn parse_backup_file(path: String) -> Result<t_storage::BackupMetaData, String> {
-    t_storage::parse_backup_file(&path)
+pub async fn parse_backup_file(path: String) -> Result<t_storage::BackupMetaData, String> {
+    tauri::async_runtime::spawn_blocking(move || t_storage::parse_backup_file(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn restore_databases(
+pub async fn restore_databases(
     backup_path: String,
     selections: Vec<t_storage::RestoreSelection>,
+    restore_settings: Option<bool>,
 ) -> Result<t_storage::RestoreResult, String> {
-    t_storage::restore_databases(&backup_path, &selections)
+    tauri::async_runtime::spawn_blocking(move || {
+        t_storage::restore_databases(&backup_path, &selections, restore_settings.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn get_restored_ui_preferences() -> Result<Option<serde_json::Value>, String> {
+    t_storage::restored_ui_preferences()
 }
 
 #[cfg(test)]

@@ -5,20 +5,15 @@
  * author:  julyx10
  * date:    2026-01-15
  */
-use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use uuid::Uuid;
-use zip::ZipWriter;
-use zip::read::ZipArchive;
-use zip::write::FileOptions;
 
-use crate::t_config::{self, AppConfig, Library, LibraryState};
+use crate::t_config::{self, AppConfig, Library};
 
 static DB_MIGRATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
@@ -287,48 +282,11 @@ pub struct DbStorageInfo {
     pub db_file_size: i64,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupResult {
-    pub file_path: String,
-    pub file_size: i64,
-    pub library_count: usize,
-    pub library_names: Vec<String>,
-    pub warnings:Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupMetaLibrary {
-    pub name: String,
-    pub db_size: i64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupMetaData {
-    pub created_at: i64,
-    pub libraries: Vec<BackupMetaLibrary>,
-    #[serde(default)]
-    pub includes_media:bool,
-    #[serde(default)]
-    pub recovery_reports:Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RestoreSelection {
-    pub library_name: String,
-    pub should_rename: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RestoreResult {
-    pub restored_count: usize,
-    pub restored_names: Vec<String>,
-    pub warnings:Vec<String>,
-}
+mod backup;
+pub use backup::{
+    BackupMetaData, BackupResult, RestoreResult, RestoreSelection, apply_pending_settings,
+    backup_databases, parse_backup_file, restore_databases, restored_ui_preferences,
+};
 
 pub fn get_db_storage_info() -> Result<Vec<DbStorageInfo>, String> {
     let config = t_config::load_app_config()?;
@@ -353,256 +311,6 @@ pub fn get_db_storage_info() -> Result<Vec<DbStorageInfo>, String> {
     }
 
     Ok(results)
-}
-
-pub fn backup_databases(library_ids: &[String], dest_path: &str) -> Result<BackupResult, String> {
-    let _migration_guard = DbMigrationGuard::acquire()?;
-    let config = t_config::load_app_config()?;
-
-    let selected: Vec<&Library> = library_ids
-        .iter()
-        .filter_map(|id| config.libraries.iter().find(|l| l.id == *id))
-        .collect();
-
-    if selected.is_empty() {
-        return Err("No libraries selected for backup.".to_string());
-    }
-
-    for lib in &selected {
-        let db_path = get_library_db_path_from_config(&config, &lib.id)?;
-        checkpoint_db(Path::new(&db_path))?;
-    }
-
-    let file =
-        fs::File::create(dest_path).map_err(|e| format!("Failed to create backup file: {}", e))?;
-    let mut zip = ZipWriter::new(file);
-
-    let mut warnings=Vec::new();
-    for lib in &selected {let path=get_library_db_path_from_config(&config,&lib.id)?;if Path::new(&path).exists(){let conn=Connection::open_with_flags(&path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e|e.to_string())?;
-        let report=crate::t_media_recovery::inspect(&conn,false)?;warnings.extend(report.issues.into_iter().map(|issue|format!("{}: {issue}",lib.name)));}}
-    let backup_info = serde_json::json!({
-        "includesMedia":false,
-        "recoveryReports":warnings,
-        "recoveryScope":"catalogue-and-journals-only",
-        "createdAt": SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
-        "libraries": selected.iter().map(|lib| {
-            let db_path = get_library_db_path_from_config(&config, &lib.id).ok();
-            let size = db_path.as_ref()
-                .and_then(|p| fs::metadata(p).ok())
-                .map(|m| m.len() as i64)
-                .unwrap_or(0);
-            serde_json::json!({ "name": lib.name, "dbSize": size })
-        }).collect::<Vec<_>>()
-    });
-
-    let info_json = serde_json::to_string_pretty(&backup_info)
-        .map_err(|e| format!("Failed to serialize backup info: {}", e))?;
-
-    let options =
-        FileOptions::<'_, ()>::default().compression_method(zip::CompressionMethod::Deflated);
-    zip.start_file("backup-info.json", options)
-        .map_err(|e| format!("Failed to write backup-info.json to zip: {}", e))?;
-    zip.write_all(info_json.as_bytes())
-        .map_err(|e| format!("Failed to write backup-info.json content: {}", e))?;
-
-    let app_config_path = t_config::get_config_file_path()?;
-    if app_config_path.exists() {
-        let mut config_content = String::new();
-        fs::File::open(&app_config_path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?
-            .read_to_string(&mut config_content)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-
-        let options =
-            FileOptions::<'_, ()>::default().compression_method(zip::CompressionMethod::Deflated);
-        zip.start_file("app-config.json", options)
-            .map_err(|e| format!("Failed to write app-config.json to zip: {}", e))?;
-        zip.write_all(config_content.as_bytes())
-            .map_err(|e| format!("Failed to write app-config.json content: {}", e))?;
-    }
-
-    let mut library_names = Vec::new();
-    for lib in &selected {
-        let db_path = get_library_db_path_from_config(&config, &lib.id)?;
-        let path = Path::new(&db_path);
-        if !path.exists() {
-            continue;
-        }
-
-        let mut db_content = Vec::new();
-        fs::File::open(path)
-            .map_err(|e| format!("Failed to read database '{}': {}", lib.name, e))?
-            .read_to_end(&mut db_content)
-            .map_err(|e| format!("Failed to read database '{}': {}", lib.name, e))?;
-
-        let recovery_conn=Connection::open_with_flags(path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e|e.to_string())?;
-        for (id,journal) in crate::t_media_recovery::backup_journals(&recovery_conn)?{
-            let entry=format!("recovery/{}/{id}.json",sanitize_filename(&lib.name));zip.start_file(entry,FileOptions::<'_,()>::default().compression_method(zip::CompressionMethod::Deflated)).map_err(|e|e.to_string())?;zip.write_all(journal.as_bytes()).map_err(|e|e.to_string())?;
-        }
-        let safe_name = sanitize_filename(&lib.name);
-        let zip_path = format!("{}.db", safe_name);
-
-        let options =
-            FileOptions::<'_, ()>::default().compression_method(zip::CompressionMethod::Deflated);
-        zip.start_file(&zip_path, options)
-            .map_err(|e| format!("Failed to write {} to zip: {}", zip_path, e))?;
-        zip.write_all(&db_content)
-            .map_err(|e| format!("Failed to write {} content: {}", zip_path, e))?;
-
-        library_names.push(lib.name.clone());
-    }
-
-    let file = zip
-        .finish()
-        .map_err(|e| format!("Failed to finalize backup zip: {}", e))?;
-    let final_size = file.metadata().map(|m| m.len() as i64).unwrap_or(0);
-
-    Ok(BackupResult {
-        file_path: dest_path.to_string(),
-        file_size: final_size,
-        library_count: library_names.len(),
-        library_names,
-        warnings,
-    })
-}
-
-pub fn parse_backup_file(path: &str) -> Result<BackupMetaData, String> {
-    let file = fs::File::open(path).map_err(|e| format!("Failed to open backup file: {}", e))?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|e| format!("Failed to read backup zip: {}", e))?;
-
-    let info_index = archive
-        .index_for_name("backup-info.json")
-        .ok_or_else(|| "Invalid backup file: missing backup-info.json".to_string())?;
-    let mut info_file = archive
-        .by_index(info_index)
-        .map_err(|e| format!("Failed to read backup-info.json: {}", e))?;
-    let mut info_content = String::new();
-    info_file
-        .read_to_string(&mut info_content)
-        .map_err(|e| format!("Failed to read backup-info.json: {}", e))?;
-
-    let info: BackupMetaData = serde_json::from_str(&info_content)
-        .map_err(|e| format!("Failed to parse backup-info.json: {}", e))?;
-
-    Ok(info)
-}
-
-pub fn restore_databases(
-    backup_path: &str,
-    selections: &[RestoreSelection],
-) -> Result<RestoreResult, String> {
-    let _migration_guard = DbMigrationGuard::acquire()?;
-    let mut config = t_config::load_app_config()?;
-
-    let file =
-        fs::File::open(backup_path).map_err(|e| format!("Failed to open backup file: {}", e))?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|e| format!("Failed to read backup zip: {}", e))?;
-
-    let mut db_entries: std::collections::HashMap<String, Vec<u8>> =
-        std::collections::HashMap::new();
-    for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| format!("Failed to read zip entry: {}", e))?;
-        let entry_name = entry.name().to_string();
-        if !entry_name.ends_with(".db") {
-            continue;
-        }
-        let lib_name = entry_name.trim_end_matches(".db").to_string();
-        let mut content = Vec::new();
-        entry
-            .read_to_end(&mut content)
-            .map_err(|e| format!("Failed to read zip entry '{}': {}", entry_name, e))?;
-        db_entries.insert(lib_name, content);
-    }
-
-    let mut restored_names = Vec::new();
-    let mut warnings=Vec::new();
-    let mut existing_names: std::collections::HashSet<String> =
-        config.libraries.iter().map(|l| l.name.clone()).collect();
-
-    for selection in selections {
-        let zip_lib_name = sanitize_filename(&selection.library_name);
-        let Some(db_content) = db_entries.remove(&zip_lib_name) else {
-            continue;
-        };
-
-        let final_lib_name = if selection.should_rename {
-            resolve_unique_name(&selection.library_name, &existing_names)
-        } else {
-            selection.library_name.clone()
-        };
-
-        let lib_id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().timestamp();
-        let new_lib = Library {
-            id: lib_id.clone(),
-            name: final_lib_name.clone(),
-            created_at: now,
-            state: LibraryState::default(),
-            hidden: false,
-        };
-
-        let db_path = get_library_db_path_from_config(&config, &lib_id)?;
-        let db_path_obj = Path::new(&db_path);
-        if let Some(parent) = db_path_obj.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory for library: {}", e))?;
-        }
-        fs::write(db_path_obj, &db_content).map_err(|e| {
-            format!(
-                "Failed to write database file for '{}': {}",
-                final_lib_name, e
-            )
-        })?;
-
-        let restored=Connection::open(db_path_obj).map_err(|e|e.to_string())?;
-        crate::t_media_lifecycle::setup(&restored)?;
-        let report=crate::t_media_recovery::inspect(&restored,true)?;
-        warnings.extend(report.issues.into_iter().map(|issue|format!("{final_lib_name}: {issue}")));
-        config.libraries.push(new_lib);
-        existing_names.insert(final_lib_name.clone());
-        restored_names.push(final_lib_name);
-    }
-
-    t_config::save_app_config(&config)?;
-    Ok(RestoreResult {
-        restored_count: restored_names.len(),
-        restored_names,
-        warnings,
-    })
-}
-
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim()
-        .to_string()
-}
-
-fn resolve_unique_name(name: &str, existing: &std::collections::HashSet<String>) -> String {
-    if !existing.contains(name) {
-        return name.to_string();
-    }
-    for i in 1..=999 {
-        let candidate = format!("{} ({})", name, i);
-        if !existing.contains(&candidate) {
-            return candidate;
-        }
-    }
-    format!("{} ({})", name, rand::random::<u16>())
 }
 
 #[cfg(test)]

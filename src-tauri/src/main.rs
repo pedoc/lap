@@ -129,9 +129,16 @@ async fn main() {
         .manage(t_dedup::DedupState::default())
         .manage(t_similar::SimilarState::default())
         .setup(|_app| {
-            t_private_lock::start_auto_lock(_app.handle().clone());
             t_startup::mark(&_app.handle(), "setup-started");
             t_config::set_app_identifier(&_app.config().identifier);
+            // Apply restored configuration before anything caches it or starts
+            // background work. A failed apply rolls back and keeps the marker.
+            if let Err(error) = t_storage::apply_pending_settings() {
+                eprintln!(
+                    "Application settings restore failed; previous settings retained: {error}"
+                );
+            }
+            t_private_lock::start_auto_lock(_app.handle().clone());
             if let Ok(config) = t_config::load_app_config() {
                 t_webview_proxy::initialize(config.network_proxy_url.clone());
                 t_network::initialize(config.network_proxy_url);
@@ -542,6 +549,7 @@ async fn main() {
             t_cmds::backup_databases,
             t_cmds::parse_backup_file,
             t_cmds::restore_databases,
+            t_cmds::get_restored_ui_preferences,
         ])
         .build(tauri::generate_context!());
 

@@ -246,6 +246,9 @@ fn decode(source: &str, legacy_library: Option<&str>) -> Result<Configuration, S
 fn path() -> Result<std::path::PathBuf, String> {
     Ok(crate::t_config::get_app_data_dir()?.join("ai-config.json"))
 }
+pub(crate) fn validate_backup(source: &str) -> Result<(), String> {
+    decode(source, None).map(|_| ())
+}
 pub fn snapshot() -> Result<Configuration, String> {
     let mut state = SETTINGS.lock().map_err(|e| e.to_string())?;
     if state.is_none() {

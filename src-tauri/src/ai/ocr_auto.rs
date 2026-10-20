@@ -50,7 +50,7 @@ fn path() -> Result<std::path::PathBuf, String> {
         Ok(crate::t_config::get_app_data_dir()?.join("ocr-automation.json"))
     }
 }
-fn validate(policy: &Policy) -> Result<(), String> {
+pub(crate) fn validate(policy: &Policy) -> Result<(), String> {
     if !(15..=3600).contains(&policy.idle_seconds)
         || !(1..=100).contains(&policy.batch_size)
         || policy

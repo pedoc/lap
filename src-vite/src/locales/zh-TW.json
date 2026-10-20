@@ -2045,7 +2045,17 @@
       "restore_conflict": "已存在 → 將重新命名",
       "restore_restoring": "正在還原...",
       "restore_success": "還原完成。已還原 {count} 個媒體庫：{names}",
-      "restore_note": "名稱衝突的媒體庫將被重新命名，現有資料不會被覆寫。"
+      "restore_note": "名稱衝突的媒體庫將被重新命名，現有資料不會被覆寫。",
+      "backup_settings_hint": "同時備份應用程式偏好、AI 設定、自動辨識策略和已設定的應用鎖；不包含模型檔案及系統憑證庫中的 API 金鑰。",
+      "restore_checking": "正在讀取備份…",
+      "restore_checksum_hint": "還原前將校驗 SHA-256 和資料庫完整性，通過後才寫入資料。",
+      "restore_legacy_hint": "舊版備份：將檢查 ZIP CRC 和資料庫完整性，無法核對 SHA-256。",
+      "restore_settings": "同時還原應用程式設定",
+      "restore_settings_hint": "下次啟動時生效，包含備份時的應用鎖密碼。保留現有媒體庫及本機資料位置，自動辨識保持暫停。",
+      "restore_restart_hint": "媒體庫已還原。應用程式設定將於下次啟動時生效，可立即重新啟動或稍後再啟動。",
+      "restore_restart": "重新啟動 Lap",
+      "restore_close": "完成",
+      "restore_apply_failed": "無法套用還原的設定，已保留原設定及待還原檔案。請檢查檔案權限或佔用後重新啟動重試。"
     },
     "face_recognition": {
       "title": "人物搜尋",

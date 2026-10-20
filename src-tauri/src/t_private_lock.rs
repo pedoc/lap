@@ -279,6 +279,11 @@ impl LockState {
 fn config_path() -> Result<PathBuf, String> {
     Ok(crate::t_config::get_app_data_dir()?.join("private-lock.json"))
 }
+pub(crate) fn validate_backup(source: &str) -> Result<(), String> {
+    serde_json::from_str::<Config>(source)
+        .map_err(|e| format!("Invalid private lock configuration: {e}"))?
+        .validate()
+}
 fn state() -> Result<std::sync::MutexGuard<'static, LockState>, String> {
     let mut state = STATE.lock().map_err(|_| "Private lock state unavailable")?;
     if !state.initialized {
