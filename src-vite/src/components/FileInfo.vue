@@ -476,7 +476,7 @@ import { config, libConfig } from '@/common/config';
 import { onBeforeEnter, onEnter, onAfterEnter, onLeave } from '@/common/infoPanelTransition';
 import { isWebViewVideoPlaybackDisabled, getGStreamerAvailability } from '@/common/video';
 import { isOriginalUnavailable } from '@/common/availability';
-import { getTagsForFile, renameFile, editImage, getAlbum, getFileCollections, getFileInfo, getMotionPhotoVideoPath, revealPath, getFacesForFile, getPersonThumbnail } from '@/common/api';
+import { getTagsForFile, renameFile, editImage, getAlbum, getFileCollections, getFileInfo, getMotionPhotoVideoPath, revealPath, getFacesForFile, getPersonThumbnail, isCloudOnlyFile } from '@/common/api';
 import { 
   extractFileName, 
   getFileExtension,
@@ -695,6 +695,8 @@ async function playPreviewVideo() {
   const available = await getGStreamerAvailability();
   if (request !== videoPreviewRequest || !available) return;
   if (!canPreviewVideo.value || !previewVideoPath.value || showVideoPreview.value) return;
+  // Playing an online-only video would download it.
+  if (await isCloudOnlyFile(previewVideoPath.value) || request !== videoPreviewRequest) return;
   isVideoPreviewReady.value = false;
   showVideoPreview.value = true;
   await nextTick();
@@ -737,6 +739,8 @@ watch(
     const requestSeq = ++motionPhotoVideoRequestSeq;
     motionPhotoVideoPath.value = null;
     if (!fileId || mediaSubtype !== 'motion_photo') return;
+    // Extracting the embedded video reads the file; an online-only one would download.
+    if (await isCloudOnlyFile(props.fileInfo?.file_path || '') || requestSeq !== motionPhotoVideoRequestSeq) return;
     try {
       const path = await getMotionPhotoVideoPath(Number(fileId));
       if (requestSeq === motionPhotoVideoRequestSeq) {

@@ -25,6 +25,21 @@ pub fn base() -> String {
         visible()
     )
 }
+/// Availability is deliberately separate from visibility: cached results and
+/// manual annotations remain browsable for cloud-only originals.
+pub(crate) fn local_originals() -> &'static str {
+    "COALESCE(a.cloud_only,0)=0 AND COALESCE(a.metadata_pending,0)=0"
+}
+/// Provider state can change after a job's database snapshot. Defer such a
+/// photo instead of writing a model failure or a false negative observation.
+pub(crate) fn defer_cloud_original(c: &Connection, id: i64, path: &str) -> Result<bool, String> {
+    if !crate::t_utils::is_cloud_only_path(path) {
+        return Ok(false);
+    }
+    c.execute("UPDATE afiles SET cloud_only=1 WHERE id=?1", [id])
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
 /// Equivalent visibility for one ID, without materializing library-wide lists.
 pub(crate) fn point_base() -> String {
     format!(
@@ -44,7 +59,7 @@ pub fn check_library(library: &str) -> Result<(), String> {
 }
 fn source_query() -> String {
     format!(
-        "SELECT b.path || '/' || a.name,a.modified_at,a.size,a.width,a.height,COALESCE(a.e_orientation,1) {} AND a.id=?1",
+        "SELECT b.path || '/' || a.name,a.modified_at,a.size,COALESCE(a.width,0),COALESCE(a.height,0),COALESCE(a.e_orientation,1) {} AND a.id=?1",
         point_base()
     )
 }
@@ -79,6 +94,13 @@ impl Source {
         Ok(())
     }
     pub(crate) fn load(&self) -> Result<DynamicImage, String> {
+        // Metadata checks and editing existing cached annotations do not need
+        // original pixels. Availability belongs only at the decode boundary.
+        if crate::t_utils::is_cloud_only_path(&self.path) {
+            return Err(
+                "Original is online-only; download it locally before image analysis".into(),
+            );
+        }
         if self.width.saturating_mul(self.height) > 80_000_000 {
             return Err("Image exceeds 80 megapixel analysis decoding limit".into());
         }
@@ -99,6 +121,14 @@ pub(crate) fn source_on(c: &Connection, id: i64) -> Result<Source, String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[test]
+    fn metadata_only_placeholders_do_not_break_cached_result_reads() {
+        let c = db(2);
+        c.execute_batch("UPDATE afiles SET width=NULL,height=NULL,cloud_only=1,metadata_pending=1 WHERE id=1;").unwrap();
+        let source = source_optional_on(&c, 1).unwrap().unwrap();
+        assert_eq!((source.width,source.height),(0,0));
+        assert_eq!(source.stamp_key().unwrap().len(),64);
+    }
 
     pub(crate) fn db(count: i64) -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -117,6 +147,7 @@ pub(crate) mod tests {
             [count],
         )
         .unwrap();
+        c.execute_batch("ALTER TABLE afiles ADD COLUMN cloud_only INTEGER NOT NULL DEFAULT 0; ALTER TABLE afiles ADD COLUMN metadata_pending INTEGER NOT NULL DEFAULT 0;").unwrap();
         c
     }
 

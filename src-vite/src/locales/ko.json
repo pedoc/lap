@@ -54,6 +54,12 @@
     "database_corrupted_hint": "다른 라이브러리로 전환해 보세요."
   },
   "album": {
+    "drop": {
+      "add": "폴더를 드래그하여 추가",
+      "separate": "파일과 폴더를 따로 드래그하세요.",
+      "confirm_folder": "폴더 선택: {name}",
+      "folders_only": "폴더를 드래그하세요."
+    },
     "album_list": "앨범",
     "search_folders": "폴더 검색",
     "favorite_folders_only": "즐겨찾는 폴더만",
@@ -150,6 +156,7 @@
       "validation_name": "스마트 앨범 이름을 입력하세요.",
       "validation_rule": "완성된 규칙을 하나 이상 추가하세요.",
       "fields": {
+        "folder_name": "폴더 이름",
         "name": "파일 이름",
         "file_type": "파일 유형",
         "media_subtype": "미디어 하위 유형",
@@ -225,6 +232,8 @@
     }
   },
   "offline": {
+    "cloud_only": "온라인에서만 사용 가능",
+    "cloud_only_pending": "온라인에서만 사용 가능 — 파일 정보 미완성",
     "original_unavailable": "원본 파일에 접근할 수 없습니다",
     "requires_original": "원본 파일이 필요합니다. 저장 장치를 다시 연결하세요."
   },
@@ -434,7 +443,11 @@
       "placeholder": "파일 이름"
     },
     "filter": {
-      "select_mode": "선택 항목",
+      "select_mode": "다중 선택",
+      "select_files": "파일 선택",
+      "show_selection_panel": "다중 선택 패널 열기",
+      "hide_selection_panel": "다중 선택 패널 접기",
+      "exit_select_mode": "다중 선택 모드 종료",
       "select_count": "{count}개 선택됨",
       "group_type_options": [
         "없음",
@@ -457,7 +470,8 @@
         "크기",
         "픽셀 크기",
         "재생시간",
-        "무작위"
+        "무작위",
+        "추가"
       ],
       "similarity": "유사도",
       "sort_order_options": [
@@ -557,6 +571,7 @@
       },
       "reclaimable_size": "정리 가능",
       "groups_title": "중복 그룹",
+      "skipped_cloud_only": "온라인 전용 파일 {count}개를 건너뛰었습니다",
       "actions_title": "작업",
       "compare": "비교",
       "rescan": "다시 스캔",
@@ -1086,24 +1101,13 @@
     "montage": {
       "title": "콜라주",
       "layout": "레이아웃",
-      "grid": "격자",
-      "mosaic": "모자이크",
-      "pile": "사진 더미",
+      "pile": "자유 배치",
       "shuffle": "무작위 콜라주",
-      "angle": "각도: {value}°",
-      "scale": "배율: {value}%",
       "shadow": "그림자 그리기",
       "style": "스타일",
       "export": "내보내기: {size}",
       "random_rotation": "무작위 회전",
       "border_width": "테두리 두께",
-      "photos": "사진 ({count})",
-      "add": "추가",
-      "photos_hint": "드래그하여 순서 변경 · 오른쪽 클릭으로 제거",
-      "add_none": "Lap에서 아직 콜라주에 없는 사진을 선택한 다음 추가를 클릭하세요.",
-      "hint_pile": "사진 더미: 드래그하여 이동 · 다이얼로 회전 및 크기 조절 · 잡은 사진이 맨 앞으로 옵니다",
-      "hint_grid": "그리드: 사진이 각 칸을 채웁니다 (가운데 자르기) · 사진을 다른 사진 위로 드래그하면 서로 바뀝니다",
-      "hint_mosaic": "모자이크: 빈틈 없이, 사진 비율 유지 · 사진을 다른 사진 위로 드래그하면 서로 바뀝니다",
       "page": "페이지",
       "page_size": "크기",
       "page_screen": "화면 16:9",
@@ -1204,7 +1208,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "내비게이터 선명도 격자",
-    "sharpness_grid_hint": "내비게이터에 선명한 영역을 표시합니다.",
+    "sharpness_grid_hint": "내비게이터에 선명한 영역을 표시합니다",
     "live": "라이브",
     "motion": "모션",
     "title": "이미지 뷰어",
@@ -1322,15 +1326,16 @@
       "title": "RAW",
       "section_pairs": "쌍을 이룬 파일",
       "pair_source": "쌍의 기본 표시",
-      "pair_source_hint": "쌍을 이룬 썸네일과 미리보기에 사용됩니다.",
+      "pair_source_hint": "쌍을 이룬 썸네일과 미리보기에 사용됩니다",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "기본 미리보기 소스",
+      "preview_source_hint": "우선 소스를 사용할 수 없으면 다른 소스를 사용합니다",
       "rawRenderBrightness": "렌더링 밝기",
       "option_embedded": "내장 미리보기 우선",
-      "option_rendered": "항상 RAW 렌더링",
+      "option_rendered": "RAW 렌더링 우선",
       "option_original": "원본 노출",
       "option_brightened": "밝게",
-      "brightness_hint": "내장 미리보기를 사용할 수 없는 경우를 포함해 RAW 렌더링 시 적용됩니다.",
+      "brightness_hint": "RAW 렌더링에만 적용됩니다",
       "switch_to": "{source}(으)로 전환",
       "show_pair": "페어링된 {format} 표시",
       "source_embedded": "내장",

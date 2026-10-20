@@ -138,7 +138,7 @@
         <!-- straighten angle + crop confirm/cancel -->
         <div
           v-if="cropStatus === 1"
-          class="w-full max-w-2xl shrink-0 flex items-center gap-3 px-4"
+          class="w-full max-w-xl shrink-0 flex items-center gap-3 px-4"
         >
           <div
             class="flex items-center gap-3 flex-1 min-w-0"
@@ -146,19 +146,17 @@
             @pointerup="isRotating = false"
             @pointercancel="isRotating = false"
           >
-            <span class="text-xs font-medium text-base-content/50 shrink-0">{{ $t('msgbox.image_editor.angle') }}</span>
             <AngleSlider
               v-model="cropAngleModel"
               :min="-45"
               :max="45"
               :step="1"
+              :aria-label="$t('msgbox.image_editor.angle')"
               class="flex-1 min-w-0"
             />
           </div>
 
-          <div class="w-px h-5 bg-base-content/10 shrink-0"></div>
-
-          <div class="flex items-center gap-1 shrink-0">
+          <div class="flex items-center gap-1 shrink-0 translate-y-2.5">
             <TButton
               buttonSize="small"
               :icon="IconClose"
@@ -558,6 +556,10 @@ import { editImage, checkFileExists, getFileInfo } from '@/common/api';
 import { getMaxInscribedRect, clampCenterInRotatedRect, maxResizeT } from '@/common/geometry';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emit as tauriEmit, listen } from '@tauri-apps/api/event';
+
+watch(() => config.imageEditor, (preferences) => {
+  void tauriEmit('image-editor-config-changed', JSON.parse(JSON.stringify(preferences)));
+}, { deep: true });
 
 import TitleBar from '@/components/TitleBar.vue';
 import MessageBox from '@/components/MessageBox.vue';

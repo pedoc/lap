@@ -204,7 +204,7 @@ const validateInput = () => {
 };
 
 function handleKeyDown(event: KeyboardEvent) {
-  if (!uiStore.isInputActive('MessageBox') || props.isLoading) return;
+  if (event.defaultPrevented || !uiStore.isInputActive('MessageBox') || props.isLoading) return;
 
   const { key } = event;
   const activeElement = document.activeElement;

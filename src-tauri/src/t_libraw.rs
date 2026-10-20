@@ -361,7 +361,7 @@ impl RawHandle {
         thumbs
     }
 
-    fn render_preview(&mut self, options: RawDisplayOptions) -> Result<RawImageBlob, String> {
+    fn render_preview(&mut self, options: RawDisplayOptions, half_size: bool) -> Result<RawImageBlob, String> {
         let mut out = LapLibRawImage {
             data: std::ptr::null_mut(),
             len: 0,
@@ -373,7 +373,7 @@ impl RawHandle {
             flip: 0,
         };
 
-        let ret = unsafe { lap_libraw_render_preview(self.raw, 0, 0, options.auto_bright as c_int, &mut out) };
+        let ret = unsafe { lap_libraw_render_preview(self.raw, half_size as c_int, 0, options.auto_bright as c_int, &mut out) };
         if ret != 0 {
             return Err(libraw_error(ret, "Failed to process RAW preview"));
         }
@@ -438,12 +438,12 @@ fn format_shutter_speed(shutter: f32) -> String {
     }
 }
 
-fn render_processed_preview(file_path: &str, max_edge: u32, options: RawDisplayOptions) -> Result<Vec<u8>, String> {
+fn render_processed_preview(file_path: &str, max_edge: u32, options: RawDisplayOptions, half_size: bool) -> Result<Vec<u8>, String> {
     let mut raw = RawHandle::open(file_path)?;
-    let rendered = raw.render_preview(options)?;
+    let rendered = raw.render_preview(options, half_size)?;
     let image = decode_processed_image(&rendered)?;
-    let image = if max_edge > 0 {
-        image.resize(max_edge, max_edge, image::imageops::FilterType::Lanczos3)
+    let image = if max_edge > 0 && image.width().max(image.height()) > max_edge {
+        image.resize(max_edge, max_edge, if half_size { image::imageops::FilterType::Triangle } else { image::imageops::FilterType::Lanczos3 })
     } else {
         image
     };
@@ -538,12 +538,20 @@ pub fn get_raw_preview_with_source(
     file_path: &str,
     options: RawDisplayOptions,
 ) -> Result<(Vec<u8>, &'static str, bool), String> {
+    resolve_raw_preview(file_path, options, 4096, false)
+}
+
+pub fn get_raw_preview_with_size(file_path: &str, options: RawDisplayOptions, full_size: bool) -> Result<(Vec<u8>, &'static str, bool), String> {
+    resolve_raw_preview(file_path, options, if full_size { 0 } else { 4096 }, !full_size)
+}
+
+fn resolve_raw_preview(file_path: &str, options: RawDisplayOptions, max_edge: u32, half_size: bool) -> Result<(Vec<u8>, &'static str, bool), String> {
     if options.embedded() {
         if let Ok(Some(preview)) = get_embedded_raw_preview_image(file_path) {
             return Ok((preview, "embedded", false));
         }
     }
-    let preview = render_processed_preview(file_path, 4096, options)?;
+    let preview = render_processed_preview(file_path, max_edge, options, half_size)?;
     Ok((preview, if options.auto_bright { "brightened" } else { "rendered" }, options.embedded()))
 }
 
@@ -715,6 +723,10 @@ mod raw_display_render_tests {
         let options = |mode| RawDisplayOptions { mode, prefer_pair: false, auto_bright: false };
         let render = |mode| get_raw_preview_image(path_str, options(mode)).unwrap().unwrap();
         let normal = render(RawPreviewMode::Rendered);
+        let fit = get_raw_preview_with_size(path_str, options(RawPreviewMode::Rendered), false).unwrap().0;
+        let full = get_raw_preview_with_size(path_str, options(RawPreviewMode::Rendered), true).unwrap().0;
+        assert_eq!(image::load_from_memory(&fit).unwrap().width(), 64);
+        assert_eq!(image::load_from_memory(&full).unwrap().width(), 128);
         let bright_options = RawDisplayOptions { auto_bright: true, ..options(RawPreviewMode::Rendered) };
         let bright = get_raw_preview_image(path_str, bright_options).unwrap().unwrap();
         let (fallback_bright, source, unavailable) = get_raw_preview_with_source(path_str, RawDisplayOptions { mode: RawPreviewMode::Embedded, ..bright_options }).unwrap();

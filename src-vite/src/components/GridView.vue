@@ -90,6 +90,7 @@
           @dblclicked="(modifiers) => $emit('item-dblclicked', getFileIndex(item, index), modifiers)"
           @select-toggled="(shiftKey) => $emit('item-select-toggled', getFileIndex(item, index), shiftKey)"
           @action="(actionName) => $emit('item-action', { action: actionName, index: getFileIndex(item, index) })"
+          @selection-context-menu="(event) => $emit('selection-context-menu', getFileIndex(item, index), event)"
         />
         <div v-else class="w-full h-full bg-base-200/70"></div>
       </div>
@@ -124,7 +125,7 @@ import { config } from '@/common/config';
 import { thumbnailProfile } from '@/common/thumbnailProfiles';
 import Thumbnail from '@/components/Thumbnail.vue';
 import VirtualScroll from '@/components/VirtualScroll.vue';
-import { GROUP } from '@/common/constants';
+import { GROUP, GROUP_HEADER_HEIGHT } from '@/common/constants';
 import { calculateJustifiedLayout, calculateLinearRowLayout, calculateLinearColumnLayout, calculateMasonryLayout, type Geometry } from '@/common/layout';
 import { buildFolderBreadcrumbs, formatFolderBreadcrumb, isWithinRootPath } from '@/common/utils';
 import Breadcrumb from '@/components/Breadcrumb.vue';
@@ -188,6 +189,7 @@ const emit = defineEmits([
   'item-dblclicked',
   'item-select-toggled',
   'item-action',
+  'selection-context-menu',
   'date-group-select',
   'group-select-toggled',
   'request-scroll',
@@ -207,7 +209,7 @@ const containerRef = ref<HTMLElement | null>(null);
 const scroller = ref<any>(null);
 const columnCount = ref(4);
 const containerWidth = ref(0);
-const GROUP_HEADER_HEIGHT = 40;
+
 const groupHeaderHeight = computed(() => GROUP_HEADER_HEIGHT * Number(config.settings.scale || 1));
 let pendingPointerDrag: {
   pointerId: number;
@@ -590,9 +592,6 @@ onMounted(() => {
     resizeObserver = new ResizeObserver(() => {
       // updateColumnCount(); // merged into updateLayout
       updateLayout();
-      if (props.selectedItemIndex !== -1) {
-        scrollToItem(props.selectedItemIndex);
-      }
     });
     resizeObserver.observe(containerRef.value);
     updateLayout();

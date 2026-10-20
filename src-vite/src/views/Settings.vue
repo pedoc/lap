@@ -37,7 +37,7 @@
                 <div>{{ $t('settings.general.select_language') }}</div>
                 <div v-if="config.settings.language !== 'en'" class="text-xs text-base-content/30">Select language</div>
               </div>
-              <select class="select  select-bordered select-sm min-w-32" v-model="config.settings.language">
+              <select class="select  select-bordered select-sm min-w-32" :value="config.settings.language" @change="config.setLanguage(($event.target as HTMLSelectElement).value)">
                 <option v-for="(lang, index) in languages" :key="index" :value="lang.value">{{ lang.label }}</option>
               </select>
             </div>
@@ -561,7 +561,7 @@ import { ask, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { normalizeThumbnailSize } from '@/common/thumbnailProfiles';
-import { THUMBNAIL_BADGE, MAP_MARKER_SIZES, SETTINGS_TAB } from '@/common/constants';
+import { THUMBNAIL_BADGE, MAP_MARKER_SIZES, SETTINGS_TAB, SETTINGS_BASE_WIDTH, SETTINGS_BASE_HEIGHT } from '@/common/constants';
 import {
   getDbStorageDir,
   changeDbStorageDir,
@@ -606,7 +606,7 @@ const settingsTabs = [
   { id: SETTINGS_TAB.ABOUT, label: 'settings.about.title' },
 ];
 const rawPreviewFields = [
-  { key: 'rawPreviewSource', hint: '', options: ['embedded', 'rendered'] },
+  { key: 'rawPreviewSource', hint: 'preview_source_hint', options: ['embedded', 'rendered'] },
   { key: 'rawRenderBrightness', hint: 'brightness_hint', options: ['original', 'brightened'] },
 ];
 

@@ -1,7 +1,7 @@
 <template>
   <div class="absolute inset-0 flex items-center justify-center px-6" data-tauri-drag-region>
     <select
-      v-model="config.settings.language"
+      :value="config.settings.language" @change="config.setLanguage(($event.target as HTMLSelectElement).value)"
       class="select select-bordered select-sm absolute top-4 right-6 w-auto"
       :aria-label="$t('settings.general.select_language')"
     >

@@ -477,6 +477,39 @@ fn has_hidden_attribute(_metadata: &std::fs::Metadata) -> bool {
     false
 }
 
+/// True on Windows for a cloud-only placeholder (OneDrive Files On-Demand):
+/// reading its content downloads it, reading this attribute does not.
+#[cfg(target_os = "windows")]
+pub fn is_cloud_only(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
+    (metadata.file_attributes() & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) != 0
+}
+
+#[cfg(target_os = "macos")]
+pub fn is_cloud_only(metadata: &std::fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    const SF_DATALESS: u32 = 0x4000_0000;
+    (metadata.st_flags() & SF_DATALESS) != 0
+}
+
+// Other platforms have no supported placeholder detection yet.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn is_cloud_only(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// True when reading the file's content cannot trigger a cloud download.
+/// Reads the live attributes, never the catalog's stored state.
+pub fn content_readable(path: &str) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && !is_cloud_only(&m))
+}
+
+/// True for an existing cloud-only file (live attributes).
+pub fn is_cloud_only_path(path: &str) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| is_cloud_only(&m))
+}
+
 pub fn is_hidden(entry: &walkdir::DirEntry) -> bool {
     is_dotfile(entry.file_name())
         || entry
@@ -640,6 +673,7 @@ mod win32_imports {
         ) -> i32;
 
         pub fn CloseHandle(hObject: HANDLE) -> i32;
+
     }
 }
 
@@ -2514,9 +2548,12 @@ fn sync_folder_direct_files(
                     return Ok(FolderSyncOutcome::default());
                 }
                 // Update the existing DB record to point to the new name/path.
-                if let Ok(Some(updated_file)) =
+                let renamed_file = if content_readable(file_path_str) {
                     AFile::update_file_info(db_id, file_path_str, scan_time)
-                {
+                } else {
+                    AFile::update_path(db_id, file_path_str, scan_time)
+                };
+                if let Ok(Some(updated_file)) = renamed_file {
                     rename_count += 1;
                     if is_live_photo_candidate_name(&file_name) {
                         live_photo_affected_names.insert(file_name.clone());
@@ -2739,8 +2776,7 @@ fn reconcile_raw_jpeg_pairs_after_album_index(
     Ok(())
 }
 
-/// Sync a single folder when its directory mtime has changed.
-/// Returns counts and schedules thumbnail/embedding generation.
+/// Sync the opened folder, including cloud state changes that leave its mtime unchanged.
 pub fn sync_single_folder(
     app_handle: &tauri::AppHandle,
     album_id: i64,
@@ -2817,7 +2853,12 @@ pub fn sync_single_folder(
         FolderScanState::LIVE_PHOTO_PAIRING,
         FolderScanState::LIVE_PHOTO_PAIRING_VERSION,
     )?;
-    if info.modified == folder.modified_at && !needs_live_photo_reindex {
+    let (cloud_flags_changed, needs_cloud_indexing) = if info.modified == folder.modified_at && !needs_live_photo_reindex {
+        AFile::refresh_cloud_state(resolved_folder_id, folder_path)?
+    } else {
+        (false, false)
+    };
+    if info.modified == folder.modified_at && !needs_live_photo_reindex && !needs_cloud_indexing {
         // An unchanged mtime-driven sync still reconciles the existing pair state.
         // This is intentionally the only incremental path that receives the
         // setting; changing Settings alone does not mutate the database.
@@ -2838,7 +2879,7 @@ pub fn sync_single_folder(
             // The frontend uses this to decide whether it needs to reload the
             // current list.  A newly created or cleared association changes
             // which companion rows are visible.
-            dirty_folder_count: u32::from(raw_pairing_changed || folder_layout_changed),
+            dirty_folder_count: u32::from(raw_pairing_changed || folder_layout_changed || cloud_flags_changed),
             new_folder_count,
             new_file_count: 0,
             updated_file_count: 0,
@@ -2930,7 +2971,7 @@ pub fn refresh_album_subfolders(
 }
 
 fn should_process_synced_file(file: &AFile, file_type: i64, threshold: i64) -> bool {
-    if !file.album_visible || dimensions_excluded(file_type, file.width.unwrap_or(0), file.height.unwrap_or(0), threshold) { return false; }
+    if file.cloud_only || !file.album_visible || dimensions_excluded(file_type, file.width.unwrap_or(0), file.height.unwrap_or(0), threshold) { return false; }
     if !file.has_thumbnail.unwrap_or(false) {
         return true;
     }
@@ -3062,6 +3103,11 @@ static FILTER_DIMENSIONS_CACHE: Lazy<Mutex<FilterDimensionsCache>> =
 /// modification time invalidate changed files; the FIFO cache has a 32 MiB budget.
 fn filter_image_dimensions(path: &str, file_type: i64) -> Option<(u32, u32)> {
     let metadata = fs::metadata(path).ok()?;
+    // Measuring an online-only image would download it; the stored dimensions
+    // apply instead (index_single_file and should_process_synced_file).
+    if is_cloud_only(&metadata) {
+        return None;
+    }
     let modified = metadata.modified().ok()?;
     if let Ok(cache) = FILTER_DIMENSIONS_CACHE.lock() {
         if let Some(entry) = cache.entries.get(path) {
@@ -3515,7 +3561,8 @@ struct ThumbnailReadyPayload {
 }
 
 pub fn file_accessible(path: &str) -> bool {
-    std::path::Path::new(path).is_file() && std::fs::File::open(path).is_ok()
+    // Opening a cloud-only file downloads it; its metadata is enough here.
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && (is_cloud_only(&m) || std::fs::File::open(path).is_ok()))
 }
 
 pub fn album_accessible(album_id: i64) -> bool {
@@ -3523,7 +3570,10 @@ pub fn album_accessible(album_id: i64) -> bool {
 }
 
 pub fn refresh_album_accessibility(album: &mut Album) {
-    let generation = album_accessibility_generation();
+    refresh_album_accessibility_if_current(album, album_accessibility_generation());
+}
+
+pub fn refresh_album_accessibility_if_current(album: &mut Album, generation: u64) {
     album.is_accessible = directory_accessible(&album.path);
     if let Some(album_id) = album.id {
         let mut inaccessible = INACCESSIBLE_ALBUM_IDS.lock().unwrap();
@@ -3879,7 +3929,7 @@ fn index_single_file(
                             _ => false,
                         };
 
-                        let task = if fully_indexed {
+                        let task = if fully_indexed || file.cloud_only {
                             None
                         } else {
                             Some(ThumbnailTask {
@@ -4699,6 +4749,45 @@ mod album_scan_filter_tests {
         assert_eq!((counts.1,counts.3,counts.5),(4,1,5));
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[cfg(test)]
+mod cloud_only_tests {
+    use super::*;
+
+    #[test]
+    fn local_file_is_not_cloud_only() {
+        let path = std::env::temp_dir().join(format!("lap-cloud-only-{}", uuid::Uuid::new_v4()));
+        fs::write(&path, b"local").unwrap();
+        assert!(!is_cloud_only(&fs::metadata(&path).unwrap()));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn content_readable_needs_an_existing_local_file() {
+        let path = std::env::temp_dir().join(format!("lap-readable-{}", uuid::Uuid::new_v4()));
+        let path_str = path.to_str().unwrap().to_string();
+        assert!(!content_readable(&path_str));
+        fs::write(&path, b"local").unwrap();
+        assert!(content_readable(&path_str));
+        assert!(!is_cloud_only_path(&path_str));
+        fs::remove_file(path).unwrap();
+    }
+
+    /// Set LAP_CLOUD_ONLY_FILE to a Windows/macOS cloud-only file to run this check.
+    #[test]
+    fn cloud_only_sample_is_detected() {
+        let Ok(path) = std::env::var("LAP_CLOUD_ONLY_FILE") else { return };
+        assert!(is_cloud_only(&fs::metadata(&path).unwrap()));
+        assert!(file_accessible(&path));
+        assert!(!content_readable(&path));
+        assert!(is_cloud_only_path(&path));
+        FileInfo::new(&path).unwrap();
+        assert_eq!(filter_image_dimensions(&path, 1), None);
+        assert!(is_cloud_only(&fs::metadata(&path).unwrap()), "an accessibility or metadata check downloaded the file");
+    }
+
+
 }
 
 #[cfg(test)]

@@ -54,6 +54,12 @@
     "database_corrupted_hint": "Spróbuj przełączyć się na inną bibliotekę."
   },
   "album": {
+    "drop": {
+      "add": "Przeciągnij folder, aby go dodać",
+      "separate": "Przeciągaj pliki i foldery osobno.",
+      "confirm_folder": "Wybierz folder: {name}",
+      "folders_only": "Przeciągnij folder."
+    },
     "album_list": "Albumy",
     "search_folders": "Szukaj folderów",
     "favorite_folders_only": "Tylko ulubione foldery",
@@ -150,6 +156,7 @@
       "validation_name": "Wprowadź nazwę inteligentnego albumu.",
       "validation_rule": "Dodaj co najmniej jedną kompletną regułę.",
       "fields": {
+        "folder_name": "Nazwa folderu",
         "name": "Nazwa pliku",
         "file_type": "Typ pliku",
         "media_subtype": "Podtyp multimediów",
@@ -225,6 +232,8 @@
     }
   },
   "offline": {
+    "cloud_only": "Dostępny tylko online",
+    "cloud_only_pending": "Dostępny tylko online — niepełne informacje o pliku",
     "original_unavailable": "Oryginalny plik jest niedostępny",
     "requires_original": "Wymaga oryginalnego pliku. Podłącz ponownie urządzenie pamięci masowej."
   },
@@ -434,7 +443,11 @@
       "placeholder": "Szukaj nazwy pliku"
     },
     "filter": {
-      "select_mode": "Tryb wielokrotnego wyboru",
+      "select_mode": "Wielokrotny wybór",
+      "select_files": "Wybierz pliki",
+      "show_selection_panel": "Otwórz panel wielokrotnego wyboru",
+      "hide_selection_panel": "Zwiń panel wielokrotnego wyboru",
+      "exit_select_mode": "Wyjdź z trybu wielokrotnego wyboru",
       "select_count": "Zaznaczono: {count}",
       "group_type_options": [
         "Brak",
@@ -457,7 +470,8 @@
         "Rozmiar",
         "Wymiary",
         "Czas trwania",
-        "Losowo"
+        "Losowo",
+        "Dodanie"
       ],
       "similarity": "Podobieństwo",
       "sort_order_options": [
@@ -557,6 +571,7 @@
       },
       "reclaimable_size": "Do odzyskania",
       "groups_title": "Zbiory duplikatów",
+      "skipped_cloud_only": "Pominięto pliki dostępne tylko online: {count}",
       "actions_title": "Akcje",
       "compare": "Porównaj",
       "rescan": "Skanuj ponownie",
@@ -1086,24 +1101,13 @@
     "montage": {
       "title": "Kolaż",
       "layout": "Układ",
-      "grid": "Siatka",
-      "mosaic": "Mozaika",
-      "pile": "Stos zdjęć",
+      "pile": "Swobodny kolaż",
       "shuffle": "Losowy kolaż",
-      "angle": "Kąt: {value}°",
-      "scale": "Skala: {value}%",
       "shadow": "Rysuj cienie",
       "style": "Styl",
       "export": "Eksport: {size}",
       "random_rotation": "Losowy obrót",
       "border_width": "Grubość ramki",
-      "photos": "Zdjęcia ({count})",
-      "add": "Dodaj",
-      "photos_hint": "Przeciągnij, aby zmienić kolejność · prawy klik, aby usunąć",
-      "add_none": "Zaznacz w Lap zdjęcia, których nie ma jeszcze w kolażu, a następnie kliknij Dodaj.",
-      "hint_pile": "Stos zdjęć: przeciągnij, aby przesunąć · pokrętło obraca i skaluje · chwycone zdjęcie trafia na wierzch",
-      "hint_grid": "Siatka: zdjęcia wypełniają każdą komórkę (kadrowanie do środka) · przeciągnij zdjęcie na inne, aby je zamienić",
-      "hint_mosaic": "Mozaika: bez przerw, zdjęcia zachowują proporcje · przeciągnij zdjęcie na inne, aby je zamienić",
       "page": "Strona",
       "page_size": "Rozmiar",
       "page_screen": "Ekran 16:9",
@@ -1204,7 +1208,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "Siatka ostrości w nawigatorze",
-    "sharpness_grid_hint": "Wyróżnia ostre obszary w nawigatorze.",
+    "sharpness_grid_hint": "Wyróżnia ostre obszary w nawigatorze",
     "live": "LIVE",
     "motion": "MOTION",
     "title": "Przeglądarka zdjęć",
@@ -1322,15 +1326,16 @@
       "title": "RAW",
       "section_pairs": "Pliki w parach",
       "pair_source": "Domyślne wyświetlanie par",
-      "pair_source_hint": "Używane dla sparowanych miniatur i podglądów.",
+      "pair_source_hint": "Używane dla sparowanych miniatur i podglądów",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "Domyślne źródło podglądu",
+      "preview_source_hint": "Jeśli preferowane źródło jest niedostępne, używa drugiego",
       "rawRenderBrightness": "Jasność renderowania",
       "option_embedded": "Preferuj osadzony podgląd",
-      "option_rendered": "Zawsze renderuj RAW",
+      "option_rendered": "Najpierw renderuj RAW",
       "option_original": "Oryginalna ekspozycja",
       "option_brightened": "Rozjaśniona",
-      "brightness_hint": "Dotyczy renderowania RAW, również gdy osadzony podgląd jest niedostępny.",
+      "brightness_hint": "Dotyczy tylko renderowania RAW",
       "switch_to": "Przełącz na {source}",
       "show_pair": "Pokaż sparowany {format}",
       "source_embedded": "Osadzony",

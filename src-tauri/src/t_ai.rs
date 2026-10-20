@@ -67,6 +67,9 @@ impl AiEngine {
         Err("Semantic backend retries exhausted".into())
     }
     pub fn encode_image(&mut self, path: &str) -> Result<Vec<f32>, String> {
+        if crate::t_utils::is_cloud_only_path(path) {
+            return Err("Original is online-only; background inference will not download it".into());
+        }
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         self.encode_image_from_bytes(&bytes)
     }

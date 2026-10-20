@@ -363,25 +363,25 @@ test('object text search resolves localized, raw and keyed class names', () => {
 });
 test('automatic detection only schedules pending photos in the authorized library', () => {
   const view = { automation: { enabled: true, paused: false, revision: 'r1', scope: null as any }, modelInstalled: true, pending: 2, status: { running: false } };
-  assert.equal(objectHelpers.objectAutomationReady(view, 'A', true), true);
+  assert.equal(objectHelpers.objectAutomationReady(view, 'A', false), true);
   for (const pending of [0, -1, undefined, NaN]) {
-    assert.equal(objectHelpers.objectAutomationReady({ ...view, pending }, 'A', true), false);
+    assert.equal(objectHelpers.objectAutomationReady({ ...view, pending }, 'A', false), false);
   }
-  assert.equal(objectHelpers.objectAutomationReady(view, 'A', false), false);
-  assert.equal(objectHelpers.objectAutomationReady({ ...view, modelInstalled: false }, 'A', true), false);
-  assert.equal(objectHelpers.objectAutomationReady({ ...view, status: { running: true } }, 'A', true), false);
-  assert.equal(objectHelpers.objectAutomationReady({ ...view, automation: { ...view.automation, paused: true } }, 'A', true), false);
-  assert.equal(objectHelpers.objectAutomationReady({ ...view, automation: { ...view.automation, enabled: false } }, 'A', true), false);
-  view.automation.scope = { libraryId: 'B', folderId: 12 };
   assert.equal(objectHelpers.objectAutomationReady(view, 'A', true), false);
-  assert.equal(objectHelpers.objectAutomationReady(view, 'B', true), true);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, modelInstalled: false }, 'A', false), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, status: { running: true } }, 'A', false), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, automation: { ...view.automation, paused: true } }, 'A', false), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, automation: { ...view.automation, enabled: false } }, 'A', false), false);
+  view.automation.scope = { libraryId: 'B', folderId: 12 };
+  assert.equal(objectHelpers.objectAutomationReady(view, 'A', false), false);
+  assert.equal(objectHelpers.objectAutomationReady(view, 'B', false), true);
 });
 test('automatic polling skips empty libraries and keeps a single request through state refresh', async () => {
   const mounted: Array<() => void> = [], unmount: Array<() => void> = [], ticks: Array<() => void> = [], calls: any[] = [];
   let finishRefresh: () => void = () => {};
   const view = Vue.ref({ automation: { enabled: true, paused: false, revision: 'r1' }, modelInstalled: true, pending: 0, status: { running: false } });
   const ctx = {
-    libConfig: Vue.reactive({ _libraryId: 'A', index: { status: 1 } }),
+    libConfig: Vue.reactive({ _libraryId: 'A', index: { status: 0 } }),
     objectBusy: Vue.ref(false), objectAutomationReady: objectHelpers.objectAutomationReady,
     useObjects: () => ({ view, refresh: () => new Promise<void>(resolve => { finishRefresh = resolve; }) }),
     invoke: async (name: string, args: any) => { calls.push({ name, args }); },

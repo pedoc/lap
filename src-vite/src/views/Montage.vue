@@ -21,19 +21,19 @@
 
     <!-- Main Content -->
     <div class="flex-1 flex gap-3 p-3 min-h-0 select-none">
-      <!-- Left: Preview and hint -->
-      <div class="flex-1 min-w-0 flex flex-col gap-2">
+      <!-- Left: Preview -->
+      <div class="flex-1 min-w-0 flex flex-col items-center justify-center gap-2">
         <div
           ref="containerRef"
-          class="relative flex-1 min-h-0 rounded-box overflow-hidden border border-base-content/5 bg-base-300/30 shadow-sm flex items-center justify-center"
+          class="relative w-full flex-1 min-h-0 rounded-box overflow-hidden border border-base-content/5 bg-base-300/30 shadow-sm flex items-center justify-center"
         >
           <transition name="fade">
-            <div v-if="isProcessing" class="absolute inset-0 z-50 flex items-center justify-center bg-base-100/55 backdrop-blur-sm">
+            <div v-if="isProcessing" class="absolute inset-0 bg-base-100/50 flex items-center justify-center z-50 rounded-box">
               <span class="loading loading-dots text-primary"></span>
             </div>
           </transition>
 
-          <div v-if="pageBox.width > 0" class="relative" :style="{ width: `${pageBox.width}px`, height: `${pageBox.height}px` }">
+          <div v-if="pageBox.width > 0" class="relative isolate" :style="{ width: `${pageBox.width}px`, height: `${pageBox.height}px` }">
             <div
               ref="pageRef"
               class="absolute inset-0 overflow-hidden shadow-lg"
@@ -43,7 +43,7 @@
               <div
                 v-for="item in movedLayout"
                 :key="item.fileId"
-                class="absolute"
+                class="group absolute"
                 :class="{
                   'cursor-move': mode === 'pile',
                   'cursor-grab': mode !== 'pile',
@@ -55,55 +55,65 @@
                 :data-frame-id="item.fileId"
                 @pointerdown="startDrag($event, item.fileId, mode === 'pile' ? 'move' : 'swap')"
               >
-                <div class="relative w-full h-full overflow-hidden">
+                <div class="relative w-full overflow-hidden" :style="{ height: `calc(100% - ${captionHeight(item) * pageBox.width}px)` }">
                   <img
                     :src="fileById.get(item.fileId)?.thumbnail"
                     class="absolute left-1/2 top-1/2 max-w-none object-cover pointer-events-none"
                     :style="photoStyle(item)"
                   />
                 </div>
+                <img v-if="captions.get(item.fileId)" :src="captions.get(item.fileId)" class="absolute pointer-events-none" :style="{ left: `${item.border * pageBox.width}px`, bottom: `${item.border * pageBox.width}px`, width: `calc(100% - ${2 * item.border * pageBox.width}px)`, height: `${captionHeight(item) * pageBox.width}px` }" />
+                <button
+                  class="absolute top-1 right-1 size-5 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 focus-visible:opacity-100 cursor-pointer disabled:cursor-default"
+                  :disabled="files.length <= 2 || isProcessing"
+                  :aria-label="$t('tooltip.album.remove')"
+                  @pointerdown.stop
+                  @click.stop="removePhoto(item.fileId)"
+                ><IconClose class="size-3" /></button>
               </div>
             </div>
 
-            <!-- dial of the active photo (Picasa style): drag the handle around to rotate, away from the center to scale -->
+            <!-- Drag the handle around to rotate, away from the center to scale. -->
             <div
               v-if="dial"
               class="absolute pointer-events-none"
               :style="{ left: `${dial.x}px`, top: `${dial.y}px`, zIndex: layout.length + 1 }"
             >
-              <svg class="absolute left-0 top-0 overflow-visible" width="1" height="1">
-                <circle :r="DIAL_RADIUS" fill="none" stroke="rgb(0 0 0 / 0.4)" :stroke-width="DIAL_WIDTH" />
+              <svg class="absolute left-0 top-0 overflow-visible drop-shadow-sm" width="1" height="1">
+                <circle :r="DIAL_RADIUS" fill="none" stroke="rgb(0 0 0 / 0.35)" :stroke-width="DIAL_WIDTH" />
                 <line
                   v-for="tick in 24"
                   :key="tick"
-                  :x1="DIAL_RADIUS - DIAL_WIDTH / 2 + 3" :x2="DIAL_RADIUS - DIAL_WIDTH / 2 + (tick % 2 ? 6 : 9)"
-                  stroke="rgb(255 255 255 / 0.7)"
+                  :x1="DIAL_RADIUS - DIAL_WIDTH / 2 + 4"
+                  :x2="DIAL_RADIUS - DIAL_WIDTH / 2 + (tick % 6 === 0 ? 12 : tick % 3 === 0 ? 9 : 6)"
+                  stroke="rgb(255 255 255 / 0.75)"
+                  :stroke-width="tick % 6 === 0 ? 2 : 1"
+                  stroke-linecap="round"
                   :transform="`rotate(${tick * 15})`"
                 />
-                <line x1="-6" x2="6" stroke="rgb(255 255 255 / 0.7)" />
-                <line y1="-6" y2="6" stroke="rgb(255 255 255 / 0.7)" />
-                <g :transform="`rotate(${dial.angle})`">
-                  <line :x1="DIAL_RADIUS + DIAL_WIDTH / 2" :x2="DIAL_HANDLE" stroke="white" stroke-width="2" />
-                  <circle :cx="DIAL_HANDLE" r="7" fill="white" stroke="var(--color-primary)" stroke-width="4" />
+                <g :transform="`rotate(${dial.angle})`" stroke-linecap="round">
+                  <line :x1="DIAL_RADIUS + DIAL_WIDTH / 2" :x2="DIAL_HANDLE - 12" stroke="rgb(0 0 0 / 0.35)" stroke-width="4" />
+                  <line :x1="DIAL_RADIUS + DIAL_WIDTH / 2" :x2="DIAL_HANDLE - 12" stroke="var(--color-primary)" stroke-width="2" />
                 </g>
               </svg>
               <div
-                class="absolute size-6 -translate-1/2 rounded-full pointer-events-auto cursor-grab"
+                class="group absolute size-9 -translate-1/2 rounded-full pointer-events-auto flex items-center justify-center"
+                :class="activeDragKind === 'transform' ? 'cursor-grabbing' : 'cursor-grab'"
                 :style="dial.handle"
                 @pointerdown.stop="startDrag($event, dial.item.fileId, 'transform')"
-              ></div>
-              <div class="absolute -translate-1/2 flex flex-col items-center gap-1 text-[11px] font-medium text-white whitespace-nowrap">
-                <span class="px-1.5 rounded bg-black/40">{{ $t('msgbox.montage.angle', { value: dial.angleLabel }) }}</span>
-                <span class="px-1.5 rounded bg-black/40 mt-4">{{ $t('msgbox.montage.scale', { value: dial.scaleLabel }) }}</span>
+              >
+                <span class="size-6 rounded-full border border-base-content/15 shadow-md flex items-center justify-center transition-colors group-hover:bg-primary group-hover:text-primary-content"
+                  :class="activeDragKind === 'transform' ? 'bg-primary text-primary-content' : 'bg-base-100 text-primary'">
+                  <IconRotate class="size-3.5" />
+                </span>
               </div>
             </div>
           </div>
         </div>
-        <div class="h-4 shrink-0 text-center text-[11px] text-base-content/50 truncate">{{ $t(`msgbox.montage.hint_${mode}`) }}</div>
       </div>
 
       <!-- Right: Settings -->
-      <div ref="panelRef" class="w-80 shrink-0 flex flex-col gap-3 overflow-y-auto text-xs">
+      <div class="w-80 shrink-0 flex flex-col gap-3 overflow-y-auto text-xs">
         <section class="rounded-box p-3 space-y-2 border border-base-content/5 shadow-sm bg-base-300/30">
           <div class="font-semibold text-base-content/80">{{ $t('msgbox.montage.layout') }}</div>
           <div class="flex items-center gap-1">
@@ -112,10 +122,23 @@
               :key="option.value"
               buttonSize="small"
               :icon="option.icon"
+              :icon-style="{ transform: `rotate(${option.value === 'masonry' ? 90 : 0}deg)` }"
               :selected="mode === option.value"
               :tooltip="option.label"
               @click="mode = option.value"
             />
+          </div>
+          <div v-if="mode === 'card' || mode === 'grid'" class="flex items-center justify-between gap-2">
+            <span>{{ $t('settings.grid.scaling') }}</span>
+            <select v-model="scaling" class="select select-bordered select-xs w-40">
+              <option v-for="(label, index) in localeMsg.settings.grid.scaling_options" :key="index" :value="index">{{ label }}</option>
+            </select>
+          </div>
+          <div v-if="mode === 'card'" class="flex items-center justify-between gap-2">
+            <span>{{ $t('settings.grid.label_primary') }}</span>
+            <select v-model="captionField" class="select select-bordered select-xs w-40">
+              <option v-for="(label, index) in localeMsg.settings.grid.label_options" :key="index" :value="index">{{ label }}</option>
+            </select>
           </div>
           <button class="btn btn-sm w-full" @click="shuffle">
             <IconSortingShuffle class="size-4" />{{ $t('msgbox.montage.shuffle') }}
@@ -132,9 +155,9 @@
           </div>
           <div v-if="pageKey !== 'square'" class="flex items-center justify-between gap-2">
             <span>{{ $t('msgbox.montage.orientation') }}</span>
-            <div class="join">
-              <button class="btn btn-xs join-item" :class="{ 'btn-active': landscape }" @click="landscape = true">{{ $t('msgbox.montage.landscape') }}</button>
-              <button class="btn btn-xs join-item" :class="{ 'btn-active': !landscape }" @click="landscape = false">{{ $t('msgbox.montage.portrait') }}</button>
+            <div class="flex items-center gap-1">
+              <TButton buttonSize="small" :icon="IconCropLandscape" :selected="landscape" :tooltip="$t('msgbox.montage.landscape')" @click="landscape = true" />
+              <TButton buttonSize="small" :icon="IconCropPortrait" :selected="!landscape" :tooltip="$t('msgbox.montage.portrait')" @click="landscape = false" />
             </div>
           </div>
           <div class="text-[11px] text-base-content/45">{{ $t('msgbox.montage.export', { size: exportLabel }) }}</div>
@@ -146,7 +169,7 @@
             <span>{{ $t('msgbox.montage.background') }}</span>
             <div class="flex gap-2">
               <button
-                v-for="color in BACKGROUND_PRESETS"
+                v-for="color in backgroundSwatches"
                 :key="color"
                 class="size-5.5 rounded-md border border-base-content/15 cursor-pointer"
                 :class="{ 'outline-2 outline-offset-2 outline-primary': background === color }"
@@ -155,30 +178,40 @@
               ></button>
               <label
                 class="relative size-5.5 rounded-md border border-base-content/15 cursor-pointer overflow-hidden"
-                :class="{ 'outline-2 outline-offset-2 outline-primary': !BACKGROUND_PRESETS.includes(background) }"
                 style="background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red)"
               >
-                <input v-model="background" type="color" class="absolute inset-0 opacity-0 cursor-pointer" />
+                <input :value="background" type="color" class="absolute inset-0 opacity-0 cursor-pointer"
+                  @input="background = ($event.target as HTMLInputElement).value" @change="rememberCustomBackground"
+                  @keydown.esc.stop="($event.target as HTMLInputElement).blur()" />
               </label>
             </div>
           </div>
 
-          <div v-if="mode === 'pile'" class="flex items-center justify-between gap-2">
-            <span>{{ $t('msgbox.montage.random_rotation') }} <span class="text-base-content/45">± {{ maxRotation }}°</span></span>
-            <SliderInput id="montage-rotation" v-model="maxRotation" :min="0" :max="30" :step="1" :slider_width="140" />
+          <div v-if="mode === 'pile'" class="space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <label for="montage-rotation">{{ $t('msgbox.montage.random_rotation') }}</label>
+              <span class="text-base-content/45 tabular-nums">± {{ maxRotation }}°</span>
+            </div>
+            <SliderInput id="montage-rotation" v-model="maxRotation" :min="0" :max="30" :step="1" class="!w-full" />
           </div>
-          <div v-else class="flex items-center justify-between gap-2">
-            <span>{{ $t('msgbox.montage.spacing') }} <span class="text-base-content/45">{{ toExportPx(spacing) }} px</span></span>
-            <SliderInput id="montage-spacing" v-model="spacing" :min="0" :max="5" :step="0.25" :slider_width="140" />
+          <div v-else class="space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <label for="montage-spacing">{{ $t('msgbox.montage.spacing') }}</label>
+              <span class="text-base-content/45 tabular-nums whitespace-nowrap">{{ toExportPx(spacing) }} px</span>
+            </div>
+            <SliderInput id="montage-spacing" v-model="spacing" :min="0" :max="5" :step="0.25" class="!w-full" />
           </div>
 
           <label class="flex items-center justify-between gap-2 cursor-pointer">
             <span>{{ $t('msgbox.montage.border') }}</span>
             <input v-model="borderOn" type="checkbox" class="toggle toggle-xs toggle-primary" />
           </label>
-          <div class="flex items-center justify-between gap-2" :class="{ 'opacity-50': !borderOn }">
-            <span>{{ $t('msgbox.montage.border_width') }} <span class="text-base-content/45">{{ toExportPx(border) }} px</span></span>
-            <SliderInput id="montage-border" v-model="border" :min="0.25" :max="4" :step="0.25" :slider_width="140" :disabled="!borderOn" />
+          <div :class="{ 'opacity-50': !borderOn }" class="space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <label for="montage-border">{{ $t('msgbox.montage.border_width') }}</label>
+              <span class="text-base-content/45 tabular-nums whitespace-nowrap">{{ toExportPx(border) }} px</span>
+            </div>
+            <SliderInput id="montage-border" v-model="border" :min="0" :max="4" :step="0.25" class="!w-full" :disabled="!borderOn" />
           </div>
 
           <label class="flex items-center justify-between gap-2 cursor-pointer">
@@ -187,44 +220,19 @@
           </label>
         </section>
 
-        <section class="rounded-box p-3 space-y-2 border border-base-content/5 shadow-sm bg-base-300/30">
-          <div class="flex items-center justify-between">
-            <span class="font-semibold text-base-content/80">{{ $t('msgbox.montage.photos', { count: files.length }) }}</span>
-            <button class="btn btn-ghost btn-xs" :disabled="files.length >= MAX_PHOTOS" @click="requestAdd">+ {{ $t('msgbox.montage.add') }}</button>
-          </div>
-          <div class="grid grid-cols-6 gap-1">
-            <div
-              v-for="file in files"
-              :key="file.id"
-              class="aspect-square rounded overflow-hidden cursor-grab"
-              :class="{
-                'opacity-35': Number(file.id) === dragSource,
-                'outline-2 outline-dashed outline-primary': Number(file.id) === dropTarget,
-              }"
-              :data-thumb-id="file.id"
-              @pointerdown="startDrag($event, Number(file.id), 'reorder')"
-              @contextmenu.prevent="removePhoto(Number(file.id))"
-            >
-              <img
-                :src="file.thumbnail"
-                class="w-full h-full object-cover pointer-events-none"
-                :style="{ transform: `rotate(${Number(file.rotate || 0)}deg)` }"
-              />
-            </div>
-          </div>
-          <div class="text-[11px] text-base-content/45">{{ $t('msgbox.montage.photos_hint') }}</div>
-        </section>
       </div>
     </div>
 
     <!-- Bottom Bar -->
     <div class="h-14 shrink-0 flex items-center justify-end px-4 gap-2">
-      <div v-if="errorMessage" class="flex-1 min-w-0 text-xs text-error truncate" :title="errorMessage">{{ errorMessage }}</div>
       <button
         class="px-4 py-1 rounded-box hover:bg-base-100 hover:text-base-content cursor-pointer text-sm mr-4"
         :disabled="isProcessing"
         @click="closeWindow"
       >{{ $t('msgbox.image_editor.cancel') }}</button>
+      <button class="btn btn-sm" :disabled="isProcessing || files.length < 2" @click="printCollage">
+        <IconPrint class="size-4" />{{ $t('menu.file.print') }}
+      </button>
       <select v-model="combinedFormatKey" class="select select-bordered select-xs">
         <option v-for="option in combinedFormatOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
       </select>
@@ -234,6 +242,8 @@
         @click="clickSave"
       >{{ $t('msgbox.image_editor.save_as_new') }}</button>
     </div>
+
+    <PrintImage ref="printImageView" />
 
     <!-- Save dialog: destination folder and file name -->
     <ModalDialog v-if="showSaveDialog" :title="$t('msgbox.montage.save_title')" :width="480" @cancel="closeSaveDialog">
@@ -270,37 +280,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { MONTAGE_MAX_PHOTOS, MONTAGE_BACKGROUND_PRESETS, MONTAGE_PAGE_SIZES } from '@/common/constants';
+import { ref, toRefs, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
-import { isWin, isLinux, setTheme, getFolderPath, getFullPath, combineFileName, getSelectOptions, getThumbUrl, isValidFileName } from '@/common/utils';
+import { isWin, isLinux, setTheme, getFolderPath, getFullPath, combineFileName, getSelectOptions, getThumbUrl, isValidFileName, formatFileSize, formatDimensionText, formatTimestamp, formatCameraInfo, formatCaptureSettings } from '@/common/utils';
 import { getFileInfo, checkFileExists, renderMontage } from '@/common/api';
-import { computeMontageLayout, shuffled, type MontageItem, type MontageMode } from '@/common/montageLayout';
+import { computeMontageLayout, shuffled, type MontageItem } from '@/common/montageLayout';
 import { getAspectRatio } from '@/common/layout';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { LogicalSize } from '@tauri-apps/api/dpi';
-import { emit as tauriEmit, listen } from '@tauri-apps/api/event';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { emit as tauriEmit } from '@tauri-apps/api/event';
+import { open as openDialog, message } from '@tauri-apps/plugin-dialog';
 
+import PrintImage from '@/components/PrintImage.vue';
 import TitleBar from '@/components/TitleBar.vue';
 import TButton from '@/components/TButton.vue';
 import SliderInput from '@/components/SliderInput.vue';
 import ModalDialog from '@/components/ModalDialog.vue';
 
-import { IconTile, IconJustified, IconStack, IconSortingShuffle, IconFolder } from '@/common/icons';
+import { IconCard, IconTile, IconJustified, IconCollage, IconSortingShuffle, IconFolder, IconClose, IconRotate, IconCropLandscape, IconCropPortrait, IconPrint } from '@/common/icons';
 
-// export size in pixels, landscape (300 dpi for print formats)
-const PAGE_SIZES = {
-  a4: [3508, 2480],
-  photo: [1772, 1181],
-  screen: [3840, 2160],
-  square: [3000, 3000],
-} as const;
-type PageKey = keyof typeof PAGE_SIZES;
+type PageKey = keyof typeof MONTAGE_PAGE_SIZES;
 const PRINT_PAGES: PageKey[] = ['a4', 'photo'];
-const BACKGROUND_PRESETS = ['#f5f0e6', '#ffffff', '#111827', '#7c2d12'];
-const MAX_PHOTOS = 50; // same limit as the main window
 
 const router = useRouter();
 const { t, locale, messages } = useI18n();
@@ -309,25 +311,35 @@ const appWindow = getCurrentWebviewWindow();
 const showDesktopTitleBar = isWin || isLinux;
 
 const files = ref<any[]>([]); // montage order
-const mode = ref<MontageMode>('grid');
-const pageKey = ref<PageKey>('a4');
-const landscape = ref(true);
-const background = ref('#ffffff');
-const spacing = ref(1);     // % of the page width
-const borderOn = ref(true);
-const border = ref(1.5);    // % of the page width
-const maxRotation = ref(12); // pile, degrees
-const shadow = ref(true);
+const { mode, captionField, pageKey, landscape, background, spacing,
+  borderOn, border, scaling, maxRotation, shadow } = toRefs(config.montage);
+watch(() => config.montage, (preferences) => {
+  void tauriEmit('montage-config-changed', JSON.parse(JSON.stringify(preferences)));
+}, { deep: true });
+const backgroundSwatches = computed(() => {
+  const saved = String(config.montage.lastCustomBackground).toLowerCase();
+  const recent = /^#[0-9a-f]{6}$/.test(saved) && !MONTAGE_BACKGROUND_PRESETS.includes(saved) ? saved : '#7c2d12';
+  return [...MONTAGE_BACKGROUND_PRESETS, MONTAGE_BACKGROUND_PRESETS.includes(background.value) ? recent : background.value];
+});
+function rememberCustomBackground(event: Event) {
+  const color = (event.target as HTMLInputElement).value.toLowerCase();
+  background.value = color;
+  if (!MONTAGE_BACKGROUND_PRESETS.includes(color)) {
+    config.montage.lastCustomBackground = color;
+  }
+}
+const photoScaling = computed(() => mode.value === 'card' || mode.value === 'grid' ? scaling.value : 1);
 const seed = ref(1);        // pile placement
 const isProcessing = ref(false);
-const errorMessage = ref('');
 
 const titleText = computed(() => `${t('msgbox.montage.title')} - ${t('toolbar.filter.select_count', { count: files.value.length })}`);
 
 const modeOptions = computed(() => [
-  { value: 'grid' as const, icon: IconTile, label: t('msgbox.montage.grid') },
-  { value: 'mosaic' as const, icon: IconJustified, label: t('msgbox.montage.mosaic') },
-  { value: 'pile' as const, icon: IconStack, label: t('msgbox.montage.pile') },
+  { value: 'card' as const, icon: IconCard, label: localeMsg.value.settings.grid.style_options[0] },
+  { value: 'grid' as const, icon: IconTile, label: localeMsg.value.settings.grid.style_options[1] },
+  { value: 'mosaic' as const, icon: IconJustified, label: localeMsg.value.settings.grid.style_options[2] },
+  { value: 'masonry' as const, icon: IconJustified, label: localeMsg.value.settings.grid.style_options[3] },
+  { value: 'pile' as const, icon: IconCollage, label: t('msgbox.montage.pile') },
 ]);
 
 const pageOptions = computed(() => [
@@ -338,7 +350,7 @@ const pageOptions = computed(() => [
 ]);
 
 const pageSize = computed(() => {
-  const [long, short] = PAGE_SIZES[pageKey.value];
+  const [long, short] = MONTAGE_PAGE_SIZES[pageKey.value];
   return landscape.value ? [long, short] : [short, long];
 });
 
@@ -352,7 +364,10 @@ function toExportPx(percent: number) {
 
 const fileById = computed(() => new Map(files.value.map(file => [Number(file.id), file])));
 
-const baseLayout = computed(() => computeMontageLayout(
+const preservedFreeformLayout = ref<MontageItem[] | null>(null);
+const baseLayout = computed(() => mode.value === 'pile' && preservedFreeformLayout.value
+  ? preservedFreeformLayout.value.filter(item => fileById.value.has(item.fileId))
+  : computeMontageLayout(
   files.value.map(file => ({ fileId: Number(file.id), ratio: getAspectRatio(file) })),
   pageSize.value[0] / pageSize.value[1],
   mode.value,
@@ -367,10 +382,16 @@ const NO_ADJUST: Adjust = { dx: 0, dy: 0, scale: 1, angle: 0 };
 const adjusts = ref(new Map<number, Adjust>());
 const raised = ref<number[]>([]);
 const activeId = ref<number>(); // photo showing the dial
-watch([mode, seed, pageKey, landscape, () => files.value.map(file => file.id).join(',')], () => {
+watch([mode, seed, pageKey, landscape,
+  () => mode.value === 'pile' ? '' : files.value.map(file => file.id).join(',')], () => {
+  preservedFreeformLayout.value = null;
   adjusts.value = new Map();
   raised.value = [];
   activeId.value = undefined;
+});
+
+watch([spacing, borderOn, border, maxRotation], () => {
+  preservedFreeformLayout.value = null;
 });
 
 const movedLayout = computed(() => baseLayout.value.map(item => {
@@ -395,13 +416,50 @@ const layout = computed(() => {
   return movedLayout.value.slice().sort((a, b) => rank(a.fileId) - rank(b.fileId));
 });
 
+function captionHeight(item: MontageItem) {
+  return mode.value === 'card' && captionField.value > 0
+    ? Math.max(0, Math.min(0.025, (item.h * pageSize.value[1] / pageSize.value[0] - 2 * item.border) * 0.3)) : 0;
+}
+
+const captions = computed(() => {
+  const result = new Map<number, string>();
+  for (const item of layout.value) {
+    const height = captionHeight(item);
+    if (!height) continue;
+    const file = fileById.value.get(item.fileId);
+    const fields = ['', file.name, formatFileSize(file.size), formatDimensionText(file.width, file.height),
+      formatTimestamp(file.taken_date, 'date_time'), file.geo_name, formatCameraInfo(file.e_make, file.e_model),
+      file.e_lens_model, formatCaptureSettings(file.e_focal_length, file.e_exposure_time, file.e_f_number, file.e_iso_speed, file.e_exposure_bias)];
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round((item.w - 2 * item.border) * pageSize.value[0]));
+    canvas.height = Math.max(1, Math.round(height * pageSize.value[0]));
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = borderColor.value;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = `${canvas.height * 0.55}px sans-serif`;
+    ctx.fillStyle = '#333333';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    let text = String(fields[captionField.value] || '');
+    const maxWidth = Math.max(0, canvas.width - canvas.height * 0.5);
+    if (ctx.measureText(text).width > maxWidth) {
+      const chars = Array.from(text);
+      while (chars.length && ctx.measureText(chars.join('') + '…').width > maxWidth) chars.pop();
+      text = chars.length ? chars.join('') + '…' : '';
+    }
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    result.set(item.fileId, canvas.toDataURL('image/png'));
+  }
+  return result;
+});
+
 // dial geometry, in px around the photo's center
 const DIAL_RADIUS = 56;
-const DIAL_WIDTH = 22;
+const DIAL_WIDTH = 20;
 const DIAL_HANDLE = 92;
 
 const dial = computed(() => {
-  if (mode.value !== 'pile' || activeId.value === undefined) return null;
+  if (mode.value !== 'pile' || activeId.value === undefined || activeDragKind.value === 'move') return null;
   const item = movedLayout.value.find(other => other.fileId === activeId.value);
   if (!item) return null;
   const radians = item.rotation * Math.PI / 180;
@@ -411,18 +469,15 @@ const dial = computed(() => {
     y: (item.y + item.h / 2) * pageBox.value.height,
     angle: item.rotation,
     handle: { left: `${Math.cos(radians) * DIAL_HANDLE}px`, top: `${Math.sin(radians) * DIAL_HANDLE}px` },
-    angleLabel: Math.round((((item.rotation % 360) + 540) % 360) - 180),
-    scaleLabel: Math.round((adjusts.value.get(item.fileId)?.scale ?? 1) * 100),
   };
 });
 
-// Pointer drags: move / transform a pile photo, swap two photos of the grid or mosaic,
-// reorder the photo strip. Swap and reorder find their target under the pointer.
-type DragKind = 'move' | 'transform' | 'swap' | 'reorder';
-const DROP_SELECTORS: Partial<Record<DragKind, string>> = { swap: '[data-frame-id]', reorder: '[data-thumb-id]' };
+// Move / transform a freeform photo, or swap photos in the preview.
+type DragKind = 'move' | 'transform' | 'swap';
+const activeDragKind = ref<DragKind>();
 const pageRef = ref<HTMLElement | null>(null);
-const dragSource = ref<number>(); // swap / reorder: dragged photo
-const dropTarget = ref<number>(); // swap / reorder: photo under the pointer
+const dragSource = ref<number>(); // swap: dragged photo
+const dropTarget = ref<number>(); // swap: photo under the pointer
 let drag: { kind: DragKind; fileId: number; startX: number; startY: number; centerX: number; centerY: number; start: Adjust } | null = null;
 
 function startDrag(event: PointerEvent, fileId: number, kind: DragKind) {
@@ -439,6 +494,7 @@ function startDrag(event: PointerEvent, fileId: number, kind: DragKind) {
   } else {
     dragSource.value = fileId;
   }
+  activeDragKind.value = kind;
   drag = {
     kind,
     fileId,
@@ -450,14 +506,14 @@ function startDrag(event: PointerEvent, fileId: number, kind: DragKind) {
   };
   window.addEventListener('pointermove', onDrag);
   window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
 }
 
 function onDrag(event: PointerEvent) {
   if (!drag) return;
-  const selector = DROP_SELECTORS[drag.kind];
-  if (selector) {
-    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>(selector);
-    const id = Number(target?.dataset.frameId ?? target?.dataset.thumbId);
+  if (drag.kind === 'swap') {
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-frame-id]');
+    const id = Number(target?.dataset.frameId);
     dropTarget.value = id && id !== drag.fileId ? id : undefined;
     return;
   }
@@ -484,18 +540,16 @@ function endDrag() {
     const from = ids.indexOf(drag.fileId);
     const to = ids.indexOf(dropTarget.value);
     const next = files.value.slice();
-    if (drag.kind === 'swap') {
-      [next[from], next[to]] = [next[to], next[from]];
-    } else {
-      next.splice(to, 0, ...next.splice(from, 1));
-    }
+    [next[from], next[to]] = [next[to], next[from]];
     files.value = next;
   }
   drag = null;
+  activeDragKind.value = undefined;
   dragSource.value = undefined;
   dropTarget.value = undefined;
   window.removeEventListener('pointermove', onDrag);
   window.removeEventListener('pointerup', endDrag);
+  window.removeEventListener('pointercancel', endDrag);
 }
 
 function shuffle() {
@@ -504,7 +558,12 @@ function shuffle() {
 }
 
 function removePhoto(fileId: number) {
-  if (files.value.length > 2) files.value = files.value.filter(file => Number(file.id) !== fileId);
+  if (files.value.length <= 2 || isProcessing.value) return;
+  if (mode.value === 'pile') preservedFreeformLayout.value = baseLayout.value.filter(item => item.fileId !== fileId);
+  files.value = files.value.filter(file => Number(file.id) !== fileId);
+  adjusts.value.delete(fileId);
+  raised.value = raised.value.filter(id => id !== fileId);
+  if (activeId.value === fileId) activeId.value = undefined;
 }
 
 async function loadFiles(ids: number[]) {
@@ -514,43 +573,12 @@ async function loadFiles(ids: number[]) {
     .map((file: any) => ({ ...file, thumbnail: getThumbUrl(file.id) }));
 }
 
-// "+ Add": the main window answers with the photos selected in Lap (montage-add-files)
-function requestAdd() {
-  errorMessage.value = '';
-  void tauriEmit('montage-add-request');
-}
-
-async function addFiles(fileIds: number[]) {
-  const ids = fileIds.filter(id => !fileById.value.has(id));
-  if (ids.length === 0) {
-    errorMessage.value = t('msgbox.montage.add_none');
-    return;
-  }
-  const room = MAX_PHOTOS - files.value.length;
-  if (ids.length > room) errorMessage.value = t('msgbox.montage.too_many_photos', { count: MAX_PHOTOS });
-  files.value = [...files.value, ...await loadFiles(ids.slice(0, room))];
-  await fitWindowToPanel();
-}
-
-// grow the window until the settings panel needs no scrollbar, never beyond the screen
-const panelRef = ref<HTMLElement | null>(null);
-async function fitWindowToPanel() {
-  await nextTick();
-  const panel = panelRef.value;
-  const overflow = panel ? panel.scrollHeight - panel.clientHeight : 0;
-  if (overflow <= 0) return;
-  const height = Math.min(window.innerHeight + overflow, window.screen.availHeight);
-  if (height <= window.innerHeight) return;
-  await appWindow.setSize(new LogicalSize(window.innerWidth, height));
-  await appWindow.center();
-}
-
 // fit the page into the preview area
 const containerRef = ref<HTMLElement | null>(null);
 const containerSize = ref({ width: 0, height: 0 });
 let resizeObserver: ResizeObserver | null = null;
 const pageBox = computed(() => {
-  const padding = 24;
+  const padding = 5;
   const scale = Math.min(
     (containerSize.value.width - padding * 2) / pageSize.value[0],
     (containerSize.value.height - padding * 2) / pageSize.value[1],
@@ -588,7 +616,7 @@ function frameStyle(item: MontageItem) {
     width: `${item.w * 100}%`,
     height: `${item.h * 100}%`,
     padding: `${item.border * pageBox.value.width}px`,
-    backgroundColor: item.border > 0 ? borderColor.value : 'transparent',
+    backgroundColor: item.border > 0 || photoScaling.value === 0 ? borderColor.value : 'transparent',
     transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined,
     boxShadow: shadow.value ? shadowStyle(item.rotation) : undefined,
     zIndex: layout.value.findIndex(other => other.fileId === item.fileId),
@@ -599,23 +627,24 @@ function frameStyle(item: MontageItem) {
 function photoStyle(item: MontageItem) {
   const rotate = Number(fileById.value.get(item.fileId)?.rotate || 0);
   const innerW = item.w * pageBox.value.width - 2 * item.border * pageBox.value.width;
-  const innerH = item.h * pageBox.value.height - 2 * item.border * pageBox.value.width;
+  const innerH = item.h * pageBox.value.height - (2 * item.border + captionHeight(item)) * pageBox.value.width;
   const swap = rotate % 180 !== 0;
   return {
     width: `${swap ? innerH : innerW}px`,
     height: `${swap ? innerW : innerH}px`,
+    objectFit: ['contain', 'cover', 'fill'][photoScaling.value] as 'contain' | 'cover' | 'fill',
     transform: `translate(-50%, -50%) rotate(${rotate}deg)`,
   };
 }
 
-// output format and quality follow the image editor settings
+// Collage export preferences are independent of the image editor.
 const outputFormatValues = ['jpg', 'png', 'webp'] as const;
 const combinedFormatKey = computed({
-  get: () => config.imageEditor.format !== 0 ? String(config.imageEditor.format) : `0-${config.imageEditor.quality}`,
+  get: () => config.montage.format !== 0 ? String(config.montage.format) : `0-${config.montage.quality}`,
   set: (key: string) => {
     const [format, quality] = key.split('-').map(Number);
-    config.imageEditor.format = format;
-    config.imageEditor.quality = quality || 0;
+    config.montage.format = format;
+    config.montage.quality = quality || 0;
   },
 });
 const combinedFormatOptions = computed(() => {
@@ -627,7 +656,7 @@ const combinedFormatOptions = computed(() => {
   ];
 });
 
-const outputFormat = computed(() => outputFormatValues[config.imageEditor.format] || outputFormatValues[0]);
+const outputFormat = computed(() => outputFormatValues[config.montage.format] || outputFormatValues[0]);
 
 // save dialog, prefilled with the first photo's folder and a free montage_N name
 const showSaveDialog = ref(false);
@@ -638,7 +667,6 @@ const saveNameRef = ref<HTMLInputElement | null>(null);
 
 async function clickSave() {
   if (isProcessing.value || files.value.length < 2) return;
-  errorMessage.value = '';
   saveError.value = '';
   saveFolder.value = getFolderPath(files.value[0].file_path);
   let counter = 1;
@@ -663,6 +691,35 @@ async function browseFolder() {
   }
 }
 
+function renderParams() {
+  return {
+    width: pageSize.value[0],
+    height: pageSize.value[1],
+    background: background.value,
+    borderColor: borderColor.value,
+    shadow: shadow.value,
+    items: layout.value.map(item => {
+      const file = fileById.value.get(item.fileId);
+      return { ...item, scaling: photoScaling.value, path: file.file_path, orientation: Number(file.e_orientation || 1), rotate: Number(file.rotate || 0), caption: captions.value.get(item.fileId)?.split(',')[1], captionHeight: captionHeight(item) };
+    }),
+  };
+}
+
+const printImageView = ref<InstanceType<typeof PrintImage> | null>(null);
+async function printCollage() {
+  if (isProcessing.value || files.value.length < 2) return;
+  isProcessing.value = true;
+  try {
+    const params = renderParams();
+    const png = await renderMontage({ ...params, forPrint: true, destFilePath: '', outputFormat: 'png' });
+    await printImageView.value!.print(`data:image/png;base64,${png}`, params.width > params.height ? 'landscape' : 'portrait');
+  } catch (error) {
+    await message(`${t('msgbox.montage.save_failed')} ${error}`, { kind: 'error' });
+  } finally {
+    isProcessing.value = false;
+  }
+}
+
 async function confirmSave() {
   if (isProcessing.value) return;
   const folderPath = saveFolder.value.trim().replace(/[\\/]+$/, '');
@@ -684,19 +741,10 @@ async function confirmSave() {
   isProcessing.value = true;
   saveError.value = '';
   try {
-    await renderMontage({
-      width: pageSize.value[0],
-      height: pageSize.value[1],
-      background: background.value,
-      borderColor: borderColor.value,
-      shadow: shadow.value,
-      items: layout.value.map(item => {
-        const file = fileById.value.get(item.fileId);
-        return { ...item, path: file.file_path, orientation: Number(file.e_orientation || 1), rotate: Number(file.rotate || 0) };
-      }),
+    await renderMontage({ ...renderParams(),
       destFilePath,
       outputFormat: outputFormat.value,
-      quality: [90, 80, 60][config.imageEditor.quality] || 80,
+      quality: [90, 80, 60][config.montage.quality] || 80,
     });
     await tauriEmit('message-from-montage', { type: 'success', filePath: destFilePath });
   } catch (error) {
@@ -715,10 +763,25 @@ async function closeWindow() {
   }
 }
 
+let closeOnEscapeRelease = false;
 function handleKeyDown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.repeat) return;
   if (showSaveDialog.value) closeSaveDialog();
-  else void closeWindow();
+  else closeOnEscapeRelease = true;
+}
+function handleKeyUp(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !closeOnEscapeRelease) return;
+  closeOnEscapeRelease = false;
+  event.preventDefault();
+  event.stopPropagation();
+  void closeWindow();
+}
+function handleWindowFocus() {
+  const input = document.activeElement;
+  if (input instanceof HTMLInputElement && input.type === 'color') input.blur();
 }
 
 watch(() => config.settings.language, (newLanguage) => {
@@ -734,27 +797,25 @@ watch(() => config.settings.darkTheme, (newDarkTheme) => {
   setTheme(config.settings.appearance, newDarkTheme);
 });
 
-let unlistenAddFiles: (() => void) | null = null;
-
 onMounted(async () => {
   window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keyup', handleKeyUp);
+  window.addEventListener('focus', handleWindowFocus);
   resizeObserver = new ResizeObserver(([entry]) => {
     containerSize.value = { width: entry.contentRect.width, height: entry.contentRect.height };
   });
   if (containerRef.value) resizeObserver.observe(containerRef.value);
 
-  unlistenAddFiles = await listen('montage-add-files', (event: any) => addFiles(event.payload.fileIds || []));
-
   const ids = String(router.currentRoute.value.query.fileIds || '').split(',').map(Number).filter(id => id > 0);
-  files.value = await loadFiles(ids);
-  await fitWindowToPanel();
+  files.value = await loadFiles(ids.slice(0, MONTAGE_MAX_PHOTOS));
 });
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
+  window.removeEventListener('keyup', handleKeyUp);
+  window.removeEventListener('focus', handleWindowFocus);
   endDrag();
   resizeObserver?.disconnect();
-  unlistenAddFiles?.();
 });
 
 </script>

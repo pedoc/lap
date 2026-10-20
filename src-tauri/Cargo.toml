@@ -94,13 +94,13 @@ ort = { version = "=2.0.0-rc.10", default-features = false, features = ["coreml"
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSScreen", "NSWorkspace"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSDictionary", "NSError", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSDictionary", "NSError", "NSLocale", "NSString", "NSURL"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["directml"] }
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 clipboard-win = "5.4.1"
-windows = { version = "0.61.3", default-features = false, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Wdk_Graphics_Direct3D"] }
+windows = { version = "0.61.3", default-features = false, features = ["Win32_Foundation", "Win32_Globalization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Wdk_Graphics_Direct3D"] }
 
 [features]
 # Legacy CUDA linkage for other platforms. Windows x64 uses the optional bridge

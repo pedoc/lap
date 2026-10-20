@@ -56,6 +56,7 @@ mod t_private_lock;
 mod t_sqlite;
 mod t_thumbnail_rebuild;
 mod t_storage;
+mod t_startup;
 mod t_utils;
 mod t_video;
 mod t_window_exit;
@@ -67,6 +68,7 @@ async fn main() {
         eprintln!("Unhandled panic: {}", panic_info);
     }));
 
+    let startup = t_startup::StartupState::default();
     let builder = tauri::Builder::default();
     let builder = t_protocol::register_protocols(builder);
     let builder = t_private_lock::register_protocol(builder);
@@ -81,13 +83,22 @@ async fn main() {
     };
 
     let run_result = builder
-        .plugin(tauri_plugin_window_state::Builder::default().build()) // macOS: ~/Library/Application Support/{APP_NAME}/window-state.json
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // Let the frontend show the window after its first themed render.
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(startup)
         .manage(t_video::VideoManager::default())
         .manage(t_ai::AiState(std::sync::Arc::new(std::sync::Mutex::new(t_ai::AiEngine::new()))))
         .manage(t_face::FaceState(std::sync::Arc::new(
@@ -119,6 +130,7 @@ async fn main() {
         .manage(t_similar::SimilarState::default())
         .setup(|_app| {
             t_private_lock::start_auto_lock(_app.handle().clone());
+            t_startup::mark(&_app.handle(), "setup-started");
             t_config::set_app_identifier(&_app.config().identifier);
             if let Ok(config) = t_config::load_app_config() {
                 t_webview_proxy::initialize(config.network_proxy_url.clone());
@@ -147,11 +159,16 @@ async fn main() {
             // wheel+ctrlKey events for touchpad pinch. Touchscreen pinch is still
             // handled by our pointer-event logic (with `touch-action: none`).
 
+            t_startup::mark(&_app.handle(), "database-started");
             // Create the database on startup
             if let Err(e) = t_sqlite::create_db() {
                 eprintln!("Failed to initialize database: {}", e);
-            } else if let Err(e) = ai::profiles::ensure_selected() {
-                eprintln!("Failed to initialize AI index profiles: {e}");
+                t_startup::mark(&_app.handle(), "database-failed");
+            } else {
+                t_startup::mark(&_app.handle(), "database-ready");
+                if let Err(e) = ai::profiles::ensure_selected() {
+                    eprintln!("Failed to initialize AI index profiles: {e}");
+                }
             }
 
             // Initialize video HTTP server for Linux
@@ -165,20 +182,8 @@ async fn main() {
                 if let Err(e) = t_utils::restore_album_scopes(&_app.handle()) {
                     eprintln!("Failed to restore asset scopes: {}", e);
                 }
-                let generation = t_utils::album_accessibility_generation();
-                tauri::async_runtime::spawn_blocking(move || {
-                    if let Ok(mut albums) = t_sqlite::Album::get_all_albums() {
-                        t_utils::refresh_all_album_accessibility_if_current(&mut albums, generation);
-                    }
-                });
             }
-
-            // Model sessions are loaded lazily by blocking inference workers.
-            // Installing a model therefore does not require restarting the app.
-
-            if !t_sqlite::is_database_corrupted() {
-                t_utils::start_folder_mtime_sync(_app.handle().clone());
-            }
+            t_startup::mark(&_app.handle(), "setup-ready");
 
             // Open devtools in development mode
             // #[cfg(debug_assertions)] // only include this block in debug builds
@@ -228,10 +233,14 @@ async fn main() {
             t_window_exit::cancel_app_exit,
             t_window_exit::confirm_app_exit,
             t_window_exit::request_app_restart,
+            t_startup::record_startup_stage,
+            t_startup::finish_startup,
+            t_startup::get_ai_initialization_status,
             t_drag::start_file_drag,
             t_drag::cancel_file_drag,
             // library
             t_cmds::get_app_config,
+            t_cmds::get_system_region_locale,
             t_cmds::get_supported_format_extensions,
             t_cmds::get_ffmpeg_backed_image_extensions,
             t_cmds::check_gstreamer_available,
@@ -411,6 +420,7 @@ async fn main() {
             t_cmds::get_file_info,
             t_cmds::update_file_info,
             t_cmds::refresh_selected_file_info,
+            t_cmds::is_cloud_only_file,
             t_cmds::prepare_motion_photo_video,
             t_cmds::add_file_to_db,
             t_cmds::check_file_exists,

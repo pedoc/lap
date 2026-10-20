@@ -151,10 +151,10 @@
           <!-- toggle select mode -->
           <TButton
             :icon="IconSelection"
-            :tooltip="$t('toolbar.filter.select_mode')"
-            :selected="selectMode"
+            :tooltip="$t(selectionPanelOpen ? 'toolbar.filter.exit_select_mode' : 'toolbar.filter.select_mode')"
+            :selected="selectionPanelOpen"
             :disabled="isScanStreamingMode || isMapVisible"
-            @click="handleSelectMode(!selectMode)"
+            @click="toggleSelectMode"
           />
 
           <!-- toggle dedup panel -->
@@ -213,6 +213,25 @@
             showFilmstripLayout ? (config.settings.showStatusBar ? 'mt-12 mb-8' : 'mt-12 mb-1') : ''
           ]"
         >
+          <Transition name="selection-bar" appear>
+          <div v-if="selectMode && !selectionPanelOpen" class="absolute top-16 right-4 z-20 flex items-center gap-1 rounded-box border border-base-content/10 bg-base-200/80 backdrop-blur-md px-2 py-1 shadow-sm"
+            :class="{ 'pointer-events-none': uiStore.inputStack.length > 0 }"
+            @pointerdown.stop @click.stop
+          >
+            <button class="flex items-center gap-2 rounded-box px-1 py-1 text-primary/70 hover:text-primary cursor-pointer"
+              :aria-label="$t('toolbar.filter.show_selection_panel')"
+              :title="$t('toolbar.filter.show_selection_panel')" @click="openSelectionPanel"
+            >
+              <span class="text-sm tabular-nums" aria-live="polite">
+                {{ selectedCount > 0 ? $t('toolbar.filter.select_count', { count: selectedCount.toLocaleString() }) : $t('toolbar.filter.select_files') }}
+              </span>
+              <IconPanelMax class="size-4" />
+            </button>
+            <button class="btn btn-ghost btn-xs btn-square" :aria-label="$t('toolbar.filter.exit_select_mode')"
+              :title="`${$t('toolbar.filter.exit_select_mode')} (Esc)`" @click="handleSelectMode(false)"
+            ><IconClose class="size-4" /></button>
+          </div>
+          </Transition>
           <div class="relative" 
             :class="{ 'flex-1': !showFilmstripLayout }"
             :style="{ 
@@ -245,6 +264,7 @@
                 @item-dblclicked="handleItemDblClicked"
                 @item-select-toggled="handleItemSelectToggled"
                 @item-action="handleItemAction"
+                @selection-context-menu="handleSelectionContextMenu"
                 @date-group-select="handleDateGroupSelect"
                 @group-select-toggled="handleGroupSelectToggled"
                 @visible-range-update="handleVisibleRangeUpdate"
@@ -262,23 +282,25 @@
               >
                 <button 
                   :class="[
-                    'p-2 rounded-full pointer-events-auto bg-base-100/30', 
+                    'preview-press-button p-2 rounded-full pointer-events-auto bg-base-100/30',
                     selectedItemIndex > 0 ? 'text-base-content/70 hover:text-base-content hover:bg-base-100/70 cursor-pointer' : 'text-base-content/30'
                   ]"
+                  :disabled="selectedItemIndex <= 0"
                   @click="requestNavigate('prev')"
                   @dblclick.stop
                 >
-                  <component :is="isFilmstripVertical ? IconArrowUp : IconLeft" class="w-8 h-8" />
+                  <span class="preview-press-icon flex pointer-events-none"><component :is="isFilmstripVertical ? IconArrowUp : IconLeft" class="w-8 h-8" /></span>
                 </button>
                 <button 
                   :class="[
-                    'p-2 rounded-full pointer-events-auto bg-base-100/30', 
+                    'preview-press-button p-2 rounded-full pointer-events-auto bg-base-100/30',
                     selectedItemIndex < fileList.length - 1 ? 'text-base-content/70 hover:text-base-content hover:bg-base-100/70 cursor-pointer' : 'text-base-content/30'
                   ]"
+                  :disabled="selectedItemIndex >= fileList.length - 1"
                   @click="requestNavigate('next')" 
                   @dblclick.stop
                 >
-                  <component :is="isFilmstripVertical ? IconArrowDown : IconRight" class="w-8 h-8" />
+                  <span class="preview-press-icon flex pointer-events-none"><component :is="isFilmstripVertical ? IconArrowDown : IconRight" class="w-8 h-8" /></span>
                 </button> 
               </div>
             </div>
@@ -383,7 +405,7 @@
             <div class="absolute inset-1 z-90 flex items-center justify-between pointer-events-none">
               <button
                 :class="[
-                  'p-2 rounded-full bg-base-100/30 transition-opacity duration-200',
+                  'preview-press-button p-2 rounded-full bg-base-100/30 transition-opacity duration-200',
                   quickViewHoverLeft
                     ? (selectedItemIndex > 0
                       ? 'opacity-100 pointer-events-auto text-base-content/70 hover:text-base-content hover:bg-base-100/70 cursor-pointer'
@@ -395,11 +417,11 @@
                 @click.stop="requestNavigate('prev')"
                 @dblclick.stop
               >
-                <IconLeft class="w-8 h-8" />
+                <span class="preview-press-icon flex pointer-events-none"><IconLeft class="w-8 h-8" /></span>
               </button>
               <button
                 :class="[
-                  'p-2 rounded-full bg-base-100/30 transition-opacity duration-200',
+                  'preview-press-button p-2 rounded-full bg-base-100/30 transition-opacity duration-200',
                   quickViewHoverRight
                     ? (selectedItemIndex < fileList.length - 1
                       ? 'opacity-100 pointer-events-auto text-base-content/70 hover:text-base-content hover:bg-base-100/70 cursor-pointer'
@@ -411,7 +433,7 @@
                 @click.stop="requestNavigate('next')"
                 @dblclick.stop
               >
-                <IconRight class="w-8 h-8" />
+                <span class="preview-press-icon flex pointer-events-none"><IconRight class="w-8 h-8" /></span>
               </button>
             </div>
           </div>
@@ -443,7 +465,7 @@
           :style="{ width: activeRightPanelWidth + 'px', top: '3rem', bottom: config.settings.showStatusBar ? '2rem' : '0.25rem' }"
         >
           <DedupPane
-            v-if="rightPanelContent === 'dedup'"
+            v-if="renderedRightPanelContent === 'dedup'"
             ref="dedupPaneRef"
             :selected-file-id="fileList[selectedItemIndex]?.id"
             :dedup-scan-key="dedupScanKey"
@@ -463,7 +485,7 @@
             @dedup-status-updated="dedupStatuses = $event"
           />
           <SelectionPanel
-            v-else-if="rightPanelContent === 'selection'"
+            v-else-if="renderedRightPanelContent === 'selection'"
             :file-count="fileList.length"
             :selected-files="selectionPreviewFiles"
             :selected-count="selectedCount"
@@ -471,7 +493,7 @@
             :selected-size="selectedSize"
             :query-source="currentQuerySource"
             :more-actions="selectionMenuItems"
-            @close="handleSelectMode(false)"
+            @close="handleSelectMode(false); config.rightPanel.show = false"
             @select-all="selectAllInCurrentList"
             @select-none="selectNoneInCurrentList"
             @select-invert="invertSelectionInCurrentList"
@@ -480,6 +502,7 @@
             @copy-to-folder="onCopyToFolder"
             @remove-from-collection="removeSelectedFromCollection"
             @trash="openTrashMsgbox()"
+            @rename="clickRename"
             @favorite-all="selectModeSetFavorites(true)"
             @unfavorite-all="selectModeSetFavorites(false)"
             @set-rating-all="selectModeSetRatings"
@@ -493,7 +516,7 @@
             @more-action-menu="handleMoreActionMenu"
           />
           <FileInfo
-            v-else-if="rightPanelContent === 'info'"
+            v-else-if="renderedRightPanelContent === 'info'"
             ref="fileInfoRef"
             :fileInfo="fileList[selectedItemIndex]"
             :navigator-viewport="infoNavigatorViewport"
@@ -507,10 +530,10 @@
             @toggleFavorite="toggleFavorite"
             @setRating="setSelectedFileRating"
             @setCulling="setSelectedFileCullingFlag"
-            @rotate="clickRotate"
-            @quick-edit-tag="clickTag"
-            @quick-edit-collection="clickAddToCollection"
-            @quick-edit-comment="openCommentEditor"
+            @rotate="handleInfoAction(clickRotate)"
+            @quick-edit-tag="handleInfoAction(clickTag)"
+            @quick-edit-collection="handleInfoAction(clickAddToCollection)"
+            @quick-edit-comment="handleInfoAction(openCommentEditor)"
             @navigate-folder="handleInfoNavigateFolder"
             @navigate-metadata="handleNavigateMetadata"
             @navigate-person="handleNavigatePerson"
@@ -538,7 +561,6 @@
       :empty-message="statusBarEmptyMessage"
     />
   </div>
-
 
   <!-- rename -->
   <MessageBox
@@ -724,16 +746,7 @@
     </div>
   </div>
 
-  <Teleport to="body">
-    <div class="print-only">
-      <img
-        v-if="printImageSrc"
-        ref="printImageRef"
-        :src="printImageSrc"
-        alt=""
-      />
-    </div>
-  </Teleport>
+  <PrintImage ref="printImageView" />
 
   <!-- Pops a More-actions submenu parent's children (e.g. "Open in external
        app...") at the clicked toolbar button, reusing ContextMenu's submenu
@@ -752,14 +765,19 @@
 </template>
 
 <script setup lang="ts">
+import { pendingChanges } from '@/common/pendingChanges';
 import { startupWindowProxy } from '@/common/windowProxy';
 
 import { isFaceRename, faceChangeAffectsPerson } from '@/common/faceUpdates';
-import { ref, watch, computed, createVNode, onMounted, onBeforeUnmount, nextTick, render, markRaw } from 'vue';
+import { defineAsyncComponent, ref, watch, computed, createVNode, onMounted, onBeforeUnmount, nextTick, render, markRaw } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { externalDragKind, updateExternalDrag, resetExternalDrag, finishExternalDrag } from '@/common/externalDrag';
+import { getExternalDropUris, getExternalHttpDropUrls, getExternalFileDropPaths, fileUrlToPath, hasExternalDropIntent } from '@/common/externalDrop';
+
+import PrintImage from '@/components/PrintImage.vue';
 import { emit as tauriEmit, listen } from '@tauri-apps/api/event';
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { WebviewWindow, getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { PREVIEW_WINDOW_FOCUS_RESTORED } from '@/common/previewWindow';
 import { useI18n } from 'vue-i18n';
 import { useToast } from '@/common/toast';
@@ -769,7 +787,7 @@ import { getAlbum, getAllAlbums, recountAlbum, getQueryCountAndSum, getQueryTime
          copyImages, renameFile, moveFile, moveFileOutsideLibrary, copyFile, deleteFile, deleteFilePermanently, batchDeleteFiles, editFileComment, getFileThumb, getFileThumbs, getFileInfo,
          setFileRotate, setFileFavorite, setFileRating, setFileCullingFlag, batchUpdateFileMetadata, getTagsForFile, getTagGroupName, searchSimilarImages, generateEmbedding,
          revealPath, getTagName, indexAlbum, listenIndexProgress, listenIndexFinished, setAlbumCover, setDesktopWallpaper,
-         updateFileInfo, getSupportedFormatExtensions, importFile, importUrl, importFileBytes, getDragPayload, importClipboard, addFileToDb, checkFileExists, checkFileAccessibility, cancelIndexing as cancelIndexingApi, selectFolder, getFacesForFile, listenFaceIndexProgress,
+         updateFileInfo, refreshFileInfo, getSupportedFormatExtensions, importFile, importUrl, importFileBytes, getDragPayload, importClipboard, addFileToDb, checkFileExists, checkFileAccessibility, cancelIndexing as cancelIndexingApi, selectFolder, getFacesForFile, listenFaceIndexProgress,
          openFilesWithApp, getAppConfig, getIndexRecoveryInfo, clearIndexRecoveryInfo, setLastSelectedItemIndex,
          dedupDelete, getQueryFilePosition, getFolderSearchExcluded,
          listCollections, createCollection, addFilesToCollection, removeFilesFromCollection, getFileCollections, getCollectionCountAndSum, getCollectionFiles, getCollectionGroupedQueryRows, getCollectionGroupFileIds, getCollectionQueryFileIds, fetchFolder, isDirectoryAccessible, checkAlbumAccessibility, addTagToFile } from '@/common/api';
@@ -789,7 +807,7 @@ import { startOcr } from '@/common/ocr';
 import { normalizeOcrState } from '@/common/ocrUi';
 import { startObjectIndex } from '@/common/objects';
 import { normalizeObjectState, objectClassName, objectSelectionIds, resolveObjectTextClasses } from '@/common/objectUi';
-import { CULLING, DATE_SORT, GROUP, LIB_ITEM, RATE, SIDEBAR } from '@/common/constants';
+import { CULLING, DATE_SORT, GROUP, LIB_ITEM, RATE, SIDEBAR, SELECTED_THUMBNAIL_LIMIT, RIGHT_PANEL_MIN_WIDTH, PANEL_ANIMATION_MS, MONTAGE_MAX_PHOTOS, LARGE_BATCH_CONFIRM_THRESHOLD, EXTERNAL_OPEN_WARNING_THRESHOLD } from '@/common/constants';
 import { isWin, isMac, isLinux, setTheme, separator,
          formatFileSize, formatDate, getCalendarDateRange, formatFolderBreadcrumb, getThumbnailDataUrl, getAssetSrc, getPreviewUrl,
          getCachedThumbnailDataUrl,
@@ -800,7 +818,7 @@ import { isWin, isMac, isLinux, setTheme, separator,
 import DropDownSelect from '@/components/DropDownSelect.vue';
 import ProgressBar from '@/components/ProgressBar.vue';
 import GridView  from '@/components/GridView.vue';
-import PhotoMapView from '@/components/PhotoMapView.vue';
+const PhotoMapView = defineAsyncComponent(() => import('@/components/PhotoMapView.vue'));
 import ContextMenu from '@/components/ContextMenu.vue';
 import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFileDragActive, isReturningNativeFileDrag, startNativeFileDrag } from '@/common/nativeDrag';
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
@@ -819,7 +837,7 @@ import RefreshFileInfoDialog from '@/components/RefreshFileInfoDialog.vue';
 import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
 import { thumbnailSelectionScope } from '@/common/thumbnailRebuild';
 const thumbnailRebuildRequest = ref<any>(null);
-import { fileInfoRevision } from '@/common/fileInfoRefresh';
+import { fileInfoRevision, metadataRefreshRequiresQuery } from '@/common/fileInfoRefresh';
 import { displayLocationFilterLabel } from '@/common/locationNames';
 import IndexRecoveryDialog from '@/components/IndexRecoveryDialog.vue';
 import MoveTo from '@/components/MoveTo.vue';
@@ -855,6 +873,7 @@ import {
   IconFilmstrip,
   IconMapDefault,
   IconSelection,
+  IconClose,
   IconInformation,
   IconSearch,
   IconBox,
@@ -885,6 +904,7 @@ import {
   IconSortingDesc,
   IconSortingShuffle,
   IconFilter,
+  IconPanelMax,
 } from '@/common/icons';
 
 const thumbnailPlaceholder = new URL('@/assets/images/image-file.png', import.meta.url).href;
@@ -1043,6 +1063,8 @@ let hasRestoredInitialSelection = false;
 
 // mutil select mode
 const selectMode = ref(false);
+const selectionPanelOpen = ref(false);
+watch(selectMode, (active) => { if (!active) selectionPanelOpen.value = false; }, { flush: 'sync' });
 const selectedCount = ref(0);
 const selectedSize = ref(0);  // selected files size
 const selectionChunkSize = computed(() => Number(config.main?.selectionChunkSize) || 200);
@@ -1058,7 +1080,7 @@ const selectedFileIds = markRaw(new Set<number>());
 const selectionVersion = ref(0);
 const selectedFilesVersion = ref(0);
 const selectionPreviewFiles = ref<any[]>([]);
-const SELECTION_PREVIEW_LIMIT = 19;
+
 let selectionPreviewRequestId = 0;
 type SelectionRestoreState = {
   selectedIds: Set<number>;
@@ -1104,7 +1126,7 @@ async function refreshSelectionPanelPreviews() {
     return;
   }
 
-  const previewIds = Array.from(selectedFileIds).slice(0, SELECTION_PREVIEW_LIMIT);
+  const previewIds = Array.from(selectedFileIds).slice(0, SELECTED_THUMBNAIL_LIMIT);
   const filesById = new Map(getActionableSelectedItems().map(file => [Number(file.id), file]));
   const missingIds = previewIds.filter(id => !filesById.has(id));
   if (missingIds.length > 0) {
@@ -1162,20 +1184,69 @@ function removeDeletedFilesFromImageViewerSession(fileIds: number[]) {
   return files.length;
 }
 
-const fileRefreshSelection = ref<{ ids: number[]; libraryId: string } | null>(null);
+const fileRefreshSelection = ref<{ ids: number[]; libraryId: string; requestId: number; groupSizes: Map<string, number> } | null>(null);
+function fileMutationReady() {
+  if (!pendingChanges.hasPending()) return true;
+  toast.warning(t('workflow_close.finish_edits_first'));
+  return false;
+}
 function startSelectedFileRefresh() {
   if (fileRefreshSelection.value || selectedFileIds.size === 0) return;
-  fileRefreshSelection.value = { ids: Array.from(selectedFileIds), libraryId: libConfig._libraryId };
+  if (!fileMutationReady()) return;
+  fileRefreshSelection.value = {
+    ids: Array.from(selectedFileIds), libraryId: libConfig._libraryId, requestId: currentContentRequestId,
+    groupSizes: new Map(Array.from(groupMetaMap, ([id, meta]) => [id, meta.size])),
+  };
 }
-async function finishSelectedFileRefresh() {
+async function finishSelectedFileRefresh(results: Array<{ file: any; size_delta: number; skipped: boolean }>) {
   const selection = fileRefreshSelection.value;
-  if (!selection || selection.libraryId !== libConfig._libraryId) return;
-  for (const id of selection.ids) clearCachedThumbnailDataUrl(id, config.settings.thumbnailSize);
+  // Skipped cloud-only files are unchanged; regenerating their thumbnails would download them.
+  results = results.filter(result => !result.skipped);
+  if (!selection || selection.libraryId !== libConfig._libraryId || results.length === 0) return;
+  for (const { file } of results) clearCachedThumbnailDataUrl(file.id, config.settings.thumbnailSize);
   fileInfoRevision.value++;
-  // updateContent dispatches list queries without awaiting their completion.
-  // Restore selection from the contentReady watcher, never from a transient
-  // empty list while those queries are still loading.
-  await updateContent(true, true);
+  if (selection.requestId !== currentContentRequestId) return;
+  const scrollTop = gridViewRef.value?.getScrollTop();
+  const loadedFiles = new Map(fileList.value.filter(isRealFileItem).map(file => [Number(file.id), file]));
+  if (results.some(({ file }) => metadataRefreshRequiresQuery(loadedFiles.get(Number(file.id)), file))) {
+    // A changed date, location, media type or source stamp can change grouping
+    // and filtered membership. Re-query while retaining the selection/viewport.
+    pendingRestoreScrollTop.value = scrollTop ?? null;
+    await updateContent(true, true);
+    return;
+  }
+  const refreshedFiles: any[] = [];
+  const groupDeltas = new Map<string, number>();
+  for (const { file: updated, size_delta } of results) {
+    totalFileSize.value += size_delta;
+    selectedSize.value += size_delta;
+    const groupId = fileIdToGroupId.get(Number(updated.id));
+    if (groupId) {
+      groupDeltas.set(groupId, (groupDeltas.get(groupId) || 0) + size_delta);
+    }
+    const file = loadedFiles.get(Number(updated.id));
+    if (!file) continue;
+    Object.assign(file, updated, { rawThumbnailStale: true });
+    refreshedFiles.push(file);
+  }
+  for (const [groupId, delta] of groupDeltas) {
+    const meta = groupMetaMap.get(groupId);
+    if (meta) meta.size = (selection.groupSizes.get(groupId) ?? meta.size) + delta;
+  }
+  for (const group of [...groupedTimelineGroups.value, ...groupedRows.value.filter(isGroupRow)]) {
+    const id = String(group.groupId || group.group_id);
+    if (groupDeltas.has(id)) group.size = groupMetaMap.get(id)?.size ?? group.size;
+  }
+  if (groupDeltas.size > 0) {
+    const sizes = { ...groupSelectedSizeMap.value };
+    for (const [id, delta] of groupDeltas) sizes[id] = Math.max(0, Number(sizes[id] || 0) + delta);
+    groupSelectedSizeMap.value = sizes;
+  }
+  syncSelectionVersions();
+  await nextTick();
+  if (selection.libraryId !== libConfig._libraryId || selection.requestId !== currentContentRequestId) return;
+  if (scrollTop !== undefined) gridViewRef.value?.scrollToPosition(scrollTop);
+  await getFileListThumb(refreshedFiles, 0, 4, true);
 }
 
 const selectionAccessFiles = ref<any[]>([]);
@@ -1227,6 +1298,24 @@ const selectionMenuItems = useFileMenuItems(
 
 const moreActionMenuRef = ref<InstanceType<typeof ContextMenu> | null>(null);
 const moreActionMenuItems = ref<any[]>([]);
+
+function handleSelectionContextMenu(index: number, event: MouseEvent) {
+  if (!selectMode.value || uiStore.inputStack.length > 0) return;
+  const openMenu = () => {
+    if (!selectMode.value) return;
+    const file = fileList.value[index];
+    if (!isRealFileItem(file)) return;
+    if (!selectedFileIds.has(Number(file.id))) {
+      selectNoneInCurrentList();
+      setItemSelected(index, true);
+    }
+    selectedItemIndex.value = index;
+    moreActionMenuItems.value = selectionMenuItems.value;
+    void nextTick(() => moreActionMenuRef.value?.open?.(event.clientX, event.clientY));
+  };
+  if (index === selectedItemIndex.value) openMenu();
+  else checkUnsavedChanges(openMenu);
+}
 // Opens a More-actions submenu parent's children (e.g. "Open in external
 // app...") at the clicked toolbar button, reusing ContextMenu's submenu
 // rendering and the same multi-select menu actions.
@@ -1253,7 +1342,7 @@ const groupSelectedCounts = computed(() => groupSelectedCountMap.value);
 const groupSelectionLoading = ref<Record<string, boolean>>({});
 const fileIdToGroupId = new Map<number, string>();
 const groupMetaMap = new Map<string, { count: number; size: number }>();
-const LARGE_BATCH_CONFIRM_THRESHOLD = 1000;
+
 const FILE_OPERATION_CONCURRENCY = 8;
 
 function clearSelectionForFileListUpdate() {
@@ -2142,33 +2231,37 @@ const errorMessage = ref('');
 const showUnsavedChangesMsgbox = ref(false);
 const pendingAction = ref<(() => void) | null>(null);
 const fileInfoRef = ref<any>(null);
-const isDedupPanelOpen = computed(() => config.rightPanel.show && config.rightPanel.mode === 'dedup');
-const isInfoPanelOpen = computed(() => config.rightPanel.show && config.rightPanel.mode === 'info');
+const isDedupPanelOpen = computed(() => !selectionPanelOpen.value && config.rightPanel.show && config.rightPanel.mode === 'dedup');
+const isInfoPanelOpen = computed(() => !selectionPanelOpen.value && config.rightPanel.show && config.rightPanel.mode === 'info');
 const rightPanelContent = computed<'selection' | 'dedup' | 'info' | null>(() => {
-  if (selectMode.value) return 'selection';
+  if (selectMode.value && selectionPanelOpen.value) return 'selection';
   if (!config.rightPanel.show) return null;
   return config.rightPanel.mode === 'dedup' ? 'dedup' : 'info';
 });
-const RIGHT_PANEL_MIN_WIDTH = 160; // Keep aligned with left panel minimum width.
-const RIGHT_PANEL_ANIMATION_MS = 200;
+const renderedRightPanelContent = ref(rightPanelContent.value);
+watch(rightPanelContent, (content) => {
+  if (content) renderedRightPanelContent.value = content;
+});
+
 const activeRightPanelWidth = computed(() => Number(config.rightPanel.width || 360));
-const shouldShowRightPanel = computed(() => config.rightPanel.show || selectMode.value);
+const shouldShowRightPanel = computed(() => config.rightPanel.show || (selectMode.value && selectionPanelOpen.value));
 const rightPanelMounted = ref(shouldShowRightPanel.value);
 const rightPanelVisualVisible = ref(shouldShowRightPanel.value);
 const rightPanelLayoutVisible = ref(shouldShowRightPanel.value);
 let rightPanelAnimationTimer: ReturnType<typeof setTimeout> | null = null;
 let rightPanelAnimationVersion = 0;
 
-async function refreshCenteredGridLayout() {
+async function refreshGridLayoutPreservingScroll() {
+  const scrollTop = gridViewRef.value?.getScrollTop();
   gridViewRef.value?.refreshLayout?.();
   await nextTick();
-  gridViewRef.value?.centerItem?.(selectedItemIndex.value);
+  if (scrollTop !== undefined) gridViewRef.value?.scrollToPosition?.(scrollTop);
 }
 
 async function commitRightPanelLayout(visible: boolean) {
   rightPanelLayoutVisible.value = visible;
   await nextTick();
-  await refreshCenteredGridLayout();
+  await refreshGridLayoutPreservingScroll();
 }
 
 function clearRightPanelAnimationTimer() {
@@ -2191,7 +2284,7 @@ watch(shouldShowRightPanel, async (visible) => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         if (animationVersion === rightPanelAnimationVersion) {
-          void refreshCenteredGridLayout();
+          void refreshGridLayoutPreservingScroll();
         }
       });
     });
@@ -2206,7 +2299,7 @@ watch(shouldShowRightPanel, async (visible) => {
       if (animationVersion !== rightPanelAnimationVersion) return;
       rightPanelMounted.value = false;
     });
-  }, RIGHT_PANEL_ANIMATION_MS);
+  }, PANEL_ANIMATION_MS);
 });
 
 function getRightPanelMaxWidth() {
@@ -2685,44 +2778,6 @@ let pointerDragFiles: Array<{
 let dragGhostHotspotX = 0;
 let dragGhostHotspotY = 0;
 
-function getExternalDropUris(dt: DataTransfer | null) {
-  const value = dt?.getData('text/uri-list')
-    || dt?.getData('text/x-moz-url')
-    || dt?.getData('text/plain')
-    || '';
-  return value
-    .split(/\r?\n/)
-    .map(uri => uri.trim())
-    .filter(uri => uri.length > 0 && !uri.startsWith('#'));
-}
-
-function getExternalHttpDropUrls(uris: string[]) {
-  return uris
-    .filter(uri => uri.startsWith('http://') || uri.startsWith('https://'));
-}
-
-function fileUrlToPath(uri: string) {
-  if (!uri.startsWith('file://')) return null;
-  try {
-    const url = new URL(uri);
-    let path = decodeURIComponent(url.pathname);
-    if (/^\/[A-Za-z]:\//.test(path)) {
-      path = path.slice(1);
-    } else if (url.hostname && url.hostname !== 'localhost') {
-      path = `//${url.hostname}${path}`;
-    }
-    return path || null;
-  } catch {
-    return null;
-  }
-}
-
-function getExternalFileDropPaths(uris: string[]) {
-  return uris
-    .map(fileUrlToPath)
-    .filter((path): path is string => !!path);
-}
-
 function hasExternalDomDrop(event: DragEvent) {
   if (isNativeFileDragActive()) return false;
   return hasExternalDragIntent(event)
@@ -2731,14 +2786,12 @@ function hasExternalDomDrop(event: DragEvent) {
 
 function hasExternalDragIntent(event: DragEvent) {
   if (isContentInternalDrag.value || isNativeFileDragActive()) return false;
-  const dt = event.dataTransfer;
-  if (!dt) return false;
-  const types = Array.from(dt.types || []);
-  return dt.files.length > 0
-    || types.includes('Files')
-    || types.includes('text/uri-list')
-    || types.includes('text/x-moz-url');
+  return hasExternalDropIntent(event.dataTransfer);
 }
+
+watch(externalDragKind, kind => {
+  if (kind !== 'files') clearDropOverlay();
+});
 
 function clearDropOverlay() {
   dragOverCount.value = 0;
@@ -3772,7 +3825,6 @@ let unlistenKeydown: () => void;
 let unlistenImageViewer: () => void;
 let unlistenImageEditor: (() => void) | null = null;
 let unlistenMontage: (() => void) | null = null;
-let unlistenMontageAdd: (() => void) | null = null;
 let unlistenFaceIndexProgress: (() => void) | null = null;
 let unlistenLibraryTotalRefreshed: (() => void) | null = null;
 let unlistenImportFilesAdded: (() => void) | null = null;
@@ -3903,6 +3955,7 @@ function handleItemClicked(
       const anchorIndex = selectedItemIndex.value;
       handleSelectMode(true);
       setItemSelected(anchorIndex, true);
+      if (isGridLayoutView.value && config.rightPanel.show) selectionPanelOpen.value = true;
 
       selectedItemIndex.value = index;
       if (index !== anchorIndex) {
@@ -4009,7 +4062,6 @@ async function selectRangeFromSingleSelection(anchorIndex: number, targetIndex: 
   selectMode.value = true;
   showQuickView.value = false;
   stopSlideShow();
-  config.rightPanel.show = false;
 
   for (let i = start; i <= end; i++) {
     if (isRealFileItem(fileList.value[i])) {
@@ -4019,6 +4071,7 @@ async function selectRangeFromSingleSelection(anchorIndex: number, targetIndex: 
 
   selectedItemIndex.value = targetIndex;
   lastSelectedIndex.value = targetIndex;
+  if (isGridLayoutView.value && config.rightPanel.show) selectionPanelOpen.value = true;
 }
 
 async function handleItemSelectToggled(index: number, shiftKey: boolean = false) {
@@ -4053,6 +4106,7 @@ async function handleItemSelectToggled(index: number, shiftKey: boolean = false)
   
   // Update last selected index
   lastSelectedIndex.value = index;
+  if (isGridLayoutView.value && config.rightPanel.show) selectionPanelOpen.value = true;
 }
 
 function toggleKeyboardSelection(direction: 'prev' | 'next') {
@@ -4125,9 +4179,6 @@ async function handleGroupSelectToggled(groupRow: any, selected: boolean) {
     const ids = await getCachedGroupFileIds(groupId);
     if (!ids || ids.length === 0) return;
 
-    // Group selection enters multi-select directly, so close an active right panel
-    // just as the thumbnail selection path does.
-    config.rightPanel.show = false;
     selectMode.value = true;
     const idSet = new Set(ids.map(id => Number(id)).filter(id => Number.isFinite(id) && id > 0));
     const loadedById = new Map<number, number>();
@@ -4199,6 +4250,7 @@ async function getCachedGroupFileIds(groupId: string) {
         : [];
   const normalized = ids.map((id: any) => Number(id)).filter((id: number) => Number.isFinite(id) && id > 0);
   groupFileIdsCache.set(groupId, normalized);
+  for (const id of normalized) fileIdToGroupId.set(id, groupId);
   return normalized;
 }
 
@@ -4274,9 +4326,9 @@ async function requireCurrentOriginals() {
 
 function clickRename() {
   if (currentOriginalsUnavailable()) return;
-  if (selectMode.value) return;
   // Skip while an inline input is active (e.g. FileInfo rename, where Enter confirms the edit).
   if (uiStore.inputStack.length > 0) return;
+  if (selectMode.value) return;
   renamingFileName.value = extractFileName(fileList.value[selectedItemIndex.value].name);
   showRenameMsgbox.value = true;
 }
@@ -4744,11 +4796,8 @@ function handleLocalKeyDown(event: KeyboardEvent) {
       return;
     }
     if (selectMode.value) {
-      if (selectedCount.value > 0) {
-        selectNoneInCurrentList();
-      } else {
-        handleSelectMode(false);
-      }
+      if (selectionPanelOpen.value) config.rightPanel.show = false;
+      handleSelectMode(false);
       event.preventDefault();
       return;
     }
@@ -4930,6 +4979,7 @@ function handleLocalKeyDown(event: KeyboardEvent) {
 
   if (matchesShortcut('file.rename', event, shortcutPlatform)) {
     event.preventDefault();
+    event.stopPropagation();
     clickRename();
     return;
   }
@@ -5636,7 +5686,13 @@ onMounted( async() => {
   window.addEventListener(PREVIEW_WINDOW_FOCUS_RESTORED, restoreOpenPreviewFocus);
   window.addEventListener('keyup', handleLocalKeyUp);
   unlistenAlbumAccessChanged = await listen('album-accessibility-changed', (event: any) => {
-    if (event.payload?.libraryId === libConfig._libraryId && !event.payload?.selectionChanged) updateContent(true);
+    if (event.payload?.libraryId !== libConfig._libraryId || event.payload?.selectionChanged) return;
+    if (config.main.sidebarIndex === SIDEBAR.ALBUM && Number(libConfig.album.id) > 0
+      && Number(event.payload?.albumId || libConfig.album.id) !== Number(libConfig.album.id)) return;
+    pendingInitialSelectedIndex = selectedItemIndex.value;
+    hasRestoredInitialSelection = false;
+    pendingRestoreScrollTop.value = gridViewRef.value?.getScrollTop() ?? null;
+    updateContent(true);
   });
   unlistenKeydown = await listen('global-keydown', handleKeyDown);
 
@@ -5678,6 +5734,11 @@ onMounted( async() => {
       return;
     }
     if (!hasExternalDragIntent(e)) return;
+    updateExternalDrag(e);
+    if (externalDragKind.value !== 'files') {
+      clearDropOverlay();
+      return;
+    }
     e.preventDefault();
     if (acceptDrops.value) {
       dragOverCount.value++;
@@ -5710,9 +5771,16 @@ onMounted( async() => {
       return;
     }
     if (!hasExternalDragIntent(e)) return;
+    updateExternalDrag(e);
+    if (externalDragKind.value !== 'files') {
+      clearDropOverlay();
+      return;
+    }
+    if (acceptDrops.value) isDragOver.value = true;
     e.preventDefault();
   };
   domDrop = async (e: DragEvent) => {
+    finishExternalDrag();
     if (isReturningNativeFileDrag(e)) {
       e.preventDefault();
       clearDropOverlay();
@@ -5729,6 +5797,8 @@ onMounted( async() => {
     }
     e.preventDefault();
     clearDropOverlay();
+    updateExternalDrag(e);
+    if (externalDragKind.value === 'folders' || externalDragKind.value === 'mixed') return;
     if (!acceptDrops.value) {
       showDropWarning.value = true;
       return;
@@ -5795,7 +5865,7 @@ onMounted( async() => {
     }
     toast.warning(t('msgbox.drop_import.no_files'));
   };
-  domDragEnd = () => clearDropOverlay();
+  domDragEnd = () => { clearDropOverlay(); resetExternalDrag(); };
   document.addEventListener('dragenter', domDragEnter);
   document.addEventListener('dragleave', domDragLeave);
   document.addEventListener('dragover', domDragOver);
@@ -5877,12 +5947,6 @@ onMounted( async() => {
     } else {
       toast.success(localeMsg.value.tooltip.save_image.save_as_success || localeMsg.value.tooltip.save_image.success);
     }
-  });
-
-  // "+ Add" in the montage window: send it the photos selected here
-  unlistenMontageAdd = await listen('montage-add-request', async () => {
-    const fileIds = await getMontageImageIds();
-    await (await WebviewWindow.getByLabel('montage'))?.emit('montage-add-files', { fileIds });
   });
 
   unlistenImageEditor = await listen('message-from-image-editor', async (event: any) => {
@@ -6123,7 +6187,6 @@ onBeforeUnmount(() => {
   unlistenImageViewer();
   if (unlistenImageEditor) unlistenImageEditor();
   if (unlistenMontage) unlistenMontage();
-  if (unlistenMontageAdd) unlistenMontageAdd();
   if (unlistenKeydown) unlistenKeydown();
   if (unlistenTriggerNextAlbum) unlistenTriggerNextAlbum();
   if (unlistenIndexProgress) unlistenIndexProgress();
@@ -6216,7 +6279,6 @@ watch(
 watch(() => libConfig._libraryId, () => {
   uiStore.clearCountUpdateRequest();
 });
-
 
 /// watch for file list changes
 watch(
@@ -8003,6 +8065,11 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
   // Increment request ID to cancel any previous thumbnail generation and reset queue
   currentThumbRequestId++;
   const requestId = ++currentContentRequestId;
+  // Leaving the folder view re-arms its sync, so coming back picks up changes that
+  // leave the folder mtime untouched (e.g. OneDrive "Free up space").
+  if (newIndex !== SIDEBAR.ALBUM || !libConfig.album.id || libConfig.album.selected) {
+    lastSyncedAlbumFolder = '';
+  }
 
   contentReady.value = false;
   contentCountIsAuthoritative.value = false;
@@ -8710,8 +8777,6 @@ const clickCopyImages = async (fallbackFile?: any) => {
 
 const appPathForMediaKind = (kind: 'image' | 'video') =>
   String(config.defaultExternalApp(kind)?.path || '');
-
-const EXTERNAL_OPEN_WARNING_THRESHOLD = 100;
 
 const launchInExternalApp = async (paths: string[], appPath: string) => {
   try {
@@ -9554,11 +9619,18 @@ async function refreshGroupedRowsAfterDelete(fileIds: number[]) {
   await initializeGroupedFileList(currentContentRequestId);
 }
 
-// update the file info from the file
-const updateFile = async (file: any, showToast = false) => {
+// update the file info from the file; isRefresh = "Refresh file info" menu action
+const updateFile = async (file: any, isRefresh = false) => {
   if (!await requireOriginalFiles([file])) return;
   try {
-    const updatedFile = await updateFileInfo(file.id, file.file_path);
+    // The refresh command leaves an unchanged cloud-only file unread, so skip
+    // the forced thumbnail and image reload that would download it.
+    const refreshed = isRefresh ? await refreshFileInfo(libConfig._libraryId, file.id) : null;
+    if (refreshed?.skipped) {
+      toast.success(localeMsg.value.tooltip.update_image.success);
+      return;
+    }
+    const updatedFile = isRefresh ? refreshed?.file : await updateFileInfo(file.id, file.file_path);
     if (updatedFile) {
       Object.assign(file, updatedFile);
       await updateThumbForFile(file);
@@ -9574,15 +9646,15 @@ const updateFile = async (file: any, showToast = false) => {
       // Clear CSS filter adjustments after image reload is triggered
       uiStore.clearActiveAdjustments();
 
-      if (showToast) {
+      if (isRefresh) {
         toast.success(localeMsg.value.tooltip.update_image.success);
       }
-    } else if (showToast) {
+    } else if (isRefresh) {
       toast.error(localeMsg.value.tooltip.update_image.failed);
     }
   } catch (err) {
     console.error('Failed to update file info:', err);
-    if (showToast) {
+    if (isRefresh) {
       toast.error(localeMsg.value.tooltip.update_image.failed);
     }
   }
@@ -9608,7 +9680,7 @@ function getNextVideoThumbnailRefreshPercent(file: any) {
 }
 
 const updateThumbForFile = async (file: any) => {
-  file.thumbnail = '';
+  file.rawThumbnailStale = true;
   clearCachedThumbnailDataUrl(file.id, config.settings.thumbnailSize);
   const thumb = await getFileThumb(
     file.id,
@@ -9622,7 +9694,7 @@ const updateThumbForFile = async (file: any) => {
   );
   if (thumb) {
     if (thumb.error_code === 0 || thumb.error_code === 2) {
-      file.thumbnail = getThumbnailDataUrl(thumb, thumbnailPlaceholder, true, config.settings.thumbnailSize, file.file_path, Number(file.modified_at || 0));
+      file.thumbnail = getThumbnailDataUrl(thumb, thumbnailPlaceholder, true, config.settings.thumbnailSize, file.file_path, Number(file.modified_at || 0), !file.cloud_only);
       file.rawThumbnailStale = false;
     } else if (thumb.error_code === 1) {
       file.rawThumbnailStale = false;
@@ -10066,6 +10138,7 @@ const selectAllInCurrentList = async () => {
       .reduce((total, size) => total + Number(size || 0), 0);
     syncSelectionVersions();
     selectMode.value = true;
+    if (isGridLayoutView.value && config.rightPanel.show) selectionPanelOpen.value = true;
     return;
   }
 
@@ -10099,6 +10172,7 @@ const selectAllInCurrentList = async () => {
   selectedSize.value = selectedFileIds.size === totalFileCount.value ? totalFileSize.value : nextSize;
   syncSelectionVersions();
   selectMode.value = true;
+  if (isGridLayoutView.value && config.rightPanel.show) selectionPanelOpen.value = true;
 };
 
 const selectNoneInCurrentList = () => {
@@ -10145,9 +10219,31 @@ const handleSelectMode = (value: any) => {
   } else {
     showQuickView.value = false;
     stopSlideShow();
-    config.rightPanel.show = false;
   }
 };
+
+function toggleSelectMode() {
+  if (isScanStreamingMode.value || isMapVisible.value) return;
+  checkUnsavedChanges(() => {
+    const open = !selectionPanelOpen.value;
+    if (selectionPanelOpen.value) config.rightPanel.show = false;
+    handleSelectMode(open);
+    selectionPanelOpen.value = open;
+  });
+}
+
+function openSelectionPanel() {
+  if (isScanStreamingMode.value || isMapVisible.value) return;
+  checkUnsavedChanges(() => {
+    if (!selectMode.value) handleSelectMode(true);
+    selectionPanelOpen.value = true;
+  });
+}
+
+function handleInfoAction(action: () => void) {
+  if (selectMode.value) handleSelectMode(false);
+  action();
+}
 
 watch(isMapView, (active) => {
   if (!active) return;
@@ -10317,11 +10413,13 @@ const toggleInfoPanel = () => {
       // A pending transition or failed window restore must not open a hidden panel.
       if (preview.isFullScreen) return;
     }
-    if (isInfoPanelOpen.value && !wasPreviewFullScreen) {
+    const wasInfoPanelOpen = isInfoPanelOpen.value;
+    if (selectMode.value) handleSelectMode(false);
+    if (wasInfoPanelOpen && !wasPreviewFullScreen) {
       config.rightPanel.show = false;
       return;
     }
-    handleSelectMode(false);
+    selectionPanelOpen.value = false;
     config.rightPanel.mode = 'info';
     config.rightPanel.show = true;
   });
@@ -10330,7 +10428,9 @@ const toggleInfoPanel = () => {
 const toggleDedupPanel = () => {
   if (isScanStreamingMode.value) return;
   checkUnsavedChanges(() => {
-    if (isDedupPanelOpen.value) {
+    const wasDedupPanelOpen = isDedupPanelOpen.value;
+    if (selectMode.value) handleSelectMode(false);
+    if (wasDedupPanelOpen) {
       config.rightPanel.show = false;
       return;
     }
@@ -10802,7 +10902,7 @@ async function getFileListThumb(files: any[], offset = 0, concurrencyLimit = 4, 
     if (!thumb) return;
 
     if (thumb.error_code === 0 || thumb.error_code === 2) {
-      file.thumbnail = getThumbnailDataUrl(thumb, thumbnailPlaceholder, bustCache, thumbnailSize, file.file_path, Number(file.modified_at || 0));
+      file.thumbnail = getThumbnailDataUrl(thumb, thumbnailPlaceholder, bustCache, thumbnailSize, file.file_path, Number(file.modified_at || 0), !file.cloud_only);
       file.rawThumbnailStale = false;
     } else if (thumb.error_code === 1) {
       file.rawThumbnailStale = false;
@@ -11083,17 +11183,12 @@ async function syncSelectionToImageViewer(index: number) {
   });
 }
 
-const MONTAGE_MAX_PHOTOS = 50;
 let montageSaveAsContext: SaveAsContext | null = null;
 let montageSourceFolder = '';
 
 // selected images, including the ones not loaded in the view yet
 async function getMontageImages() {
   return ((await getActionableSelectedItemsForAction()) || []).filter((item: any) => item.file_type !== 2);
-}
-
-async function getMontageImageIds() {
-  return (await getMontageImages()).map((item: any) => Number(item.id));
 }
 
 let montageOpening = false;
@@ -11131,9 +11226,12 @@ async function createMontageWindow() {
   montageSaveAsContext = getCurrentSaveAsContext(images[0]);
   montageSourceFolder = getFolderPath(images[0].file_path);
 
-  // the montage window grows itself if its settings panel does not fit
-  const width = Math.min(1280, window.screen.availWidth);
-  const height = Math.min(800, window.screen.availHeight);
+  const parentWindow = getCurrentWebviewWindow();
+  const [size, position, scaleFactor] = await Promise.all([
+    parentWindow.innerSize(), parentWindow.outerPosition(), parentWindow.scaleFactor(),
+  ]);
+  const { width, height } = size.toLogical(scaleFactor);
+  const { x, y } = position.toLogical(scaleFactor);
 
   const newWindow = new WebviewWindow('montage', {
     ...await startupWindowProxy(),
@@ -11141,7 +11239,8 @@ async function createMontageWindow() {
     title: 'Montage',
     width,
     height,
-    center: true,
+    x,
+    y,
     minWidth: 800,
     minHeight: 500,
     resizable: true,
@@ -11159,7 +11258,7 @@ async function createMontageWindow() {
   // wait until the window exists, so a second click finds it
   await new Promise<void>(resolve => {
     newWindow.once('tauri://created', () => {
-      newWindow?.show();
+      newWindow.show();
       resolve();
     });
     newWindow.once('tauri://error', () => resolve());
@@ -11209,23 +11308,7 @@ async function openImageEditor(index: number) {
 
 }
 
-const printImageSrc = ref('');
-const printImageRef = ref<HTMLImageElement | null>(null);
-
-async function waitForPrintImage() {
-  await nextTick();
-  const image = printImageRef.value;
-  if (!image) throw new Error('Print image element was not rendered');
-  if (image.complete) {
-    if (image.naturalWidth > 0) return;
-    throw new Error('Print image failed to load');
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    image.addEventListener('load', () => resolve(), { once: true });
-    image.addEventListener('error', () => reject(new Error('Print image failed to load')), { once: true });
-  });
-}
+const printImageView = ref<InstanceType<typeof PrintImage> | null>(null);
 
 async function printImage(index: number) {
   const selectedFile = fileList.value[index];
@@ -11235,7 +11318,7 @@ async function printImage(index: number) {
   const fileType = Number(selectedFile.file_type || 1);
 
   try {
-    printImageSrc.value = shouldUseBackendPreview(selectedFile.file_path, fileType)
+    const source = shouldUseBackendPreview(selectedFile.file_path, fileType)
       ? getPreviewUrl(
         fileId,
         selectedFile.file_path,
@@ -11243,16 +11326,8 @@ async function printImage(index: number) {
         Number(selectedFile.modified_at || 0),
       )
       : getAssetSrc(selectedFile.file_path, Number(selectedFile.modified_at || 0));
-    await waitForPrintImage();
-    // Defer to let the context menu / UI close before the synchronous print dialog opens
-    setTimeout(() => {
-      window.addEventListener('afterprint', () => {
-        printImageSrc.value = '';
-      }, { once: true });
-      window.print();
-    }, 100);
+    await printImageView.value?.print(source);
   } catch (error) {
-    printImageSrc.value = '';
     console.error('Failed to prepare image for printing:', error);
   }
 }
@@ -11291,55 +11366,39 @@ function stopDragging() {
   document.removeEventListener('mouseup', stopDragging);
 }
 
+const emit = defineEmits<{ startupReady: [] }>();
+let startupReadyEmitted = false;
+watch([contentReady, showWelcomeContent], ([ready, welcome]) => {
+  if (startupReadyEmitted || (!ready && !welcome)) return;
+  startupReadyEmitted = true;
+  void nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => emit('startupReady'))));
+}, { immediate: true });
+
 defineExpose({
   focusContent: activateContentPane,
-  refreshCenteredGridLayout,
+  refreshCenteredGridLayout: refreshGridLayoutPreservingScroll,
 });
 </script>
 
 <style scoped>
-.print-only {
-  display: none;
+.selection-bar-enter-active,
+.selection-bar-leave-active {
+  transition: opacity 0.2s ease-out, transform 0.2s ease-out;
 }
 
-@media print {
-  @page {
-    margin: 0;
-  }
+.selection-bar-enter-from,
+.selection-bar-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
 
-  :global(html),
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-  }
+.selection-bar-leave-active {
+  pointer-events: none;
+}
 
-  :global(body > *:not(.print-only)) {
-    display: none !important;
-  }
-
-  .print-only {
-    position: absolute;
-    inset: 0;
-    box-sizing: border-box;
-    display: grid !important;
-    place-items: center;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    background: #fff;
-    break-inside: avoid;
-  }
-
-  .print-only img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    object-position: center;
-  }
+@media (prefers-reduced-motion: reduce) {
+  .selection-bar-enter-active,
+  .selection-bar-leave-active { transition: none; }
 }
 
 .drop-overlay {

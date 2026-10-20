@@ -13,7 +13,7 @@ function overlaps(a: MontageItem, b: MontageItem) {
   return a.x + a.w > b.x + EPS && b.x + b.w > a.x + EPS && a.y + a.h > b.y + EPS && b.y + b.h > a.y + EPS;
 }
 
-for (const mode of ['grid', 'mosaic', 'pile'] as MontageMode[]) {
+for (const mode of ['card', 'grid', 'mosaic', 'masonry', 'pile'] as MontageMode[]) {
   test(`${mode}: every photo is placed once, inside the page`, () => {
     for (const n of [2, 3, 7, 50]) {
       for (const pageRatio of pageRatios) {
@@ -47,7 +47,7 @@ test('shuffled keeps every item', () => {
   assert.deepEqual(shuffled(items).sort((a, b) => a - b), items);
 });
 
-for (const mode of ['grid', 'mosaic'] as MontageMode[]) {
+for (const mode of ['card', 'grid', 'mosaic', 'masonry'] as MontageMode[]) {
   test(`${mode}: photos never overlap and are not rotated`, () => {
     for (const n of [2, 3, 7, 50]) {
       for (const pageRatio of pageRatios) {
@@ -72,14 +72,24 @@ test('mosaic covers the page except the gaps', () => {
   }
 });
 
+test('masonry preserves photo proportions on portrait and landscape pages', () => {
+  const photos = photosOf(50);
+  for (const pageRatio of pageRatios) {
+    const items = computeMontageLayout(photos, pageRatio, 'masonry', style, 1);
+    items.forEach((item, i) => assert.ok(Math.abs(item.w * pageRatio / item.h - photos[i].ratio) < EPS));
+  }
+});
+
 test('pile photos keep their aspect ratio and are rotated within the maximum', () => {
   const pageRatio = 1.5;
-  const noBorder = { spacing: 0, border: 0, rotation: 15 };
   const photos = photosOf(7);
-  const items = computeMontageLayout(photos, pageRatio, 'pile', noBorder, 0);
-  items.forEach((item, i) => {
-    assert.ok(Math.abs(item.rotation) <= 15);
-    const ratio = (item.w * pageRatio) / item.h; // back to absolute units
-    assert.ok(Math.abs(ratio - photos[i].ratio) < 1e-6);
-  });
+  photos[0].ratio = 5;
+  for (const border of [0, 0.04]) {
+    const items = computeMontageLayout(photos, pageRatio, 'pile', { spacing: 0, border, rotation: 15 }, 0);
+    items.forEach((item, i) => {
+      assert.ok(Math.abs(item.rotation) <= 15);
+      const ratio = (item.w - 2 * item.border) / (item.h / pageRatio - 2 * item.border);
+      assert.ok(Math.abs(ratio - photos[i].ratio) < 1e-6);
+    });
+  }
 });

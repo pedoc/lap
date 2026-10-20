@@ -54,6 +54,12 @@
     "database_corrupted_hint": "Intenta cambiar a otra biblioteca."
   },
   "album": {
+    "drop": {
+      "add": "Arrastra una carpeta para añadirla",
+      "separate": "Arrastra archivos y carpetas por separado.",
+      "confirm_folder": "Seleccionar carpeta: {name}",
+      "folders_only": "Arrastra una carpeta."
+    },
     "album_list": "Álbumes",
     "search_folders": "Buscar carpetas",
     "favorite_folders_only": "Solo carpetas favoritas",
@@ -150,6 +156,7 @@
       "validation_name": "Introduce un nombre para el álbum inteligente.",
       "validation_rule": "Añade al menos una regla completa.",
       "fields": {
+        "folder_name": "Nombre de la carpeta",
         "name": "Nombre de archivo",
         "file_type": "Tipo de archivo",
         "media_subtype": "Subtipo de medio",
@@ -225,6 +232,8 @@
     }
   },
   "offline": {
+    "cloud_only": "Disponible solo en línea",
+    "cloud_only_pending": "Disponible solo en línea — información incompleta",
     "original_unavailable": "El archivo original no está disponible",
     "requires_original": "Requiere el archivo original. Vuelve a conectar el dispositivo de almacenamiento."
   },
@@ -434,7 +443,11 @@
       "placeholder": "Buscar archivo"
     },
     "filter": {
-      "select_mode": "Selección",
+      "select_mode": "Selección múltiple",
+      "select_files": "Seleccionar archivos",
+      "show_selection_panel": "Abrir panel de selección múltiple",
+      "hide_selection_panel": "Contraer panel de selección múltiple",
+      "exit_select_mode": "Salir de la selección múltiple",
       "select_count": "{count} seleccionados",
       "group_type_options": [
         "Ninguno",
@@ -457,7 +470,8 @@
         "Tamaño",
         "Dimensión",
         "Duración",
-        "Aleatorio"
+        "Aleatorio",
+        "Añadido"
       ],
       "similarity": "Similitud",
       "sort_order_options": [
@@ -557,6 +571,7 @@
       },
       "reclaimable_size": "Recuperable",
       "groups_title": "Grupos duplicados",
+      "skipped_cloud_only": "Se omitieron {count} archivos disponibles solo en línea",
       "actions_title": "Acciones",
       "compare": "Comparar",
       "rescan": "Volver a escanear",
@@ -1086,24 +1101,13 @@
     "montage": {
       "title": "Collage",
       "layout": "Diseño",
-      "grid": "Cuadrícula",
-      "mosaic": "Mosaico",
-      "pile": "Pila de fotos",
+      "pile": "Collage libre",
       "shuffle": "Collage aleatorio",
-      "angle": "Ángulo: {value}°",
-      "scale": "Escala: {value} %",
       "shadow": "Dibujar sombras",
       "style": "Estilo",
       "export": "Exportación: {size}",
       "random_rotation": "Rotación aleatoria",
       "border_width": "Grosor del borde",
-      "photos": "Fotos ({count})",
-      "add": "Añadir",
-      "photos_hint": "Arrastrar para reordenar · clic derecho para quitar",
-      "add_none": "Seleccione en Lap fotos que aún no estén en el collage y haga clic en Añadir.",
-      "hint_pile": "Pila de fotos: arrastrar para mover · el dial gira y redimensiona · la foto que toma pasa al frente",
-      "hint_grid": "Cuadrícula: las fotos llenan cada celda (recorte centrado) · arrastre una foto sobre otra para intercambiarlas",
-      "hint_mosaic": "Mosaico: sin huecos, las fotos conservan sus proporciones · arrastre una foto sobre otra para intercambiarlas",
       "page": "Página",
       "page_size": "Tamaño",
       "page_screen": "Pantalla 16:9",
@@ -1204,7 +1208,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "Cuadrícula de nitidez del navegador",
-    "sharpness_grid_hint": "Resalta las zonas nítidas en el navegador.",
+    "sharpness_grid_hint": "Resalta las zonas nítidas en el navegador",
     "live": "EN VIVO",
     "motion": "MOTION",
     "title": "Visor de imagenes",
@@ -1322,15 +1326,16 @@
       "title": "RAW",
       "section_pairs": "Archivos emparejados",
       "pair_source": "Visualización predeterminada de los pares",
-      "pair_source_hint": "Se usa para las miniaturas y vistas previas emparejadas.",
+      "pair_source_hint": "Se usa para las miniaturas y vistas previas emparejadas",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "Fuente de vista previa predeterminada",
+      "preview_source_hint": "Si la fuente preferida no está disponible, usa la otra",
       "rawRenderBrightness": "Brillo de renderizado",
       "option_embedded": "Preferir vista previa incrustada",
-      "option_rendered": "Renderizar RAW siempre",
+      "option_rendered": "Renderizar RAW primero",
       "option_original": "Exposición original",
       "option_brightened": "Aclarada",
-      "brightness_hint": "Se aplica al renderizar RAW, incluso si no hay una vista previa incrustada disponible.",
+      "brightness_hint": "Solo se aplica al renderizado RAW",
       "switch_to": "Cambiar a {source}",
       "show_pair": "Mostrar {format} emparejado",
       "source_embedded": "Incrustada",

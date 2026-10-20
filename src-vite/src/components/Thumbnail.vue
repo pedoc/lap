@@ -39,7 +39,7 @@
           'opacity-100': isThumbnailLoaded,
         }"
         :style="imgStyle"
-        loading="lazy"
+        loading="eager"
         @load="handleThumbnailLoad"
         @error="retryThumbnail"
       />
@@ -85,8 +85,11 @@
         @error="stopMediaPreview"
       />
 
-      <div v-if="originalUnavailable" class="pointer-events-none absolute right-0.5 bottom-0.5 z-20 thumb-badge thumb-badge-muted" :aria-label="t('offline.original_unavailable')">
+      <div v-if="originalUnavailable" class="pointer-events-none absolute right-0.5 bottom-0.5 z-20 thumb-badge" :aria-label="t('offline.original_unavailable')">
         <IconExclamation class="h-3.5 w-3.5 shrink-0 text-warning/70" />
+      </div>
+      <div v-else-if="file.cloud_only" class="absolute right-0.5 bottom-0.5 z-20 thumb-badge" :title="cloudOnlyLabel" :aria-label="cloudOnlyLabel">
+        <IconCloud class="h-3.5 w-3.5 shrink-0" />
       </div>
 
       <div v-if="file._ocr && libConfig.activePane !== 'collection' && (config.main.sidebarIndex === SIDEBAR.OCR && ocrThumbnail.visible || config.main.sidebarIndex === SIDEBAR.SEARCH && file._ocr.state === 'text' && textSegments(file._ocr.excerpt, libConfig.search.searchText || '').some(part => part.match))" class="absolute inset-x-1 bottom-6 z-10 rounded-box bg-base-100/90 px-2 py-1 text-[11px] leading-4 pointer-events-none" :title="file._ocr.excerpt">
@@ -105,7 +108,7 @@
         <div
           v-for="badge in statusBadges"
           :key="badge.key"
-          class="thumb-badge thumb-badge-muted"
+          class="thumb-badge"
         >
           <template v-if="badge.icons?.length">
             <div class="flex items-center gap-0.5">
@@ -144,7 +147,7 @@
           hasBottomMediaBadges ? 'bottom-6' : 'bottom-0.5',
         ]"
       >
-        <div class="thumb-badge thumb-badge-muted">
+        <div class="thumb-badge">
           {{ thumbnailBadge }}
         </div>
       </div>
@@ -154,20 +157,20 @@
       >
         <div
           v-if="isLivePhoto || isMotionPhoto"
-          class="thumb-badge thumb-badge-muted"
+          class="thumb-badge"
         >
           <IconLivePhoto class="h-3.5 w-3.5 shrink-0" />
           <span class="leading-none">{{ isLivePhoto ? t('image_viewer.live') : t('image_viewer.motion') }}</span>
         </div>
         <div
           v-if="isRawJpegPair"
-          class="thumb-badge thumb-badge-muted"
+          class="thumb-badge"
         >
           <span class="leading-none">{{ rawJpegPairBadge }}</span>
         </div>
         <div
           v-if="videoDurationBadge"
-          class="thumb-badge thumb-badge-muted"
+          class="thumb-badge"
         >
           {{ videoDurationBadge }}
         </div>
@@ -193,8 +196,7 @@
         </label>
       </div>
 
-      <!-- context menu (non-select only; in select mode all actions live in the
-           always-visible selection panel, so no per-thumbnail menu is shown) -->
+      <!-- per-file menu; multi-select uses the shared context menu -->
       <div v-if="!selectMode" class="absolute right-0.5 top-0.5">
         <ContextMenu
           ref="contextMenuRef"
@@ -248,11 +250,13 @@ import { isWebViewVideoPlaybackDisabled, getGStreamerAvailability } from '@/comm
 import { claimHoverPreview, releaseHoverPreview } from '@/common/hoverPreview';
 import ContextMenu from '@/components/ContextMenu.vue';
 import { isOriginalUnavailable } from '@/common/availability';
+import { isCloudOnlyFile } from '@/common/api';
 import { useFileMenuItems } from '@/common/fileMenu';
 
 import { 
   IconMore,
   IconExclamation,
+  IconCloud,
   IconPhoto,
   IconHeartFilled,
   IconTag,
@@ -300,7 +304,8 @@ const emit = defineEmits([
     'clicked',
     'dblclicked',
     'select-toggled',
-    'action'
+    'action',
+    'selection-context-menu',
 ]);
 
 const isTransitionDisabled = ref(false);
@@ -333,6 +338,8 @@ const canPreviewVideo = computed(() => (
   !originalUnavailable.value && (isVideoFile.value || isLivePhoto.value)
   && !!previewVideoPath.value
   && !isWebViewVideoPlaybackDisabled(previewVideoPath.value)
+  // The companion video is checked live before playback.
+  && (isLivePhoto.value || !props.file.cloud_only)
 ));
 const ANIMATABLE_IMAGE_EXTENSIONS = new Set(['gif', 'png', 'apng', 'webp', 'avif']);
 const isAnimatableImageFile = computed(() => ANIMATABLE_IMAGE_EXTENSIONS.has(
@@ -340,7 +347,8 @@ const isAnimatableImageFile = computed(() => ANIMATABLE_IMAGE_EXTENSIONS.has(
 ));
 const isGifFile = computed(() => getFileExtension(props.file?.name || props.file?.file_path || '').toLowerCase() === 'gif');
 const animatedImagePreviewSrc = computed(() => getAssetSrc(props.file?.file_path || '', Number(props.file?.modified_at || 0)));
-const canPreviewAnimatedImage = computed(() => !originalUnavailable.value && isAnimatableImageFile.value && !!animatedImagePreviewSrc.value);
+const canPreviewAnimatedImage = computed(() => !originalUnavailable.value && !props.file?.cloud_only
+  && isAnimatableImageFile.value && !!animatedImagePreviewSrc.value);
 const isGeometryGridStyle = computed(() => config.settings.grid.style === 2 || config.settings.grid.style === 3);
 // Pair previews can have a different crop than the RAW dimensions used by layout.
 const fitRawPairPreview = computed(() => isGeometryGridStyle.value && isRawJpegPair.value
@@ -356,7 +364,7 @@ const isThumbnailLoaded = ref(false);
 let thumbnailRetryCount = 0;
 
 watch(
-  () => [props.file?.id, props.file?.thumbnail],
+  [() => props.file?.id, () => props.file?.thumbnail],
   ([, src]) => {
     thumbnailSrc.value = String(src || '');
     isThumbnailLoaded.value = false;
@@ -453,6 +461,8 @@ function startVideoPreview() {
     const available = await getGStreamerAvailability();
     if (request !== videoPreviewRequest || !available) return;
     if (!canPreviewVideo.value || !previewVideoPath.value) return;
+    // The catalog flag can be stale; playing an online-only video would download it.
+    if (await isCloudOnlyFile(previewVideoPath.value) || request !== videoPreviewRequest) return;
 
     isVideoPreviewReady.value = false;
     showVideoPreview.value = true;
@@ -490,18 +500,27 @@ function stopVideoPreview() {
   showVideoPreview.value = false;
 }
 
+let animatedImagePreviewRequest = 0;
+
 function startAnimatedImagePreview() {
   if (!canPreviewAnimatedImage.value || animatedImagePreviewTimer || showAnimatedImagePreview.value) return;
 
-  animatedImagePreviewTimer = setTimeout(() => {
+  const request = ++animatedImagePreviewRequest;
+  const filePath = props.file?.file_path || '';
+  animatedImagePreviewTimer = setTimeout(async () => {
     animatedImagePreviewTimer = null;
     if (!canPreviewAnimatedImage.value) return;
+    // The catalog flag can be stale; loading an online-only image would download it.
+    if (await isCloudOnlyFile(filePath)) return;
+    if (request !== animatedImagePreviewRequest || props.file?.file_path !== filePath
+      || !canPreviewAnimatedImage.value) return;
     isAnimatedImagePreviewReady.value = false;
     showAnimatedImagePreview.value = true;
   }, 400);
 }
 
 function stopAnimatedImagePreview() {
+  animatedImagePreviewRequest++;
   if (animatedImagePreviewTimer) {
     clearTimeout(animatedImagePreviewTimer);
     animatedImagePreviewTimer = null;
@@ -532,9 +551,10 @@ function handleDoubleClick(event: MouseEvent) {
 function handleContextMenu(event: MouseEvent) {
   event.preventDefault();
   event.stopPropagation();
-  // Multi-select actions live in the selection panel (always visible in select
-  // mode) and are left-click only, so no context menu is shown here.
-  if (props.selectMode) return;
+  if (props.selectMode) {
+    emit('selection-context-menu', event);
+    return;
+  }
   if (!props.isSelected) {
     emit('clicked', false);
   }
@@ -602,6 +622,7 @@ const isContentActive = computed(() =>
   uiStore.activePane === 'content' && uiStore.inputStack.length === 0
 );
 const { locale, messages, t } = useI18n();
+const cloudOnlyLabel = computed(() => t(props.file?.metadata_pending ? 'offline.cloud_only_pending' : 'offline.cloud_only'));
 const localeMsg = computed(() => messages.value[locale.value] as any);
 
 const menuItems = useFileMenuItems(

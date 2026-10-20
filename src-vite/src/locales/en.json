@@ -1,5 +1,6 @@
 {
   "workflow_close": {
+    "finish_edits_first": "Save or cancel the current edits before modifying files.",
     "unsaved": "Recognition revisions or inputs are unsaved. Discard them and continue? Cancel keeps the drafts.",
     "preparing": "Confirming close. Cancel to continue editing…",
     "failed": "A window did not respond or its contents changed. Closing was cancelled; drafts are preserved. Please retry."
@@ -275,6 +276,12 @@
     "database_corrupted_hint": "Please try switching to another library."
   },
   "album": {
+    "drop": {
+      "add": "Drag a folder to add",
+      "separate": "Drag files and folders separately.",
+      "confirm_folder": "Select folder: {name}",
+      "folders_only": "Please drop a folder."
+    },
     "album_list": "Albums",
     "search_folders": "Search folders",
     "favorite_folders_only": "Favorite folders only",
@@ -371,6 +378,7 @@
       "validation_name": "Enter a smart album name.",
       "validation_rule": "Add at least one complete rule.",
       "fields": {
+        "folder_name": "Folder name",
         "name": "File name",
         "file_type": "File type",
         "media_subtype": "Media subtype",
@@ -446,6 +454,8 @@
     }
   },
   "offline": {
+    "cloud_only": "Available online only",
+    "cloud_only_pending": "Available online only — information incomplete",
     "original_unavailable": "Original file is unavailable",
     "requires_original": "Requires the original file. Reconnect the storage device to use this action."
   },
@@ -656,7 +666,11 @@
       "placeholder": "Search file name"
     },
     "filter": {
-      "select_mode": "Multi-select mode",
+      "select_mode": "Multi-select",
+      "select_files": "Select files",
+      "show_selection_panel": "Open multi-select panel",
+      "hide_selection_panel": "Hide multi-select panel",
+      "exit_select_mode": "Exit multi-select",
       "select_count": "{count} selected",
       "group_type_options": [
         "None",
@@ -679,7 +693,8 @@
         "Size",
         "Dimension",
         "Duration",
-        "Random"
+        "Random",
+        "Added"
       ],
       "similarity": "Similarity",
       "sort_order_options": [
@@ -779,6 +794,7 @@
       },
       "reclaimable_size": "Reclaimable",
       "groups_title": "Duplicate Sets",
+      "skipped_cloud_only": "{count} online-only files skipped",
       "actions_title": "Actions",
       "compare": "Compare",
       "rescan": "Rescan",
@@ -1204,6 +1220,7 @@
       "error": "Failed to select file."
     },
     "file_refresh": {
+      "skipped_cloud": "Skipped cloud originals: {count}",
       "status": "Refresh status",
       "running": "Refreshing…",
       "cancelling": "Cancelling…",
@@ -1314,24 +1331,13 @@
     "montage": {
       "title": "Collage",
       "layout": "Layout",
-      "grid": "Grid",
-      "mosaic": "Mosaic",
-      "pile": "Picture pile",
+      "pile": "Freeform",
       "shuffle": "Random collage",
-      "angle": "Angle: {value}°",
-      "scale": "Scale: {value}%",
       "shadow": "Draw shadows",
       "style": "Style",
       "export": "Export: {size}",
       "random_rotation": "Random rotation",
       "border_width": "Border width",
-      "photos": "Photos ({count})",
-      "add": "Add",
-      "photos_hint": "Drag to reorder · right-click to remove",
-      "add_none": "Select photos in Lap that are not in the collage yet, then click Add.",
-      "hint_pile": "Picture pile: drag to move · use the dial to rotate and resize · the photo you grab comes to the front",
-      "hint_grid": "Grid: photos fill each cell (center crop) · drag a photo onto another to swap them",
-      "hint_mosaic": "Mosaic: no gaps, photos keep their proportions · drag a photo onto another to swap them",
       "page": "Page",
       "page_size": "Size",
       "page_screen": "Screen 16:9",
@@ -1432,7 +1438,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "Navigator sharpness grid",
-    "sharpness_grid_hint": "Highlight sharp areas in the navigator.",
+    "sharpness_grid_hint": "Highlight sharp areas in the navigator",
     "live": "LIVE",
     "motion": "MOTION",
     "title": "Image viewer",
@@ -1571,15 +1577,16 @@
       "title": "RAW",
       "section_pairs": "Paired files",
       "pair_source": "Default display for pairs",
-      "pair_source_hint": "Used for paired thumbnails and previews.",
+      "pair_source_hint": "Used for paired thumbnails and previews",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "Default preview source",
+      "preview_source_hint": "Falls back to the other source if unavailable",
       "rawRenderBrightness": "Rendering brightness",
       "option_embedded": "Embedded first",
-      "option_rendered": "Always render RAW",
+      "option_rendered": "Render RAW first",
       "option_original": "Original exposure",
       "option_brightened": "Brightened",
-      "brightness_hint": "Applies when rendering RAW, including when an embedded preview is unavailable.",
+      "brightness_hint": "Applies only to RAW rendering",
       "switch_to": "Switch to {source}",
       "show_pair": "Show paired {format}",
       "source_embedded": "Embedded",

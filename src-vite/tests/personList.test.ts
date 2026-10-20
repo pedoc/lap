@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
+import { PERSON_PAGE_SIZE } from '../src/common/constants.ts';
 import { reconcilePeople, canUsePersonCover } from '../src/common/personList.ts';
 
 test('incremental people refresh preserves object identity and existing row order', () => {
@@ -52,7 +53,7 @@ function personHarness(getPage?: (request: any, library: string) => Promise<any>
   const listeners: Record<string, (event: any) => any> = {}, mounts: Array<() => any> = [], unmounts: Array<() => any> = [], calls: any[] = [];
   const libConfig = { _libraryId: 'library-a', person: { id: null as number | null, name: null as string | null }, activePane: 'main' };
   const api = runInNewContext(`${code}\n;({loadPersons, refreshPeopleInPlace, schedulePeopleRefresh, allPersons, selectedPerson, isIndexing, personSearch, showHidden, allPersonCount});`, {
-    reconcilePeople, ref: (value: any) => ({ value }), computed: (get: any) => ({ get value() { return get(); } }),
+    PERSON_PAGE_SIZE, reconcilePeople, ref: (value: any) => ({ value }), computed: (get: any) => ({ get value() { return get(); } }),
     watch() {}, onMounted: (fn: any) => mounts.push(fn), onUnmounted: (fn: any) => unmounts.push(fn), nextTick: async () => {},
     defineProps: () => ({ titlebar: 'People' }), defineEmits: () => () => {}, defineExpose() {},
     useI18n: () => ({ t: (key: string) => key, locale: { value: 'en' }, messages: { value: { en: {} } } }), useToast: () => ({ error() {} }),

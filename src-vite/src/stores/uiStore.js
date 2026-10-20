@@ -4,6 +4,7 @@ import { defineStore } from 'pinia';
 export const useUIStore = defineStore('ui', {
   state: () => ({
     activePane: 'content',
+    startupReady: false,
     inputStack: [],
     fileVersions: {},
     // A count is written only in response to an explicit sidebar item activation.

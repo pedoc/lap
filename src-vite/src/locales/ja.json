@@ -54,6 +54,12 @@
     "database_corrupted_hint": "他のライブラリに切り替えてみてください。"
   },
   "album": {
+    "drop": {
+      "add": "フォルダーをドラッグして追加",
+      "separate": "ファイルとフォルダーは別々にドラッグしてください。",
+      "confirm_folder": "フォルダーを選択：{name}",
+      "folders_only": "フォルダーをドラッグしてください。"
+    },
     "album_list": "アルバム",
     "search_folders": "フォルダーを検索",
     "favorite_folders_only": "お気に入りのフォルダーのみ",
@@ -150,6 +156,7 @@
       "validation_name": "スマートアルバム名を入力してください。",
       "validation_rule": "完全なルールを少なくとも 1 つ追加してください。",
       "fields": {
+        "folder_name": "フォルダー名",
         "name": "ファイル名",
         "file_type": "ファイルタイプ",
         "media_subtype": "メディアサブタイプ",
@@ -225,6 +232,8 @@
     }
   },
   "offline": {
+    "cloud_only": "オンラインでのみ利用可能",
+    "cloud_only_pending": "オンラインでのみ利用可能 — ファイル情報が未取得です",
     "original_unavailable": "元のファイルにアクセスできません",
     "requires_original": "元のファイルが必要です。ストレージデバイスを再接続してください。"
   },
@@ -434,7 +443,11 @@
       "placeholder": "ファイル名を検索"
     },
     "filter": {
-      "select_mode": "選択項目",
+      "select_mode": "複数選択",
+      "select_files": "ファイルを選択",
+      "show_selection_panel": "複数選択パネルを開く",
+      "hide_selection_panel": "複数選択パネルを折りたたむ",
+      "exit_select_mode": "複数選択モードを終了",
       "select_count": "{count} 個選択中",
       "group_type_options": [
         "なし",
@@ -457,7 +470,8 @@
         "サイズ",
         "寸法",
         "長さ",
-        "ランダム"
+        "ランダム",
+        "追加"
       ],
       "similarity": "類似度",
       "sort_order_options": [
@@ -557,6 +571,7 @@
       },
       "reclaimable_size": "削減可能",
       "groups_title": "重複グループ",
+      "skipped_cloud_only": "オンラインのみのファイル {count} 件をスキップしました",
       "actions_title": "操作",
       "compare": "比較",
       "rescan": "再スキャン",
@@ -1086,24 +1101,13 @@
     "montage": {
       "title": "コラージュ",
       "layout": "レイアウト",
-      "grid": "グリッド",
-      "mosaic": "モザイク",
-      "pile": "写真の山",
+      "pile": "自由配置",
       "shuffle": "ランダム配置",
-      "angle": "角度: {value}°",
-      "scale": "倍率: {value}%",
       "shadow": "影を描く",
       "style": "スタイル",
       "export": "書き出し: {size}",
       "random_rotation": "ランダム回転",
       "border_width": "枠の太さ",
-      "photos": "写真 ({count})",
-      "add": "追加",
-      "photos_hint": "ドラッグで並べ替え · 右クリックで削除",
-      "add_none": "Lap でコラージュにまだ含まれていない写真を選択してから「追加」をクリックしてください。",
-      "hint_pile": "写真の山: ドラッグで移動 · ダイヤルで回転と拡大縮小 · つかんだ写真が前面に出ます",
-      "hint_grid": "グリッド: 写真は各セルを埋めます (中央でトリミング) · 写真を別の写真にドラッグすると入れ替わります",
-      "hint_mosaic": "モザイク: すき間なし、写真の縦横比を維持 · 写真を別の写真にドラッグすると入れ替わります",
       "page": "ページ",
       "page_size": "サイズ",
       "page_screen": "画面 16:9",
@@ -1204,7 +1208,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "ナビゲーターのシャープネスグリッド",
-    "sharpness_grid_hint": "ナビゲーターで鮮明な領域を表示します。",
+    "sharpness_grid_hint": "ナビゲーターで鮮明な領域を表示します",
     "live": "ライブ",
     "motion": "モーション",
     "title": "画像ビューア",
@@ -1322,15 +1326,16 @@
       "title": "RAW",
       "section_pairs": "ペアファイル",
       "pair_source": "ペアの既定の表示",
-      "pair_source_hint": "ペアのサムネイルとプレビューに使用します。",
+      "pair_source_hint": "ペアのサムネイルとプレビューに使用します",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "既定のプレビューソース",
+      "preview_source_hint": "優先するソースを利用できない場合は、もう一方を使用します",
       "rawRenderBrightness": "レンダリングの明るさ",
       "option_embedded": "埋め込みプレビューを優先",
-      "option_rendered": "常に RAW をレンダリング",
+      "option_rendered": "RAW の現像を優先",
       "option_original": "元の露出",
       "option_brightened": "明るめ",
-      "brightness_hint": "埋め込みプレビューが利用できない場合を含め、RAW のレンダリング時に適用されます。",
+      "brightness_hint": "RAW の現像にのみ適用されます",
       "switch_to": "{source} に切り替え",
       "show_pair": "ペアの {format} を表示",
       "source_embedded": "埋め込み",

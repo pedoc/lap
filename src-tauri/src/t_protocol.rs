@@ -176,6 +176,12 @@ fn load_protocol_thumbnail(
         let data = match thumbnail {
             Some(thumb) if thumb.error_code == 0 => thumb.thumb_data,
             Some(thumb) if thumb.error_code == 2 => {
+                if crate::t_utils::is_cloud_only_path(path) {
+                    return Ok(thumbnail_error_response(
+                        http::StatusCode::NOT_FOUND, file_id,
+                        "original is online-only and no local thumbnail is cached",
+                    ));
+                }
                 // Small images deliberately use the original instead of a separate cache file.
                 const MAX_ORIGINAL_THUMB_BYTES: u64 = 32 * 1024 * 1024;
                 let mut input = std::fs::File::open(path)
@@ -294,6 +300,9 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
                 .any(|param| param == "cachedOnly=true");
             let for_editing = request.uri().query().unwrap_or_default().split('&')
                 .any(|param| param == "forEditing=true");
+            let raw_request = request.uri().query().unwrap_or_default().split('&')
+                .find_map(|param| param.strip_prefix("rawViewerId="))
+                .map(t_image::register_raw_preview_request);
 
             if file_id <= 0 {
                 responder.respond(text_response(
@@ -377,7 +386,8 @@ pub fn register_protocols(builder: Builder<Wry>) -> Builder<Wry> {
                     }
                 }
                 if is_raw {
-                    let response = match t_image::get_raw_preview_cached(&file_path, options).await {
+                    let full_size = request.uri().query().unwrap_or_default().split('&').any(|param| param == "rawFullSize=true");
+                    let response = match t_image::get_raw_preview_cached(&file_path, options, full_size, raw_request).await {
                         Ok((data, source, unavailable)) => raw_preview_response(data, source, unavailable, pair_label),
                         Err(_) => text_response(http::StatusCode::NOT_FOUND, "RAW preview not found"),
                     };

@@ -7,6 +7,8 @@
     "dev": "vite --config vite.config.js",
     "dev:clean": "vite --config vite.config.js --force",
     "build": "vite build",
+    "test:drop": "node --test tests/external-drop.test.mjs tests/external-drag.test.mjs",
+    "test:startup": "node --test tests/startup.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

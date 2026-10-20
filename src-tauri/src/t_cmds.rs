@@ -111,6 +111,71 @@ pub struct SupportedFormatExtensions {
 // build info
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 
+// system region
+
+/// Read the region used for dates and times, independently of UI language.
+#[tauri::command]
+pub fn get_system_region_locale() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+        // LOCALE_NAME_MAX_LENGTH includes the terminating null character.
+        let mut name = [0u16; 85];
+        // SAFETY: the API receives a writable slice and its exact capacity.
+        let length = unsafe { GetUserDefaultLocaleName(&mut name) };
+        if length == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        String::from_utf16(&name[..length as usize - 1])
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::NSLocale;
+
+        // currentLocale includes the user's region; preferredLanguages does not.
+        let identifier = NSLocale::currentLocale().localeIdentifier().to_string();
+        Ok(normalize_locale_identifier(&identifier))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(time_locale_from_env(|key| std::env::var(key).ok()))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        Ok(None)
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+fn normalize_locale_identifier(identifier: &str) -> Option<String> {
+    let identifier = identifier.trim();
+    if identifier.is_empty() {
+        return None;
+    }
+    // POSIX encoding suffixes and legacy locale modifiers are not BCP-47 tags.
+    let base = identifier.split(['.', '@']).next()?;
+    if base == "C" || base == "POSIX" {
+        // Intl has no C locale; use English as its formatting approximation.
+        return Some("en-US".to_string());
+    }
+    if base.is_empty() {
+        return None;
+    }
+    Some(base.replace('_', "-"))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn time_locale_from_env(mut get: impl FnMut(&str) -> Option<String>) -> Option<String> {
+    // LANGUAGE and LC_MESSAGES affect translations, not date/time formatting.
+    ["LC_ALL", "LC_TIME", "LANG"]
+        .into_iter()
+        .find_map(|key| get(key).filter(|value| !value.trim().is_empty()))
+        .and_then(|value| normalize_locale_identifier(&value))
+}
+
 // library
 
 /// get app config (libraries list and current library)
@@ -119,89 +184,13 @@ pub fn get_app_config() -> Result<AppConfig, String> {
     t_config::load_app_config()
 }
 
-fn extension_description(ext: &str) -> &'static str {
-    match ext {
-        "3fr" => "Hasselblad RAW",
-        "3gp" => "3GPP Multimedia",
-        "arw" => "Sony Alpha RAW",
-        "asf" => "Advanced Systems Format",
-        "avi" => "Audio Video Interleave",
-        "avif" => "AV1 Image File Format",
-        "bmp" => "Bitmap Image File",
-        "cr2" => "Canon RAW 2",
-        "cr3" => "Canon RAW 3",
-        "crw" => "Canon RAW",
-        "dcr" => "Kodak RAW",
-        "dds" => "DirectDraw Surface",
-        "dng" => "Digital Negative",
-        "dpx" => "Digital Picture Exchange",
-        "erf" => "Epson RAW",
-        "exr" => "OpenEXR High Dynamic Range Image",
-        "flv" => "Flash Video",
-        "gif" => "Graphics Interchange Format",
-        "hdr" => "Radiance High Dynamic Range Image",
-        "heic" => "High Efficiency Image Container",
-        "heif" => "High Efficiency Image File",
-        "hevc" => "High Efficiency Video Coding",
-        "hif" => "HEIF Image File",
-        "j2c" => "JPEG 2000 Codestream",
-        "j2k" => "JPEG 2000 Codestream",
-        "jp2" => "JPEG 2000 Image",
-        "jpc" => "JPEG 2000 Codestream",
-        "jpeg" => "Joint Photographic Experts Group",
-        "jfif" => "JPEG File Interchange Format",
-        "jpf" => "JPEG 2000 Image",
-        "jpg" => "Joint Photographic Experts Group",
-        "jpx" => "JPEG 2000 Extended Image",
-        "jxl" => "JPEG XL",
-        "kdc" => "Kodak Digital Camera RAW",
-        "m2ts" => "Blu-ray BDAV Video",
-        "m4v" => "MPEG-4 Video",
-        "mdc" => "Minolta RAW",
-        "mef" => "Mamiya RAW",
-        "mkv" => "Matroska Video",
-        "mod" => "Camcorder Video",
-        "mos" => "Leaf RAW",
-        "mov" => "QuickTime Movie",
-        "mp4" => "MPEG-4 Video",
-        "mpeg" => "Moving Picture Experts Group Video",
-        "mpg" => "MPEG Video",
-        "mrw" => "Minolta RAW",
-        "mts" => "AVCHD Video",
-        "nef" => "Nikon Electronic Format",
-        "nrw" => "Nikon RAW",
-        "orf" => "Olympus RAW Format",
-        "pef" => "Pentax Electronic File",
-        "png" => "Portable Network Graphics",
-        "psd" => "Photoshop Document",
-        "qoi" => "Quite OK Image",
-        "raf" => "Fujifilm RAW",
-        "raw" => "Generic Camera RAW",
-        "rgbe" => "Radiance RGBE Image",
-        "rw2" => "Panasonic RAW 2",
-        "rwl" => "Leica RAW",
-        "sr2" => "Sony RAW 2",
-        "srf" => "Sony RAW Format",
-        "srw" => "Samsung RAW",
-        "tga" => "Truevision Targa Image",
-        "tif" => "Tagged Image File",
-        "tiff" => "Tagged Image File Format",
-        "tod" => "JVC HD Camcorder Video",
-        "ts" => "MPEG Transport Stream",
-        "webm" => "WebM Video",
-        "webp" => "Web Picture Format",
-        "wmv" => "Windows Media Video",
-        _ => "File Format",
-    }
-}
-
 fn extension_option(ext: &str) -> ExtensionOption {
     ExtensionOption {
         value: ext.to_string(),
         label: format!(
             "{} ({})",
             ext.to_ascii_uppercase(),
-            extension_description(ext)
+            t_common::extension_description(ext)
         ),
     }
 }
@@ -278,21 +267,6 @@ fn gstreamer_element_missing(exit_code: Option<i32>, stderr: &[u8]) -> bool {
     exit_code.is_some_and(|code| code != 0)
         && String::from_utf8_lossy(stderr).lines().any(|line|
             line.trim() == "No such element or plugin 'autoaudiosink'")
-}
-
-#[cfg(test)]
-mod gstreamer_probe_tests {
-    use super::gstreamer_element_missing;
-
-    #[test]
-    fn only_explicit_missing_element_disables_preview() {
-        let missing = b"No such element or plugin 'autoaudiosink'\n";
-        assert!(gstreamer_element_missing(Some(255), missing));
-        assert!(!gstreamer_element_missing(Some(0), missing));
-        assert!(!gstreamer_element_missing(None, missing));
-        assert!(!gstreamer_element_missing(Some(127), b"error while loading shared libraries"));
-        assert!(!gstreamer_element_missing(Some(1), b"unknown failure"));
-    }
 }
 
 /// set last selected item index
@@ -551,11 +525,21 @@ pub fn get_album(album_id: i64) -> Result<Album, String> {
 
 /// Recheck one album root when the user selects that album or one of its folders.
 #[tauri::command]
-pub fn check_album_accessibility(album_id: i64) -> Result<bool, String> {
-    let mut album = Album::get_album_by_id(album_id)
-        .map_err(|e| format!("Error while checking album accessibility: {}", e))?;
-    t_utils::refresh_album_accessibility(&mut album);
-    Ok(album.is_accessible)
+pub async fn check_album_accessibility(album_id: i64) -> Result<bool, String> {
+    let library_id = t_config::current_library_id()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (mut album, generation) = with_current_library(&library_id, || {
+            let album = Album::get_album_by_id(album_id)
+                .map_err(|e| format!("Error while checking album accessibility: {}", e))?;
+            Ok((album, t_utils::album_accessibility_generation()))
+        })?;
+        // Network I/O must not hold the library-switch lock. Ignore stale probes.
+        t_utils::refresh_album_accessibility_if_current(&mut album, generation);
+        if generation != t_utils::album_accessibility_generation() {
+            return Err("Library changed".to_string());
+        }
+        Ok(album.is_accessible)
+    }).await.map_err(|e| format!("Album accessibility check failed: {e}"))?
 }
 
 /// recount files for an album and return updated album
@@ -1029,7 +1013,7 @@ pub fn open_external_url(url: &str) -> Result<(), String> {
 /// system's default layout. A RAW+JPEG pair supplies its JPEG/HEIC companion.
 #[tauri::command]
 pub async fn set_desktop_wallpaper(
-    app_handle: AppHandle,
+    _app_handle: AppHandle,
     file_path: &str,
     companion_path: Option<String>,
 ) -> Result<(), String> {
@@ -1043,7 +1027,7 @@ pub async fn set_desktop_wallpaper(
     #[cfg(target_os = "macos")]
     {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        app_handle
+        _app_handle
             .run_on_main_thread(move || {
                 use objc2::MainThreadMarker;
                 use objc2::runtime::AnyObject;
@@ -1690,7 +1674,7 @@ pub async fn edit_image(params: t_image::EditParams) -> Result<bool, String> {
 
 /// render a photo montage and save it
 #[tauri::command]
-pub async fn render_montage(params: t_montage::MontageParams) -> Result<(), String> {
+pub async fn render_montage(params: t_montage::MontageParams) -> Result<Option<String>, String> {
     t_montage::render_montage(params).await
 }
 
@@ -3084,28 +3068,58 @@ pub fn update_file_info(file_id: i64, file_path: &str) -> Result<Option<AFile>, 
         .map_err(|e| format!("Error while updating file info: {}", e))
 }
 
-/// Force a selected file refresh without accepting a stale frontend file path.
+#[derive(Default, serde::Serialize)]
+pub struct FileRefreshResult {
+    file: AFile,
+    size_delta: i64,
+    /// True when a cloud-only original was left unread without explicit download consent.
+    skipped: bool,
+    /// A later stage failed after metadata was already updated.
+    error: Option<String>,
+}
+
+/// Re-read local metadata without implicitly hydrating a cloud placeholder.
+fn refresh_file(file_id: i64) -> Result<Option<FileRefreshResult>, String> {
+    let old = AFile::get_file_info(file_id)?.ok_or("File not found")?;
+    let path = old.file_path.as_deref().ok_or("File path missing")?;
+    // Changed timestamps do not imply consent to download a cloud original.
+    if t_utils::is_cloud_only_path(path) {
+        return Ok(Some(FileRefreshResult { file: old, size_delta: 0, skipped: true, ..Default::default() }));
+    }
+    crate::t_media_lifecycle::validate_original(file_id, path, false)?;
+    let updated = AFile::update_file_info(file_id, path, chrono::Utc::now().timestamp_millis())?;
+    if updated.is_none() {
+        return Err("Metadata could not be indexed; original retained and pending state preserved".into());
+    }
+    if let Some(ref file) = updated {
+        let content_changed = old.metadata_pending || old.modified_at != file.modified_at || old.size != file.size;
+        if content_changed || old.width != file.width || old.height != file.height
+            || old.e_orientation != file.e_orientation {
+            AThumb::delete(file_id)?;
+        }
+        if content_changed {
+            crate::ai::profiles::invalidate_file(file_id)?;
+        }
+    }
+    AFile::update_column(file_id, "cloud_only", &false)?;
+    AFile::update_column(file_id, "metadata_pending", &false)?;
+    Ok(AFile::get_file_info(file_id)?.map(|file| FileRefreshResult {
+        size_delta: file.size - old.size,
+        file,
+        skipped: false,
+        ..Default::default()
+    }))
+}
+
+/// Refresh a selected local file without accepting a stale frontend file path.
 #[tauri::command]
-pub async fn refresh_selected_file_info(library_id: String, file_id: i64) -> Result<Option<AFile>, String> {
+pub async fn refresh_selected_file_info(library_id: String, file_id: i64) -> Result<Option<FileRefreshResult>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e| e.to_string())?;
         if t_config::current_library_id()? != library_id {
             return Err("Library changed".to_string());
         }
-        let old = AFile::get_file_info(file_id)?.ok_or("File not found")?;
-        let path = old.file_path.as_deref().ok_or("File path missing")?;
-        let updated = AFile::update_file_info(file_id, path, chrono::Utc::now().timestamp_millis())?;
-        if let Some(ref file) = updated {
-            let content_changed = old.modified_at != file.modified_at || old.size != file.size;
-            if content_changed || old.width != file.width || old.height != file.height
-                || old.e_orientation != file.e_orientation {
-                AThumb::delete(file_id)?;
-            }
-            if content_changed {
-                crate::ai::profiles::invalidate_file(file_id)?;
-            }
-        }
-        AFile::get_file_info(file_id)
+        refresh_file(file_id)
     }).await.map_err(|e| format!("File refresh task failed: {e}"))?
 }
 
@@ -3123,6 +3137,14 @@ pub fn add_file_to_db(folder_id: i64, file_path: &str) -> Result<Option<AFile>, 
 #[tauri::command]
 pub fn check_file_exists(file_path: &str) -> bool {
     Path::new(file_path).exists()
+}
+
+/// Live cloud-only check (the catalog's flag can be stale); reads attributes only.
+#[tauri::command]
+pub async fn is_cloud_only_file(file_path: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || t_utils::is_cloud_only_path(&file_path))
+        .await
+        .unwrap_or(false)
 }
 
 /// Check readability without decoding or modifying the original.
@@ -3495,29 +3517,27 @@ pub fn check_ai_status(state: State<t_ai::AiState>) -> String {
 
 /// generate embedding for a file
 #[tauri::command]
-pub async fn generate_embedding(state: State<'_, t_ai::AiState>, app_handle: AppHandle, file_id: i64) -> Result<String, String> {
+pub async fn generate_embedding(
+    state: State<'_, t_ai::AiState>, app_handle: AppHandle, file_id: i64, library_id: Option<String>,
+) -> Result<String, String> {
     let state = (*state).clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _library = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
+    let library_id = library_id.unwrap_or(t_config::current_library_id()?);
+    tauri::async_runtime::spawn_blocking(move || with_current_library(&library_id, || {
         let result = AFile::generate_embedding_for_request(&state, file_id, true);
-        if result.is_ok() { let _ = app_handle.emit("semantic-index-changed", serde_json::json!({"library_id": crate::t_config::current_library_id()?, "file_id": file_id})); }
+        if result.is_ok() { let _ = app_handle.emit("semantic-index-changed", serde_json::json!({"library_id": library_id, "file_id": file_id})); }
         result
-    })
-        .await.map_err(|e|e.to_string())?
+    })).await.map_err(|e|e.to_string())?
 }
 
-// search similar images
 #[tauri::command]
 pub async fn search_similar_images(
-    state: State<'_, t_ai::AiState>,
-    params: ImageSearchParams,
+    state: State<'_, t_ai::AiState>, params: ImageSearchParams, library_id: Option<String>,
 ) -> Result<Vec<AFile>, String> {
     let state = (*state).clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _library = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
+    let library_id = library_id.unwrap_or(t_config::current_library_id()?);
+    tauri::async_runtime::spawn_blocking(move || with_current_library(&library_id, || {
         AFile::search_similar_images(&state, params)
-    })
-        .await.map_err(|e|e.to_string())?
+    })).await.map_err(|e|e.to_string())?
         .map_err(|e| format!("Error while searching similar images: {}", e))
 }
 
@@ -4088,6 +4108,86 @@ pub fn restore_databases(
     selections: Vec<t_storage::RestoreSelection>,
 ) -> Result<t_storage::RestoreResult, String> {
     t_storage::restore_databases(&backup_path, &selections)
+}
+
+#[cfg(test)]
+mod system_locale_tests {
+    use super::*;
+
+    #[test]
+    fn regional_identifiers_are_valid_for_intl() {
+        assert_eq!(normalize_locale_identifier("en_CH"), Some("en-CH".into()));
+        assert_eq!(
+            normalize_locale_identifier("fr_CH.UTF-8"),
+            Some("fr-CH".into())
+        );
+        assert_eq!(
+            normalize_locale_identifier("de_DE@euro"),
+            Some("de-DE".into())
+        );
+        assert_eq!(normalize_locale_identifier("C.UTF-8"), Some("en-US".into()));
+        assert_eq!(normalize_locale_identifier("POSIX"), Some("en-US".into()));
+        assert_eq!(normalize_locale_identifier(""), None);
+    }
+
+    #[test]
+    fn linux_uses_time_category_and_ignores_translation_preferences() {
+        let get = |key: &str| match key {
+            "LANGUAGE" | "LC_MESSAGES" | "LANG" => Some("en_US.UTF-8".into()),
+            "LC_TIME" => Some("fr_CH.UTF-8".into()),
+            _ => None,
+        };
+        assert_eq!(time_locale_from_env(get), Some("fr-CH".into()));
+        assert_eq!(
+            time_locale_from_env(|key| {
+                if key == "LC_ALL" {
+                    Some("de_DE.UTF-8".into())
+                } else {
+                    get(key)
+                }
+            }),
+            Some("de-DE".into())
+        );
+        assert_eq!(
+            time_locale_from_env(|key| {
+                if key == "LC_TIME" || key == "LC_ALL" {
+                    Some(String::new())
+                } else {
+                    get(key)
+                }
+            }),
+            Some("en-US".into())
+        );
+        assert_eq!(time_locale_from_env(|_| None), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_region_matches_current_locale() {
+        let identifier = objc2_foundation::NSLocale::currentLocale()
+            .localeIdentifier()
+            .to_string();
+        assert_eq!(
+            get_system_region_locale().unwrap(),
+            normalize_locale_identifier(&identifier)
+        );
+        assert!(get_system_region_locale().unwrap().is_some());
+    }
+}
+
+#[cfg(test)]
+mod gstreamer_probe_tests {
+    use super::gstreamer_element_missing;
+
+    #[test]
+    fn only_explicit_missing_element_disables_preview() {
+        let missing = b"No such element or plugin 'autoaudiosink'\n";
+        assert!(gstreamer_element_missing(Some(255), missing));
+        assert!(!gstreamer_element_missing(Some(0), missing));
+        assert!(!gstreamer_element_missing(None, missing));
+        assert!(!gstreamer_element_missing(Some(127), b"error while loading shared libraries"));
+        assert!(!gstreamer_element_missing(Some(1), b"unknown failure"));
+    }
 }
 
 #[cfg(test)]

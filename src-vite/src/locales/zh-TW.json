@@ -1,5 +1,6 @@
 {
   "workflow_close": {
+    "finish_edits_first": "請先儲存或取消目前編輯，再執行檔案操作。",
     "unsaved": "有未儲存的識別修訂或輸入，是否放棄這些修改並繼續？取消將保留草稿。",
     "preparing": "正在確認關閉，取消後可繼續編輯…",
     "failed": "視窗未回應或內容已變更，已取消關閉。草稿仍保留，請稍後重試。"
@@ -398,6 +399,12 @@
     "database_corrupted_hint": "請嘗試切換到其他媒體庫。"
   },
   "album": {
+    "drop": {
+      "add": "拖入資料夾以新增",
+      "separate": "請分別拖入檔案與資料夾。",
+      "confirm_folder": "選擇資料夾：{name}",
+      "folders_only": "請拖入資料夾。"
+    },
     "album_list": "相簿",
     "search_folders": "搜尋資料夾",
     "favorite_folders_only": "僅我的最愛資料夾",
@@ -494,6 +501,7 @@
       "validation_name": "請輸入智慧相簿名稱。",
       "validation_rule": "請至少新增一條完整規則。",
       "fields": {
+        "folder_name": "資料夾名稱",
         "name": "檔案名稱",
         "file_type": "檔案類型",
         "media_subtype": "媒體子類型",
@@ -569,6 +577,8 @@
     }
   },
   "offline": {
+    "cloud_only": "僅線上可用",
+    "cloud_only_pending": "僅線上可用 — 檔案資訊待補齊",
     "original_unavailable": "原始檔案暫時無法存取",
     "requires_original": "需要原始檔案，請連接儲存裝置後使用此操作。"
   },
@@ -779,7 +789,11 @@
       "placeholder": "搜尋檔案名稱"
     },
     "filter": {
-      "select_mode": "多選模式",
+      "select_mode": "多選",
+      "select_files": "選擇檔案",
+      "show_selection_panel": "開啟多選面板",
+      "hide_selection_panel": "收起多選面板",
+      "exit_select_mode": "退出多選",
       "select_count": "已選 {count}",
       "group_type_options": [
         "無",
@@ -802,7 +816,8 @@
         "大小",
         "尺寸",
         "長度",
-        "隨機"
+        "隨機",
+        "加入順序"
       ],
       "similarity": "相似度",
       "sort_order_options": [
@@ -902,6 +917,7 @@
       },
       "reclaimable_size": "可釋放",
       "groups_title": "重複群組",
+      "skipped_cloud_only": "已略過 {count} 個僅線上可用的檔案",
       "actions_title": "動作",
       "compare": "比較",
       "rescan": "重新掃描",
@@ -1327,6 +1343,7 @@
       "error": "無法選擇檔案。"
     },
     "file_refresh": {
+      "skipped_cloud": "已略過雲端原圖：{count}",
       "status": "重新整理狀態",
       "running": "重新整理中…",
       "cancelling": "取消中…",
@@ -1437,24 +1454,13 @@
     "montage": {
       "title": "拼貼",
       "layout": "版面",
-      "grid": "格狀",
-      "mosaic": "馬賽克",
-      "pile": "相片堆疊",
+      "pile": "自由拼貼",
       "shuffle": "隨機拼貼",
-      "angle": "角度：{value}°",
-      "scale": "縮放：{value}%",
       "shadow": "繪製陰影",
       "style": "樣式",
       "export": "匯出：{size}",
       "random_rotation": "隨機旋轉",
       "border_width": "邊框寬度",
-      "photos": "相片（{count}）",
-      "add": "新增",
-      "photos_hint": "拖曳以重新排序 · 按右鍵移除",
-      "add_none": "請在 Lap 中選取尚未加入拼貼的相片，然後按「新增」。",
-      "hint_pile": "相片堆疊：拖曳以移動 · 使用轉盤旋轉與縮放 · 抓取的相片會移到最上層",
-      "hint_grid": "格狀：相片填滿每個格子（置中裁切）· 將相片拖到另一張上即可交換",
-      "hint_mosaic": "馬賽克：無間隙，相片保持原始比例 · 將相片拖到另一張上即可交換",
       "page": "頁面",
       "page_size": "尺寸",
       "page_screen": "螢幕 16:9",
@@ -1555,7 +1561,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "導航器清晰度網格",
-    "sharpness_grid_hint": "在導航器中標示清晰區域。",
+    "sharpness_grid_hint": "在導航器中標示清晰區域",
     "live": "LIVE",
     "motion": "MOTION",
     "title": "圖片檢視器",
@@ -1694,15 +1700,16 @@
       "title": "RAW",
       "section_pairs": "配對檔案",
       "pair_source": "配對的預設顯示",
-      "pair_source_hint": "用於配對的縮圖與預覽。",
+      "pair_source_hint": "用於配對的縮圖與預覽",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "預設預覽來源",
+      "preview_source_hint": "首選來源無法使用時，自動使用另一來源",
       "rawRenderBrightness": "算繪亮度",
-      "option_embedded": "內嵌優先",
-      "option_rendered": "一律算繪 RAW",
+      "option_embedded": "優先使用內嵌預覽",
+      "option_rendered": "優先算繪 RAW",
       "option_original": "原始曝光",
       "option_brightened": "提亮",
-      "brightness_hint": "算繪 RAW 時套用，包含無內嵌預覽可用時。",
+      "brightness_hint": "僅對 RAW 算繪生效",
       "switch_to": "切換為 {source}",
       "show_pair": "顯示配對的 {format}",
       "source_embedded": "內嵌",

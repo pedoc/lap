@@ -54,6 +54,12 @@
     "database_corrupted_hint": "Tente mudar para outra biblioteca."
   },
   "album": {
+    "drop": {
+      "add": "Arraste uma pasta para adicionar",
+      "separate": "Arraste arquivos e pastas separadamente.",
+      "confirm_folder": "Selecionar pasta: {name}",
+      "folders_only": "Arraste uma pasta."
+    },
     "album_list": "Álbuns",
     "search_folders": "Pesquisar pastas",
     "favorite_folders_only": "Apenas pastas favoritas",
@@ -150,6 +156,7 @@
       "validation_name": "Insira um nome para o álbum inteligente.",
       "validation_rule": "Adicione pelo menos uma regra completa.",
       "fields": {
+        "folder_name": "Nome da pasta",
         "name": "Nome do arquivo",
         "file_type": "Tipo de arquivo",
         "media_subtype": "Subtipo de mídia",
@@ -225,6 +232,8 @@
     }
   },
   "offline": {
+    "cloud_only": "Disponível somente online",
+    "cloud_only_pending": "Disponível somente online — informações incompletas",
     "original_unavailable": "O ficheiro original está indisponível",
     "requires_original": "Requer o ficheiro original. Volte a ligar o dispositivo de armazenamento."
   },
@@ -434,7 +443,11 @@
       "placeholder": "Nome do arquivo"
     },
     "filter": {
-      "select_mode": "Seleção",
+      "select_mode": "Seleção múltipla",
+      "select_files": "Selecionar arquivos",
+      "show_selection_panel": "Abrir painel de seleção múltipla",
+      "hide_selection_panel": "Recolher painel de seleção múltipla",
+      "exit_select_mode": "Sair da seleção múltipla",
       "select_count": "{count} selecionados",
       "group_type_options": [
         "Nenhum",
@@ -457,7 +470,8 @@
         "Tamanho",
         "Dimensão",
         "Duração",
-        "Aleatório"
+        "Aleatório",
+        "Adição"
       ],
       "similarity": "Similaridade",
       "sort_order_options": [
@@ -557,6 +571,7 @@
       },
       "reclaimable_size": "Recuperável",
       "groups_title": "Grupos duplicados",
+      "skipped_cloud_only": "{count} arquivos disponíveis somente online foram ignorados",
       "actions_title": "Ações",
       "compare": "Comparar",
       "rescan": "Verificar novamente",
@@ -1086,24 +1101,13 @@
     "montage": {
       "title": "Colagem",
       "layout": "Layout",
-      "grid": "Grade",
-      "mosaic": "Mosaico",
-      "pile": "Pilha de fotos",
+      "pile": "Colagem livre",
       "shuffle": "Colagem aleatória",
-      "angle": "Ângulo: {value}°",
-      "scale": "Escala: {value}%",
       "shadow": "Desenhar sombras",
       "style": "Estilo",
       "export": "Exportação: {size}",
       "random_rotation": "Rotação aleatória",
       "border_width": "Espessura da borda",
-      "photos": "Fotos ({count})",
-      "add": "Adicionar",
-      "photos_hint": "Arraste para reordenar · clique direito para remover",
-      "add_none": "Selecione no Lap fotos que ainda não estão na colagem e clique em Adicionar.",
-      "hint_pile": "Pilha de fotos: arraste para mover · o dial gira e redimensiona · a foto agarrada vem para a frente",
-      "hint_grid": "Grade: as fotos preenchem cada célula (corte centralizado) · arraste uma foto sobre outra para trocá-las",
-      "hint_mosaic": "Mosaico: sem espaços, as fotos mantêm as proporções · arraste uma foto sobre outra para trocá-las",
       "page": "Página",
       "page_size": "Tamanho",
       "page_screen": "Tela 16:9",
@@ -1204,7 +1208,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "Grade de nitidez do navegador",
-    "sharpness_grid_hint": "Realça áreas nítidas no navegador.",
+    "sharpness_grid_hint": "Realça áreas nítidas no navegador",
     "live": "AO VIVO",
     "motion": "MOTION",
     "title": "Visualizador de imagens",
@@ -1322,15 +1326,16 @@
       "title": "RAW",
       "section_pairs": "Arquivos pareados",
       "pair_source": "Exibição padrão para pares",
-      "pair_source_hint": "Usado para miniaturas e pré-visualizações pareadas.",
+      "pair_source_hint": "Usado para miniaturas e pré-visualizações pareadas",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "Fonte de pré-visualização padrão",
+      "preview_source_hint": "Se a fonte preferida estiver indisponível, usa a outra",
       "rawRenderBrightness": "Brilho da renderização",
       "option_embedded": "Preferir pré-visualização incorporada",
-      "option_rendered": "Sempre renderizar RAW",
+      "option_rendered": "Renderizar RAW primeiro",
       "option_original": "Exposição original",
       "option_brightened": "Clareada",
-      "brightness_hint": "Aplica-se ao renderizar RAW, inclusive quando a pré-visualização incorporada não está disponível.",
+      "brightness_hint": "Aplica-se apenas à renderização RAW",
       "switch_to": "Alternar para {source}",
       "show_pair": "Mostrar {format} associado",
       "source_embedded": "Incorporada",

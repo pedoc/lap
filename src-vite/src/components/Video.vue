@@ -74,6 +74,7 @@
 
 <script setup lang="ts">
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { GESTURE_LOCK_THRESHOLD, HORIZONTAL_NAV_THRESHOLD, PLAYBACK_DEADLINE_MS, DIRECT_PLAYBACK_TIMEOUT_MS, LOADING_OVERLAY_DELAY_MS } from '@/common/constants';
 import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
@@ -179,8 +180,6 @@ let hasNavigatedThisGesture = false;
 const gestureType = ref<'none' | 'zoom' | 'nav'>('none');
 const navDirection = ref<'next' | 'prev' | ''>('');
 let lastDeltaX = 0;
-const GESTURE_LOCK_THRESHOLD = 10;
-const HORIZONTAL_NAV_THRESHOLD = 100;
 
 const transitionName = computed(() => {
   if (props.isSlideShow) return 'slide-next';
@@ -228,9 +227,7 @@ const playerOptions = computed(() => ({
 }));
 
 const getActivePlayer = () => players.value[activeVideo.value];
-const PLAYBACK_DEADLINE_MS = 30_000;
-const DIRECT_PLAYBACK_TIMEOUT_MS = 8000;
-const LOADING_OVERLAY_DELAY_MS = 500;
+
 let playbackDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 let loadingOverlayTimer: ReturnType<typeof setTimeout> | null = null;
 const directPlaybackTypes: Record<string, string> = {

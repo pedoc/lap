@@ -364,6 +364,7 @@ const fieldOptions = computed(() => [
   { value: 'date_modified', label: t('album.smart_edit.fields.date_modified') },
 
   // File
+  { value: 'folder_name', label: t('album.smart_edit.fields.folder_name') },
   { value: 'name', label: t('album.smart_edit.fields.name') },
   { value: 'file_type', label: t('album.smart_edit.fields.file_type') },
   { value: 'media_subtype', label: t('album.smart_edit.fields.media_subtype') },
@@ -431,7 +432,7 @@ function getOperatorOptions(field: string) {
   const op = (key: string) => ({ value: key, label: t(`album.smart_edit.operators.${key}`) });
   if (['semantic','similar_image'].includes(field)) return [{value:'matches',label:'≥'}, {value:'not_matches',label:'<'}];
   if (field === 'anniversary') return [op('is')];
-  if (field === 'name' || field === 'ocr_text') return [op('contains'), op('not_contains')];
+  if (['folder_name', 'name', 'ocr_text'].includes(field)) return [op('contains'), op('not_contains')];
   if (field === 'object_state') return [op('is'),op('is_not')];
   if (field === 'object_class') return [op('has'),op('not_has')];
   if (field === 'object_count') return [{value:'eq',label:'='},{value:'gte',label:'≥'},{value:'lte',label:'≤'}];
@@ -460,7 +461,7 @@ function setDefaultRuleValue(rule: any) {
   if (rule.field === 'semantic') rule.value = {prompt:'',threshold:0.25};
   else if (rule.field === 'similar_image') rule.value = {fileId:null,threshold:0.5};
   else if (rule.field === 'anniversary') rule.value = true;
-  else if (rule.field === 'name' || rule.field === 'ocr_text') rule.value = '';
+  else if (['folder_name', 'name', 'ocr_text'].includes(rule.field)) rule.value = '';
   else if (rule.field === 'object_state') rule.value = 'detected';
   else if (rule.field === 'object_class') rule.value = objectOptions.value[0]?.value || '';
   else if (rule.field === 'object_count') rule.value = {classKey:objectOptions.value[0]?.value || '',count:1};

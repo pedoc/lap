@@ -2,7 +2,9 @@
 // Pure functions: the result is expressed relative to the page (0..1 on each axis),
 // so the preview and the backend render (render_montage) share one layout.
 
-export type MontageMode = 'grid' | 'mosaic' | 'pile';
+import { calculateMasonryLayout } from './layout.ts';
+
+export type MontageMode = 'card' | 'grid' | 'mosaic' | 'masonry' | 'pile';
 
 export interface MontagePhoto {
   fileId: number;
@@ -155,6 +157,28 @@ function pileLayout(photos: MontagePhoto[], pageH: number, border: number, maxRo
   });
 }
 
+function masonryLayout(photos: MontagePhoto[], pageH: number, gap: number): Box[] {
+  const items = photos.map(photo => ({ width: photo.ratio, height: 1 }));
+  let best: Box[] = [];
+  let bestScale = 0;
+  for (let columns = 1; columns <= photos.length; columns++) {
+    const width = 1 - 2 * gap;
+    if (width <= (columns - 1) * gap) break;
+    const result = calculateMasonryLayout(items, width, width / columns, gap);
+    const scale = Math.min(1, (pageH - 2 * gap) / result.containerHeight);
+    if (scale <= bestScale) continue;
+    bestScale = scale;
+    best = result.boxes.map((box, i) => ({
+      fileId: photos[i].fileId,
+      x: (1 - width * scale) / 2 + box.x * scale,
+      y: (pageH - result.containerHeight * scale) / 2 + box.y * scale,
+      w: box.width * scale,
+      h: box.height * scale,
+    }));
+  }
+  return best;
+}
+
 export function computeMontageLayout(
   photos: MontagePhoto[],
   pageRatio: number, // page width / height
@@ -167,7 +191,7 @@ export function computeMontageLayout(
 
   const boxes = mode === 'pile'
     ? pileLayout(photos, pageH, style.border, style.rotation, createRandom(seed))
-    : (mode === 'mosaic' ? mosaicLayout : gridLayout)(photos, pageH, style.spacing).map(box => ({ ...box, rotation: 0 }));
+    : (mode === 'mosaic' ? mosaicLayout : mode === 'masonry' ? masonryLayout : gridLayout)(photos, pageH, style.spacing).map(box => ({ ...box, rotation: 0 }));
 
   return boxes.map(box => ({
     fileId: box.fileId,
@@ -176,6 +200,6 @@ export function computeMontageLayout(
     w: box.w,
     h: box.h / pageH,
     rotation: box.rotation,
-    border: style.border,
+    border: mode === 'pile' ? style.border : Math.min(style.border, box.w / 4, box.h / 4),
   }));
 }

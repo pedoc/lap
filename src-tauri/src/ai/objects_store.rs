@@ -482,6 +482,7 @@ pub struct View {
     pub partial: i64,
     pub failed: i64,
     pub pending: i64,
+    pub automation_has_local_pending: bool,
     pub classes: Vec<ClassCount>,
     pub model_installed: bool,
     pub model_name: String,
@@ -565,6 +566,13 @@ pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<V
     }
     let mut status = super::objects_jobs::status(library);
     let automation = super::objects_automation::load();
+    let local_pending = match &automation {
+        Ok(policy) if policy.enabled && policy.scope.as_ref().is_none_or(|s| s.library_id == library) =>
+            super::objects_jobs::has_local_pending(c, &profile, policy.scope.as_ref().map(|s| s.folder_id)),
+        _ => Ok(false),
+    };
+    let local_pending_error = local_pending.as_ref().err().cloned();
+    let has_local_pending = local_pending.unwrap_or(false);
     let (history, history_error) = match super::objects_journal::list(c, library, &profile, &status)
     {
         Ok(entries) => (entries, None),
@@ -583,6 +591,7 @@ pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<V
         partial,
         failed,
         pending: eligible - indexed - failed,
+        automation_has_local_pending: has_local_pending,
         classes: classes.into_values().collect(),
         model_installed: super::assets::installed(&model.definition),
         model_name: model.definition.name.clone(),
@@ -592,7 +601,7 @@ pub fn view_on(c: &Connection, model: &ResolvedModel, library: &str) -> Result<V
         history_error,
         sessions: super::runtime::reports(model),
         automation: automation.as_ref().ok().cloned(),
-        automation_error: automation.err(),
+        automation_error: automation.err().or(local_pending_error),
     })
 }
 #[tauri::command]

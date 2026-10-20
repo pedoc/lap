@@ -2,6 +2,16 @@
   "bundle": {
     "resources": {
       "resources/lap_cuda_bridge.dll": "resources/lap_cuda_bridge.dll"
+    },
+    "windows": {
+      "wix": {
+        "fragmentPaths": [
+          "windows/vc-runtime.wxs"
+        ],
+        "componentGroupRefs": [
+          "LapVcRuntimeCheck"
+        ]
+      }
     }
   },
   "app": {
@@ -15,7 +25,12 @@
         "decorations": false,
         "transparent": true,
         "dragDropEnabled": false,
-        "zoomHotkeysEnabled": true
+        "zoomHotkeysEnabled": true,
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ]
   }

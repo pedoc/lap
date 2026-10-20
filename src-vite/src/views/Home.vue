@@ -165,7 +165,7 @@
           <h2 class="text-lg font-medium">{{ $t('library.database_corrupted') }}</h2>
           <p class="text-sm text-base-content/60">{{ $t('library.database_corrupted_hint') }}</p>
         </div>
-        <Content v-show="!showMediaUtilities" v-else-if="databaseCorrupted === false" ref="contentRef" :key="libraryVersion" :titlebar="activeSidebarButton.text" :libraryEmpty="libraryEmpty"/>
+        <Content v-show="!showMediaUtilities" v-else-if="databaseCorrupted === false" ref="contentRef" :key="libraryVersion" :titlebar="activeSidebarButton.text" :libraryEmpty="libraryEmpty" @startup-ready="finishStartup"/>
         <MediaUtilityView v-if="databaseCorrupted===false && showMediaUtilities" :key="libraryVersion+'-'+libConfig.library.item" :mode="libConfig.library.item==='hidden-media'?'hidden':'deleted'" />
       </div>
     </div>
@@ -190,34 +190,35 @@
 import { useOcrAutomation } from '@/common/ocrAutomation';
 import { useObjectAutomation } from '@/common/objectAutomation';
 import { startupWindowProxy } from '@/common/windowProxy';
-import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue';
+import { defineAsyncComponent, ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { emit, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getName } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
+import { applyAlbumAccess, recheckOfflineAlbums } from '@/common/albumRecovery';
 import { config, libConfig } from '@/common/config';
 import { useAppUpdater } from '@/common/updater';
 import { useUIStore } from '@/stores/uiStore';
 import { isWin, isMac, isLinux, SCALE_VALUES } from '@/common/utils';
 import { matchesShortcut, ShortcutPlatform } from '@/common/shortcuts';
-import { SIDEBAR, SETTINGS_TAB } from '@/common/constants';
+import { SIDEBAR, SETTINGS_TAB, SETTINGS_BASE_WIDTH, SETTINGS_BASE_HEIGHT, PANEL_ANIMATION_MS } from '@/common/constants';
 import { getAppConfig, switchLibrary, cancelIndexing, cancelFaceIndex } from '@/common/api';
 
 // vue components
 import Library from '@/components/Library.vue';
 import AlbumList from '@/components/AlbumList.vue';
-import SmartAlbumList from '@/components/SmartAlbumList.vue';
-import ImageSearch from '@/components/ImageSearch.vue';
-import Tag from '@/components/Tag.vue';
-import Calendar from '@/components/Calendar.vue';
-import Location from '@/components/Location.vue';
-import Person from '@/components/Person.vue';
-import ImageText from '@/components/ImageText.vue';
-import ObjectBrowser from '@/components/ObjectBrowser.vue';
-import ObjectTaskBanner from '@/components/ObjectTaskBanner.vue';
-import OcrTaskBanner from '@/components/OcrTaskBanner.vue';
-import Camera from '@/components/Camera.vue';
+const SmartAlbumList = defineAsyncComponent(() => import('@/components/SmartAlbumList.vue'));
+const ImageSearch = defineAsyncComponent(() => import('@/components/ImageSearch.vue'));
+const Tag = defineAsyncComponent(() => import('@/components/Tag.vue'));
+const Calendar = defineAsyncComponent(() => import('@/components/Calendar.vue'));
+const Location = defineAsyncComponent(() => import('@/components/Location.vue'));
+const Person = defineAsyncComponent(() => import('@/components/Person.vue'));
+const ImageText = defineAsyncComponent(() => import('@/components/ImageText.vue'));
+const ObjectBrowser = defineAsyncComponent(() => import('@/components/ObjectBrowser.vue'));
+const ObjectTaskBanner = defineAsyncComponent(() => import('@/components/ObjectTaskBanner.vue'));
+const OcrTaskBanner = defineAsyncComponent(() => import('@/components/OcrTaskBanner.vue'));
+const Camera = defineAsyncComponent(() => import('@/components/Camera.vue'));
 
 import TitleBar from '@/components/TitleBar.vue';
 import TButton from '@/components/TButton.vue';
@@ -225,7 +226,7 @@ import MediaUtilityView from '@/components/MediaUtilityView.vue';
 import Content from '@/components/Content.vue';
 import ContextMenu from '@/components/ContextMenu.vue';
 import CollectionTray from '@/components/CollectionTray.vue';
-import ManageLibraries from '@/components/ManageLibraries.vue';
+const ManageLibraries = defineAsyncComponent(() => import('@/components/ManageLibraries.vue'));
 import iconLogo from '@/assets/images/icon.png';
 
 import {
@@ -279,8 +280,6 @@ const checkLibraryEmpty = async () => {
     libraryEmpty.value = false;
   }
 };
-const SETTINGS_BASE_WIDTH = 600;
-const SETTINGS_BASE_HEIGHT = 620;
 
 /// i18n
 useOcrAutomation();
@@ -298,7 +297,7 @@ const showPanel = computed({
   get: () => config.leftPanel.show,
   set: (value: boolean) => { config.leftPanel.show = value; },
 });
-const LEFT_PANEL_ANIMATION_MS = 200;
+
 const leftPanelMounted = ref(showPanel.value);
 const leftPanelVisualExpanded = ref(showPanel.value);
 const leftPanelLayoutExpanded = ref(showPanel.value);
@@ -331,7 +330,7 @@ watch(showPanel, async (expanded) => {
       if (animationVersion !== leftPanelAnimationVersion) return;
       leftPanelAnimationTimer = null;
       void commitLeftPanelLayout(true);
-    }, LEFT_PANEL_ANIMATION_MS);
+    }, PANEL_ANIMATION_MS);
     return;
   }
 
@@ -343,7 +342,7 @@ watch(showPanel, async (expanded) => {
       if (animationVersion !== leftPanelAnimationVersion) return;
       leftPanelMounted.value = false;
     });
-  }, LEFT_PANEL_ANIMATION_MS);
+  }, PANEL_ANIMATION_MS);
 });
 
 // Library state
@@ -466,6 +465,23 @@ const libraryMenuItems = computed(() => {
   return items;
 });
 
+let startupFinished = false;
+function handleAccessRecovery() {
+  if (isSwitchingLibrary.value || databaseCorrupted.value !== false) return;
+  void recheckOfflineAlbums();
+}
+
+async function finishStartup() {
+  if (startupFinished) return;
+  startupFinished = true;
+  uiStore.startupReady = true;
+  performance.mark('startup-first-content-ready');
+  void invoke('finish_startup').catch(console.error);
+  if (config.settings.autoCheckUpdates !== false) void checkForUpdates(false);
+}
+watch(databaseCorrupted, corrupted => {
+  if (corrupted) void nextTick(() => requestAnimationFrame(() => requestAnimationFrame(() => finishStartup())));
+});
 
 onMounted(async () => {
   window.addEventListener('keydown', handleHomeKeyDown);
@@ -495,9 +511,17 @@ onMounted(async () => {
     (panelRef.value as any)?.openAlbumEdit?.(albumId);
   });
 
-  unlistenAlbumsRefreshed = await listen('albums-refreshed', () => {
+  unlistenAlbumsRefreshed = await listen('albums-refreshed', async (event: any) => {
+    const libraryId = event.payload?.libraryId || libConfig._libraryId;
+    if (libraryId !== libConfig._libraryId) return;
+    for (const album of event.payload?.albums || []) {
+      if (typeof album.is_accessible === 'boolean') {
+        await applyAlbumAccess(album, album.is_accessible, libraryId);
+      }
+    }
     void checkLibraryEmpty();
   });
+  window.addEventListener('focus', handleAccessRecovery);
 
   try {
     const name = await getName();
@@ -506,12 +530,10 @@ onMounted(async () => {
     console.error('Failed to get app name:', e);
   }
 
-  if (config.settings.autoCheckUpdates !== false) {
-    void checkForUpdates(false);
-  }
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener('focus', handleAccessRecovery);
   clearLeftPanelAnimationTimer();
   window.removeEventListener('keydown', handleHomeKeyDown);
   document.removeEventListener('mousemove', handleCollectionMouseMove);

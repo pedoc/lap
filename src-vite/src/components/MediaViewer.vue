@@ -4,6 +4,7 @@
     :class="['w-full flex flex-col items-center justify-center', previewFullScreen ? 'fixed inset-0 z-[200]' : 'relative', isFullScreen ? 'bg-base-200' : '', toolbarOnly ? '' : 'h-full group']"
     :style="toolbarOnly ? undefined : viewBackgroundStyle"
     @mousemove="handleMouseMove"
+    @mouseover="handleRawControlsHover"
     @mouseleave="handleMouseLeave"
     @contextmenu.prevent
     ref="containerRef"
@@ -238,11 +239,11 @@
     <!-- Close Button (Top Right) -->
     <button 
       v-if="mode === 0 && !config.mediaViewer.isPinned && !isFullScreen"
-      class="absolute right-2 top-2 z-90 p-2 rounded-full text-base-content/70 bg-base-100/30 hover:text-base-content hover:bg-base-100/70 cursor-pointer"
+      class="preview-press-button absolute right-2 top-2 z-90 p-2 rounded-full text-base-content/70 bg-base-100/30 hover:text-base-content hover:bg-base-100/70 cursor-pointer"
       @click.stop="$emit('close')"
       @dblclick.stop
     >
-      <IconClose class="w-5 h-5" />
+      <span class="preview-press-icon flex pointer-events-none"><IconClose class="w-5 h-5" /></span>
     </button>
 
     <div
@@ -262,7 +263,7 @@
         <div
           v-for="badge in quickViewStatusBadges"
           :key="badge.key"
-          class="thumb-badge thumb-badge-muted"
+          class="thumb-badge"
         >
           <template v-if="badge.icons?.length">
             <div class="flex items-center gap-0.5">
@@ -293,7 +294,7 @@
       <!-- Previous Button (Overlay, media-area anchored) -->
       <button
         v-if="!isSlideShow && (showOverlayNav || previewFullScreen)"
-        class="absolute left-2 top-1/2 -translate-y-1/2 z-70 p-2 rounded-full bg-base-100/30 backdrop-blur-md transition-opacity duration-200"
+        class="preview-press-button absolute left-2 top-1/2 -translate-y-1/2 z-70 p-2 rounded-full bg-base-100/30 backdrop-blur-md transition-opacity duration-200"
         :class="[
           isHoverLeft ? (hasPrevious ? 'opacity-100 pointer-events-auto hover:text-base-content hover:bg-base-100/80 cursor-pointer' : 'opacity-30 cursor-default') : 'opacity-0 pointer-events-none'
         ]"
@@ -301,13 +302,13 @@
         @click.stop="triggerPrev"
         @dblclick.stop
       >
-        <IconLeft class="w-8 h-8" />
+        <span class="preview-press-icon flex pointer-events-none"><IconLeft class="w-8 h-8" /></span>
       </button>
 
       <!-- Next Button (Overlay, media-area anchored) -->
       <button
         v-if="!isSlideShow && (showOverlayNav || previewFullScreen)"
-        class="absolute right-2 top-1/2 -translate-y-1/2 z-70 p-2 rounded-full bg-base-100/30 backdrop-blur-md transition-opacity duration-200"
+        class="preview-press-button absolute right-2 top-1/2 -translate-y-1/2 z-70 p-2 rounded-full bg-base-100/30 backdrop-blur-md transition-opacity duration-200"
         :class="[
           isHoverRight ? (hasNext ? 'opacity-100 pointer-events-auto hover:text-base-content hover:bg-base-100/80 cursor-pointer' : 'opacity-30 cursor-default') : 'opacity-0 pointer-events-none'
         ]"
@@ -315,7 +316,7 @@
         @click.stop="triggerNext"
         @dblclick.stop
       >
-        <IconRight class="w-8 h-8" />
+        <span class="preview-press-icon flex pointer-events-none"><IconRight class="w-8 h-8" /></span>
       </button>
 
       <div
@@ -440,7 +441,8 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent, ref, computed, watch, onMounted, onBeforeUnmount, type Component, type CSSProperties } from 'vue';
+import { OVERLAY_CLICK_MOVE_TOLERANCE } from '@/common/constants';
+import { defineAsyncComponent, ref, computed, watch, onMounted, onUpdated, onBeforeUnmount, type Component, type CSSProperties } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { runPreviewWindowOperation, recoverPreviewWindowFocus } from '@/common/previewWindow';
@@ -693,6 +695,29 @@ const hasOpenMenu = ref(false);
 const containerWidth = ref(0);
 const buttonsRef = ref<HTMLElement | null>(null);
 const buttonsWidth = ref(0);
+const rawControlsWidth = ref(0);
+const rawControlsHovered = ref(false);
+let observedRawControls: HTMLElement | null = null;
+const rawToolbarNeedsTop = computed(() => rawControlsWidth.value > 0
+  && containerWidth.value < buttonsWidth.value + 2 * rawControlsWidth.value + 48);
+
+function measureRawControls() {
+  const controls = containerRef.value?.querySelector<HTMLElement>('[data-raw-preview-controls]') || null;
+  if (controls !== observedRawControls) {
+    if (observedRawControls) resizeObserver?.unobserve(observedRawControls);
+    observedRawControls = controls;
+    if (controls) resizeObserver?.observe(controls);
+  }
+  rawControlsWidth.value = controls?.offsetWidth || 0;
+  if (!rawControlsWidth.value) rawControlsHovered.value = false;
+}
+
+onUpdated(measureRawControls);
+
+function handleRawControlsHover(e: MouseEvent) {
+  rawControlsHovered.value = !!(e.target as Element)?.closest('[data-raw-preview-controls]');
+  if (rawControlsHovered.value) handleMouseLeave();
+}
 const filenameMaxWidth = computed(() => {
   if (containerWidth.value > 0 && buttonsWidth.value > 0) {
     const val = (containerWidth.value / 2) - (buttonsWidth.value / 2) - 100;
@@ -1037,6 +1062,7 @@ let resizeObserver: ResizeObserver | null = null;
 
 onMounted(() => {
   resizeObserver = new ResizeObserver((entries) => {
+    measureRawControls();
     for (const entry of entries) {
       if (entry.target === containerRef.value) {
         containerWidth.value = entry.contentRect.width;
@@ -1078,6 +1104,8 @@ function toggleToolbarPin() {
 }
 
 function handleMouseMove(e: MouseEvent) {
+  handleRawControlsHover(e);
+  if (rawControlsHovered.value) return;
   if (!containerRef.value) return;
 
   const containerRect = containerRef.value.getBoundingClientRect();
@@ -1158,7 +1186,10 @@ const computedToolbarClass = computed(() => {
     // Floating Hover Bar
     const floatingClasses = 'left-1/2 -translate-x-1/2 px-2 rounded-box bg-base-100/30 hover:bg-base-100/70 transition-[opacity,transform] duration-300 ease-in-out';
     
-    if (toolbarPosition.value === 'bottom') {
+    if (toolbarPosition.value === 'bottom' && !rawToolbarNeedsTop.value) {
+       if (rawControlsHovered.value && !hasOpenMenu.value) {
+         return `${commonClasses} ${floatingClasses} bottom-4 invisible opacity-0 pointer-events-none`;
+       }
        if (isHoverBottom.value || hasOpenMenu.value) {
           if (props.file.file_type === 2) {
             return `${commonClasses} ${floatingClasses} bottom-8 opacity-100`;
@@ -1173,7 +1204,7 @@ const computedToolbarClass = computed(() => {
           }
        }
     } else {
-       if (isHoverTop.value || hasOpenMenu.value) {
+       if (isHoverTop.value || (rawToolbarNeedsTop.value && isHoverBottom.value) || hasOpenMenu.value) {
           return `${commonClasses} ${floatingClasses} top-4 opacity-100`;
        } else {
           return `${commonClasses} ${floatingClasses} top-4 opacity-0`;
@@ -1208,7 +1239,7 @@ const triggerPrev = () => {
   if (props.hasPrevious) {
     emit('prev');
   } else {
-    // showMessage((localeMsg.value as any).tooltip.image_viewer.first_image);
+    showMessage((localeMsg.value as any).tooltip.image_viewer.first_image);
   }
 }
 
@@ -1216,7 +1247,7 @@ const triggerNext = () => {
   if (props.hasNext) {
     emit('next');
   } else {
-    // showMessage((localeMsg.value as any).tooltip.image_viewer.last_image);
+    showMessage((localeMsg.value as any).tooltip.image_viewer.last_image);
   }
 }
 
@@ -1249,7 +1280,6 @@ const handleOverlayClick = () =>{
   }
 }
 
-const OVERLAY_CLICK_MOVE_TOLERANCE = 4;
 let overlayPointer: { id: number; x: number; y: number } | null = null;
 
 const resetOverlayPointer = () => {

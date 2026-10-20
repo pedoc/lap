@@ -50,6 +50,7 @@ pub struct View {
     pub with_text: i64,
     pub without_text: i64,
     pub pending: i64,
+    pub automation_has_local_pending: bool,
     pub model_name: String,
     pub model_installed: bool,
     pub profile: String,
@@ -204,9 +205,17 @@ fn view_on(c: &Connection, library: &str) -> Result<View, String> {
     let profile = model.profile();
     let (eligible, indexed, failed, with_text, without_text) = coverage_on(c, &profile)?;
     let automation = super::ocr_auto::load();
+    let local_pending = (|| -> Result<bool, String> {
+        let Ok(policy) = &automation else { return Ok(false) };
+        if !policy.enabled || policy.scope.as_ref().is_some_and(|s| s.library_id != library) { return Ok(false); }
+        let folder = policy.scope.as_ref().map(|s| folder_scope(c, s.folder_id)).transpose()?;
+        Ok(!target_ids_with_options(c, &profile, false, false, None, folder, &AtomicBool::new(false), true, Some(1))?.is_empty())
+    })();
+    let local_pending_error = local_pending.as_ref().err().cloned();
+    let has_local_pending = local_pending.unwrap_or(false);
     Ok(View {
         automation: automation.as_ref().ok().cloned(),
-        automation_error: automation.err(),
+        automation_error: automation.err().or(local_pending_error),
         status: current_status(library),
         eligible,
         indexed,
@@ -214,6 +223,7 @@ fn view_on(c: &Connection, library: &str) -> Result<View, String> {
         with_text,
         without_text,
         pending: eligible - indexed - failed,
+        automation_has_local_pending: has_local_pending,
         model_name: model.definition.name.clone(),
         model_installed: super::assets::installed(&model.definition),
         profile,
@@ -403,6 +413,11 @@ fn run(
             _ => process=Err("Source changed or became unavailable during OCR; rescan the album and retry this photo".into()),
         }
         check()?; // Cancellation is not an OCR failure; never stamp it as indexed.
+        if process.is_err() && super::media::defer_cloud_original(&c, id, &path)? {
+            job.status.lock().map_err(|e|e.to_string())?.completed += 1;
+            let _ = app.emit("ocr-index-progress", job.status.lock().map_err(|e|e.to_string())?.clone());
+            continue;
+        }
         let (text, document, error) = match &process {
             Ok(doc) => (
                 doc.text.clone(),
@@ -514,7 +529,7 @@ fn target_ids_with_options(
     limit: Option<usize>,
 ) -> Result<Vec<i64>, String> {
     // Snapshot IDs only. Page source rows lazily, never retain a whole library's paths / decoded pixels.
-    let mut query = format!("SELECT a.id {}", base());
+    let mut query = format!("SELECT a.id {} AND {}", base(), super::media::local_originals());
     if only_pending {
         query.push_str(" AND ");
         query.push_str(&workspace_condition("pending").replace(
@@ -673,6 +688,17 @@ pub async fn get_ocr_summaries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cloud_or_pending_originals_are_not_enqueued_as_ocr_failures() {
+        let c = db();
+        c.execute_batch("UPDATE afiles SET cloud_only=1 WHERE id=1; UPDATE afiles SET metadata_pending=1 WHERE id=2;").unwrap();
+        let cancel = AtomicBool::new(false);
+        assert!(target_ids_with_options(&c,"model-a",true,false,None,None,&cancel,false,None).unwrap().is_empty());
+        // Availability must not change the existing browse/coverage contract.
+        assert_eq!(coverage_on(&c,"model-a").unwrap().0,2);
+        c.execute_batch("UPDATE afiles SET cloud_only=0 WHERE id=1;").unwrap();
+        assert_eq!(target_ids_with_options(&c,"model-a",false,false,None,None,&cancel,true,Some(1)).unwrap(),vec![1]);
+    }
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE albums(id INTEGER PRIMARY KEY,path TEXT,file_types INTEGER,small_image_filter INTEGER,excluded_folders TEXT);
@@ -681,9 +707,10 @@ mod tests {
             CREATE TABLE media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER DEFAULT 0,deleted_at INTEGER);
             CREATE TABLE ai_index_profiles(task TEXT PRIMARY KEY,fingerprint TEXT NOT NULL);
             INSERT INTO albums VALUES(1,'/photos',7,0,'[]');INSERT INTO afolders VALUES(1,1,'/photos',0);
-            INSERT INTO afiles VALUES(1,1,1,100,100,NULL,10,20),(2,1,1,100,100,NULL,10,20);
+            INSERT INTO afiles(id,folder_id,file_type,width,height,live_photo_video_id,modified_at,size) VALUES(1,1,1,100,100,NULL,10,20),(2,1,1,100,100,NULL,10,20);
             INSERT INTO ai_index_profiles VALUES('ocr','model-a');").unwrap();
         ensure_schema(&c).unwrap();
+        c.execute_batch("ALTER TABLE afiles ADD COLUMN cloud_only INTEGER NOT NULL DEFAULT 0; ALTER TABLE afiles ADD COLUMN metadata_pending INTEGER NOT NULL DEFAULT 0;").unwrap();
         c
     }
     #[test]
@@ -706,7 +733,7 @@ mod tests {
     fn automation_selects_only_pending_rows_in_bounded_batches() {
         let c = db();
         c.execute_batch(
-            "INSERT INTO afiles VALUES(3,1,1,100,100,NULL,10,20),(4,1,1,100,100,NULL,10,20);",
+            "INSERT INTO afiles(id,folder_id,file_type,width,height,live_photo_video_id,modified_at,size) VALUES(3,1,1,100,100,NULL,10,20),(4,1,1,100,100,NULL,10,20);",
         )
         .unwrap();
         store_result(
@@ -751,7 +778,7 @@ mod tests {
     #[test]
     fn workspace_states_are_disjoint_and_scope_current_model_source_and_visibility() {
         let c = db();
-        c.execute_batch("INSERT INTO afiles VALUES(3,1,1,100,100,NULL,10,20),(4,1,1,100,100,NULL,10,20),(5,1,1,100,100,NULL,10,20);").unwrap();
+        c.execute_batch("INSERT INTO afiles(id,folder_id,file_type,width,height,live_photo_video_id,modified_at,size) VALUES(3,1,1,100,100,NULL,10,20),(4,1,1,100,100,NULL,10,20),(5,1,1,100,100,NULL,10,20);").unwrap();
         store_result(
             &c,
             1,
@@ -840,7 +867,7 @@ mod tests {
     fn retry_failed_is_not_resume_or_rebuild_and_selected_scope_does_not_expand() {
         let c = db();
         let cancel = AtomicBool::new(false);
-        c.execute_batch("INSERT INTO afiles VALUES(3,1,1,100,100,NULL,10,20);")
+        c.execute_batch("INSERT INTO afiles(id,folder_id,file_type,width,height,live_photo_video_id,modified_at,size) VALUES(3,1,1,100,100,NULL,10,20);")
             .unwrap();
         store_result(&c, 1, "model-a", Some(10), 20, "", Some("{}"), None).unwrap();
         store_result(&c, 2, "model-a", Some(10), 20, "", None, Some("failed")).unwrap();
@@ -861,7 +888,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         c.execute_batch("INSERT INTO afolders VALUES(2,1,'/photos/trip_%',0),(3,1,'/photos/trip_%/child',0),(4,1,'/photos/trip_%2',0),(5,1,'/photos/trip_AX',0),(6,2,'/photos/trip_%/child',0);
             INSERT INTO albums VALUES(2,'/photos',7,0,'[]');
-            INSERT INTO afiles VALUES(3,2,1,100,100,NULL,10,20),(4,3,1,100,100,NULL,10,20),(5,4,1,100,100,NULL,10,20),(6,5,1,100,100,NULL,10,20),(7,6,1,100,100,NULL,10,20);").unwrap();
+            INSERT INTO afiles(id,folder_id,file_type,width,height,live_photo_video_id,modified_at,size) VALUES(3,2,1,100,100,NULL,10,20),(4,3,1,100,100,NULL,10,20),(5,4,1,100,100,NULL,10,20),(6,5,1,100,100,NULL,10,20),(7,6,1,100,100,NULL,10,20);").unwrap();
         let folder = folder_scope(&c, 2).unwrap();
         assert_eq!(
             target_ids_on(&c, "model-a", false, false, None, Some(folder), &cancel).unwrap(),

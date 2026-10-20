@@ -119,7 +119,7 @@ fn targets(
     folder: Option<(i64, String)>,
     limit: Option<usize>,
 ) -> Result<Vec<i64>, String> {
-    let mut sql = format!("SELECT a.id {}", media::base());
+    let mut sql = format!("SELECT a.id {} AND {}", media::base(), media::local_originals());
     let mut values: Vec<Box<dyn ToSql>> = Vec::new();
     if !force {
         sql.push_str(" AND ");
@@ -160,6 +160,12 @@ fn targets(
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())
+}
+pub(crate) fn has_local_pending(c: &Connection, profile: &str, folder_id: Option<i64>) -> Result<bool, String> {
+    let folder = folder_id.map(|id| c.query_row(
+        "SELECT album_id,path FROM afolders WHERE id=?1", [id], |r| Ok((r.get(0)?,r.get(1)?)),
+    ).map_err(|e| format!("Object automation folder is unavailable: {e}"))).transpose()?;
+    Ok(!targets(c, profile, false, false, None, folder, Some(1))?.is_empty())
 }
 fn persist(c: &Connection, job: &Job) -> Result<(), String> {
     let status = job.status.lock().map_err(|e| e.to_string())?.clone();
@@ -522,6 +528,18 @@ pub async fn start_object_index(
                         result = Err(error);
                     }
                     check(&job, &library_id)?;
+                    if result.is_err() && crate::t_cmds::with_current_library(&library_id, || {
+                        media::defer_cloud_original(&c, id, &source.path)
+                    })? {
+                        journal::mark(&c, &job_id, id, "skipped")?;
+                        let mut status = job.status.lock().map_err(|e| e.to_string())?;
+                        status.completed += 1;
+                        status.skipped += 1;
+                        drop(status);
+                        persist(&c, &job)?;
+                        publish_progress(&app_handle, &job);
+                        continue;
+                    }
                     let written = {
                         let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
                             .read()
@@ -775,6 +793,13 @@ mod tests {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE albums(id INTEGER PRIMARY KEY,path TEXT,file_types INTEGER,small_image_filter INTEGER,excluded_folders TEXT);CREATE TABLE afolders(id INTEGER PRIMARY KEY,album_id INTEGER,path TEXT,is_excluded_from_search INTEGER DEFAULT 0);CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,width INTEGER,height INTEGER,live_photo_video_id INTEGER,modified_at INTEGER,size INTEGER);CREATE TABLE media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER DEFAULT 0,deleted_at INTEGER);INSERT INTO albums VALUES(1,'/photos',7,0,'[]');INSERT INTO afolders VALUES(1,1,'/photos/trip_%',0),(2,1,'/photos/trip_%/child',0),(3,1,'/photos/trip_%2',0);INSERT INTO afiles VALUES(1,1,1,100,100,NULL,10,20),(2,2,1,100,100,NULL,10,20),(3,3,1,100,100,NULL,10,20);").unwrap();
         store::ensure_schema(&c).unwrap();
+        c.execute_batch("ALTER TABLE afiles ADD COLUMN cloud_only INTEGER NOT NULL DEFAULT 0; ALTER TABLE afiles ADD COLUMN metadata_pending INTEGER NOT NULL DEFAULT 0;").unwrap();
+        c.execute_batch("UPDATE afiles SET cloud_only=1 WHERE id=1; UPDATE afiles SET metadata_pending=1 WHERE id=2;").unwrap();
+        assert_eq!(targets(&c,"p",true,false,None,None,None).unwrap(),vec![3]);
+        assert!(!has_local_pending(&c,"p",Some(1)).unwrap());
+        assert!(has_local_pending(&c,"p",Some(3)).unwrap());
+        assert_eq!(c.query_row(&format!("SELECT COUNT(*) {} AND a.id=1",media::base()),[],|r|r.get::<_,i64>(0)).unwrap(),1,"cached observations stay browsable");
+        c.execute_batch("UPDATE afiles SET cloud_only=0,metadata_pending=0;").unwrap();
         assert_eq!(
             targets(&c, "p", false, false, Some(&[2]), None, None).unwrap(),
             vec![2]

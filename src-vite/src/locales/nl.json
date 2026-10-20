@@ -54,6 +54,12 @@
     "database_corrupted_hint": "Probeer over te schakelen naar een andere bibliotheek."
   },
   "album": {
+    "drop": {
+      "add": "Sleep een map om deze toe te voegen",
+      "separate": "Sleep bestanden en mappen afzonderlijk.",
+      "confirm_folder": "Map selecteren: {name}",
+      "folders_only": "Sleep een map hierheen."
+    },
     "album_list": "Albums",
     "search_folders": "Mappen zoeken",
     "favorite_folders_only": "Alleen favoriete mappen",
@@ -150,6 +156,7 @@
       "validation_name": "Voer een naam in voor het slimme album.",
       "validation_rule": "Voeg minstens één volledige regel toe.",
       "fields": {
+        "folder_name": "Mapnaam",
         "name": "Bestandsnaam",
         "file_type": "Bestandstype",
         "media_subtype": "Mediasubtype",
@@ -225,8 +232,10 @@
     }
   },
   "offline": {
+    "cloud_only": "Alleen online beschikbaar",
+    "cloud_only_pending": "Alleen online beschikbaar — bestandsinformatie onvolledig",
     "original_unavailable": "Het oorspronkelijke bestand is niet beschikbaar",
-    "requires_original": "Vereist het oorspronkelijke bestand. Sluit het opslagapparaat opnieuw aan."
+    "requires_original": "Hiervoor is het oorspronkelijke bestand nodig. Sluit het opslagapparaat opnieuw aan om deze actie te gebruiken."
   },
   "import_files": {
     "title": "Bestanden importeren",
@@ -435,6 +444,10 @@
     },
     "filter": {
       "select_mode": "Meervoudige selectie",
+      "select_files": "Bestanden selecteren",
+      "show_selection_panel": "Paneel voor meervoudige selectie openen",
+      "hide_selection_panel": "Paneel voor meervoudige selectie inklappen",
+      "exit_select_mode": "Meervoudige selectie beëindigen",
       "select_count": "{count} geselecteerd",
       "group_type_options": [
         "Geen",
@@ -457,7 +470,8 @@
         "Grootte",
         "Afmetingen",
         "Duur",
-        "Willekeurig"
+        "Willekeurig",
+        "Toegevoegd"
       ],
       "similarity": "Overeenkomst",
       "sort_order_options": [
@@ -557,6 +571,7 @@
       },
       "reclaimable_size": "Vrij te maken",
       "groups_title": "Duplicaatsets",
+      "skipped_cloud_only": "{count} bestanden die alleen online beschikbaar zijn overgeslagen",
       "actions_title": "Acties",
       "compare": "Vergelijken",
       "rescan": "Opnieuw scannen",
@@ -1086,24 +1101,13 @@
     "montage": {
       "title": "Collage",
       "layout": "Indeling",
-      "grid": "Raster",
-      "mosaic": "Mozaïek",
-      "pile": "Fotostapel",
+      "pile": "Vrije collage",
       "shuffle": "Willekeurige collage",
-      "angle": "Hoek: {value}°",
-      "scale": "Schaal: {value}%",
       "shadow": "Schaduwen tekenen",
       "style": "Stijl",
       "export": "Exporteren: {size}",
-      "random_rotation": "Willekeurige rotatie",
+      "random_rotation": "Willekeurig draaien",
       "border_width": "Randdikte",
-      "photos": "Foto's ({count})",
-      "add": "Toevoegen",
-      "photos_hint": "Sleep om te herschikken · rechtsklik om te verwijderen",
-      "add_none": "Selecteer in Lap foto's die nog niet in de collage staan en klik dan op Toevoegen.",
-      "hint_pile": "Fotostapel: sleep om te verplaatsen · gebruik de draaiknop om te draaien en te schalen · de foto die je pakt komt naar voren",
-      "hint_grid": "Raster: foto's vullen elke cel (centraal bijgesneden) · sleep een foto op een andere om ze te wisselen",
-      "hint_mosaic": "Mozaïek: zonder tussenruimte, foto's behouden hun verhoudingen · sleep een foto op een andere om ze te wisselen",
       "page": "Pagina",
       "page_size": "Formaat",
       "page_screen": "Scherm 16:9",
@@ -1204,7 +1208,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "Scherpteraster in de navigator",
-    "sharpness_grid_hint": "Markeer scherpe gebieden in de navigator.",
+    "sharpness_grid_hint": "Markeer scherpe gebieden in de navigator",
     "live": "LIVE",
     "motion": "MOTION",
     "title": "Fotoviewer",
@@ -1303,8 +1307,8 @@
       "select_language": "Kies taal",
       "date_time_format": "Datum- en tijdnotatie",
       "date_time_format_options": [
-        "Volg systeem",
-        "Volg app-taal"
+        "Systeem volgen",
+        "App-taal volgen"
       ],
       "font_size": "Lettergrootte",
       "font_size_options": [
@@ -1320,22 +1324,23 @@
     },
     "raw": {
       "title": "RAW",
-      "section_pairs": "Gepaarde bestanden",
+      "section_pairs": "Gekoppelde bestanden",
       "pair_source": "Standaardweergave voor paren",
-      "pair_source_hint": "Gebruikt voor gepaarde miniaturen en voorbeelden.",
+      "pair_source_hint": "Gebruikt voor miniaturen en voorbeelden van gekoppelde bestanden",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "Standaardvoorbeeldbron",
+      "preview_source_hint": "Als de voorkeursbron ontbreekt, wordt de andere gebruikt",
       "rawRenderBrightness": "Helderheid bij renderen",
       "option_embedded": "Ingesloten voorbeeld eerst",
-      "option_rendered": "RAW altijd renderen",
+      "option_rendered": "RAW eerst renderen",
       "option_original": "Originele belichting",
-      "option_brightened": "Ophelderd",
-      "brightness_hint": "Van toepassing bij het renderen van RAW, ook als er geen ingesloten voorbeeld beschikbaar is.",
+      "option_brightened": "Helderder",
+      "brightness_hint": "Geldt alleen voor RAW-rendering",
       "switch_to": "Overschakelen naar {source}",
       "show_pair": "Gekoppelde {format} tonen",
       "source_embedded": "Ingesloten",
       "source_rendered": "Gerenderd",
-      "source_brightened": "Ophelderd",
+      "source_brightened": "Helderder",
       "preview_mode": "RAW-voorbeeldmodus"
     },
     "browse": {

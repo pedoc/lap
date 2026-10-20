@@ -1,10 +1,22 @@
 import { startMediaJob } from './mediaJobs';
 import { setAlbumAccessibility } from '@/common/availability';
 import { invoke } from '@tauri-apps/api/core';
+import { locale } from '@tauri-apps/plugin-os';
 import { listen } from '@tauri-apps/api/event';
 import { config, libConfig } from '@/common/config';
 import { separator, localeComp, formatTimestamp } from '@/common/utils';
 import { getRawDisplayOptions } from './rawDisplay';
+
+export async function getSystemRegionLocale() {
+  // plugin-os reports language preferences, which can differ from date/time region.
+  try {
+    const region = await invoke('get_system_region_locale');
+    if (region) return region;
+  } catch (error) {
+    console.warn('Could not read system regional locale', error);
+  }
+  return locale();
+}
 
 // library
 
@@ -1067,7 +1079,7 @@ export async function editImage(params) {
 
 // render a photo montage and save it (throws the backend error message)
 export async function renderMontage(params) {
-  return await invoke('render_montage', { params });
+  return await invoke('render_montage', { params: { ...params, rawDisplayOptions: getRawDisplayOptions() } });
 }
 
 // copy an edited image to clipboard
@@ -1090,7 +1102,7 @@ export async function copyImages(filePaths) {
   }
 }
 
-// rename a file
+// Rename a single file.
 export async function renameFile(fileId, filePath, newName) {
   try {
     const result = await invoke('rename_file', { fileId, filePath, newName });
@@ -1265,6 +1277,16 @@ export async function updateFileInfo(fileId, filePath) {
   return null;
 }
 
+// refresh a file's info from disk; returns { file, size_delta, skipped }
+export async function refreshFileInfo(libraryId, fileId) {
+  try {
+    return await invoke('refresh_selected_file_info', { libraryId, fileId });
+  } catch (error) {
+    console.log('Failed to refresh file info:', error);
+  }
+  return null;
+}
+
 export async function importFile(filePath, folderId, folderPath, throwOnError = false, libraryId = libConfig._libraryId) {
   try {
     const result = await invoke('import_file', { filePath, folderId, folderPath, libraryId });
@@ -1368,6 +1390,11 @@ export async function checkFileExists(filePath) {
 
 export async function checkFileAccessibility(filePath) {
   return invoke('check_file_accessibility', { filePath });
+}
+
+// Live check: reading an online-only file would make the cloud provider download it.
+export async function isCloudOnlyFile(filePath) {
+  return invoke('is_cloud_only_file', { filePath }).catch(() => true);
 }
 
 // set file rotate
@@ -1786,7 +1813,7 @@ export async function checkAiStatus() {
 // generate embedding
 export async function generateEmbedding(fileId) {
   try {
-    const result = await invoke('generate_embedding', { fileId });
+    const result = await invoke('generate_embedding', { fileId, libraryId: libConfig._libraryId });
     return result;
   } catch (error) {
     console.error('generateEmbedding error:', error);
@@ -1796,8 +1823,9 @@ export async function generateEmbedding(fileId) {
 
 // search similar images
 export async function searchSimilarImages(params) {
+  const libraryId = libConfig._libraryId;
   try {
-    const results = await invoke('search_similar_images', { params });
+    const results = await invoke('search_similar_images', { params, libraryId });
     return results || [];
   } catch (error) {
     console.error('searchSimilarImages error:', error);

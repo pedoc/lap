@@ -54,6 +54,12 @@
     "database_corrupted_hint": "Bitte versuchen Sie, zu einer anderen Bibliothek zu wechseln."
   },
   "album": {
+    "drop": {
+      "add": "Ordner zum Hinzufügen hierherziehen",
+      "separate": "Dateien und Ordner getrennt ziehen.",
+      "confirm_folder": "Ordner auswählen: {name}",
+      "folders_only": "Bitte einen Ordner hierherziehen."
+    },
     "album_list": "Alben",
     "search_folders": "Ordner suchen",
     "favorite_folders_only": "Nur Lieblingsordner",
@@ -150,6 +156,7 @@
       "validation_name": "Gib einen Namen für das Smart-Album ein.",
       "validation_rule": "Füge mindestens eine vollständige Regel hinzu.",
       "fields": {
+        "folder_name": "Ordnername",
         "name": "Dateiname",
         "file_type": "Dateityp",
         "media_subtype": "Medienuntertyp",
@@ -225,6 +232,8 @@
     }
   },
   "offline": {
+    "cloud_only": "Nur online verfügbar",
+    "cloud_only_pending": "Nur online verfügbar — Dateiinformationen unvollständig",
     "original_unavailable": "Originaldatei nicht verfügbar",
     "requires_original": "Benötigt die Originaldatei. Verbinden Sie das Speichergerät erneut."
   },
@@ -434,7 +443,11 @@
       "placeholder": "Dateiname"
     },
     "filter": {
-      "select_mode": "Auswahl",
+      "select_mode": "Mehrfachauswahl",
+      "select_files": "Dateien auswählen",
+      "show_selection_panel": "Mehrfachauswahl-Bereich öffnen",
+      "hide_selection_panel": "Mehrfachauswahl-Bereich einklappen",
+      "exit_select_mode": "Mehrfachauswahl beenden",
       "select_count": "{count} ausgewählt",
       "group_type_options": [
         "Keine",
@@ -457,7 +470,8 @@
         "Größe",
         "Dimension",
         "Dauer",
-        "Zufällig"
+        "Zufällig",
+        "Hinzugefügt"
       ],
       "similarity": "Ähnlichkeit",
       "sort_order_options": [
@@ -557,6 +571,7 @@
       },
       "reclaimable_size": "Freigebbar",
       "groups_title": "Duplikatgruppen",
+      "skipped_cloud_only": "{count} reine Onlinedateien übersprungen",
       "actions_title": "Aktionen",
       "compare": "Vergleichen",
       "rescan": "Erneut scannen",
@@ -1086,24 +1101,13 @@
     "montage": {
       "title": "Collage",
       "layout": "Layout",
-      "grid": "Raster",
-      "mosaic": "Mosaik",
-      "pile": "Fotostapel",
+      "pile": "Freie Collage",
       "shuffle": "Zufallscollage",
-      "angle": "Winkel: {value}°",
-      "scale": "Maßstab: {value} %",
       "shadow": "Schatten zeichnen",
       "style": "Stil",
       "export": "Export: {size}",
       "random_rotation": "Zufällige Drehung",
       "border_width": "Rahmenbreite",
-      "photos": "Fotos ({count})",
-      "add": "Hinzufügen",
-      "photos_hint": "Ziehen zum Sortieren · Rechtsklick zum Entfernen",
-      "add_none": "Wählen Sie in Lap Fotos aus, die noch nicht in der Collage sind, und klicken Sie auf Hinzufügen.",
-      "hint_pile": "Fotostapel: ziehen zum Verschieben · mit dem Drehregler drehen und skalieren · das gegriffene Foto kommt nach vorne",
-      "hint_grid": "Raster: Fotos füllen jede Zelle (zentriert zugeschnitten) · ein Foto auf ein anderes ziehen, um sie zu tauschen",
-      "hint_mosaic": "Mosaik: lückenlos, Fotos behalten ihr Seitenverhältnis · ein Foto auf ein anderes ziehen, um sie zu tauschen",
       "page": "Seite",
       "page_size": "Format",
       "page_screen": "Bildschirm 16:9",
@@ -1204,7 +1208,7 @@
   },
   "image_viewer": {
     "sharpness_grid": "Schärferaster im Navigator",
-    "sharpness_grid_hint": "Scharfe Bereiche im Navigator hervorheben.",
+    "sharpness_grid_hint": "Scharfe Bereiche im Navigator hervorheben",
     "live": "LIVE",
     "motion": "MOTION",
     "title": "Bildanzeige",
@@ -1322,15 +1326,16 @@
       "title": "RAW",
       "section_pairs": "Gepaarte Dateien",
       "pair_source": "Standardanzeige für Paare",
-      "pair_source_hint": "Wird für gepaarte Miniaturansichten und Vorschauen verwendet.",
+      "pair_source_hint": "Wird für gepaarte Miniaturansichten und Vorschauen verwendet",
       "pair_jpeg": "JPEG / HEIC",
       "rawPreviewSource": "Standard-Vorschauquelle",
+      "preview_source_hint": "Bei Nichtverfügbarkeit wird die andere Quelle verwendet",
       "rawRenderBrightness": "Helligkeit beim Rendern",
       "option_embedded": "Eingebettete Vorschau bevorzugen",
-      "option_rendered": "RAW immer rendern",
+      "option_rendered": "RAW bevorzugt rendern",
       "option_original": "Originale Belichtung",
       "option_brightened": "Aufgehellt",
-      "brightness_hint": "Gilt beim Rendern von RAW, auch wenn keine eingebettete Vorschau verfügbar ist.",
+      "brightness_hint": "Gilt nur beim Rendern von RAW",
       "switch_to": "Zu {source} wechseln",
       "show_pair": "Zugehöriges {format} anzeigen",
       "source_embedded": "Eingebettet",

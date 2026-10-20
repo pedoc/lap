@@ -1,5 +1,5 @@
 <template>
-  <ModalDialog v-if="visible" :title="$t('menu.file.refresh_file_info')" :width="440" @cancel="closeOrCancel">
+  <ModalDialog :title="$t('menu.file.refresh_file_info')" :width="440" @cancel="closeOrCancel">
     <section class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
       <div class="font-bold uppercase text-[10px] tracking-widest text-base-content/30">{{ $t('msgbox.file_refresh.status') }}</div>
       <div class="space-y-2 px-1 text-xs" role="status" aria-live="polite">
@@ -8,10 +8,12 @@
           <span class="tabular-nums">{{ processed.toLocaleString() }} / {{ fileIds.length.toLocaleString() }}</span>
         </div>
         <progress class="progress progress-primary w-full" :value="processed" :max="Math.max(fileIds.length, 1)"></progress>
-        <div class="flex gap-3 text-base-content/60">
+        <div class="flex flex-wrap gap-3 text-base-content/60">
           <span>{{ $t('msgbox.file_refresh.succeeded', { count: succeeded.toLocaleString() }) }}</span>
           <span :class="{ 'text-error/70': failed > 0 }">{{ $t('msgbox.file_refresh.failed', { count: failed.toLocaleString() }) }}</span>
+          <span v-if="skipped">{{ $t('msgbox.file_refresh.skipped_cloud', { count: skipped.toLocaleString() }) }}</span>
         </div>
+        <p v-if="lastError" class="text-error/70 break-words" role="alert">{{ lastError }}</p>
       </div>
     </section>
     <div class="mt-4 flex justify-end gap-4">
@@ -29,23 +31,22 @@ import { libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
 import ModalDialog from '@/components/ModalDialog.vue';
 
-const props = defineProps<{ fileIds: number[]; libraryId: string; finishRefresh: () => Promise<void> }>();
+type FileRefreshResult = { file: any; size_delta: number; skipped: boolean; error?: string | null };
+const props = defineProps<{ fileIds: number[]; libraryId: string; finishRefresh: (results: FileRefreshResult[]) => Promise<void> }>();
 const emit = defineEmits(['close']);
 const uiStore = useUIStore();
-const visible = ref(true);
 const running = ref(true);
 const cancelled = ref(false);
 const processed = ref(0);
 const succeeded = ref(0);
 const failed = ref(0);
+const skipped = ref(0);
+const lastError = ref('');
 let disposed = false;
 
 function closeOrCancel() {
   if (running.value) {
     cancelled.value = true;
-    visible.value = false;
-    uiStore.removeInputHandler('RefreshFileInfoDialog');
-    // Keep the task mounted until the in-flight file and list refresh finish.
   } else emit('close');
 }
 function handleKeyDown(event: KeyboardEvent) {
@@ -57,6 +58,7 @@ function handleKeyDown(event: KeyboardEvent) {
 }
 watch(() => libConfig._libraryId, () => { cancelled.value = true; });
 onMounted(async () => {
+  const results: FileRefreshResult[] = [];
   uiStore.pushInputHandler('RefreshFileInfoDialog');
   window.addEventListener('keydown', handleKeyDown);
   // Sequential background commands bound memory and permit cancellation between
@@ -68,21 +70,30 @@ onMounted(async () => {
         break;
       }
       try {
-        const result = await invoke('refresh_selected_file_info', { libraryId: props.libraryId, fileId });
-        if (result) succeeded.value++;
+        const result = await invoke<FileRefreshResult | null>('refresh_selected_file_info', { libraryId: props.libraryId, fileId });
+        if (result) {
+          results.push(result);
+          if (result.skipped) {
+            skipped.value++;
+          } else if (result.error) {
+            failed.value++;
+            lastError.value = result.error;
+          } else succeeded.value++;
+        }
         else failed.value++;
       } catch (error) {
         console.error('Failed to refresh selected file:', fileId, error);
+        lastError.value = String(error);
         failed.value++;
       }
       processed.value++;
     }
   } finally {
     try {
-      if (!disposed && libConfig._libraryId === props.libraryId) await props.finishRefresh();
+      if (!disposed && libConfig._libraryId === props.libraryId) await props.finishRefresh(results);
     } finally {
       running.value = false;
-      if (!disposed && !visible.value) emit('close');
+      if (!disposed && cancelled.value) emit('close');
     }
   }
 });

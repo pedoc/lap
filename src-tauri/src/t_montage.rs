@@ -3,6 +3,7 @@
 // preview and this full-resolution render share one source of truth.
 
 use fast_image_resize as fir;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use serde::Deserialize;
 use std::fs::File;
@@ -19,6 +20,8 @@ const SHADOW_OPACITY: f32 = 0.45;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MontageItem {
+    #[serde(default, rename = "fileId")]
+    file_id: i64,
     path: String,
     orientation: i32, // exif orientation value
     rotate: i32,      // file rotation stored by Lap (0, 90, 180, 270)
@@ -29,10 +32,18 @@ pub struct MontageItem {
     h: f32,
     rotation: f32, // degrees, clockwise
     border: f32,   // border width, relative to the page width
+    #[serde(default)]
+    caption: Option<String>,
+    #[serde(default, rename = "captionHeight")]
+    caption_height: f32,
+    #[serde(default)]
+    scaling: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct MontageParams {
+    #[serde(default, rename = "rawDisplayOptions")]
+    raw_display_options: crate::t_raw_display::RawDisplayOptions,
     width: u32,
     height: u32,
     background: String, // "#rrggbb"
@@ -45,6 +56,8 @@ pub struct MontageParams {
     #[serde(rename = "outputFormat")]
     output_format: String,
     quality: Option<u8>,
+    #[serde(default, rename = "forPrint")]
+    for_print: bool,
 }
 
 fn parse_hex_color(color: &str) -> Result<Rgba<u8>, String> {
@@ -61,10 +74,16 @@ fn parse_hex_color(color: &str) -> Result<Rgba<u8>, String> {
 /// Center-crop `img` to the aspect ratio of `dst_w`x`dst_h` and resize it to that size,
 /// producing only the `part` (x, y, w, h) of the result.
 fn cover_resize(img: DynamicImage, dst_w: u32, dst_h: u32, part: (u32, u32, u32, u32)) -> Result<RgbaImage, String> {
+    resize_photo(img, dst_w, dst_h, part, true)
+}
+
+fn resize_photo(img: DynamicImage, dst_w: u32, dst_h: u32, part: (u32, u32, u32, u32), crop: bool) -> Result<RgbaImage, String> {
     let src = img.into_rgba8();
     let (src_w, src_h) = (src.width().max(1), src.height().max(1));
     let dst_ratio = dst_w as f64 / dst_h as f64;
-    let (crop_w, crop_h) = if src_w as f64 / src_h as f64 > dst_ratio {
+    let (crop_w, crop_h) = if !crop {
+        (src_w, src_h)
+    } else if src_w as f64 / src_h as f64 > dst_ratio {
         (((src_h as f64 * dst_ratio).round() as u32).clamp(1, src_w), src_h)
     } else {
         (src_w, ((src_w as f64 / dst_ratio).round() as u32).clamp(1, src_h))
@@ -157,6 +176,8 @@ fn draw_item(
     let frame_w = (item.w * page_w).round().max(1.0) as u32;
     let frame_h = (item.h * page_h).round().max(1.0) as u32;
     let border = ((item.border * page_w).round() as u32).min((frame_w.min(frame_h) - 1) / 2);
+    let caption_height = ((item.caption_height * page_w).round().max(0.0) as u32)
+        .min(frame_h - 2 * border - 1);
     let center_x = (item.x + item.w / 2.0) * page_w;
     let center_y = (item.y + item.h / 2.0) * page_h;
     let (sin, cos) = item.rotation.to_radians().sin_cos();
@@ -185,16 +206,30 @@ fn draw_item(
 
     // that part of the frame: border color, then the part of the photo inside it
     let mut tile = RgbaImage::from_pixel(right - left, bottom - top, border_color);
-    let (photo_left, photo_top) = (left.max(border), top.max(border));
-    let (photo_right, photo_bottom) = (right.min(frame_w - border), bottom.min(frame_h - border));
+    let (mut photo_w, mut photo_h) = (frame_w - 2 * border, frame_h - 2 * border - caption_height);
+    if item.scaling == Some(0) {
+        let scale = (photo_w as f64 / img.width() as f64).min(photo_h as f64 / img.height() as f64);
+        photo_w = (img.width() as f64 * scale).round().clamp(1.0, photo_w as f64) as u32;
+        photo_h = (img.height() as f64 * scale).round().clamp(1.0, photo_h as f64) as u32;
+    }
+    let photo_x = (frame_w - photo_w) / 2;
+    let photo_y = border + (frame_h - 2 * border - caption_height - photo_h) / 2;
+    let (photo_left, photo_top) = (left.max(photo_x), top.max(photo_y));
+    let (photo_right, photo_bottom) = (right.min(photo_x + photo_w), bottom.min(photo_y + photo_h));
     if photo_left < photo_right && photo_top < photo_bottom {
-        let photo = cover_resize(
-            img,
-            frame_w - 2 * border,
-            frame_h - 2 * border,
-            (photo_left - border, photo_top - border, photo_right - photo_left, photo_bottom - photo_top),
-        )?;
+        let part = (photo_left - photo_x, photo_top - photo_y, photo_right - photo_left, photo_bottom - photo_top);
+        let photo = if item.scaling == Some(2) {
+            resize_photo(img, photo_w, photo_h, part, false)?
+        } else {
+            cover_resize(img, photo_w, photo_h, part)?
+        };
         image::imageops::replace(&mut tile, &photo, (photo_left - left) as i64, (photo_top - top) as i64);
+    }
+    if caption_height > 0 && let Some(caption) = &item.caption {
+        let bytes = STANDARD.decode(caption).map_err(|e| e.to_string())?;
+        let caption = image::load_from_memory_with_format(&bytes, ImageFormat::Png).map_err(|e| e.to_string())?;
+        let caption = caption.resize_exact(frame_w - 2 * border, caption_height, image::imageops::FilterType::Triangle);
+        image::imageops::overlay(&mut tile, &caption.into_rgba8(), border as i64 - left as i64, (frame_h - border - caption_height) as i64 - top as i64);
     }
     let tile = if item.rotation != 0.0 {
         t_image::rotate_arbitrary(DynamicImage::ImageRgba8(tile), item.rotation).into_rgba8()
@@ -247,8 +282,18 @@ fn write_montage(canvas: RgbaImage, dest: &Path, format: &str, quality: u8) -> R
     result
 }
 
-/// Render the montage at full resolution from the original files and save it.
-pub async fn render_montage(params: MontageParams) -> Result<(), String> {
+fn thumbnail_is_sufficient(img: &DynamicImage, item: &MontageItem, width: u32, height: u32) -> bool {
+    let w = (item.w * width as f32).round().max(1.0) as u32;
+    let h = (item.h * height as f32).round().max(1.0) as u32;
+    let border = ((item.border * width as f32).round() as u32).min((w.min(h) - 1) / 2);
+    let caption = ((item.caption_height * width as f32).round().max(0.0) as u32).min(h - 2 * border - 1);
+    let sx = (w - 2 * border) as f64 / img.width() as f64;
+    let sy = (h - 2 * border - caption) as f64 / img.height() as f64;
+    if item.scaling == Some(0) { sx.min(sy) <= 1.0 } else { sx.max(sy) <= 1.0 }
+}
+
+/// Render at the output resolution, reusing sufficiently large cached thumbnails.
+pub async fn render_montage(params: MontageParams) -> Result<Option<String>, String> {
     if params.width == 0 || params.height == 0 || params.width > MAX_PAGE_SIDE || params.height > MAX_PAGE_SIDE {
         return Err(format!("Invalid montage size: {}x{}", params.width, params.height));
     }
@@ -256,7 +301,7 @@ pub async fn render_montage(params: MontageParams) -> Result<(), String> {
         return Err("No photos in the montage".to_string());
     }
     let dest = Path::new(&params.dest_file_path).to_path_buf();
-    if dest.exists() {
+    if !params.for_print && dest.exists() {
         return Err(format!("File already exists: {}", params.dest_file_path));
     }
 
@@ -266,11 +311,17 @@ pub async fn render_montage(params: MontageParams) -> Result<(), String> {
 
     // One photo at a time: only a single decoded original is in memory.
     for item in params.items {
-        let img = t_image::load_oriented_image(&item.path, item.orientation)
-            .await
-            .map_err(|e| format!("{}: {}", item.path, e))?;
+        let (path, file_id, orientation, rotate, options) = (item.path.clone(), item.file_id, item.orientation, item.rotate, params.raw_display_options);
+        let thumbnail = tauri::async_runtime::spawn_blocking(move || {
+            let bytes = crate::t_sqlite::AThumb::cached_montage_bytes(file_id, &path, orientation, options)?;
+            image::load_from_memory(&bytes).ok().map(|img| apply_rotate(img, rotate))
+        }).await.map_err(|e| e.to_string())?;
+        let img = match thumbnail.filter(|img| thumbnail_is_sufficient(img, &item, params.width, params.height)) {
+            Some(img) => img,
+            None => apply_rotate(t_image::load_oriented_image(&item.path, item.orientation)
+                .await.map_err(|e| format!("{}: {}", item.path, e))?, item.rotate),
+        };
         canvas = tauri::async_runtime::spawn_blocking(move || {
-            let img = apply_rotate(img, item.rotate);
             draw_item(&mut canvas, img, &item, border_color, shadow).map_err(|e| format!("{}: {}", item.path, e))?;
             Ok::<RgbaImage, String>(canvas)
         })
@@ -278,8 +329,15 @@ pub async fn render_montage(params: MontageParams) -> Result<(), String> {
         .map_err(|e| format!("Failed to join montage task: {}", e))??;
     }
 
+    if params.for_print {
+        return tauri::async_runtime::spawn_blocking(move || {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(canvas).write_to(&mut bytes, ImageFormat::Png).map_err(|e| e.to_string())?;
+            Ok(Some(STANDARD.encode(bytes.into_inner())))
+        }).await.map_err(|e| e.to_string())?;
+    }
     let quality = params.quality.unwrap_or(80);
-    tauri::async_runtime::spawn_blocking(move || write_montage(canvas, &dest, &params.output_format, quality))
+    tauri::async_runtime::spawn_blocking(move || write_montage(canvas, &dest, &params.output_format, quality).map(|_| None))
         .await
         .map_err(|e| format!("Failed to join montage task: {}", e))?
 }
@@ -289,13 +347,46 @@ mod tests {
     use super::*;
 
     fn item(x: f32, y: f32, w: f32, h: f32, rotation: f32, border: f32) -> MontageItem {
-        MontageItem { path: String::new(), orientation: 1, rotate: 0, x, y, w, h, rotation, border }
+        MontageItem { file_id: 0, path: String::new(), orientation: 1, rotate: 0, x, y, w, h, rotation, border, caption: None, caption_height: 0.0, scaling: None }
     }
 
     const WHITE: Rgba<u8> = Rgba([255, 255, 255, 255]);
 
     fn solid(w: u32, h: u32, color: [u8; 4]) -> DynamicImage {
         DynamicImage::ImageRgba8(RgbaImage::from_pixel(w, h, Rgba(color)))
+    }
+
+    #[test]
+    fn thumbnail_resolution_accounts_for_crop_rotation_and_caption() {
+        let source = solid(200, 100, [255, 0, 0, 255]);
+        let mut frame = item(0.0, 0.0, 1.0, 1.0, 0.0, 0.0);
+        assert!(thumbnail_is_sufficient(&source, &frame, 100, 100));
+        assert!(!thumbnail_is_sufficient(&source, &frame, 150, 150));
+        frame.scaling = Some(0);
+        assert!(thumbnail_is_sufficient(&source, &frame, 150, 150));
+        frame.scaling = Some(2);
+        assert!(!thumbnail_is_sufficient(&source, &frame, 150, 150));
+        frame.caption_height = 0.4;
+        assert!(thumbnail_is_sufficient(&source, &frame, 150, 150));
+        frame.caption_height = 0.0;
+        assert!(thumbnail_is_sufficient(&source, &frame, 200, 100));
+        assert!(!thumbnail_is_sufficient(&apply_rotate(source, 90), &frame, 200, 100));
+    }
+
+    #[test]
+    fn fit_and_stretch_preserve_the_full_photo() {
+        for scaling in [0, 2] {
+            let mut source = solid(100, 50, [255, 0, 0, 255]).into_rgba8();
+            for y in 0..50 {
+                for x in 0..20 { source.put_pixel(x, y, Rgba([0, 255, 0, 255])); }
+            }
+            let mut frame = item(0.0, 0.0, 1.0, 1.0, 0.0, 0.0);
+            frame.scaling = Some(scaling);
+            let mut canvas = RgbaImage::new(100, 100);
+            draw_item(&mut canvas, DynamicImage::ImageRgba8(source), &frame, Rgba([255, 255, 255, 255]), false).unwrap();
+            assert_eq!(canvas.get_pixel(5, 50).0, [0, 255, 0, 255]);
+            assert_eq!(canvas.get_pixel(50, 5).0, if scaling == 0 { [255, 255, 255, 255] } else { [255, 0, 0, 255] });
+        }
     }
 
     #[test]
@@ -323,6 +414,19 @@ mod tests {
 
         assert_eq!(canvas.get_pixel(5, 50), &Rgba([255, 255, 255, 255])); // inside the 10 px border
         assert_eq!(canvas.get_pixel(50, 50), &Rgba([255, 0, 0, 255]));
+    }
+
+    #[test]
+    fn card_caption_has_its_own_strip_below_the_photo() {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        solid(100, 20, [0, 255, 0, 255]).write_to(&mut bytes, ImageFormat::Png).unwrap();
+        let mut card = item(0.0, 0.0, 1.0, 1.0, 0.0, 0.0);
+        card.caption = Some(STANDARD.encode(bytes.into_inner()));
+        card.caption_height = 0.2;
+        let mut canvas = RgbaImage::new(100, 100);
+        draw_item(&mut canvas, solid(100, 100, [255, 0, 0, 255]), &card, WHITE, false).unwrap();
+        assert_eq!(canvas.get_pixel(50, 79), &Rgba([255, 0, 0, 255]));
+        assert_eq!(canvas.get_pixel(50, 80), &Rgba([0, 255, 0, 255]));
     }
 
     #[test]

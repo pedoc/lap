@@ -35,6 +35,7 @@
 </template>
 
 <script setup>
+import { MAP_DETAIL_ZOOM, MAP_DETAIL_LIMIT, MAP_MARKER_FADE_MS, MAP_SINGLE_POINT_FIT_ZOOM } from '@/common/constants';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -251,7 +252,7 @@ function onMapChanged() {
 function scheduleDetailFetch() {
   detailRequestToken++
   if (detailTimer) clearTimeout(detailTimer)
-  if (zoom.value < DETAIL_ZOOM || !props.active) return
+  if (zoom.value < MAP_DETAIL_ZOOM || !props.active) return
   detailTimer = setTimeout(fetchVisibleFiles, 200)
 }
 
@@ -260,7 +261,7 @@ function bufferedMapBounds(padding) {
 }
 
 async function fetchVisibleFiles() {
-  if (!map || !props.active || zoom.value < DETAIL_ZOOM) return
+  if (!map || !props.active || zoom.value < MAP_DETAIL_ZOOM) return
   // Reuse complete data until even the rendered buffer leaves the loaded area.
   if (detailBounds?.contains(bufferedMapBounds(176))) return
   const bounds = bufferedMapBounds(352)
@@ -274,12 +275,12 @@ async function fetchVisibleFiles() {
       ...props.queryParams,
       gpsMinLat: bounds.getSouth(), gpsMaxLat: bounds.getNorth(),
       gpsMinLon: bounds.getWest(), gpsMaxLon: bounds.getEast(),
-    }, 0, DETAIL_LIMIT + 1)
+    }, 0, MAP_DETAIL_LIMIT + 1)
   }
   if (token !== detailRequestToken || !map || !props.active || !files) return
   // Never render a truncated detail set as though it were the complete region.
-  detailBounds = files.length <= DETAIL_LIMIT ? bounds : null
-  visibleFiles = files.length <= DETAIL_LIMIT ? files : []
+  detailBounds = files.length <= MAP_DETAIL_LIMIT ? bounds : null
+  visibleFiles = files.length <= MAP_DETAIL_LIMIT ? files : []
   renderMarkers()
 }
 
@@ -333,7 +334,7 @@ function renderMarkers() {
 function requestPhotoClusters() {
   if (!map || !clusterWorker || !props.active || !isQueryMap.value) return
   const spacing = Math.round(Number(config.settings.mapMarkerSize || 64) * 0.75)
-  const useDetails = zoom.value >= DETAIL_ZOOM && visibleFiles.length > 0
+  const useDetails = zoom.value >= MAP_DETAIL_ZOOM && visibleFiles.length > 0
     && detailBounds?.contains(bufferedMapBounds(176))
   const source = useDetails ? 'details' : 'overview'
   const input = useDetails ? visibleFiles : points.value
@@ -382,7 +383,7 @@ function applyPhotoClusters(clusters) {
     retiringMarkers.set(marker, setTimeout(() => {
       markerLayer?.removeLayer(marker)
       retiringMarkers.delete(marker)
-    }, MARKER_FADE_MS))
+    }, MAP_MARKER_FADE_MS))
   }
   photoMarkers = nextMarkers
 }
@@ -431,7 +432,7 @@ function addPhotoMarker(lat, lon, fileId, count, cluster = null) {
     html: `<div class="map-photo-marker"><img src="${getThumbUrl(fileId, false, config.settings.thumbnailSize || 512)}" />${count > 1 ? `<span>${count > 999 ? '999+' : count}</span>` : ''}</div>`,
   }).addTo(markerLayer)
   const element = marker.getElement()
-  element?.style.setProperty('--map-photo-fade-duration', `${MARKER_FADE_MS}ms`)
+  element?.style.setProperty('--map-photo-fade-duration', `${MAP_MARKER_FADE_MS}ms`)
   element?.style.setProperty('--map-photo-marker-size', `${size}px`)
   // Wait for the photo itself: otherwise its opacity animation can finish
   // while the thumbnail request is still pending.
@@ -490,7 +491,7 @@ function fitBounds() {
 function fitMapToPoints() {
   map.fitBounds(createMapBounds(points.value.map(point => [point.lat, point.lon])), {
     padding: [20, 20],
-    maxZoom: points.value.length === 1 ? Math.min(SINGLE_POINT_FIT_ZOOM, activeMaxZoom.value) : activeMaxZoom.value,
+    maxZoom: points.value.length === 1 ? Math.min(MAP_SINGLE_POINT_FIT_ZOOM, activeMaxZoom.value) : activeMaxZoom.value,
   })
 }
 function zoomCenter() {

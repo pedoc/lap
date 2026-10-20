@@ -2,6 +2,8 @@
  * Config Store - Global application configuration
  */
 import { defineStore } from 'pinia';
+import { i18n, loadLanguage } from '@/common/i18n';
+let languageRequest = 0;
 import { SIDEBAR, MAP_MARKER_SIZES } from '@/common/constants';
 
 export const useConfigStore = defineStore('configStore', {
@@ -95,6 +97,24 @@ export const useConfigStore = defineStore('configStore', {
       quality: 0,               // jpeg quality (0: High, 1: Medium, 2: Low), [90, 80, 60]
     },
 
+    montage: {
+      mode: 'grid',             // card | grid | mosaic | masonry | pile; default: grid
+      pageKey: 'a4',            // a4 | photo (10 × 15 cm) | screen | square; default: a4
+      landscape: true,          // true: landscape, false: portrait (ignored for square); default: true
+      background: '#ffffff',   // background color in #RRGGBB; default: #ffffff (white)
+      lastCustomBackground: '#7c2d12', // last custom swatch in #RRGGBB; default: #7c2d12
+      spacing: 1,              // non-pile spacing: 0–5% of page width, step: 0.25%; default: 1%
+      borderOn: true,          // border enabled: true | false; default: true
+      border: 1.5,             // border width: 0–4% of page width, step: 0.25%; default: 1.5%
+      scaling: 1,              // card/grid: 0: Fit, 1: Crop to fill, 2: Stretch; default: 1
+      captionField: 1,         // card caption: 0: None, 1: Name, 2: Size, 3: Dimension, 4: Time,
+                              // 5: Location, 6: Camera, 7: Lens, 8: Capture settings; default: 1
+      maxRotation: 12,         // pile random rotation: ±0–30 degrees, step: 1; default: ±12 degrees
+      shadow: true,            // shadow enabled: true | false; default: true
+      format: 0,               // export format: 0: JPEG, 1: PNG, 2: WEBP; default: 0
+      quality: 0,              // JPEG quality: 0: High (90), 1: Medium (80), 2: Low (60); default: 0
+    },
+
     imageViewer: {
       isSyncViewport: false,    // sync viewport
       isFullScreen: false,      // native fullscreen in image viewer window
@@ -102,7 +122,7 @@ export const useConfigStore = defineStore('configStore', {
 
     libraryChangedVersion: 0,
 
-    // System locale (BCP-47, e.g. "en-GB"), fetched once at startup via plugin-os.
+    // Regional locale (BCP-47, e.g. "en-GB"), fetched once at startup.
     // Used when dateTimeFormat follows the system region.
     systemLocale: '',
 
@@ -265,8 +285,16 @@ export const useConfigStore = defineStore('configStore', {
         video: normalizeGroup('video'),
       };
     },
-    setLanguage(language) {
-      this.settings.language = language;
+    async setLanguage(language) {
+      const request = ++languageRequest;
+      try {
+        await loadLanguage(language);
+        if (request !== languageRequest) return;
+        this.settings.language = language;
+        i18n.global.locale.value = language;
+      } catch (error) {
+        console.error('Failed to switch language:', error);
+      }
     },
     setDateTimeFormat(dateTimeFormat) {
       this.settings.dateTimeFormat = dateTimeFormat;

@@ -129,6 +129,9 @@ impl FaceEngine {
     }
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn process_image(&mut self, path: &str) -> Result<(Vec<FaceData>, (u32, u32)), String> {
+        if crate::t_utils::is_cloud_only_path(path) {
+            return Err("Original is online-only; download it locally before face analysis".into());
+        }
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         self.process_image_from_bytes(&bytes)
     }

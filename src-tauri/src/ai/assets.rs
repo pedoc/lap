@@ -793,9 +793,11 @@ mod resumable_download_tests {
         }
     }
     fn path() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!("model-download-test-{}.part", uuid::Uuid::new_v4()))
+        // A custom Cargo --target-dir need not create the workspace target folder.
+        // Keep these network fixtures independent of build layout and test order.
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target");
+        std::fs::create_dir_all(&directory).unwrap();
+        directory.join(format!("model-download-test-{}.part", uuid::Uuid::new_v4()))
     }
     fn full(body: &str) -> String {
         format!("HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\n{body}")
