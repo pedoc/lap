@@ -26,6 +26,8 @@ test('tag releases call Windows only after the shared release has been published
   assert.match(job(release, 'signing-preflight'), /TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(job(release, 'build'), /needs: \[setup, signing-preflight\]/);
   assert.doesNotMatch(job(release, 'signing-preflight'), /grep -q 'untrusted comment:'/);
+  assert.match(release, /APPLE_SIGNING_AVAILABLE/);
+  assert.match(job(release, 'build'), /Build \(macOS unsigned\)/);
 });
 
 test('Windows accepts reusable and manual inputs through the shared inputs context', () => {
