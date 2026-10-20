@@ -57,6 +57,7 @@ brew install --cask lap
 - **Folder-first workflow** with multiple libraries, drag-&-drop import/export, copy-paste import/export, filesystem sync, and safe move/copy/delete operations.
 - **Local AI search** for text prompts, visual similarity, subjects, face clustering, and optional multilingual search in 50+ languages.
 - **Smart Albums** save rule-based views with custom grouping and sorting.
+- **Combined filters** search existing metadata, people, objects and image text with nested AND/OR conditions, previews, and optional saving as a Smart Album.
 - **Date-organized import** with day, month, year, or single-folder layouts, original filenames, and duplicate skipping.
 - **Collections and tags** to organize selected files in bulk without moving or duplicating the originals.
 - **Duplicate cleanup** with reclaimable-space summaries and bulk removal across duplicate sets.

@@ -1,5 +1,5 @@
 <template>
-  <ModalDialog :title="isNew ? $t('album.smart_edit.title_add') : $t('album.smart_edit.title_edit')" :width="620" position-key="smart-album-edit" @cancel="clickCancel">
+  <ModalDialog :title="isFilterMode ? $t('structured_search.title') : isNew ? $t('album.smart_edit.title_add') : $t('album.smart_edit.title_edit')" :width="620" :position-key="isFilterMode ? 'structured-search' : 'smart-album-edit'" @cancel="clickCancel">
     <SmartAlbumPhotoPicker v-if="referenceRule" @select="(id:number)=>{referenceRule.value.fileId=id;referenceRule=null;}" @cancel="referenceRule=null" />
     <section
       class="min-h-0 max-h-[50vh] overflow-y-auto pr-1"
@@ -9,11 +9,14 @@
       @drop.stop
     >
       <p v-if="locationOptionsError" role="alert" class="mb-2 text-xs text-error break-all">{{ locationOptionsError }}</p>
-      <div class="flex gap-2 mb-3">
+      <p v-if="isFilterMode" class="mb-3 text-xs leading-relaxed text-base-content/60">{{ $t('structured_search.scope') }}</p>
+      <p v-if="optionsError" role="alert" class="mb-2 text-xs text-error">{{ $t('structured_search.options_error', { error: optionsError }) }} <button type="button" class="link" @click="initializeOptions">{{ $t('structured_search.retry') }}</button></p>
+      <div v-if="!isFilterMode" class="flex gap-2 mb-3">
         <select v-model="template" class="select select-sm flex-1" @change="applyTemplate"><option value="">{{ $t('smart_albums.template') }}</option><option v-for="item in SMART_TEMPLATES" :key="item" :value="item">{{ $t(`smart_albums.templates.${item}`) }}</option></select>
         <select v-model="parentId" class="select select-sm flex-1" :aria-label="$t('smart_albums.move')"><option :value="null">{{ $t('smart_albums.root') }}</option><option v-for="row in folderOptions" :key="row.node.id" :value="row.node.id">{{ row.path }}</option></select>
       </div>
       <div class="w-full grid grid-cols-[92px_1fr] gap-x-4 gap-y-3 items-start text-xs select-none">
+        <template v-if="!isFilterMode">
         <div class="h-8 flex items-center text-[10px] uppercase tracking-widest font-bold text-base-content/30">{{ $t('album.smart_edit.name') }}</div>
         <input ref="inputNameRef" v-model="name" type="text" maxlength="255" class="w-full input input-sm text-xs font-semibold" :placeholder="$t('album.smart_edit.validation_name')" />
 
@@ -33,8 +36,9 @@
           :tooltip="$t('album.smart_edit.description')"
           @click="showDescriptionInput"
         />
+        </template>
 
-        <section class="col-span-2 rounded-box border border-base-content/10 bg-base-300/20 p-3 shadow-sm">
+        <section v-if="!isFilterMode" class="col-span-2 rounded-box border border-base-content/10 bg-base-300/20 p-3 shadow-sm">
           <div class="grid grid-cols-3 gap-2">
             <label class="min-w-0 space-y-1">
               <span class="block text-[10px] uppercase tracking-widest font-bold text-base-content/30">{{ $t('album.smart_edit.sort') }}</span>
@@ -90,7 +94,7 @@
 
     <div class="mt-4 flex justify-end space-x-4">
       <button class="t-button-default" @click="clickCancel">{{ $t('msgbox.cancel') }}</button>
-      <button class="t-button-primary" :disabled="!canSave" @click="clickOk">{{ $t('msgbox.ok') }}</button>
+      <button class="t-button-primary" :disabled="!canSave || (isFilterMode && optionsBusy)" @click="clickOk"><span v-if="isFilterMode && optionsBusy" class="loading loading-spinner loading-xs"></span>{{ $t(isFilterMode ? 'structured_search.apply' : 'msgbox.ok') }}</button>
     </div>
   </ModalDialog>
 </template>
@@ -118,6 +122,7 @@ import ModalDialog from '@/components/ModalDialog.vue';
 import TButton from '@/components/TButton.vue';
 
 const props = defineProps({
+  mode: { type: String, default: 'album' },
   parentId: { type: String, default: null },
   nodes: { type: Array, default: () => [] },
   smartAlbum: {
@@ -127,6 +132,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['ok', 'cancel']);
+const isFilterMode = computed(() => props.mode === 'filter');
 const { t, locale, messages } = useI18n();
 const { view: objectModelView } = useObjects();
 const objectOptions = computed(() => (objectModelView.value?.classes || []).map((label:any) => ({value:label.key,label:objectClassName(label,t)})));
@@ -208,14 +214,14 @@ async function previewResults() {
   const token = ++previewToken;
   const library = libConfig._libraryId;
   const signature = previewSignature.value;
-  const params = JSON.parse(signature);
+  const params = JSON.parse(signature)[0];
   previewBusy.value = true;
   previewError.value = '';
   try {
     const [count, files, status] = await Promise.all([
       getSmartQueryCountAndSum(params),
       getSmartQueryFiles(params, 0, 12),
-      getSmartAlbumStatus(params),
+      hasAiRules(rules.value) ? getSmartAlbumStatus(params) : Promise.resolve({}),
     ]);
     if (
       editDisposed ||
@@ -268,7 +274,7 @@ watch(
     }
   },
 );
-const isNew = computed(() => !props.smartAlbum);
+const isNew = computed(() => !props.smartAlbum?.id);
 const name = ref(props.smartAlbum?.name || '');
 const description = ref(props.smartAlbum?.description || '');
 const showDescription = ref(description.value.trim().length > 0);
@@ -381,7 +387,7 @@ const fieldOptions = computed(() => [
   // Location
   { value: 'location', label: t('album.smart_edit.fields.location') },
   { value: 'has_gps', label: t('album.smart_edit.fields.has_gps') },
-]);
+].filter(option => !isFilterMode.value || !['semantic', 'similar_image'].includes(option.value)));
 
 const validationMessage = computed(() => {
   if (ruleCount.value > maxRules) return t('album.smart_edit.validation_rule');
@@ -392,7 +398,8 @@ const validationMessage = computed(() => {
 const canSave = computed(
   () =>
     libConfig._libraryId === editLibraryId &&
-    name.value.trim().length > 0 &&
+    (isFilterMode.value || name.value.trim().length > 0) &&
+    (!isFilterMode.value || !hasSemanticRules(rules.value)) &&
     validationMessage.value.length === 0 &&
     (!hasSemanticRules(rules.value) || Boolean(preview.value && !previewStale.value && !previewError.value)),
 );
@@ -563,6 +570,26 @@ function closeActiveDateDropdown() {
 
 function clickOk() {
   if (!canSave.value) return;
+  if (isFilterMode.value) {
+    if (optionsBusy.value) return;
+    const displayValues: Record<string, string> = {};
+    const options: Record<string, any[]> = {
+      tag: tagOptions.value, person: personOptions.value, album: albumOptions.value,
+      collection: collectionOptions.value, camera: cameraOptions.value, lens: lensOptions.value,
+      location: locationOptions.value, file_type: fileTypeOptions.value, culling: cullingOptions.value,
+      media_subtype: mediaSubtypeOptions.value, object_class: objectOptions.value,
+    };
+    visitSmartRules(rules.value, rule => {
+      const option = options[rule.field]?.find(item => String(item.value) === String(rule.value));
+      if (option) displayValues[rule.id] = option.label;
+      if (rule.field === 'object_count') {
+        const label = objectOptions.value.find(item => item.value === rule.value?.classKey)?.label || rule.value?.classKey;
+        displayValues[rule.id] = `${label} × ${rule.value?.count}`;
+      }
+    });
+    emit('ok', { query: queryParams(), displayValues });
+    return;
+  }
   const now = Math.floor(Date.now() / 1000);
   emit('ok', {
     id: props.smartAlbum?.id || crypto.randomUUID?.() || `${Date.now()}`,
@@ -776,13 +803,29 @@ function flattenLocationOptions(items: any[]) {
   return items.map(node => ({value: String(node.id),label: locationNodePath(node,byId)}));
 }
 
+const optionsBusy = ref(false);
+const optionsError = ref('');
+async function initializeOptions() {
+  if (optionsBusy.value) return;
+  optionsBusy.value = true;
+  optionsError.value = '';
+  try {
+    const results = await Promise.allSettled([loadSupportedFormatOptions(), loadOptions()]);
+    const failures = results.filter(result => result.status === 'rejected');
+    if (failures.length) throw new Error(failures.map(result => (result as PromiseRejectedResult).reason).join('; '));
+  } catch (error) {
+    if (!editDisposed) optionsError.value = String(error);
+  } finally {
+    optionsBusy.value = false;
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('keydown', handleKeyDown);
   uiStore.pushInputHandler('SmartAlbumEdit');
-  await loadSupportedFormatOptions();
-  await loadOptions();
+  await initializeOptions();
   await nextTick();
-  inputNameRef.value?.focus();
+  if (!editDisposed) inputNameRef.value?.focus();
 });
 
 onUnmounted(() => {
