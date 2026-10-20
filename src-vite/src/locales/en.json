@@ -1,4 +1,21 @@
 {
+  "structured_search": {
+    "title": "Combined filters",
+    "search_mode": "Search mode",
+    "text_search": "Text search",
+    "scope": "Combine conditions across visible photos in the current library. People, objects and image text use existing recognition results. Filtering never starts recognition or uploads photos.",
+    "conditions": "Active conditions",
+    "empty": "Add dates, places, people, tags or ratings to find photos matching your conditions.",
+    "session_hint": "Temporary conditions last for this session. Save as a Smart Album to keep them.",
+    "add": "Add conditions",
+    "edit": "Edit conditions",
+    "apply": "Apply filters",
+    "clear": "Clear",
+    "save_album": "Save as Smart Album",
+    "options_error": "Some options could not load: {error}. Retry to load them.",
+    "retry": "Retry",
+    "empty_hint": "No photos match these conditions. Edit or clear them; recognition conditions only search existing results."
+  },
   "workflow_close": {
     "finish_edits_first": "Save or cancel the current edits before modifying files.",
     "unsaved": "Recognition revisions or inputs are unsaved. Discard them and continue? Cancel keeps the drafts.",

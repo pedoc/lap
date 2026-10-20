@@ -4,12 +4,17 @@
     <!-- title bar -->
     <div class="sidebar-panel-header" data-tauri-drag-region>
       <span class="sidebar-panel-header-title flex-1">
-        {{ titlebar }}<template v-if="searchHistoryList.length > 0"> ({{ searchHistoryList.length.toLocaleString() }})</template>
+        {{ titlebar }}<template v-if="!structuredSearch.active && searchHistoryList.length > 0"> ({{ searchHistoryList.length.toLocaleString() }})</template>
       </span>
-      <ContextMenu :menuItems="searchPanelMenuItems" :iconMenu="IconMore" :smallIcon="true" />
+      <ContextMenu v-if="!structuredSearch.active" :menuItems="searchPanelMenuItems" :iconMenu="IconMore" :smallIcon="true" />
     </div>
 
-    <div class="mx-1 mb-2 px-1 shrink-0">
+    <div class="flex gap-1 px-2 pb-2" role="group" :aria-label="$t('structured_search.search_mode')">
+      <button type="button" class="btn btn-sm flex-1" :class="{ 'btn-active': !structuredSearch.active }" :aria-pressed="!structuredSearch.active" @click="structuredSearch.active = false">{{ $t('structured_search.text_search') }}</button>
+      <button type="button" class="btn btn-sm flex-1" :class="{ 'btn-active': structuredSearch.active }" :aria-pressed="structuredSearch.active" @click="selectStructuredSearch">{{ $t('structured_search.title') }}</button>
+    </div>
+    <StructuredSearchPanel v-if="structuredSearch.active" class="overflow-y-auto flex-1" />
+    <div v-if="!structuredSearch.active" class="mx-1 mb-2 px-1 shrink-0">
       <div
         :class="[
           'h-8 flex items-center rounded-box transition-colors bg-base-100/40',
@@ -45,7 +50,7 @@
     </div>
 
     <!-- search history -->
-    <div class="overflow-y-auto flex-1" >
+    <div v-if="!structuredSearch.active" class="overflow-y-auto flex-1" >
         <div v-for="(item, index) in searchHistoryList" :key="index"
           :class="[
             'sidebar-item group',
@@ -100,6 +105,13 @@ import { useUIStore } from '@/stores/uiStore';
 import MessageBox from '@/components/MessageBox.vue';
 import { IconMore, IconTrash, IconSearch, IconClose } from '@/common/icons';
 import ContextMenu from '@/components/ContextMenu.vue';
+import StructuredSearchPanel from './StructuredSearchPanel.vue';
+import { structuredSearch, openStructuredSearch } from '@/common/structuredSearch';
+
+function selectStructuredSearch() {
+  structuredSearch.active = true;
+  if (!structuredSearch.album) openStructuredSearch(libConfig._libraryId);
+}
 
 const props = defineProps({
   titlebar: {
@@ -175,6 +187,7 @@ onUnmounted(() => {
 });
 
 function handleSearchHistoryClick(index: number) {
+  structuredSearch.active = false;
   const item = libConfig.search.searchHistory[index];
   const searchText = typeof item === 'string' ? item : item?.text;
   if (searchText) {
@@ -207,6 +220,7 @@ function deleteHistoryItem(index: number) {
 
 function handleSearch() {
   if (searchQuery.value.trim().length === 0) return;
+  structuredSearch.active = false;
   
   const query = searchQuery.value.trim();
   const history = libConfig.search.searchHistory as any[];

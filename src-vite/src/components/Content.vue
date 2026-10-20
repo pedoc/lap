@@ -56,9 +56,17 @@
       <!-- toolbar -->
       <div class="flex items-center gap-2 shrink-0">
 
+        <TButton
+          :icon="IconFileSearch"
+          :tooltip="$t('structured_search.title')"
+          :selected="isStructuredSearchView"
+          :disabled="isScanStreamingMode"
+          @click="openStructuredSearch(libConfig._libraryId)"
+        />
+
         <!-- file type options -->
         <DropDownSelect
-          v-if="config.main.sidebarIndex!==SIDEBAR.OBJECTS && !(config.main.sidebarIndex===SIDEBAR.LIBRARY && libConfig.library.item===LIB_ITEM.MEDIA)"
+          v-if="!isStructuredSearchView && config.main.sidebarIndex!==SIDEBAR.OBJECTS && !(config.main.sidebarIndex===SIDEBAR.LIBRARY && libConfig.library.item===LIB_ITEM.MEDIA)"
           :icon="IconFilter"
           :options="fileTypeOptions"
           :multiSelect="true"
@@ -688,6 +696,8 @@
     @cancel="showCommentMsgbox = false"
   />
 
+  <StructuredSearchDialogs />
+
   <!-- Unsaved Changes Confirmation -->
   <MessageBox
     v-if="showUnsavedChangesMsgbox"
@@ -823,6 +833,8 @@ import ContextMenu from '@/components/ContextMenu.vue';
 import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFileDragActive, isReturningNativeFileDrag, startNativeFileDrag } from '@/common/nativeDrag';
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
+import StructuredSearchDialogs from './StructuredSearchDialogs.vue';
+import { structuredSearch, structuredSearchAlbum, openStructuredSearch } from '@/common/structuredSearch';
 import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules, hasAiRules, isSmartFolder } from '@/common/smartAlbums';
 import { setMediaHidden } from '@/common/api';
 import { mediaTypeRules } from '@/common/mediaLifecycle';
@@ -1633,10 +1645,17 @@ function createRandomSeed() {
   return values[0] % RANDOM_SEED_MODULUS;
 }
 
-const activeSmartAlbum = computed(() =>
+const isStructuredSearchView = computed(() =>
+  !isCollectionPane.value && config.main.sidebarIndex === SIDEBAR.SEARCH
+  && structuredSearch.active && structuredSearch.libraryId === libConfig._libraryId,
+);
+const activeStructuredAlbum = computed(() => isStructuredSearchView.value
+  ? structuredSearchAlbum(libConfig._libraryId, t('structured_search.title'), config.search.sortType, config.search.sortOrder, config.search.groupBy)
+  : null);
+const activeSmartAlbum = computed(() => activeStructuredAlbum.value || (
   !isCollectionPane.value && config.main.sidebarIndex === SIDEBAR.SMART_ALBUM
     ? getActiveCustomSmartAlbum()
-    : null,
+    : null),
 );
 
 const isRandomSort = computed(() => {
@@ -1657,7 +1676,7 @@ const effectiveGroupBy = computed(() => {
 });
 
 const isSearchGroupingView = computed(() =>
-  config.main.sidebarIndex === SIDEBAR.SEARCH
+  config.main.sidebarIndex === SIDEBAR.SEARCH && !isStructuredSearchView.value
 );
 
 const isSubjectGroupingView = computed(() =>
@@ -3584,7 +3603,7 @@ function matchesRequestedSidebarCount(request: any) {
         && libConfig.smartAlbum.type === 'custom'
         && String(libConfig.smartAlbum.id) === String(request.id);
     case 'search':
-      return config.main.sidebarIndex === SIDEBAR.SEARCH && libConfig.search.searchText === request.text;
+      return config.main.sidebarIndex === SIDEBAR.SEARCH && !isStructuredSearchView.value && libConfig.search.searchText === request.text;
     default:
       return false;
   }
@@ -6318,6 +6337,7 @@ watch(
     libConfig.smartAlbum.type, libConfig.smartAlbum.id,
     // Count and cover updates are query outputs, not refresh triggers.
     smartResultSignature(activeSmartAlbum.value), // Only active result-affecting changes reload photos; folders, names, and counters do not.
+    isStructuredSearchView.value,
     libConfig.search.searchText,
     config.main.sidebarIndex === SIDEBAR.OBJECTS ? JSON.stringify([libConfig.objects, config.settings.ai?.detectionProfile]) : null,
     config.main.sidebarIndex === SIDEBAR.OCR ? `${libConfig.ocr.state}\0${libConfig.ocr.text}` : null,
@@ -6616,6 +6636,7 @@ const getCurrentGroupedQueryRowsBase = (offset: number, limit: number) => {
 };
 
 async function enrichOcrPhotos(files: any[]) {
+  if (isStructuredSearchView.value) return files;
   if (![SIDEBAR.OCR, SIDEBAR.SEARCH].includes(config.main.sidebarIndex) || libConfig.activePane === 'collection' || !files?.length) return files;
   const libraryId = libConfig._libraryId, profile = config.settings.ai?.ocrProfile;
   const text = config.main.sidebarIndex === SIDEBAR.OCR ? libConfig.ocr.text || '' : libConfig.search.searchText || '';
@@ -6651,6 +6672,7 @@ function scheduleOcrContentRefresh() {
   ocrRefreshTimer = setTimeout(() => { ocrRefreshTimer = undefined; void refreshOcrContent(); }, 900);
 }
 async function refreshOcrContent() {
+  if (isStructuredSearchView.value) { queueSmartRefresh(); return; }
   if (ocrContentDisposed || ![SIDEBAR.OCR, SIDEBAR.SEARCH, SIDEBAR.OBJECTS].includes(config.main.sidebarIndex) || libConfig.activePane === 'collection' || showQuickView.value) return;
   if (ocrRefreshRunning) return;
   ocrRefreshRunning = true; ocrRefreshAgain = false;
@@ -8318,11 +8340,19 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
     }
   }
   else if(newIndex === SIDEBAR.SEARCH) {
-    if (libConfig.search.searchText) {
+    if (isStructuredSearchView.value) {
+      contentTitle.value = t('structured_search.title');
+      if (activeStructuredAlbum.value) getSmartFileList(activeStructuredAlbum.value, requestId);
+      else getFileList({ searchFileType: 0 }, requestId);
+    } else if (libConfig.search.searchText) {
       contentTitle.value = localeMsg.value.search.title + ' - ' + libConfig.search.searchText;
       getUnifiedSearchFileList(libConfig.search.searchText, requestId);
     } else {
       contentTitle.value = localeMsg.value.search.title;
+      currentQuerySource.value = 'search';
+      currentSmartQueryParams.value = null;
+      currentCollectionId.value = null;
+      currentSearchFileIds.value = [];
       showEmptyContent(requestId);
     }
   }
@@ -9610,7 +9640,7 @@ async function refreshGroupedRowsAfterDelete(fileIds: number[]) {
   // Search builds its filename and visual-match groups client-side. The generic
   // grouping query deliberately excludes Search, so rebuild the unified result
   // after a deletion instead of resetting those groups.
-  if (config.main.sidebarIndex === SIDEBAR.SEARCH && libConfig.search.searchText) {
+  if (config.main.sidebarIndex === SIDEBAR.SEARCH && !isStructuredSearchView.value && libConfig.search.searchText) {
     await getUnifiedSearchFileList(libConfig.search.searchText, currentContentRequestId);
     return;
   }
@@ -10296,6 +10326,7 @@ const emptyFilesMessage = computed(() => {
 });
 
 const emptyFilesHint = computed(() => {
+  if (isStructuredSearchView.value) return t('structured_search.empty_hint');
   if (config.main.sidebarIndex === SIDEBAR.OBJECTS && libConfig.activePane !== 'collection') return t('objects.no_results_hint');
   if (config.main.sidebarIndex === SIDEBAR.OCR && libConfig.activePane !== 'collection') return t('ocr.no_results_hint');
   if (isCurrentFolderMissing.value) return localeMsg.value.album.folder_unavailable.description;
@@ -10641,7 +10672,7 @@ const isSearchLikeView = computed(() => {
 });
 
 const isAiSearchMode = computed(() =>
-  config.main.sidebarIndex === SIDEBAR.SEARCH ||
+  (config.main.sidebarIndex === SIDEBAR.SEARCH && !isStructuredSearchView.value) ||
   (config.main.sidebarIndex === SIDEBAR.LIBRARY && libConfig.library.item === LIB_ITEM.SUBJECTS)
 );
 

@@ -426,3 +426,57 @@ test('object previews are invalidated by the global detector and saved-result re
   config.settings.ai.detectionProfile='objects-b';assert.equal(Boolean(h.api.previewStale.value),true);await h.api.previewResults();assert.equal(Boolean(h.api.previewStale.value),false);
   h.api.ocrPreviewRevision.value++;assert.equal(Boolean(h.api.previewStale.value),true);
 });
+
+test('combined filters apply without an album name and exclude semantic inference conditions', () => {
+  const h = harness({ props: { ...props, mode: 'filter' } });
+  h.api.rules.value = [h.api.makeRule('rating')];
+  h.api.rules.value[0].value = 3;
+  assert.equal(h.api.name.value, '');
+  assert.equal(h.api.canSave.value, true);
+  h.api.clickOk();
+  assert.equal(h.emits.length, 1);
+  const result = h.emits[0][1];
+  assert.equal(result.query.rules[0].field, 'rating');
+  assert.equal(result.query.rules[0].value, 3);
+  assert.equal(result.id, undefined);
+  assert.equal(result.name, undefined);
+  h.api.rules.value = [{ id: 'nested', field: 'group', operator: 'any', value: { rules: [h.api.makeRule('semantic')] } }];
+  assert.equal(h.api.canSave.value, false);
+  h.api.clickOk();
+  assert.equal(h.emits.length, 1);
+});
+
+test('structured preview sends a query object and does not request semantic status', async () => {
+  const calls: any[] = [];
+  const h = harness({
+    props: { ...props, mode: 'filter' },
+    getSmartQueryCountAndSum: async (params: any) => { calls.push(params); return [0, 0]; },
+    getSmartQueryFiles: async (params: any) => { calls.push(params); return []; },
+    getSmartAlbumStatus: async () => { throw new Error('must not request semantic status'); },
+  });
+  h.api.rules.value = [{ id: 'r', field: 'rating', operator: 'gte', value: 3 }];
+  await h.api.previewResults();
+  assert.equal(h.api.previewError.value, '');
+  assert.equal(h.api.preview.value.count, 0);
+  assert.equal(calls.length, 2);
+  for (const params of calls) {
+    assert.equal(Array.isArray(params), false);
+    assert.equal(params.version, 2);
+    assert.equal(params.match, 'all');
+    assert.equal(params.rules[0].value, 3);
+  }
+});
+
+test('actual combined-filter editor hides album setup and semantic fields while keeping groups and preview', async () => {
+  const group = renderComponent(readFileSync(new URL('../src/components/SmartAlbumRules.vue', import.meta.url), 'utf8'), {}, 'SmartAlbumRules.vue');
+  const stub = { render() { return Vue.h('span'); } };
+  const editor = renderComponent(source, { SmartAlbumRules: group, SmartAlbumStatus: stub, ModalDialog: { template: '<section><slot /></section>' }, TButton: stub, IconEdit: stub }, 'SmartAlbumEdit.vue');
+  const html = await ssr(editor, { ...props, mode: 'filter' });
+  assert.match(html, /structured_search.scope/);
+  assert.match(html, /structured_search.apply/);
+  assert.match(html, /smart_albums.add_group/);
+  assert.match(html, /smart_albums.preview/);
+  assert.doesNotMatch(html, /smart_albums.template|album.smart_edit.validation_name|value="semantic"|value="similar_image"/);
+  assert.match(html, /value="ocr_text"/);
+  assert.match(html, /value="object_class"/);
+});

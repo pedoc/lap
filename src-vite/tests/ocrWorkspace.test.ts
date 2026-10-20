@@ -144,6 +144,7 @@ function refreshHarness(options: any = {}) {
   const requests: any[] = [];
   const context: any = {
     ocrContentDisposed:false, ocrRefreshRunning:false, ocrRefreshAgain:false, ocrPreviewDeferred:Vue.ref(false), currentContentRequestId:1, currentThumbRequestId:1, visibleRangeSeqId:1,
+    isStructuredSearchView:Vue.ref(false), queueSmartRefresh(){},
     config:{main:{sidebarIndex:SIDEBAR.OCR}}, libConfig:{activePane:'main'}, SIDEBAR,
     showQuickView:Vue.ref(false), showFilmstripLayout:Vue.ref(false), groupedModeActive:Vue.ref(false), selectMode:Vue.ref(false), fileList:files, selectedItemIndex:Vue.ref(0), selectedFileIds:new Set([7]),
     currentQueryParams:Vue.ref({ocrState:'text'}), lastVisibleRange:{start:0,end:1}, totalFileCount:Vue.ref(2), totalFileSize:Vue.ref(40),
@@ -163,6 +164,16 @@ test('incremental results commit one viewport atomically and retain thumbnails, 
   assert.equal(h.context.selectedItemIndex.value,1);assert.equal(h.context.currentContentRequestId,2);
   assert.equal(h.context.showQuickView.value,false);assert.equal(h.context.ocrRefreshRunning,false);
   assert.ok(h.requests[0][1]>0 && h.requests[0][1]<=512);
+});
+
+test('OCR updates refresh combined conditions through their query instead of restarting text search', async () => {
+  let refreshes = 0;
+  const h = refreshHarness({ isStructuredSearchView: Vue.ref(true), queueSmartRefresh: () => refreshes++ });
+  const before = h.files.value;
+  await h.run();
+  assert.equal(refreshes, 1);
+  assert.equal(h.files.value, before);
+  assert.equal(h.requests.length, 0);
 });
 test('a photo being viewed is not closed or replaced by background indexing',async()=>{
   const h=refreshHarness({showQuickView:Vue.ref(true)});const before=h.files.value;await h.run();
