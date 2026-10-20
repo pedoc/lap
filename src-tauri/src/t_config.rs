@@ -37,6 +37,17 @@ fn config_io_lock() -> &'static Mutex<()> {
     CONFIG_IO_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Backup restoration commits its database files and catalogue under the same
+/// lock as ordinary configuration writes. The current library never changes.
+pub(crate) fn with_locked_app_config<T>(
+    operation: impl FnOnce(AppConfig, PathBuf) -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = config_io_lock()
+        .lock()
+        .map_err(|_| "Config lock poisoned")?;
+    operation(load_app_config_locked()?, get_config_file_path()?)
+}
+
 // ============================================================================
 // LibraryState sub-structs for per-library config persistence
 // ============================================================================

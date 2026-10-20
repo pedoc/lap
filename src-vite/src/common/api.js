@@ -117,9 +117,9 @@ export async function getDbStorageInfo() {
   return [];
 }
 
-export async function backupDatabases(libraryIds, destPath) {
+export async function backupDatabases(libraryIds, destPath, preferences = null) {
   try {
-    return await invoke('backup_databases', { libraryIds, destPath });
+    return await invoke('backup_databases', { libraryIds, destPath, preferences });
   } catch (error) {
     console.error('Failed to backup databases:', error);
     throw error;
@@ -135,9 +135,9 @@ export async function parseBackupFile(path) {
   }
 }
 
-export async function restoreDatabases(backupPath, selections) {
+export async function restoreDatabases(backupPath, selections, restoreSettings = false) {
   try {
-    return await invoke('restore_databases', { backupPath, selections });
+    return await invoke('restore_databases', { backupPath, selections, restoreSettings });
   } catch (error) {
     console.error('Failed to restore databases:', error);
     throw error;

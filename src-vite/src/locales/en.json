@@ -1915,7 +1915,17 @@
       "restore_conflict": "Already exists → will be renamed",
       "restore_restoring": "Restoring...",
       "restore_success": "Restore completed. {count} libraries restored: {names}",
-      "restore_note": "Libraries with conflicting names will be renamed, and existing data will not be overwritten."
+      "restore_note": "Libraries with conflicting names will be renamed, and existing data will not be overwritten.",
+      "backup_settings_hint": "Includes application preferences, AI settings, automation policies and the app lock when configured. Model files and system keychain API keys are excluded.",
+      "restore_checking": "Reading backup…",
+      "restore_checksum_hint": "SHA-256 checksums and database integrity will be verified before any data is installed.",
+      "restore_legacy_hint": "Legacy backup: ZIP CRC and database integrity will be checked; SHA-256 checksums are unavailable.",
+      "restore_settings": "Also restore application settings",
+      "restore_settings_hint": "Applies on next startup, including the saved app lock password. Existing libraries and the local data location are preserved. Automatic recognition stays paused.",
+      "restore_restart_hint": "Libraries restored. Application settings will apply on next startup. You can restart now or close this dialog and restart later.",
+      "restore_restart": "Restart Lap",
+      "restore_close": "Done",
+      "restore_apply_failed": "Application settings could not be restored. Previous settings and the pending restore were retained. Check file permissions or files in use, then restart to retry."
     },
     "face_recognition": {
       "title": "People search",

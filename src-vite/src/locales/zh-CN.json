@@ -1915,7 +1915,17 @@
       "restore_conflict": "已存在 → 将自动重命名",
       "restore_restoring": "正在恢复...",
       "restore_success": "恢复完成。已恢复 {count} 个资料库：{names}",
-      "restore_note": "名称冲突的资料库将被重命名，现有数据不会被覆盖。"
+      "restore_note": "名称冲突的资料库将被重命名，现有数据不会被覆盖。",
+      "backup_settings_hint": "同时备份应用偏好、AI 设置、自动识别策略和已配置的应用锁；不包含模型文件及系统凭据库中的 API 密钥。",
+      "restore_checking": "正在读取备份…",
+      "restore_checksum_hint": "恢复前将校验 SHA-256 和数据库完整性，通过后才写入数据。",
+      "restore_legacy_hint": "旧版备份：将检查 ZIP CRC 和数据库完整性，无法核对 SHA-256。",
+      "restore_settings": "同时恢复应用设置",
+      "restore_settings_hint": "下次启动时生效，包括备份时的应用锁密码。保留现有资料库和本机数据位置，自动识别保持暂停。",
+      "restore_restart_hint": "资料库已恢复。应用设置将在下次启动时生效，可立即重启或关闭对话框后稍后重启。",
+      "restore_restart": "重启 Lap",
+      "restore_close": "完成",
+      "restore_apply_failed": "无法应用恢复的设置，已保留原配置和待恢复文件。请检查文件权限或占用后重启重试。"
     },
     "face_recognition": {
       "title": "人物搜索",

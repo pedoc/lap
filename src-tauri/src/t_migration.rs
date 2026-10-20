@@ -234,6 +234,12 @@ fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool
     Ok(false)
 }
 
+pub(crate) fn latest_schema_version() -> i32 {
+    get_migrations()
+        .last()
+        .map_or(0, |migration| migration.version)
+}
+
 pub fn check_and_migrate(conn: &Connection) -> Result<(), String> {
     let current_version: i32 = conn
         .query_row("PRAGMA user_version;", [], |row| row.get(0))
