@@ -1,5 +1,8 @@
 {
   "scan_tracking": {
+    "pending": "尚未結束的任務",
+    "pending_short": "剩餘 {count} 項",
+    "postprocessing_hint": "檔案核對已完成，仍有 {count} 項預覽／搜尋任務未結束，目前尚未全部就緒。",
     "last_error": "相簿工作最近錯誤",
     "failed_hint": "未完成完整目錄核對。請檢查磁碟、網路目錄及讀取權限；未訪問的目錄不會視為已完成掃描。",
     "save_edits_first": "掃描佇列已暫停。請先儲存或放棄目前編輯，再繼續掃描。",

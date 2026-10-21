@@ -1,5 +1,8 @@
 {
   "scan_tracking": {
+    "pending": "尚未结束的任务",
+    "pending_short": "剩余 {count} 项",
+    "postprocessing_hint": "文件核对已完成，仍有 {count} 项预览／搜索任务未结束，当前尚未全部就绪。",
     "last_error": "相册任务最近错误",
     "failed_hint": "未完成完整目录核对。请检查磁盘、网络目录和读取权限；未访问的目录不会被当作已扫描完成。",
     "save_edits_first": "扫描队列已暂停。请先保存或放弃当前编辑，再继续扫描。",

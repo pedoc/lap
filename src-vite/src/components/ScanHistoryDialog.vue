@@ -12,15 +12,19 @@
       </select>
       <div v-if="selectedRun" class="rounded-box border border-base-content/10 p-3 space-y-2">
         <p class="text-xs text-base-content/50">{{ t('scan_tracking.album_progress') }}</p>
-        <div class="flex items-center justify-between gap-2"><strong>{{ stateLabel(selectedRun.status) }}</strong><span class="text-xs text-base-content/50">{{ phaseLabel(selectedRun.phase) }}</span></div>
+        <div class="flex items-center justify-between gap-2"><strong>{{ stateLabel(selectedRun.status) }}</strong><span class="text-xs text-base-content/50">{{ phaseLabel(work.phase) }}</span></div>
         <p v-if="selectedRun.status==='pausing'" class="text-xs text-warning">{{ t('scan_tracking.pausing_hint') }}</p>
         <p v-if="selectedRun.status==='interrupted'" class="text-xs text-warning">{{ t('scan_tracking.interrupted_hint') }}</p>
         <p class="text-xs">{{ t('scan_tracking.checked',{current:selectedRun.counts.discovered,total:selectedRun.counts.total}) }}</p>
-        <progress v-if="percentage!==null" class="progress progress-primary w-full" :value="percentage" max="100" />
-        <p v-else class="text-xs text-base-content/50">{{ t('scan_tracking.counting_hint') }}</p>
+        <p v-if="active && selectedRun.counts.discovered>=selectedRun.counts.total && selectedRun.counts.pending>0" class="text-xs text-info">{{ t('scan_tracking.postprocessing_hint',{count:selectedRun.counts.pending}) }}</p>
+        <p v-if="active && ['preparing_previews','preparing_search'].includes(work.phase)" class="text-xs">{{ phaseLabel(work.phase) }}: {{ work.current }}/{{ work.total }}</p>
+        <progress v-if="percentage!==null" class="progress progress-primary w-full" :value="percentage" max="100" :aria-label="active ? phaseLabel(work.phase) : t('scan_tracking.checked_short')" />
+        <progress v-else-if="active" class="progress progress-primary w-full" :aria-label="phaseLabel(work.phase)" />
+        <p v-if="work.phase==='counting'" class="text-xs text-base-content/50">{{ t('scan_tracking.counting_hint') }}</p>
         <div class="grid grid-cols-3 gap-2 text-xs text-base-content/65">
           <span>{{ t('scan_tracking.indexed') }}: {{ selectedRun.counts.indexed }}</span><span>{{ t('scan_tracking.previews') }}: {{ selectedRun.counts.previews_ready }}</span><span>{{ t('scan_tracking.search') }}: {{ selectedRun.counts.search_ready }}/{{ selectedRun.counts.search_total }}</span>
           <span>{{ t('scan_tracking.skipped') }}: {{ selectedRun.counts.skipped }}</span><span>{{ t('scan_tracking.deferred') }}: {{ selectedRun.counts.deferred }}</span><span>{{ t('scan_tracking.errors') }}: {{ selectedRun.error_count }}</span>
+          <span>{{ t('scan_tracking.pending') }}: {{ selectedRun.counts.pending }}</span>
         </div>
         <p v-if="selectedRun.last_error" class="text-xs text-warning break-all whitespace-pre-wrap">{{ t('scan_tracking.last_error') }}: {{ selectedRun.last_error }}</p>
         <p v-else-if="selectedRun.status==='failed'" class="text-xs text-warning">{{ t('scan_tracking.failed_hint') }}</p>
@@ -49,7 +53,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { emit as appEmit } from '@tauri-apps/api/event';
 import { libConfig } from '@/common/config';
 import { scanJobs, albumScanRun, albumScanState, pauseAlbumScan } from '@/common/scanJobs';
-import { scanAction, scanPercent, folderScanState, type ScanScope, type ScanRun, type ScanFolder } from '@/common/scanStatus';
+import { scanAction, scanPercent, scanWorkProgress, folderScanState, type ScanScope, type ScanRun, type ScanFolder } from '@/common/scanStatus';
 import { useUIStore } from '@/stores/uiStore';
 import ModalDialog from './ModalDialog.vue';
 const props=defineProps<{scope:ScanScope}>(), emit=defineEmits(['cancel']);
@@ -64,7 +68,9 @@ function latestSnapshot(id:string){
  return snapshots.reduce<ScanRun|undefined>((latest,run)=>run&&(!latest||run.revision>=latest.revision)?run:latest,undefined);
 }
 const selectedRun=computed(()=>latestSnapshot(selected.value));
-const percentage=computed(()=>scanPercent(selectedRun.value));
+const active=computed(()=>!!selectedRun.value&&['running','pausing'].includes(selectedRun.value.status));
+const work=computed(()=>scanWorkProgress(selectedRun.value));
+const percentage=computed(()=>active.value ? work.value.percent : scanPercent(selectedRun.value));
 const action=computed(()=>scanAction(albumScanState(scope.albumId)));
 const date=(at:number)=>new Date(at).toLocaleString();
 const stateLabel=(state:string)=>t('scan_tracking.state_'+(state==='completed'?'complete':state==='running'?'scanning':state));

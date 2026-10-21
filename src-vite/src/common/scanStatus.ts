@@ -101,3 +101,20 @@ export function scanPercent(run: ScanRun | undefined, counts = run?.counts): num
   if (!run || run.phase === 'counting' || !counts || counts.total <= 0) return null;
   return Math.max(0, Math.min(100, Math.floor(counts.discovered * 100 / counts.total)));
 }
+
+/** File discovery can finish long before previews/search. Never present that as overall completion. */
+export function scanWorkProgress(run: ScanRun | undefined, counts = run?.counts) {
+  let phase = run?.phase || 'discovering';
+  const active = run && ['running', 'pausing'].includes(run.status);
+  if (active && counts && !['counting', 'draining'].includes(phase)) {
+    if (counts.discovered < counts.total) phase = 'discovering';
+    else if (counts.pending === 0) phase = 'finalizing';
+    else if (counts.previews_ready + counts.preview_failed + counts.deferred < counts.indexed) phase = 'preparing_previews';
+    else if (counts.search_ready + counts.search_failed < counts.search_total) phase = 'preparing_search';
+    else phase = 'finalizing';
+  }
+  const current = !counts ? 0 : phase === 'preparing_previews' ? counts.previews_ready : phase === 'preparing_search' ? counts.search_ready : counts.discovered;
+  const total = !counts ? 0 : phase === 'preparing_previews' ? counts.indexed : phase === 'preparing_search' ? counts.search_total : counts.total;
+  const percent = !counts || total <= 0 || ['counting', 'finalizing', 'draining'].includes(phase) ? null : Math.max(0, Math.min(100, Math.floor(current * 100 / total)));
+  return { phase, current, total, percent };
+}

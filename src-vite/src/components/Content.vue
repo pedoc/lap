@@ -820,7 +820,7 @@ import { getShortcutLabel, matchesShortcut, ShortcutActionId, ShortcutPlatform, 
 import { getSmartTagById } from '@/common/smartTags';
 import { clearFolderFileCounts, setFolderFileCount } from '@/composables/useAlbumSelection';
 import { createEmptyLibraryCounts } from '@/stores/libraryStore';
-import { getAlbumScanState, getAlbumScanIcon, shouldAnimateAlbumScanIcon } from '@/common/scanStatus';
+import { getAlbumScanState, getAlbumScanIcon, shouldAnimateAlbumScanIcon, scanWorkProgress } from '@/common/scanStatus';
 import { scanJobs, albumScanRun, albumScanState, useScanTracking, pauseAlbumScan, applyScanEvent, refreshScanJobs } from '@/common/scanJobs';
 import type { ScanScope } from '@/common/scanStatus';
 
@@ -5411,6 +5411,11 @@ const statusBarIsUpdateAnimating = computed(() =>
   statusBarScanMode.value === 'background' || selectedAlbumScanAnimating.value
 );
 
+const activeScanReport = computed(() => {
+  const run = albumScanRun(activeScanningAlbumId.value);
+  return run && run.id === activeScanRunId.value && ['running','pausing'].includes(run.status) ? run : undefined;
+});
+const activeScanWork = computed(() => activeScanReport.value ? scanWorkProgress(activeScanReport.value) : null);
 const statusBarScanText = computed(() => {
   if(selectedAlbumScanState.value==='pausing')return t('scan_tracking.state_pausing');
   const discovered = Number(libConfig.index.discovered || 0).toLocaleString();
@@ -5427,6 +5432,12 @@ const statusBarScanText = computed(() => {
     return localeMsg.value.search.index.paused || 'Scan paused';
   }
   if (statusBarScanMode.value !== 'current') return '';
+
+  if (activeScanWork.value && activeScanReport.value) {
+    const work = activeScanWork.value, counts = activeScanReport.value.counts;
+    const progress = ['counting','finalizing','draining'].includes(work.phase) ? '' : `${work.current.toLocaleString()} / ${work.total.toLocaleString()}`;
+    return [t('scan_tracking.phase_'+work.phase), progress, counts.pending > 0 ? t('scan_tracking.pending_short',{count:counts.pending}) : ''].filter(Boolean).join(' · ');
+  }
 
   if (phase === 'preparing_previews') {
     return (localeMsg.value.search.index.preparing_previews || 'Generating previews... {count} / {total}')
@@ -5452,16 +5463,19 @@ const statusBarScanText = computed(() => {
 });
 
 const topProgressPercent = computed(() => {
-  const phase = String(libConfig.index.phase || 'discovering');
-  const total = Number(libConfig.index.total || 0);
-  const discovered = Number(libConfig.index.discovered || 0);
-  const processed = Number(libConfig.index.processed || 0);
-  const searchReady = Number(libConfig.index.searchReady || 0);
-  const searchTotal = Number(libConfig.index.searchTotal || 0);
+  const work = activeScanWork.value;
+  const phase = work?.phase || String(libConfig.index.phase || 'discovering');
+  const total = work?.total ?? Number(libConfig.index.total || 0);
+  const discovered = work?.current ?? Number(libConfig.index.discovered || 0);
+  const processed = work?.current ?? Number(libConfig.index.processed || 0);
+  const searchReady = work?.current ?? Number(libConfig.index.searchReady || 0);
+  const searchTotal = work?.total ?? Number(libConfig.index.searchTotal || 0);
   const ratio = (current: number, max: number) => max > 0
     ? Math.min(1, Math.max(0, current / max))
     : 0;
 
+  if (['finalizing','draining'].includes(phase)) return 99;
+  if (phase === 'counting') return 1;
   if (phase === 'preparing_previews') {
     return 46 + Math.round(ratio(processed, total) * 44);
   }
@@ -5474,7 +5488,7 @@ const topProgressPercent = computed(() => {
 const showTopProgressBar = computed(() =>
   Number(libConfig.index.status) === 1 &&
   (libConfig.index.albumQueue as any[]).length > 0 &&
-  String(libConfig.index.phase || '') !== 'complete'
+  (!!activeScanWork.value || String(libConfig.index.phase || '') !== 'complete')
 );
 
 function buildScanStreamQueryParams() {

@@ -1,5 +1,8 @@
 {
   "scan_tracking": {
+    "pending": "Unfinished tasks",
+    "pending_short": "{count} tasks remaining",
+    "postprocessing_hint": "File checking is complete. {count} preview/search tasks are still unfinished; the scan has not finished yet.",
     "last_error": "Latest album-level error",
     "failed_hint": "Directory reconciliation did not complete. Check the drive, network folder and read permissions; unvisited directories are not marked complete.",
     "save_edits_first": "Scan queue paused. Save or discard the current edits before resuming.",

@@ -178,7 +178,7 @@ function reportHarness(handler?:(command:string,args:any)=>any,folderPath?:strin
   setTimeout:()=>1,clearTimeout(){},navigator:{clipboard:{writeText:async()=>{}}},
  };
  const script=stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\n/gm,'');
- const scope=Vue.effectScope();const api=scope.run(()=>runInNewContext(`${script};({history,selected,details,selectedRun,load,loadDetails,control,historyLabel,error});`,ctx));
+ const scope=Vue.effectScope();const api=scope.run(()=>runInNewContext(`${script};({history,selected,details,selectedRun,load,loadDetails,control,historyLabel,error,work,percentage});`,ctx));
  return {api,ctx,lib,store,current,emits,calls,async mount(){for(const fn of mounts)fn();await tick();},dispose(){unmounts.forEach(fn=>fn());scope.stop();}};
 }
 
@@ -244,4 +244,77 @@ test('right-click removal is bound to the clicked album without changing an unre
  const contextHandler=source.slice(source.indexOf('function handleAlbumContextMenu('),source.indexOf('\nconst getAlbumById'));
  assert.ok(!contextHandler.includes('clickAlbum('),'opening a context menu must not navigate');
  assert.match(source,/:message="\$t\('msgbox.remove_album.content', \{ album: removeAlbumTarget.albumName \}\)"/);
+});
+
+const lateCounts=()=>counts({total:10623,discovered:10623,indexed:10621,previews_ready:10528,images:7010,search_total:7010,search_ready:6876,metadata_failed:2,pending:159});
+const translate=(dict:any)=>(key:string,params:any={})=>{
+ const value=key.split('.').reduce((value:any,part)=>value?.[part],dict)||key;
+ return value.replace(/\{(\w+)\}/g,(_:string,name:string)=>String(params[name]??`{${name}}`));
+};
+
+test('full file counts do not mean previews, search or the actual scan have completed',()=>{
+ const job=run('one',1,'running',{phase:'preparing_previews',counts:lateCounts()});
+ const work=scan.scanWorkProgress(job);
+ assert.equal(work.phase,'preparing_previews');assert.equal(work.current,10528);assert.equal(work.total,10621);assert.ok(work.percent!<100);
+ assert.equal(scan.getAlbumScanState({albumId:1,albumQueue:[1],run:job}),'scanning');
+ const part=counts({total:5,discovered:5,indexed:5,previews_ready:4,pending:1});
+ assert.equal(scan.scanWorkProgress(job,part).total,5,'directory progress must use directory counts, not the parent album');
+});
+
+test('metadata failures and deferred previews cannot strand the display in the preview phase',()=>{
+ const donePreviews={...lateCounts(),previews_ready:10619,preview_failed:1,deferred:1,pending:2};
+ const job=run('one',1,'running',{phase:'preparing_previews',counts:donePreviews});
+ const work=scan.scanWorkProgress(job);assert.equal(work.phase,'preparing_search');assert.equal(work.current,6876);assert.equal(work.total,7010);
+ job.counts.pending=0;assert.equal(scan.scanWorkProgress(job).phase,'finalizing');assert.equal(scan.scanWorkProgress(job).percent,null);
+ job.phase='draining';job.counts.pending=1;assert.equal(scan.scanWorkProgress(job).phase,'draining');
+});
+
+test('counting and terminal statuses are not reinterpreted as active post-processing',()=>{
+ assert.equal(scan.scanWorkProgress(run('one',1,'running',{phase:'counting',counts:lateCounts()})).percent,null);
+ assert.equal(scan.scanWorkProgress(run('one',1,'paused',{phase:'preparing_previews',counts:{...lateCounts(),pending:0}})).phase,'preparing_previews');
+ assert.equal(scan.scanWorkProgress(run('one',1,'warnings',{phase:'complete',counts:lateCounts()})).phase,'complete');
+ assert.equal(scan.scanWorkProgress(undefined).percent,null);
+ assert.equal(scan.scanWorkProgress(run('one',1,'running',{phase:'discovering',counts:counts({total:0,discovered:0,indexed:0,pending:0})})).phase,'finalizing');
+});
+
+test('the real badge displays current-stage numbers and pending work, then the acknowledged terminal state',()=>{
+ const current=Vue.ref(run('one',1,'running',{phase:'preparing_previews',counts:lateCounts()}));
+ const source=read('components/ScanStatusBadge.vue').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
+ const script=stripTypeScriptTypes(source).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\n/gm,'');
+ const api=runInNewContext(`${script};({label,progress,hint,busy});`,{
+  ...Vue,...scan,defineProps:()=>({albumId:1}),useI18n:()=>({t:translate(JSON.parse(read('locales/zh-CN.json')))}),
+  albumScanRun:()=>current.value,albumScanState:()=>scan.getAlbumScanState({albumId:1,albumQueue:[],run:current.value}),
+  directoryScan:()=>({}),scanJobs:{error:''},libConfig:{_libraryId:'A'},showScanHistory(){},
+  IconUpdate:'spin',IconUpdateDot:'paused',IconExclamation:'warning',IconCheck:'check',IconMinus:'empty',
+ });
+ assert.equal(api.label.value,'准备预览');assert.match(api.progress.value,/10528\/10621/);assert.match(api.progress.value,/剩余 159 项/);assert.ok(!api.progress.value.includes('10623/10623'));
+ current.value.counts.previews_ready=10621;assert.equal(api.label.value,'准备语义搜索');assert.match(api.progress.value,/6876\/7010/);
+ current.value.counts.pending=0;assert.equal(api.label.value,'目录核对与收尾');assert.equal(api.progress.value,'');
+ current.value={...current.value,status:'warnings',finished_at:3000,phase:'complete',revision:2};
+ assert.equal(api.busy.value,false);assert.equal(api.label.value,'已完成，有待处理项');
+});
+
+test('the report progress bar follows pending preview/search work rather than a completed file count',async()=>{
+ const h=reportHarness();await h.mount();
+ h.store.runs.old=run('old',1,'running',{phase:'preparing_previews',revision:2,counts:lateCounts()});
+ assert.equal(h.api.percentage.value,99);assert.equal(h.api.work.value.phase,'preparing_previews');
+ h.store.runs.old.counts.previews_ready=10621;assert.equal(h.api.work.value.phase,'preparing_search');assert.equal(h.api.percentage.value,98);
+ h.store.runs.old.counts.pending=0;assert.equal(h.api.percentage.value,null);assert.equal(h.api.work.value.phase,'finalizing');h.dispose();
+});
+
+test('the footer and top bar keep tracking background work even when the legacy phase says complete',()=>{
+ const source=read('components/Content.vue'),start=source.indexOf('const activeScanReport = computed('),end=source.indexOf('\nfunction buildScanStreamQueryParams()',start);
+ const current=Vue.ref(run('one',1,'running',{phase:'preparing_previews',counts:lateCounts()})),activeId=Vue.ref('one');
+ const lib=Vue.reactive({index:{status:1,albumQueue:[1],phase:'complete',discovered:10623,total:10623,processed:10528,searchReady:6876,searchTotal:7010,failed:2}});
+ const mode=Vue.ref('current'),dict=JSON.parse(read('locales/zh-CN.json'));
+ const api=runInNewContext(`${stripTypeScriptTypes(source.slice(start,end))};({statusBarScanText,topProgressPercent,showTopProgressBar,activeScanWork});`,{
+  ...Vue,...scan,activeScanningAlbumId:Vue.ref(1),activeScanRunId:activeId,albumScanRun:()=>current.value,libConfig:lib,
+  selectedAlbumScanState:Vue.ref('scanning'),statusBarScanMode:mode,localeMsg:{value:dict},t:translate(dict),
+ });
+ assert.match(api.statusBarScanText.value,/准备预览/);assert.match(api.statusBarScanText.value,/159/);assert.equal(api.showTopProgressBar.value,true);assert.ok(api.topProgressPercent.value<100);
+ current.value.counts.previews_ready=10621;assert.match(api.statusBarScanText.value,/准备语义搜索/);
+ current.value.counts.pending=0;assert.match(api.statusBarScanText.value,/目录核对与收尾/);assert.equal(api.topProgressPercent.value,99);
+ mode.value='waiting';assert.ok(!api.statusBarScanText.value.includes('准备语义搜索'));
+ current.value.status='warnings';lib.index.albumQueue=[];assert.equal(api.showTopProgressBar.value,false);assert.equal(api.activeScanWork.value,null);
+ for(const lang of ['zh-CN','zh-TW','en'])for(const key of ['pending','pending_short','postprocessing_hint'])assert.equal(typeof JSON.parse(read('locales/'+lang+'.json')).scan_tracking[key],'string');
 });
