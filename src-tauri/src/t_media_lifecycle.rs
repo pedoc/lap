@@ -2017,6 +2017,9 @@ mod tests {
     #[test]
     fn media_lifecycle_hidden_and_deleted_are_distinct_and_restore_keeps_hidden_state() {
         let f = Fixture::new();
+        f.conn.execute_batch("ALTER TABLE afiles ADD COLUMN title TEXT;
+            ALTER TABLE afiles ADD COLUMN title_sort_key TEXT;").unwrap();
+        crate::t_media_title::set_on(&f.conn, 1, Some("保留的标题"), None).unwrap();
         f.conn
             .execute("INSERT INTO media_states(file_id,hidden) VALUES(1,1)", [])
             .unwrap();
@@ -2037,6 +2040,9 @@ mod tests {
         restore_on(&f.conn, &load(&f.conn, &id).unwrap()).unwrap();
         assert_eq!(visible(normal_predicate("a")), 0);
         assert_eq!(visible(retained_predicate("a")), 1);
+        assert_eq!(f.conn.query_row("SELECT title FROM afiles WHERE id=1", [], |r| r.get::<_,String>(0)).unwrap(), "保留的标题");
+        assert_eq!(fs::read(f.root.join("photo.jpg")).unwrap(), b"original photo");
+
     }
     #[test]
     fn media_lifecycle_reserved_names_and_folder_guards_protect_interrupted_operations() {

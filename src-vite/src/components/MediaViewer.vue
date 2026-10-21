@@ -19,8 +19,8 @@
       <!-- App Icon + Title (left side, ImageViewer on Windows) -->
       <div v-if="showDesktopWindowControls && mode === 2 && showWindowControlsBar" class="absolute left-0 top-0 h-10 flex items-center px-3 select-none" data-tauri-drag-region>
         <img :src="iconLogo" class="w-5 h-5 mr-2 rounded" data-tauri-drag-region />
-        <span class="text-nowrap text-sm text-base-content/70 overflow-hidden whitespace-pre text-ellipsis" data-tauri-drag-region>
-          {{ $t('image_viewer.title') }}
+        <span class="text-nowrap text-sm text-base-content/70 overflow-hidden whitespace-pre text-ellipsis" :style="{ maxWidth: `${filenameMaxWidth}px` }" :title="mediaNameTooltip(file)" data-tauri-drag-region>
+          {{ mediaDisplayName(file) || $t('image_viewer.title') }}
         </span>
       </div>
       <div ref="buttonsRef" class="flex items-center space-x-1">
@@ -168,15 +168,16 @@
             :shortcut="shortcut('meta.rotate')"
             @click="$emit('item-action', { action: 'rotate', index: fileIndex })"
           />
-          <!-- <TButton
-            v-if="mode !== 2"
-            :icon="IconFileInfo"
-            :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-            :tooltip="$t('menu.meta.info')"
-            :shortcut="shortcut('meta.info')"
-            @click="$emit('item-action', { action: 'info', index: fileIndex })"
-          /> -->
         </template>
+        <TButton
+          v-if="mode === 2"
+          :icon="IconFileInfo"
+          :disabled="!file || fileIndex < 0 || !canInteract"
+          :selected="infoPanelOpen"
+          :tooltip="$t('menu.meta.info')"
+          :shortcut="shortcut('meta.info')"
+          @click="$emit('item-action', { action: 'info', index: fileIndex })"
+        />
         <!-- Linked viewport control (Compare mode only) -->
         <template v-if="mode === 2 && showSyncViewportControl">
           <IconSeparator class="t-icon-size-sm text-base-content/30" />
@@ -441,6 +442,7 @@
 </template>
 
 <script setup lang="ts">
+import { mediaDisplayName, mediaNameTooltip } from '@/common/mediaTitle';
 import { OVERLAY_CLICK_MOVE_TOLERANCE } from '@/common/constants';
 import { defineAsyncComponent, ref, computed, watch, onMounted, onUpdated, onBeforeUnmount, type Component, type CSSProperties } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -585,6 +587,7 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  infoPanelOpen: { type: Boolean, default: false },
   showWindowControls: {
     type: Boolean,
     default: false

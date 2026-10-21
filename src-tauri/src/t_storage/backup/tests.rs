@@ -99,6 +99,9 @@ fn round_trip_includes_wal_and_preserves_existing_libraries_and_saved_state() {
     let conn = Connection::open(fixture.databases.join("default.db")).unwrap();
     conn.execute_batch("PRAGMA journal_mode=WAL; INSERT INTO afiles VALUES(2,1,'wal.jpg');")
         .unwrap();
+    conn.execute_batch("ALTER TABLE afiles ADD COLUMN title TEXT;
+        ALTER TABLE afiles ADD COLUMN title_sort_key TEXT;
+        UPDATE afiles SET title='旅行日落',title_sort_key='lvxingriluo' WHERE id=2;").unwrap();
     let result = fixture.backup();
     assert_eq!(result.library_count, 1);
     assert!(result.file_size > 0);
@@ -134,6 +137,8 @@ fn round_trip_includes_wal_and_preserves_existing_libraries_and_saved_state() {
             .unwrap(),
         2
     );
+    assert_eq!(restored.query_row("SELECT title,title_sort_key FROM afiles WHERE id=2", [],
+        |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(), ("旅行日落".into(),"lvxingriluo".into()));
     assert!(!fixture.app.join(PENDING).exists());
 }
 

@@ -281,7 +281,7 @@ fn get_files_by_sizes(conn: &Connection) -> Result<Vec<AFile>, String> {
                 a.gps_latitude, a.gps_longitude, a.gps_altitude, 
                 a.geo_name, a.geo_admin1, a.geo_admin2, a.geo_cc,
                 f.path || '/' || a.name as file_path,
-                {}
+                {}, a.title
          FROM afiles a
          JOIN afolders f ON a.folder_id = f.id
          WHERE a.id NOT IN (
@@ -304,6 +304,7 @@ fn get_files_by_sizes(conn: &Connection) -> Result<Vec<AFile>, String> {
                 id: row.get(0)?,
                 folder_id: row.get(1)?,
                 name: row.get(2)?,
+                title: row.get("title")?,
                 name_pinyin: row.get(3)?,
                 size: row.get(4)?,
                 file_type: row.get(5)?,

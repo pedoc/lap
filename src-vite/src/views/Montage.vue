@@ -137,7 +137,7 @@
           <div v-if="mode === 'card'" class="flex items-center justify-between gap-2">
             <span>{{ $t('settings.grid.label_primary') }}</span>
             <select v-model="captionField" class="select select-bordered select-xs w-40">
-              <option v-for="(label, index) in localeMsg.settings.grid.label_options" :key="index" :value="index">{{ label }}</option>
+              <option v-for="(label, index) in mediaGridLabels(localeMsg.settings.grid.label_options, t('media_title.display'), t('media_title.filename'))" :key="index" :value="index">{{ label }}</option>
             </select>
           </div>
           <button class="btn btn-sm w-full" @click="shuffle">
@@ -280,6 +280,7 @@
 </template>
 
 <script setup lang="ts">
+import { mediaDisplayName, mediaGridLabels } from '@/common/mediaTitle';
 import { MONTAGE_MAX_PHOTOS, MONTAGE_BACKGROUND_PRESETS, MONTAGE_PAGE_SIZES } from '@/common/constants';
 import { ref, toRefs, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
@@ -427,9 +428,9 @@ const captions = computed(() => {
     const height = captionHeight(item);
     if (!height) continue;
     const file = fileById.value.get(item.fileId);
-    const fields = ['', file.name, formatFileSize(file.size), formatDimensionText(file.width, file.height),
+    const fields = ['', mediaDisplayName(file), formatFileSize(file.size), formatDimensionText(file.width, file.height),
       formatTimestamp(file.taken_date, 'date_time'), file.geo_name, formatCameraInfo(file.e_make, file.e_model),
-      file.e_lens_model, formatCaptureSettings(file.e_focal_length, file.e_exposure_time, file.e_f_number, file.e_iso_speed, file.e_exposure_bias)];
+      file.e_lens_model, formatCaptureSettings(file.e_focal_length, file.e_exposure_time, file.e_f_number, file.e_iso_speed, file.e_exposure_bias), file.name];
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round((item.w - 2 * item.border) * pageSize.value[0]));
     canvas.height = Math.max(1, Math.round(height * pageSize.value[0]));

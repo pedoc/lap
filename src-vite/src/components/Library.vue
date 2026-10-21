@@ -6,11 +6,12 @@
     </div>
 
     <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+      <button type="button" class="sidebar-item w-full text-left" :class="config.main.sidebarIndex === SIDEBAR.HOME ? 'sidebar-item-selected' : 'sidebar-item-hover'" @click="libConfig.activePane = 'main'; config.main.sidebarIndex = SIDEBAR.HOME"><IconHome class="mx-1 w-5 h-5 shrink-0" /><span class="sidebar-item-label">{{ $t('home_dashboard.title') }}</span></button>
       <template v-for="item in libraryItems" :key="item.id">
       <div
         :class="[
           'sidebar-item',
-          libConfig.library.item === item.id ? 'sidebar-item-selected' : 'sidebar-item-hover',
+          activeLibraryItem === item.id ? 'sidebar-item-selected' : 'sidebar-item-hover',
         ]"
         @click="selectItem(item.id)"
       >
@@ -27,9 +28,9 @@
       </template>
 
       <div class="sidebar-item sidebar-item-hover" @click="mediaExpanded=!mediaExpanded"><IconRight class="w-6 h-6 p-1" :class="mediaExpanded?'rotate-90':''" /><span class="sidebar-item-label">{{ $t('media_lifecycle.title') }}</span></div>
-      <div v-if="mediaExpanded"><div v-for="type in MEDIA_TYPES" :key="type" :title="['animated','screenshot','burst','panorama'].includes(type) ? $t('media_lifecycle.classification_hint') : undefined" class="sidebar-item pl-8" :class="libConfig.library.item===LIB_ITEM.MEDIA && libConfig.library.smartId===type?'sidebar-item-selected':'sidebar-item-hover'" @click="selectMedia(type)"><span class="sidebar-item-label">{{ $t('media_lifecycle.types.'+type) }}</span><span class="sidebar-item-count">{{ mediaCounts.media[type] ?? '—' }}</span></div></div>
+      <div v-if="mediaExpanded"><div v-for="type in MEDIA_TYPES" :key="type" :title="['animated','screenshot','burst','panorama'].includes(type) ? $t('media_lifecycle.classification_hint') : undefined" class="sidebar-item pl-8" :class="activeLibraryItem===LIB_ITEM.MEDIA && libConfig.library.smartId===type?'sidebar-item-selected':'sidebar-item-hover'" @click="selectMedia(type)"><span class="sidebar-item-label">{{ $t('media_lifecycle.types.'+type) }}</span><span class="sidebar-item-count">{{ mediaCounts.media[type] ?? '—' }}</span></div></div>
       <div class="sidebar-item text-xs text-base-content/40">{{ $t('media_lifecycle.utilities') }}</div>
-      <div v-for="item in [{id:LIB_ITEM.HIDDEN,label:'hidden',count:mediaCounts.hidden},{id:LIB_ITEM.DELETED,label:'deleted',count:mediaCounts.deleted}]" :key="item.id" class="sidebar-item" :class="libConfig.library.item===item.id?'sidebar-item-selected':'sidebar-item-hover'" @click="selectItem(item.id)"><span class="sidebar-item-label">{{ $t('media_lifecycle.'+item.label) }}</span><span class="sidebar-item-count">{{ item.count }}</span></div>
+      <div v-for="item in [{id:LIB_ITEM.HIDDEN,label:'hidden',count:mediaCounts.hidden},{id:LIB_ITEM.DELETED,label:'deleted',count:mediaCounts.deleted}]" :key="item.id" class="sidebar-item" :class="activeLibraryItem===item.id?'sidebar-item-selected':'sidebar-item-hover'" @click="selectItem(item.id)"><span class="sidebar-item-label">{{ $t('media_lifecycle.'+item.label) }}</span><span class="sidebar-item-count">{{ item.count }}</span></div>
       <div class="sidebar-item sidebar-item-hover" @click="toggleRatings">
         <IconRight
           :class="[
@@ -55,7 +56,7 @@
               <div
                 :class="[
                   'sidebar-item sidebar-item-compact ml-2',
-                  libConfig.library.item === LIB_ITEM.RATINGS && libConfig.rating.item === RATE.ALL ? 'sidebar-item-selected' : 'sidebar-item-hover',
+                  activeLibraryItem === LIB_ITEM.RATINGS && libConfig.rating.item === RATE.ALL ? 'sidebar-item-selected' : 'sidebar-item-hover',
                 ]"
                 @click="selectRating(RATE.ALL)"
               >
@@ -68,7 +69,7 @@
               <div
                 :class="[
                   'sidebar-item sidebar-item-compact ml-2',
-                  libConfig.library.item === LIB_ITEM.RATINGS && libConfig.rating.item === rating ? 'sidebar-item-selected' : 'sidebar-item-hover',
+                  activeLibraryItem === LIB_ITEM.RATINGS && libConfig.rating.item === rating ? 'sidebar-item-selected' : 'sidebar-item-hover',
                 ]"
                 @click="selectRating(rating)"
               >
@@ -86,7 +87,7 @@
               <div
                 :class="[
                   'sidebar-item sidebar-item-compact ml-2',
-                  libConfig.library.item === LIB_ITEM.RATINGS && libConfig.rating.item === RATE.UNRATED ? 'sidebar-item-selected' : 'sidebar-item-hover',
+                  activeLibraryItem === LIB_ITEM.RATINGS && libConfig.rating.item === RATE.UNRATED ? 'sidebar-item-selected' : 'sidebar-item-hover',
                 ]"
                 @click="selectRating(RATE.UNRATED)"
               >
@@ -122,7 +123,7 @@
               <div
                 :class="[
                   'sidebar-item sidebar-item-compact ml-2',
-                  libConfig.library.item === LIB_ITEM.CULLING && libConfig.culling.item === item.id ? 'sidebar-item-selected' : 'sidebar-item-hover',
+                  activeLibraryItem === LIB_ITEM.CULLING && libConfig.culling.item === item.id ? 'sidebar-item-selected' : 'sidebar-item-hover',
                 ]"
                 @click="selectCulling(item.id)"
               >
@@ -160,7 +161,7 @@
               <div
                 :class="[
                   'sidebar-item sidebar-item-compact ml-2',
-                  libConfig.library.item === LIB_ITEM.SUBJECTS && libConfig.library.smartId === item.id ? 'sidebar-item-selected' : 'sidebar-item-hover',
+                  activeLibraryItem === LIB_ITEM.SUBJECTS && libConfig.library.smartId === item.id ? 'sidebar-item-selected' : 'sidebar-item-hover',
                 ]"
                 @click="selectSmartTag(item.id)"
               >
@@ -186,7 +187,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { createEmptyLibraryCounts } from '@/stores/libraryStore';
 import { CULLING, LIB_ITEM, RATE, SIDEBAR, type LibItem } from '@/common/constants';
 
-import { IconFiles, IconHeartFilled, IconRight, IconBolt, IconFlag, IconFlagFilled, IconFlagOff, IconStar, IconStarFilled, IconHistory } from '@/common/icons';
+import { IconHome, IconFiles, IconHeartFilled, IconRight, IconBolt, IconFlag, IconFlagFilled, IconFlagOff, IconStar, IconStarFilled, IconHistory } from '@/common/icons';
 import { SMART_TAG_CATEGORIES } from '@/common/smartTags';
 import { MEDIA_TYPES } from '@/common/mediaLifecycle';
 import { listen } from '@tauri-apps/api/event';
@@ -194,7 +195,7 @@ import { getMediaOverview, getLibraryVisibleCounts } from '@/common/api';
 
 const mediaCounts=ref<any>({media:{},hidden:0,deleted:0});const mediaExpanded=ref(true);let mediaRequest=0;let mediaDisposed=false;const mediaStops:(()=>void)[]=[];
 async function refreshMedia(){const token=++mediaRequest;const library=libConfig._libraryId;try{const next=await getMediaOverview(library);if(!mediaDisposed&&token===mediaRequest&&library===libConfig._libraryId)mediaCounts.value=next;}catch(error){console.error('Media counts:',error);}}
-function selectMedia(type:string){libConfig.library.item=LIB_ITEM.MEDIA;libConfig.library.smartId=type;libConfig.library.activateTick=Number(libConfig.library.activateTick||0)+1;}
+function selectMedia(type:string){config.main.sidebarIndex=SIDEBAR.LIBRARY;libConfig.library.item=LIB_ITEM.MEDIA;libConfig.library.smartId=type;libConfig.library.activateTick=Number(libConfig.library.activateTick||0)+1;}
 onMounted(async()=>{void refreshMedia();for(const name of ['media-lifecycle-changed','files-deleted','index_finished']){const stop=await listen(name,()=>{void refreshMedia();void refreshLibraryCounts();});if(mediaDisposed){stop();return;}mediaStops.push(stop);}});
 onBeforeUnmount(()=>{mediaDisposed=true;mediaRequest++;mediaStops.forEach(stop=>stop());});
 watch(()=>libConfig._libraryId,()=>{mediaCounts.value={media:{},hidden:0,deleted:0};void refreshMedia();});
@@ -210,6 +211,7 @@ const { locale, messages } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
 const uiStore = useUIStore();
 const libraryCounts = computed(() => libConfig.library.counts || createEmptyLibraryCounts());
+const activeLibraryItem = computed(() => config.main.sidebarIndex === SIDEBAR.LIBRARY ? libConfig.library.item : null);
 const subjectCounts = computed(() => libConfig.library.subjectCounts || {});
 const totalCount = computed(() => Number(libraryCounts.value.all || 0));
 const favoriteCount = computed(() => Number(libraryCounts.value.favorite || 0));
@@ -283,6 +285,7 @@ function formatSearchResultCount(count: number) {
 }
 
 function selectItem(item: LibItem) {
+  config.main.sidebarIndex = SIDEBAR.LIBRARY;
   libConfig.library.item = item;
   uiStore.requestCountUpdate({ source: 'library', item });
   libConfig.library.activateTick = Number(libConfig.library.activateTick || 0) + 1;
@@ -327,6 +330,7 @@ function onLeave(el: Element) {
 }
 
 function selectRating(rating: number) {
+  config.main.sidebarIndex = SIDEBAR.LIBRARY;
   libConfig.library.item = LIB_ITEM.RATINGS;
   libConfig.rating.item = rating;
   uiStore.requestCountUpdate({ source: 'library', item: LIB_ITEM.RATINGS, rating });
@@ -334,6 +338,7 @@ function selectRating(rating: number) {
 }
 
 function selectCulling(item: string) {
+  config.main.sidebarIndex = SIDEBAR.LIBRARY;
   libConfig.library.item = LIB_ITEM.CULLING;
   libConfig.culling.item = item;
   uiStore.requestCountUpdate({ source: 'library', item: LIB_ITEM.CULLING, cullingItem: item });
@@ -341,6 +346,7 @@ function selectCulling(item: string) {
 }
 
 function selectSmartTag(smartId: string) {
+  config.main.sidebarIndex = SIDEBAR.LIBRARY;
   libConfig.library.item = LIB_ITEM.SUBJECTS;
   libConfig.library.smartId = smartId;
   uiStore.requestCountUpdate({ source: 'library', item: LIB_ITEM.SUBJECTS, smartId });

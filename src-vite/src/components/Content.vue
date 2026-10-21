@@ -527,6 +527,7 @@
             v-else-if="renderedRightPanelContent === 'info'"
             ref="fileInfoRef"
             :fileInfo="fileList[selectedItemIndex]"
+            :editor-active="config.rightPanel.show && renderedRightPanelContent === 'info'"
             :navigator-viewport="infoNavigatorViewport"
             @navigator-visible="infoNavigatorVisible = $event"
             @navigator-navigate="navigateInfoPreview"
@@ -775,6 +776,8 @@
 </template>
 
 <script setup lang="ts">
+import { mediaDisplayName, applyMediaTitleChange, mediaSortOptions } from '@/common/mediaTitle';
+import { useMediaTitleEvents } from '@/common/mediaTitleEvents';
 import { pendingChanges } from '@/common/pendingChanges';
 import { startupWindowProxy } from '@/common/windowProxy';
 
@@ -834,6 +837,7 @@ import { MAX_NATIVE_DRAG_FILES, createDragPreview, isWindowDragEdge, isNativeFil
 import { isOriginalUnavailable, setFileAccessibility, setFolderAccessibility, requiresOriginalAction } from '@/common/availability';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
 import StructuredSearchDialogs from './StructuredSearchDialogs.vue';
+import { homePhotoIds } from '@/common/homeDashboard';
 import { structuredSearch, structuredSearchAlbum, openStructuredSearch } from '@/common/structuredSearch';
 import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules, hasAiRules, isSmartFolder } from '@/common/smartAlbums';
 import { setMediaHidden } from '@/common/api';
@@ -2387,7 +2391,14 @@ const hasUnsavedChanges = computed(() => {
   return uiStore.hasActiveChanges(currentFile);
 });
 
-const checkUnsavedChanges = (action: () => void) => {
+const checkUnsavedChanges = (next: () => void) => {
+  const action = () => {
+    if (!pendingChanges.hasPending('media-title')) { next(); return; }
+    const library = libConfig._libraryId;
+    void pendingChanges.prepare('media-title').then(token => {
+      if (token && pendingChanges.valid(token) && library === libConfig._libraryId) next();
+    });
+  };
   if (hasUnsavedChanges.value) {
     pendingAction.value = action;
     showUnsavedChangesMsgbox.value = true;
@@ -5934,6 +5945,9 @@ onMounted( async() => {
            }
         }
         break;
+      case 'navigate-info':
+        await handleViewerInfoNavigation(event.payload as any);
+        break;
       case 'update-file-meta':
         const targetFileId = Number((event.payload as any).fileId);
         const changes = (event.payload as any).changes || {};
@@ -7869,6 +7883,7 @@ async function resolveObjectText(searchText: string): Promise<string[]> {
 
 async function getUnifiedSearchFileList(searchText: string, requestId: number) {
   const textParams = {
+    searchMetadata: true,
     searchFileType: config.search.fileType,
     sortType: 3,
     sortOrder: 0,
@@ -8137,6 +8152,12 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
 
     contentTitle.value = collection.name || localeMsg.value.collection.title;
     getCollectionFileList(collectionId, requestId);
+    return;
+  }
+
+  if (newIndex === SIDEBAR.HOME && libConfig.activePane !== 'collection') {
+    contentTitle.value = '';
+    showEmptyContent(requestId);
     return;
   }
 
@@ -8478,7 +8499,7 @@ function enterSimilarSearchMode(file: any) {
   showQuickView.value = false;
   
   // 3. Update Title to indicate context
-  contentTitle.value = localeMsg.value.search.similar_images + ' - ' + file.name;
+  contentTitle.value = localeMsg.value.search.similar_images + ' - ' + mediaDisplayName(file);
 
   // 4. Perform Search (reusing existing API call logic)
   const requestId = ++currentContentRequestId;
@@ -10287,6 +10308,22 @@ const handleInfoNavigateFolder = (folderPath: string) => {
   enterAlbumPreviewMode(targetFile, folderPath);
 };
 
+async function handleViewerInfoNavigation(request: { libraryId: string; fileId: number; target: string; payload: any }) {
+  const library = libConfig._libraryId;
+  if (request.libraryId !== library || !['folder', 'metadata', 'person'].includes(request.target) || !(request.fileId > 0)) return;
+  const file = await getFileInfo(request.fileId);
+  if (!file || library !== libConfig._libraryId) return;
+  checkUnsavedChanges(async () => {
+    if (library !== libConfig._libraryId) return;
+    if (request.target === 'folder' && typeof request.payload === 'string') enterAlbumPreviewMode(file, request.payload);
+    else if (request.target === 'metadata') handleNavigateMetadata(request.payload);
+    else if (request.target === 'person') handleNavigatePerson(request.payload);
+    const mainWindow = await WebviewWindow.getByLabel('main');
+    await mainWindow?.show();
+    await mainWindow?.setFocus();
+  });
+}
+
 const FILE_TYPE_IMAGE = 1;
 const FILE_TYPE_VIDEO = 2;
 const FILE_TYPE_RAW = 4;
@@ -10594,7 +10631,7 @@ const fileTypeOptions = computed(() => {
 
 // sort type options
 const sortOptions = computed(() => {
-  return getSelectOptions(localeMsg.value.toolbar.filter?.sort_type_options);
+  return mediaSortOptions(getSelectOptions(localeMsg.value.toolbar.filter?.sort_type_options), t('media_title.filename'), t('media_title.sort'));
 });
 
 const fixedAiSortOptions = computed(() => [{
@@ -11032,6 +11069,20 @@ async function getFileListThumb(files: any[], offset = 0, concurrencyLimit = 4, 
   return runWithConcurrencyLimit(files);
 }
 
+// Home uses an independent bounded source with the normal single-photo viewer.
+async function openHomePhoto(request: { id: number; ids: number[]; libraryId: string }) {
+  if (request.libraryId !== libConfig._libraryId || config.main.sidebarIndex !== SIDEBAR.HOME) return;
+  const ids = homePhotoIds(request.id, request.ids);
+  if (!ids.length) return;
+  const files = await invoke<any[]>('get_home_preview_files', { libraryId: request.libraryId, fileIds: ids });
+  if (request.libraryId !== libConfig._libraryId || config.main.sidebarIndex !== SIDEBAR.HOME) return;
+  const byId = new Map((files || []).map((file: any) => [Number(file.id), file]));
+  const snapshot = ids.map(id => byId.get(id)).filter(Boolean);
+  const index = snapshot.findIndex((file: any) => file.id === request.id);
+  if (index < 0) throw new Error(t('home_dashboard.photo_unavailable'));
+  await openImageViewer(index, true, false, { files: snapshot });
+}
+
 // Open the image viewer window
 async function openImageViewer(
   index: number,
@@ -11406,8 +11457,17 @@ watch([contentReady, showWelcomeContent], ([ready, welcome]) => {
 }, { immediate: true });
 
 defineExpose({
+  openHomePhoto,
   focusContent: activateContentPane,
   refreshCenteredGridLayout: refreshGridLayoutPreservingScroll,
+});
+useMediaTitleEvents(change => {
+  if (change.library_id !== libConfig._libraryId) return;
+  for (const file of fileList.value) applyMediaTitleChange(file, libConfig._libraryId, change);
+  for (const row of groupedRows.value) applyMediaTitleChange(row?.file || row?.item || row, libConfig._libraryId, change);
+  if (imageViewerSession.value.mode === 'compare') {
+    for (const file of imageViewerSession.value.files) applyMediaTitleChange(file, libConfig._libraryId, change);
+  }
 });
 </script>
 

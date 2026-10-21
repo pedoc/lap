@@ -238,6 +238,7 @@
 </template>
 
 <script setup lang="ts">
+import { mediaDisplayName, mediaNameTooltip } from '@/common/mediaTitle';
 import { addressPath, addressForFile } from '@/common/locationNames';
 import { computed, nextTick, ref, watch, toRef, onBeforeUnmount, type CSSProperties, type Component } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -636,7 +637,8 @@ const menuItems = useFileMenuItems(
 const getGridLabelText = (file: any, option: number) => {
   switch (option) {
     case 0: return '';
-    case 1: return shortenFilename(file.name) || ' ';
+    case 1: return (file.title?.trim() ? mediaDisplayName(file) : shortenFilename(file.name)) || ' ';
+    case 9: return shortenFilename(file.name) || ' ';
     case 2: return formatFileSize(file.size) || ' ';
     case 3: return formatDimensionText(file.width, file.height) || ' ';
     case 4: return formatTimestamp(file.taken_date, 'date_time') || ' ';
@@ -649,7 +651,8 @@ const getGridLabelText = (file: any, option: number) => {
 };
 
 const getGridLabelTooltip = (file: any, option: number) => {
-  if (option === 1) return file.name;
+  if (option === 1) return mediaNameTooltip(file);
+  if (option === 9) return file.name;
   const text = getGridLabelText(file, option);
   return text === ' ' ? '' : text;
 };

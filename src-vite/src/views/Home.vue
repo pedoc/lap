@@ -26,7 +26,7 @@
         ref="leftPanelRootRef"
         tabindex="-1"
         :class="[
-          'relative flex my-1 ml-1 z-10 select-none outline-none',
+          'relative flex shrink-0 my-1 ml-1 z-10 select-none outline-none',
           !leftPanelLayoutExpanded && isMac ? 'mt-12 mb-8': '',
         ]"
         :style="{ width: leftPanelLayoutExpanded ? leftPanelWidth : '4rem' }"
@@ -41,10 +41,10 @@
 
           <!-- side bar -->
           <div 
-            class="fixed top-14 min-w-16 bottom-10 z-10 flex flex-col items-center space-y-1" 
+            class="fixed top-14 min-w-16 bottom-10 z-10 flex flex-col items-center space-y-1 overflow-y-auto no-scrollbar"
             data-tauri-drag-region
           >
-            <div v-for="item in visibleButtons" :key="item.index">
+            <div v-for="item in visibleButtons" :key="item.index" class="shrink-0">
               <TButton
                 :buttonSize="'large'"
                 :icon="item.icon"
@@ -107,7 +107,7 @@
             v-if="leftPanelMounted || libraryEmpty"
             class="absolute inset-y-0 left-16 pt-10 px-1 border-l border-base-content/5 flex flex-col overflow-hidden transition-[transform,opacity] duration-200 ease-in-out"
             :class="leftPanelVisualExpanded ? 'translate-x-0 opacity-100' : '-translate-x-full opacity-0 pointer-events-none'"
-            :style="{ width: `calc(${Number(config.leftPanel.width || 260) / 16}rem - 4rem)` }"
+            :style="{ width: `calc(${leftPanelWidth} - 4rem)` }"
           >
 
             <!-- Component panel (flex-1 to fill remaining space) -->
@@ -147,7 +147,7 @@
       <div v-if="!uiStore.isFullScreen"
         class="w-1 shrink-0"
         :class="{
-          'cursor-col-resize splitter-indicator splitter-vertical': leftPanelLayoutExpanded,
+          'cursor-col-resize splitter-indicator splitter-vertical': leftPanelLayoutExpanded && config.main.sidebarIndex !== SIDEBAR.HOME,
           'splitter-dragging': leftPanelLayoutExpanded && isDraggingSplitter,
         }" 
         @mousedown="startDraggingSplitter"
@@ -155,9 +155,9 @@
       ></div>
        
       <!-- content area -->
-      <div 
+      <div data-home-workspace
         :class="[
-          'flex-1 flex relative',
+          'flex-1 min-w-0 flex relative overflow-hidden',
           showDesktopTitleBar ? 'rounded-tl-box' : '',
         ]"
       >
@@ -165,7 +165,10 @@
           <h2 class="text-lg font-medium">{{ $t('library.database_corrupted') }}</h2>
           <p class="text-sm text-base-content/60">{{ $t('library.database_corrupted_hint') }}</p>
         </div>
-        <Content v-show="!showMediaUtilities" v-else-if="databaseCorrupted === false" ref="contentRef" :key="libraryVersion" :titlebar="activeSidebarButton.text" :libraryEmpty="libraryEmpty" @startup-ready="finishStartup"/>
+        <div v-else-if="databaseCorrupted === false" v-show="!showMediaUtilities && !showHomeDashboard" data-content-panel class="flex flex-1 min-w-0 overflow-hidden">
+          <Content ref="contentRef" :key="libraryVersion" :titlebar="activeSidebarButton.text" :libraryEmpty="libraryEmpty" @startup-ready="finishStartup"/>
+        </div>
+        <HomeDashboard v-if="databaseCorrupted === false && showHomeDashboard" ref="homeDashboardRef" :key="'home-'+libraryVersion" :open-preview="openHomePreview" :library-empty="libraryEmpty" @browse="browseHome" @search="searchFromHome" @filter="filterFromHome" />
         <MediaUtilityView v-if="databaseCorrupted===false && showMediaUtilities" :key="libraryVersion+'-'+libConfig.library.item" :mode="libConfig.library.item==='hidden-media'?'hidden':'deleted'" />
       </div>
     </div>
@@ -224,6 +227,10 @@ import TitleBar from '@/components/TitleBar.vue';
 import TButton from '@/components/TButton.vue';
 import MediaUtilityView from '@/components/MediaUtilityView.vue';
 import Content from '@/components/Content.vue';
+import HomeDashboard from '@/components/HomeDashboard.vue';
+import HomeSidebar from '@/components/HomeSidebar.vue';
+import { homeBrowseRules, homeEntityRules, homePeriodRules, homePreferences, type HomeBrowseTarget, type HomePhoto } from '@/common/homeDashboard';
+import { structuredSearch, resetStructuredSearch, applyStructuredSearch, openStructuredSearch } from '@/common/structuredSearch';
 import ContextMenu from '@/components/ContextMenu.vue';
 import CollectionTray from '@/components/CollectionTray.vue';
 const ManageLibraries = defineAsyncComponent(() => import('@/components/ManageLibraries.vue'));
@@ -231,6 +238,7 @@ import iconLogo from '@/assets/images/icon.png';
 
 import {
   IconTag,
+  IconHome,
   IconLocation,
   IconPerson,
   IconFileSearch,
@@ -248,6 +256,8 @@ import {
 
 const isSwitchingLibrary = ref(false);
 const libraryVersion = ref(0);
+const showHomeDashboard = computed(() => config.main.sidebarIndex === SIDEBAR.HOME && libConfig.activePane !== 'collection');
+const homeDashboardRef = ref<any>(null);
 const showMediaUtilities=computed(()=>config.main.sidebarIndex===SIDEBAR.LIBRARY && libConfig.activePane!=='collection' && ['hidden-media','deleted-media'].includes(libConfig.library.item));
 const libraryEmpty = ref(false);
 // Mount library components only after the startup corruption check has completed.
@@ -273,7 +283,7 @@ const checkLibraryEmpty = async () => {
   try {
     const albums = await invoke<any[]>('get_all_albums', { refreshAccessibility: false });
     libraryEmpty.value = (albums?.length ?? 0) === 0;
-    if (libraryEmpty.value) {
+    if (libraryEmpty.value && config.main.sidebarIndex !== SIDEBAR.HOME) {
       config.main.sidebarIndex = SIDEBAR.ALBUM;
     }
   } catch {
@@ -394,6 +404,7 @@ const {
 
 // buttons
 const buttons = computed(() =>  [
+  { index: SIDEBAR.HOME, icon: IconHome, component: HomeSidebar, text: t('home_dashboard.title'), props: { libraryEmpty: libraryEmpty.value } },
   { index: SIDEBAR.LIBRARY, icon: IconPhotoAll, component: Library, text: localeMsg.value.sidebar.library },
   { index: SIDEBAR.ALBUM, icon: IconFolders, component: AlbumList, text: localeMsg.value.sidebar.album, props: { selectionSource: 'album' } },
   { index: SIDEBAR.SMART_ALBUM, icon: IconFolderCog, component: SmartAlbumList, text: localeMsg.value.album.smart_album_list },
@@ -408,18 +419,18 @@ const buttons = computed(() =>  [
 ]);
 
 const activeSidebarButton = computed(() =>
-  buttons.value.find(item => item.index === config.main.sidebarIndex) || buttons.value[SIDEBAR.LIBRARY]
+  buttons.value.find(item => item.index === config.main.sidebarIndex) || buttons.value.find(item => item.index === SIDEBAR.LIBRARY)!
 );
 
 const leftPanelWidth = computed(() =>
-  `${(Number(config.leftPanel.width || 260) / 16).toFixed(2)}rem`
+  `${(Number(config.main.sidebarIndex === SIDEBAR.HOME ? 256 : config.leftPanel.width || 260) / 16).toFixed(2)}rem`
 );
 
 const visibleButtons = computed(() =>
   buttons.value
-    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY && item.index !== SIDEBAR.OCR && item.index !== SIDEBAR.OBJECTS }))
+    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.HOME && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY && item.index !== SIDEBAR.OCR && item.index !== SIDEBAR.OBJECTS }))
     .filter(item => !item.hidden)
-    .sort((a, b) => a.index - b.index)
+    .sort((a, b) => a.index === SIDEBAR.HOME ? -1 : b.index === SIDEBAR.HOME ? 1 : a.index - b.index)
 );
 
 watch(() => config.settings.face.enabled, (enabled) => {
@@ -557,6 +568,7 @@ function handleHomeKeyDown(event: KeyboardEvent) {
   }
 
   if (event.key === 'Tab' && uiStore.inputStack.length === 0) {
+    if (showHomeDashboard.value) return;
     event.preventDefault();
     event.stopPropagation();
     if (uiStore.activePane === 'left-sidebar' || !leftPanelRootRef.value) {
@@ -667,7 +679,7 @@ function clickSidebar(index: number) {
   // silently mutate the persisted sidebarIndex and dead-end in a blank pane.
   if (databaseCorrupted.value) return;
   activateMainPanel();
-  if (libraryEmpty.value && index !== SIDEBAR.ALBUM && index !== SIDEBAR.LIBRARY && index !== SIDEBAR.OCR && index !== SIDEBAR.OBJECTS) return;
+  if (libraryEmpty.value && index !== SIDEBAR.HOME && index !== SIDEBAR.ALBUM && index !== SIDEBAR.LIBRARY && index !== SIDEBAR.OCR && index !== SIDEBAR.OBJECTS) return;
   if (config.main.sidebarIndex === index) {
     showPanel.value = !showPanel.value;
   } else {
@@ -680,9 +692,54 @@ function activateMainPanel() {
   libConfig.activePane = 'main';
 }
 
+async function openHomePreview(photo: HomePhoto, ids: number[]) {
+  if (!contentRef.value?.openHomePhoto) throw new Error(t('home_dashboard.preview_not_ready'));
+  await contentRef.value.openHomePhoto({ id: photo.id, ids, libraryId: libConfig._libraryId });
+}
+
+function browseHome(target: HomeBrowseTarget) {
+  activateMainPanel();
+  showPanel.value = true;
+  if (target.kind === 'add') { void emit('add-album-requested'); return; }
+  if (target.kind === 'places') { config.main.sidebarIndex = SIDEBAR.LOCATION; return; }
+  if (target.kind === 'people' && config.settings.face.enabled) { config.main.sidebarIndex = SIDEBAR.PERSON; return; }
+  if (target.kind === 'objects') { Object.assign(libConfig.objects, { state: 'all', classKey: '', className: '', minCount: 1 }); config.main.sidebarIndex = SIDEBAR.OBJECTS; return; }
+  if (target.kind === 'favorites') { libConfig.library.item = 'favorites'; config.main.sidebarIndex = SIDEBAR.LIBRARY; return; }
+  if (target.kind === 'years') { config.calendar.view = 'years'; config.main.sidebarIndex = SIDEBAR.CALENDAR; return; }
+  if (target.kind === 'photos' || target.kind === 'videos') {
+    libConfig.library.item = 'media-types'; libConfig.library.smartId = target.kind === 'photos' ? 'image' : 'video';
+    config.main.sidebarIndex = SIDEBAR.LIBRARY; return;
+  }
+  const rules = target.kind === 'year' || target.kind === 'month' ? homePeriodRules(target.year, target.kind === 'month' ? target.month : undefined)
+    : target.kind === 'entity' ? homeEntityRules(target.entity)
+    : target.kind === 'recent' ? [{ id: 'home-recent', field: 'file_type', operator: 'is', value: 5 }]
+    : target.kind === 'featured' || target.kind === 'anniversary' ? homeBrowseRules(target.kind, homePreferences(config.home).minimumRating) : [];
+  if (!rules.length) return;
+  config.search.fileType = 0;
+  if (target.kind === 'recent') { config.search.sortType = 8; config.search.sortOrder = 1; config.search.groupBy = 0; }
+  if (structuredSearch.libraryId !== libConfig._libraryId) resetStructuredSearch(libConfig._libraryId);
+  if (applyStructuredSearch({ query: { version: 2, match: 'all', rules } }, libConfig._libraryId)) config.main.sidebarIndex = SIDEBAR.SEARCH;
+}
+
+function searchFromHome(text: string) {
+  if (!text.trim()) return;
+  structuredSearch.active = false;
+  config.search.fileType = 0;
+  libConfig.search.searchText = text.trim(); libConfig.search.searchHistoryIndex = -1;
+  activateMainPanel(); config.main.sidebarIndex = SIDEBAR.SEARCH;
+  showPanel.value = true;
+}
+
+function filterFromHome() {
+  activateMainPanel();
+  config.main.sidebarIndex = SIDEBAR.SEARCH;
+  showPanel.value = true;
+  openStructuredSearch(libConfig._libraryId);
+}
+
 // Dragging the splitter
 function startDraggingSplitter(event: MouseEvent) {
-  if(!leftPanelLayoutExpanded.value) return; // no expanded left pane
+  if(!leftPanelLayoutExpanded.value || config.main.sidebarIndex === SIDEBAR.HOME) return;
 
   isDraggingSplitter.value = true;
   document.addEventListener('mousemove', handleMouseMove);

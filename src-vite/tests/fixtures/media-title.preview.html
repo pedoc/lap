@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>图片标题 · 隔离交互预览</title>
+<div id="preview"></div>
+<script type="module">
+import '/src/assets/app.css';
+import { createApp, reactive } from 'vue';
+import { createPinia } from 'pinia';
+import { createI18n } from 'vue-i18n';
+import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
+import { emit } from '@tauri-apps/api/event';
+import dictionary from '/src/locales/zh-CN.json';
+
+if (window.__TAURI_INTERNALS__) throw new Error('Only open this isolated preview in a standalone browser, not Tauri.');
+window.__TAURI_OS_PLUGIN_INTERNALS__ = { os_type: 'windows', platform: 'windows', family: 'windows', arch: 'x86_64', version: 'preview', eol: '\r\n', exe_extension: 'exe' };
+const rows = reactive([
+  { label: '默认 · 点击编辑', id: 1, name: 'DSC_0123.JPG', title: null },
+  { label: 'Hover / Active · 鼠标操作', id: 2, name: 'DSC_0124.JPG', title: '西湖日落' },
+  { label: 'Focus · Tab 键操作', id: 3, name: 'DSC_0125.JPG', title: null },
+  { label: 'Disabled · 非活动面板', id: 4, name: 'DSC_0126.JPG', title: '只读展示', disabled: true },
+  { label: 'Loading · 保存延迟 3 秒', id: 5, name: 'DSC_0127.JPG', title: null },
+  { label: 'Error · 保存失败保留草稿', id: 6, name: 'DSC_0128.JPG', title: null },
+  { label: 'Conflict · 模拟其他窗口修改', id: 7, name: 'DSC_0129.JPG', title: '原有标题' },
+  { label: 'Success · 保存和清除', id: 8, name: 'DSC_0130.JPG', title: '可清除的标题' },
+]);
+const database = new Map(rows.map(row => [row.id, row.title]));
+const receipt = reactive({ commands: [], message: '' });
+mockIPC(async (command, args) => {
+  receipt.commands.push(command);
+  if (command === 'plugin:dialog|ask' || command === 'plugin:dialog|confirm') return true;
+  if (!['get_media_title', 'set_media_title'].includes(command)) throw new Error('Preview blocked unexpected IPC: ' + command);
+  const current = database.get(args.fileId);
+  if (command === 'set_media_title') {
+    if (args.fileId === 5) await new Promise(resolve => setTimeout(resolve, 3000));
+    if (args.fileId === 6) throw new Error('Preview: offline write failed; no originals were accessed');
+    if (current !== args.expectedTitle) throw new Error('TITLE_CONFLICT');
+    database.set(args.fileId, args.title);
+  }
+  const change = { library_id: args.libraryId, file_id: args.fileId, title: database.get(args.fileId) };
+  if (command === 'set_media_title') await emit('media-title-changed', change);
+  receipt.message = JSON.stringify(change);
+  return change;
+}, { shouldMockEvents: true });
+mockWindows('media-title-preview');
+const { default: FileTitleEditor } = await import('/src/components/FileTitleEditor.vue');
+const { libConfig } = await import('/src/common/config.js');
+const { mediaDisplayName, applyMediaTitleChange } = await import('/src/common/mediaTitle.ts');
+const { useMediaTitleEvents } = await import('/src/common/mediaTitleEvents.ts');
+const app = createApp({
+  components: { FileTitleEditor },
+  setup() {
+    useMediaTitleEvents(change => rows.forEach(row => applyMediaTitleChange(row, libConfig._libraryId, change)));
+    async function conflict() {
+      database.set(7, '另一个窗口的新标题');
+      await emit('media-title-changed', { library_id: libConfig._libraryId, file_id: 7, title: database.get(7) });
+    }
+    return { rows, receipt, mediaDisplayName, conflict };
+  },
+  template: `<main class="mx-auto max-w-3xl p-6 space-y-4 text-base-content">
+    <header><h1 class="text-xl font-semibold">图片标题 · 隔离交互预览</h1><p class="text-sm opacity-60">真实组件，内存 IPC。默认、hover、focus、active、disabled、loading、error、success 八种状态；不读取图库。</p></header>
+    <section v-for="row in rows" :key="row.id" :data-preview-row="row.id" class="rounded-box border border-base-content/10 bg-base-200 p-4">
+      <h2 class="text-xs font-semibold mb-2">{{ row.label }}</h2>
+      <div class="grid grid-cols-[84px_minmax(0,1fr)] gap-x-4 gap-y-2"><span class="text-xs opacity-60">标题</span><FileTitleEditor :file="row" :active="!row.disabled" /><span class="text-xs opacity-60">真实文件名</span><span class="text-xs" data-filename>{{ row.name }}</span><span class="text-xs opacity-60">显示名称</span><span class="text-xs" data-display-name>{{ mediaDisplayName(row) }}</span></div>
+      <button v-if="row.id === 7" class="btn btn-xs mt-2" @click="conflict">模拟其他窗口修改</button>
+    </section>
+    <aside class="rounded-box bg-base-200 p-3 text-xs"><p>IPC：{{ receipt.commands.join(' → ') || '尚未调用' }}</p><p data-preview-receipt>{{ receipt.message }}</p></aside>
+  </main>`,
+});
+app.use(createPinia());
+app.use(createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-CN': dictionary } }));
+app.mount('#preview');
+</script>
+</html>

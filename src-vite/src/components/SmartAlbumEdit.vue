@@ -100,6 +100,7 @@
 </template>
 
 <script setup lang="ts">
+import { mediaSortOptions } from '@/common/mediaTitle';
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import SmartAlbumPhotoPicker from './SmartAlbumPhotoPicker.vue';
@@ -325,10 +326,10 @@ function indexedOptions(labels: unknown, fallbacks: string[]) {
   }));
 }
 
-const sortOptions = computed(() => indexedOptions(
+const sortOptions = computed(() => mediaSortOptions(indexedOptions(
   localeMsg.value.toolbar.filter?.sort_type_options,
   ['Taken Date', 'Created Date', 'Modified Date', 'Name', 'Size', 'Dimension', 'Duration', 'Random'],
-));
+), t('media_title.filename'), t('media_title.sort')));
 
 const sortOrderOptions = computed(() => indexedOptions(
   localeMsg.value.toolbar.filter?.sort_order_options,
@@ -371,7 +372,8 @@ const fieldOptions = computed(() => [
 
   // File
   { value: 'folder_name', label: t('album.smart_edit.fields.folder_name') },
-  { value: 'name', label: t('album.smart_edit.fields.name') },
+  { value: 'title', label: t('media_title.label') },
+  { value: 'name', label: t('media_title.filename') },
   { value: 'file_type', label: t('album.smart_edit.fields.file_type') },
   { value: 'media_subtype', label: t('album.smart_edit.fields.media_subtype') },
   { value: 'extension', label: t('album.smart_edit.fields.extension') },
@@ -439,6 +441,7 @@ function getOperatorOptions(field: string) {
   const op = (key: string) => ({ value: key, label: t(`album.smart_edit.operators.${key}`) });
   if (['semantic','similar_image'].includes(field)) return [{value:'matches',label:'≥'}, {value:'not_matches',label:'<'}];
   if (field === 'anniversary') return [op('is')];
+  if (field === 'title') return [op('contains'), op('not_contains'), op('empty'), op('not_empty')];
   if (['folder_name', 'name', 'ocr_text'].includes(field)) return [op('contains'), op('not_contains')];
   if (field === 'object_state') return [op('is'),op('is_not')];
   if (field === 'object_class') return [op('has'),op('not_has')];
@@ -468,7 +471,7 @@ function setDefaultRuleValue(rule: any) {
   if (rule.field === 'semantic') rule.value = {prompt:'',threshold:0.25};
   else if (rule.field === 'similar_image') rule.value = {fileId:null,threshold:0.5};
   else if (rule.field === 'anniversary') rule.value = true;
-  else if (['folder_name', 'name', 'ocr_text'].includes(rule.field)) rule.value = '';
+  else if (['folder_name', 'name', 'title', 'ocr_text'].includes(rule.field)) rule.value = '';
   else if (rule.field === 'object_state') rule.value = 'detected';
   else if (rule.field === 'object_class') rule.value = objectOptions.value[0]?.value || '';
   else if (rule.field === 'object_count') rule.value = {classKey:objectOptions.value[0]?.value || '',count:1};

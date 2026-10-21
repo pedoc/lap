@@ -552,6 +552,7 @@
 </template>
 
 <script setup lang="ts">
+import { mediaGridLabels } from '@/common/mediaTitle';
 
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
 import { LogicalSize } from '@tauri-apps/api/dpi';
@@ -782,7 +783,7 @@ const mapMarkerSizeOptions = computed(() => {
 
 // Define the grid label options
 const gridLabelOptions = computed(() => {
-  const options = localeMsg.value.settings.grid.label_options;
+  const options = mediaGridLabels(localeMsg.value.settings.grid.label_options, t('media_title.display'), t('media_title.filename'));
   const result = [];
 
   for (let i = 0; i < options.length; i++) {

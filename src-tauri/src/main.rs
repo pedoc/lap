@@ -26,6 +26,7 @@ mod t_drag;
 mod t_embedded_jpeg;
 mod t_face;
 mod t_heif;
+mod t_home;
 mod t_http;
 mod t_image;
 mod t_jpeg;
@@ -54,6 +55,8 @@ mod t_media_traits;
 mod t_private_media;
 mod t_private_lock;
 mod t_sqlite;
+mod t_search;
+mod t_media_title;
 mod t_thumbnail_rebuild;
 mod t_storage;
 mod t_startup;
@@ -311,6 +314,9 @@ async fn main() {
             t_cmds::get_grouped_file_position,
             t_cmds::get_query_file_ids,
             t_cmds::get_library_visible_counts,
+            t_home::get_home_overview,
+            t_home::search_home_entities,
+            t_home::get_home_preview_files,
             t_cmds::get_query_file_position,
             t_media_lifecycle::delete_hidden_media,
             t_media_lifecycle::get_private_media_preview,
@@ -418,6 +424,8 @@ async fn main() {
             t_cmds::batch_delete_files,
             // file metadata
             t_cmds::edit_file_comment,
+            t_media_title::get_media_title,
+            t_media_title::set_media_title,
             t_cmds::clean_unused_thumbnail_cache,
             t_cmds::get_file_thumb,
             t_cmds::get_file_thumb_by_id,

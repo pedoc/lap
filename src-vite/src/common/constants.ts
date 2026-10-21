@@ -11,6 +11,7 @@ export const SIDEBAR = {
   CAMERA: 8,
   OCR: 9,
   OBJECTS: 10,
+  HOME: 11,
 } as const;
 
 export type Sidebar = (typeof SIDEBAR)[keyof typeof SIDEBAR];

@@ -1,4 +1,5 @@
 import test from "node:test";
+import * as mediaTitles from '../src/common/mediaTitle.ts';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -25,6 +26,7 @@ function context(overrides: any = {}) {
   const libConfig = Vue.reactive({ _libraryId: "lib" });
   return {
     ...helpers,
+    ...mediaTitles,
     ...objectHelpers,
     useObjects: () => ({ view: Vue.ref({classes:[{key:"coco2017-80@1:0",name:"person",supported:true}]}) }),
     ...Vue,
@@ -184,7 +186,7 @@ function renderComponent(text: string, bindings: any, filename: string) {
   );
   const imports: any = {};
   code = code
-    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_m, names) => {
+    .replace(/import\s*\{([^}]*?)\}\s*from\s*['"]vue['"];?/g, (_m, names) => {
       for (const name of names.split(",")) {
         const [original, alias] = name.trim().split(/\s+as\s+/);
         imports[alias || original] = (Vue as any)[original];

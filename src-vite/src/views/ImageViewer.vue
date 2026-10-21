@@ -10,155 +10,171 @@
     @mouseleave="handleRootMouseLeave"
   >
 
-    <div
-      ref="viewerContainer"
-      :class="[
-        'relative flex-1 flex justify-center items-center overflow-hidden select-none',
-        showEmbeddedStatusBar ? 'pb-8' : '',
-      ]"
-    >
-      <template v-if="splitCount === 1 && fileIndex >= 0">
-        <MediaViewer
-          ref="mediaViewerRef"
-          :mode="2"
-          :isFullScreen="isFullScreen"
-          :file="fileInfo"
-          :showThumbnailPlaceholder="true"
-          :nextFilePath="nextFilePath"
-          :hasPrevious="fileIndex > 0"
-          :hasNext="fileIndex < fileCount - 1"
-          :fileIndex="fileIndex"
-          :fileCount="fileCount"
-          :isSlideShow="isSlideShow"
-          :canSlideShow="true"
-          :slideShowIntervalIndex="slideShowIntervalIndex"
-          :canInteract="true"
-          :imageScale="imageScale"
-          :imageMinScale="imageMinScale"
-          :imageMaxScale="imageMaxScale"
-          :isZoomFit="isZoomFit"
-          :isSyncViewport="isSyncViewport"
-          :showWindowControls="true"
-          @prev="clickPrev()"
-          @next="clickNext()"
-          @toggle-slide-show="clickSlideShow()"
-          @update:slideShowIntervalIndex="slideShowIntervalIndex = $event"
-          @item-action="handleItemAction"
-          @scale="clickScale"
-          @update:isZoomFit="(val) => handleZoomFitUpdate(val, 'left')"
-          @view-background-change="setViewerBackground"
-          @media-dblclick="toggleZoomFit()"
-          @toggle-full-screen="toggleNativeFullScreen"
-          @close="closeWindow"
-          @slideshow-next="handleSlideshowNext"
-        />
+    <MediaViewer
+      v-if="fileIndex >= 0"
+      class="shrink-0 z-[100]"
+      :mode="2"
+      :toolbarOnly="true"
+      :showToolbar="true"
+      :showWindowControls="true"
+      :isFullScreen="isFullScreen"
+      :file="getFileInfoByPane(activePane)"
+      :nextFilePath="getNextFilePathByPane(activePane)"
+      :hasPrevious="getFileIndexByPane(activePane) > 0"
+      :hasNext="getFileIndexByPane(activePane) < fileCount - 1"
+      :fileIndex="getFileIndexByPane(activePane)"
+      :fileCount="fileCount"
+      :isSlideShow="splitCount === 1 && isSlideShow"
+      :canSlideShow="splitCount === 1"
+      :canInteract="!!activeFileInfo"
+      :infoPanelOpen="showInfoPanel"
+      :slideShowIntervalIndex="slideShowIntervalIndex"
+      :imageScale="getPaneScale(activePane).scale"
+      :imageMinScale="getPaneScale(activePane).min"
+      :imageMaxScale="getPaneScale(activePane).max"
+      :isZoomFit="getZoomFitByPane(activePane)"
+      :isSyncViewport="isSyncViewport"
+      :showSyncViewportControl="isCompareModeSession"
+      :forceToolbarVisible="isFullScreen && splitToolbarVisible"
+      @prev="clickPrev(activePane)"
+      @next="clickNext(activePane)"
+      @toggle-slide-show="clickSlideShow(activePane)"
+      @update:slideShowIntervalIndex="slideShowIntervalIndex = $event"
+      @item-action="handleItemAction"
+      @scale="clickScale($event, activePane)"
+      @update:isZoomFit="(val) => handleZoomFitUpdate(val, activePane)"
+      @toggle-full-screen="toggleNativeFullScreen"
+      @close="closeWindow"
+      @slideshow-next="handleSlideshowNext"
+    />
 
-        <!--
-        <div v-if="config.settings.showComment && fileInfo?.comments?.length > 0" 
-          class="absolute flex m-2 p-2 bottom-0 left-0 right-0 text-sm bg-base-100/30 rounded-box select-text" 
-        >
-          <IconComment class="t-icon-size-sm shrink-0 mr-2"></IconComment>
-          {{ fileInfo?.comments }}
-        </div>
-        -->
-      </template>
-
-      <template v-else-if="splitCount > 1 && fileIndex >= 0">
-        <div class="w-full h-full flex flex-col">
-          <!-- Shared toolbar above both panes -->
+    <div class="relative flex flex-1 min-h-0" :class="showEmbeddedStatusBar ? 'pb-8' : ''">
+      <div
+        ref="viewerContainer"
+        :class="[
+          'relative flex-1 min-w-0 min-h-0 flex justify-center items-center overflow-hidden select-none',
+        ]"
+      >
+        <template v-if="splitCount === 1 && fileIndex >= 0">
           <MediaViewer
+            ref="mediaViewerRef"
             :mode="2"
-            :toolbarOnly="true"
-            :showToolbar="true"
-            :showWindowControls="true"
             :isFullScreen="isFullScreen"
-            :file="getFileInfoByPane(activePane)"
-            :nextFilePath="getNextFilePathByPane(activePane)"
-            :hasPrevious="getFileIndexByPane(activePane) > 0"
-            :hasNext="getFileIndexByPane(activePane) < fileCount - 1"
-            :fileIndex="getFileIndexByPane(activePane)"
+            :file="fileInfo"
+            :showThumbnailPlaceholder="true"
+            :nextFilePath="nextFilePath"
+            :hasPrevious="fileIndex > 0"
+            :hasNext="fileIndex < fileCount - 1"
+            :fileIndex="fileIndex"
             :fileCount="fileCount"
-            :isSlideShow="false"
-            :canSlideShow="false"
+            :isSlideShow="isSlideShow"
+            :canSlideShow="true"
+            :slideShowIntervalIndex="slideShowIntervalIndex"
             :canInteract="true"
-            :imageScale="getPaneScale(activePane).scale"
-            :imageMinScale="getPaneScale(activePane).min"
-            :imageMaxScale="getPaneScale(activePane).max"
-            :isZoomFit="getZoomFitByPane(activePane)"
+            :imageScale="imageScale"
+            :imageMinScale="imageMinScale"
+            :imageMaxScale="imageMaxScale"
+            :isZoomFit="isZoomFit"
             :isSyncViewport="isSyncViewport"
-            :showSyncViewportControl="isCompareModeSession"
-            :forceToolbarVisible="isFullScreen && splitToolbarVisible"
-            @prev="clickPrev(activePane)"
-            @next="clickNext(activePane)"
-            @toggle-slide-show="clickSlideShow(activePane)"
+            :showToolbar="false"
+            @prev="clickPrev()"
+            @next="clickNext()"
+            @toggle-slide-show="clickSlideShow()"
+            @update:slideShowIntervalIndex="slideShowIntervalIndex = $event"
             @item-action="handleItemAction"
-            @scale="clickScale($event, activePane)"
-            @update:isZoomFit="(val) => handleZoomFitUpdate(val, activePane)"
+            @scale="clickScale"
+            @update:isZoomFit="(val) => handleZoomFitUpdate(val, 'left')"
+            @view-background-change="setViewerBackground"
+            @media-dblclick="toggleZoomFit()"
             @toggle-full-screen="toggleNativeFullScreen"
             @close="closeWindow"
             @slideshow-next="handleSlideshowNext"
           />
 
-          <!-- Split Panes -->
-          <div
-            class="flex-1 grid min-h-0"
-            :class="splitCount === 4 ? 'grid-cols-2 grid-rows-2' : 'grid-cols-2 grid-rows-1'"
-          >
+
+        </template>
+
+        <template v-else-if="splitCount > 1 && fileIndex >= 0">
+          <div class="w-full h-full flex flex-col">
+            <!-- Split Panes -->
             <div
-              v-for="pane in visiblePanes"
-              :key="pane"
-              class="relative min-w-0 min-h-0"
-              :class="[paneBorderClass(pane), !isPaneAvailable(pane) ? 'pointer-events-none opacity-40' : '']"
-              @mousedown="setActivePane(pane)"
+              class="flex-1 grid min-h-0"
+              :class="splitCount === 4 ? 'grid-cols-2 grid-rows-2' : 'grid-cols-2 grid-rows-1'"
             >
-              <MediaViewer
-                :ref="(el) => setPaneViewerRef(pane, el)"
-                :mode="2"
-                :isFullScreen="isFullScreen"
-                :file="getFileInfoByPane(pane)"
-                :showThumbnailPlaceholder="true"
-                :nextFilePath="getNextFilePathByPane(pane)"
-                :hasPrevious="getFileIndexByPane(pane) > 0"
-                :hasNext="getFileIndexByPane(pane) < fileCount - 1"
-                :fileIndex="getFileIndexByPane(pane)"
-                :fileCount="fileCount"
-                :isSlideShow="false"
-                :canSlideShow="false"
-                :canInteract="isPaneAvailable(pane) && activePane === pane"
-                :isPlaybackActive="isPaneAvailable(pane) && activePane === pane"
-                :showToolbar="false"
-                :imageScale="getPaneScale(pane).scale"
-                :imageMinScale="getPaneScale(pane).min"
-                :imageMaxScale="getPaneScale(pane).max"
-                :isZoomFit="getZoomFitByPane(pane)"
-                @prev="clickPrev(pane)"
-                @next="clickNext(pane)"
-                @toggle-slide-show="clickSlideShow(pane)"
-                @item-action="handleItemAction"
-                @scale="clickScale($event, pane)"
-                @update:isZoomFit="(val) => handleZoomFitUpdate(val, pane)"
-                @view-background-change="setViewerBackground"
-                @media-dblclick="toggleZoomFit(pane)"
-                @viewport-change="handleViewportChange($event, pane)"
-                @activate="setActivePane(pane)"
-                @toggle-full-screen="toggleNativeFullScreen"
-                @close="closeWindow"
-                @slideshow-next="handleSlideshowNext"
-              />
               <div
-                v-if="isPaneAvailable(pane) && activePane === pane"
-                class="absolute inset-0 z-90 border border-primary/70 pointer-events-none"
-              />
+                v-for="pane in visiblePanes"
+                :key="pane"
+                class="relative min-w-0 min-h-0"
+                :class="[paneBorderClass(pane), !isPaneAvailable(pane) ? 'pointer-events-none opacity-40' : '']"
+                @mousedown="setActivePane(pane)"
+              >
+                <MediaViewer
+                  :ref="(el) => setPaneViewerRef(pane, el)"
+                  :mode="2"
+                  :isFullScreen="isFullScreen"
+                  :file="getFileInfoByPane(pane)"
+                  :showThumbnailPlaceholder="true"
+                  :nextFilePath="getNextFilePathByPane(pane)"
+                  :hasPrevious="getFileIndexByPane(pane) > 0"
+                  :hasNext="getFileIndexByPane(pane) < fileCount - 1"
+                  :fileIndex="getFileIndexByPane(pane)"
+                  :fileCount="fileCount"
+                  :isSlideShow="false"
+                  :canSlideShow="false"
+                  :canInteract="isPaneAvailable(pane) && activePane === pane"
+                  :isPlaybackActive="isPaneAvailable(pane) && activePane === pane"
+                  :showToolbar="false"
+                  :imageScale="getPaneScale(pane).scale"
+                  :imageMinScale="getPaneScale(pane).min"
+                  :imageMaxScale="getPaneScale(pane).max"
+                  :isZoomFit="getZoomFitByPane(pane)"
+                  @prev="clickPrev(pane)"
+                  @next="clickNext(pane)"
+                  @toggle-slide-show="clickSlideShow(pane)"
+                  @item-action="handleItemAction"
+                  @scale="clickScale($event, pane)"
+                  @update:isZoomFit="(val) => handleZoomFitUpdate(val, pane)"
+                  @view-background-change="setViewerBackground"
+                  @media-dblclick="toggleZoomFit(pane)"
+                  @viewport-change="handleViewportChange($event, pane)"
+                  @activate="setActivePane(pane)"
+                  @toggle-full-screen="toggleNativeFullScreen"
+                  @close="closeWindow"
+                  @slideshow-next="handleSlideshowNext"
+                />
+                <div
+                  v-if="isPaneAvailable(pane) && activePane === pane"
+                  class="absolute inset-0 z-90 border border-primary/70 pointer-events-none"
+                />
+              </div>
             </div>
           </div>
-        </div>
-      </template>
+        </template>
 
-      <!-- no image selected -->
-      <div v-else class="flex flex-col items-center justify-center w-full h-full text-base-content/30">
-        <IconSearch class="w-8 h-8" />
-        <span>{{ $t('tooltip.not_found.files') }}</span>
+        <!-- no image selected -->
+        <div v-else class="flex flex-col items-center justify-center w-full h-full text-base-content/30">
+          <IconSearch class="w-8 h-8" />
+          <span>{{ $t('tooltip.not_found.files') }}</span>
+        </div>
       </div>
+
+      <aside v-if="showInfoPanel" class="w-[23rem] max-w-[48vw] shrink-0 min-h-0 p-2" :aria-label="t('file_info.title')">
+        <FileInfo
+          :fileInfo="activeFileInfo"
+          :editor-active="showInfoPanel && !!activeFileInfo"
+          @close="toggleInfoPanel"
+          @toggleFavorite="toggleFavorite(getActiveFilePane())"
+          @setRating="setCurrentFileRating($event, getActiveFilePane())"
+          @setCulling="setCurrentFileCullingFlag($event, getActiveFilePane())"
+          @rotate="clickRotate(getActiveFilePane())"
+          @quick-edit-tag="clickTag(getActiveFilePane())"
+          @quick-edit-collection="clickAddToCollection(getActiveFilePane())"
+          @quick-edit-comment="openCommentEditor(getActiveFilePane())"
+          @navigate-folder="forwardInfoNavigation('folder', $event)"
+          @navigate-metadata="forwardInfoNavigation('metadata', $event)"
+          @navigate-person="forwardInfoNavigation('person', $event)"
+        />
+      </aside>
     </div>
 
     <div
@@ -210,6 +226,9 @@
 </template>
 
 <script setup lang="ts">
+import { pendingChanges } from '@/common/pendingChanges';
+import { mediaDisplayName } from '@/common/mediaTitle';
+import { useMediaTitleEvents } from '@/common/mediaTitleEvents';
 import { startOcr } from '@/common/ocr';
 import { startObjectIndex } from '@/common/objects';
 import { objectSelectionIds } from '@/common/objectUi';
@@ -242,6 +261,7 @@ import {
 } from '@/common/api';
 
 import MediaViewer from '@/components/MediaViewer.vue';
+import FileInfo from '@/components/FileInfo.vue';
 import MessageBox from '@/components/MessageBox.vue';
 import TButton from '@/components/TButton.vue';
 import StatusBar from '@/components/StatusBar.vue';
@@ -268,6 +288,7 @@ const fileIndex = ref(0);       // Index of the current file
 const fileCount = ref(0);       // Total number of files
 
 const fileInfo = ref<any>(null);
+const showInfoPanel = ref(false);
 const nextFilePath = ref('');
 const iconRotate = ref(0);      // icon rotation angle
 const isTransitionDisabled = ref(true);
@@ -367,7 +388,7 @@ function applyViewerScale(scale: number) {
 }
 
 function handleRootMouseMove(event: MouseEvent) {
-  if (!isFullScreen.value || splitCount.value === 1) {
+  if (!isFullScreen.value) {
     splitToolbarVisible.value = false;
     return;
   }
@@ -388,7 +409,7 @@ onMounted(async() => {
   window.addEventListener('resize', handleResize);
 
   const urlParams = new URLSearchParams(window.location.search);
-  
+
   fileId.value    = Number(urlParams.get('fileId'));
   fileIndex.value = Number(urlParams.get('fileIndex'));
   fileCount.value = Number(urlParams.get('fileCount'));
@@ -447,56 +468,7 @@ onMounted(async() => {
     }
   });
 
-  unlistenImg = await listen('update-img', async (event: any) => {
-    if(uiStore.inputStack.length > 0) {
-      return;
-    }
-
-    const requestedPane = String(event.payload?.pane || 'left');
-    const pane: Pane = allPanes.includes(requestedPane as Pane) ? requestedPane as Pane : 'left';
-    if (typeof event.payload?.compareMode === 'boolean') {
-      isCompareModeSession.value = !!event.payload.compareMode;
-    }
-    if (typeof event.payload?.compareFileCount === 'number') {
-      compareFileCount.value = Number(event.payload.compareFileCount);
-    } else if (!isCompareModeSession.value) {
-      compareFileCount.value = 0;
-    }
-    const requestedSplitCount = normalizeSplitCount(event.payload?.forceSplitCount);
-    if (requestedSplitCount > 1) {
-      splitCount.value = requestedSplitCount;
-    }
-    if (event.payload?.resetSplit) {
-      if (isCompareModeSession.value) clearSecondaryPanes();
-      if (isCompareModeSession.value) {
-        splitCount.value = requestedSplitCount > 1 ? requestedSplitCount : splitCount.value > 1 ? splitCount.value : 2;
-        isSyncViewport.value = !!config.imageViewer?.isSyncViewport;
-      } else {
-        splitCount.value = 1;
-        isSyncViewport.value = false;
-      }
-      if (splitCount.value === 1) {
-        clearSecondaryPanes();
-      }
-    }
-
-    fileCount.value = Number(event.payload.fileCount);
-    if (pane === 'right') {
-      rightFileId.value = Number(event.payload.fileId);
-      rightFileIndex.value = Number(event.payload.fileIndex);
-      rightNextFilePath.value = event.payload.nextFilePath || '';
-      if (rightFileId.value <= 0) rightFileInfo.value = null;
-    } else if (pane === 'bottomLeft' || pane === 'bottomRight') {
-      extraPaneState[pane].fileId = Number(event.payload.fileId);
-      extraPaneState[pane].fileIndex = Number(event.payload.fileIndex);
-      extraPaneState[pane].nextFilePath = event.payload.nextFilePath || '';
-      if (extraPaneState[pane].fileId <= 0) extraPaneState[pane].fileInfo = null;
-    } else {
-      fileId.value = Number(event.payload.fileId);
-      fileIndex.value = Number(event.payload.fileIndex);
-      nextFilePath.value = event.payload.nextFilePath || '';
-    }
-  });
+  unlistenImg = await listen('update-img', (event: any) => { receiveViewerImage(event.payload); });
   ensureFourPanesLoaded();
 
 
@@ -606,7 +578,7 @@ onMounted(async() => {
   }, 500);
 
   await handleResize();
-  
+
   // Show window after mount (if it was created hidden)
   try {
     await appWindow.show();
@@ -620,7 +592,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize);
   document.documentElement.style.fontSize = '';
   clearSlideShowTimer();
-  
+
   // unlisten
   unlistenImg();
   unlistenGridView();
@@ -688,6 +660,12 @@ function handleKeyDown(event: KeyboardEvent) {
   if (viewBackground !== null) {
     event.preventDefault();
     setViewerBackground(viewBackground);
+    return;
+  }
+
+  if (matchesShortcut('meta.info', event, shortcutPlatform)) {
+    event.preventDefault();
+    toggleInfoPanel();
     return;
   }
 
@@ -807,7 +785,11 @@ function getActivePane(): Pane {
 
 function setActivePane(pane: Pane) {
   if (!isPaneAvailable(pane)) return;
-  activePane.value = pane;
+  if (activePane.value === pane) return;
+  const id = getFileIdByPane(pane);
+  withTitleConsent(() => {
+    if (getFileIdByPane(pane) === id && isPaneAvailable(pane)) activePane.value = pane;
+  });
 }
 
 function isPaneAvailable(pane: Pane) {
@@ -990,29 +972,28 @@ watch(() => isSyncViewport.value, (isSync) => {
   config.imageViewer.isSyncViewport = isSync;
 });
 
-// watch file changed
-watch(() => fileId.value, async () => {
-  fileInfo.value = await getFileInfo(fileId.value);
-  iconRotate.value = fileInfo.value.rotate || 0;
-  console.log('fileInfo:', fileInfo.value);
-  if (isSlideShow.value) {
-    scheduleNextSlide();
-  }
-});
-
-watch(() => rightFileId.value, async () => {
-  if (rightFileId.value > 0) {
-    rightFileInfo.value = await getFileInfo(rightFileId.value);
-  } else {
-    rightFileInfo.value = null;
-  }
-});
-
-for (const pane of ['bottomLeft', 'bottomRight'] as const) {
-  watch(() => extraPaneState[pane].fileId, async (newFileId) => {
-    extraPaneState[pane].fileInfo = newFileId > 0 ? await getFileInfo(newFileId) : null;
+// Clear old details immediately, and ignore stale responses during rapid navigation.
+function watchPaneFile(pane: Pane) {
+  let request = 0;
+  watch(() => [libConfig._libraryId, getFileIdByPane(pane)] as const, async ([library, id], _previous, onCleanup) => {
+    const sequence = ++request;
+    onCleanup(() => { request++; });
+    const assign = (file: any) => {
+      if (pane === 'left') fileInfo.value = file;
+      else if (pane === 'right') rightFileInfo.value = file;
+      else extraPaneState[pane].fileInfo = file;
+    };
+    assign(null);
+    const file = id > 0 ? await getFileInfo(id) : null;
+    if (sequence !== request || library !== libConfig._libraryId || getFileIdByPane(pane) !== id) return;
+    assign(file);
+    if (pane === 'left') {
+      iconRotate.value = file?.rotate || 0;
+      if (isSlideShow.value) scheduleNextSlide();
+    }
   });
 }
+allPanes.forEach(watchPaneFile);
 
 // watch file index
 watch(() => fileIndex.value, async (newIndex) => {
@@ -1136,7 +1117,7 @@ watch(() => [fileIndex.value, fileCount.value], () => {
   ensureFourPanesLoaded();
 });
 
-function requestFileAtIndex(index: number, pane: Pane = 'left') {
+function requestFileAtIndexUnchecked(index: number, pane: Pane = 'left') {
   emit('message-from-image-viewer', { message: 'request-file-at-index', index, pane });
 }
 
@@ -1226,7 +1207,7 @@ function clickNext(pane: Pane = 'left') {
     requestFileAtIndex(0, pane);
     return;
   }
-  
+
   if (currentIndex < fileCount.value - 1) {
     requestFileAtIndex(currentIndex + 1, pane);
   } else {
@@ -1245,13 +1226,13 @@ function clickEnd(pane: Pane = 'left') {
 }
 
 function clickSlideShow(pane: Pane = 'left') {
-  setActivePane(pane);
-  isSlideShow.value = !isSlideShow.value;
-  if (isSlideShow.value) {
+  if (isSlideShow.value) { stopSlideShow(); return; }
+  withTitleConsent(() => {
+    activePane.value = pane;
+    showInfoPanel.value = false;
+    isSlideShow.value = true;
     startSlideShow();
-  } else {
-    stopSlideShow();
-  }
+  });
 }
 
 const clickZoomIn = (pane: Pane = 'left') => {
@@ -1507,6 +1488,7 @@ const handleItemAction = async (payload: { action: string }) => {
   const pane = getActiveFilePane();
 
   switch (payload.action) {
+    case 'info': toggleInfoPanel(); break;
     case 'regenerate-thumbnails':
       try { thumbnailRebuildRequest.value = { libraryId: libConfig._libraryId, scope: thumbnailSelectionScope([getFileInfoByPane(pane)]) }; } catch (error: any) { toast.error(error?.message || String(error)); }
       break;
@@ -1565,6 +1547,112 @@ const handleItemAction = async (payload: { action: string }) => {
       break;
   }
 };
+
+useMediaTitleEvents(change => {
+  if (change.library_id === libConfig._libraryId) applyFileMetaToPanes(change.file_id, { title: change.title });
+});
+watch(() => mediaDisplayName(activeFileInfo.value), name => {
+  void appWindow.setTitle(name ? `Lap — ${name}` : 'Lap').catch(() => {});
+});
+function applyViewerImage(payload: any) {
+  const requestedPane = String(payload?.pane || 'left');
+  const pane: Pane = allPanes.includes(requestedPane as Pane) ? requestedPane as Pane : 'left';
+  if (typeof payload?.compareMode === 'boolean') {
+    isCompareModeSession.value = !!payload.compareMode;
+  }
+  if (typeof payload?.compareFileCount === 'number') {
+    compareFileCount.value = Number(payload.compareFileCount);
+  } else if (!isCompareModeSession.value) {
+    compareFileCount.value = 0;
+  }
+  const requestedSplitCount = normalizeSplitCount(payload?.forceSplitCount);
+  if (requestedSplitCount > 1) {
+    splitCount.value = requestedSplitCount;
+  }
+  if (payload?.resetSplit) {
+    if (isCompareModeSession.value) clearSecondaryPanes();
+    if (isCompareModeSession.value) {
+      splitCount.value = requestedSplitCount > 1 ? requestedSplitCount : splitCount.value > 1 ? splitCount.value : 2;
+      isSyncViewport.value = !!config.imageViewer?.isSyncViewport;
+    } else {
+      splitCount.value = 1;
+      isSyncViewport.value = false;
+    }
+    if (splitCount.value === 1) {
+      clearSecondaryPanes();
+    }
+  }
+
+  fileCount.value = Number(payload.fileCount);
+  if (pane === 'right') {
+    rightFileId.value = Number(payload.fileId);
+    rightFileIndex.value = Number(payload.fileIndex);
+    rightNextFilePath.value = payload.nextFilePath || '';
+    if (rightFileId.value <= 0) rightFileInfo.value = null;
+  } else if (pane === 'bottomLeft' || pane === 'bottomRight') {
+    extraPaneState[pane].fileId = Number(payload.fileId);
+    extraPaneState[pane].fileIndex = Number(payload.fileIndex);
+    extraPaneState[pane].nextFilePath = payload.nextFilePath || '';
+    if (extraPaneState[pane].fileId <= 0) extraPaneState[pane].fileInfo = null;
+  } else {
+    fileId.value = Number(payload.fileId);
+    fileIndex.value = Number(payload.fileIndex);
+    nextFilePath.value = payload.nextFilePath || '';
+  }
+}
+function receiveViewerImage(payload: any) {
+  if (uiStore.inputStack.length > 0 && !pendingChanges.hasPending('media-title')) return;
+  const approval = approvedTitleNavigation;
+  approvedTitleNavigation = null;
+  // The reply to our own navigation must not ask to discard the same draft twice.
+  if (approval && approval.index === Number(payload?.fileIndex) && approval.pane === (payload?.pane || 'left')
+    && approval.transition === titleTransition && approval.library === libConfig._libraryId
+    && approval.originPane === getActiveFilePane() && approval.fileId === activeFileId.value
+    && pendingChanges.valid(approval.token)) {
+    applyViewerImage(payload);
+  } else withTitleConsent(() => { applyViewerImage(payload); });
+}
+
+// Revalidate both the draft and viewing context after the asynchronous dialog.
+type TitleConsent = NonNullable<Awaited<ReturnType<typeof pendingChanges.prepare>>>;
+let titleTransition = 0;
+let approvedTitleNavigation: { index: number; pane: Pane; originPane: Pane; fileId: number;
+  library: string; transition: number; token: TitleConsent } | null = null;
+function withTitleConsent(action: (token?: TitleConsent) => void) {
+  const transition = ++titleTransition;
+  if (!pendingChanges.hasPending('media-title')) { action(); return; }
+  const library = libConfig._libraryId;
+  const pane = getActiveFilePane(), id = activeFileId.value;
+  void pendingChanges.prepare('media-title').then(token => {
+    if (transition === titleTransition && token && pendingChanges.valid(token)
+      && library === libConfig._libraryId && pane === getActiveFilePane() && id === activeFileId.value) action(token);
+  });
+}
+function toggleInfoPanel() {
+  if (!showInfoPanel.value) {
+    if (!activeFileInfo.value) return;
+    stopSlideShow();
+    showInfoPanel.value = true;
+    return;
+  }
+  withTitleConsent(() => { showInfoPanel.value = false; });
+}
+function forwardInfoNavigation(target: 'folder' | 'metadata' | 'person', payload: any) {
+  withTitleConsent(() => {
+    showInfoPanel.value = false;
+    void emit('message-from-image-viewer', {
+      message: 'navigate-info', libraryId: libConfig._libraryId,
+      fileId: activeFileId.value, target, payload,
+    });
+  });
+}
+function requestFileAtIndex(index: number, pane: Pane = 'left') {
+  withTitleConsent(token => {
+    approvedTitleNavigation = token ? { index, pane, originPane: getActiveFilePane(), fileId: activeFileId.value,
+      library: libConfig._libraryId, transition: titleTransition, token } : null;
+    requestFileAtIndexUnchecked(index, pane);
+  });
+}
 
 </script>
 

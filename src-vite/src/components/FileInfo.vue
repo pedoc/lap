@@ -168,8 +168,12 @@
         >
           <div v-if="showBasicInfoPanel" class="overflow-hidden">
             <div class="pl-4 grid grid-cols-[84px_minmax(0,1fr)] gap-y-1.5 gap-x-4 text-xs">
+            <template v-if="fileInfo">
+              <div class="flex items-start text-[11px] text-base-content/45 h-6">{{ $t('media_title.label') }}</div>
+              <FileTitleEditor :key="`${libConfig._libraryId}:${fileInfo.id}`" :file="fileInfo" :active="editorActive" />
+            </template>
             <!-- Name -->
-            <div class="flex items-center text-[11px] text-base-content/45 h-6">{{ $t('file_info.name') }}</div>
+            <div class="flex items-center text-[11px] text-base-content/45 h-6">{{ $t('media_title.filename') }}</div>
             <div class="group/field flex items-center gap-1">
               <div
                 v-if="isPrimaryGeneralInfo && isRenaming"
@@ -441,7 +445,7 @@
               <MapView
                 :lat="fileInfo.gps_latitude ? Number(fileInfo.gps_latitude) : 0"
                 :lon="fileInfo.gps_longitude ? Number(fileInfo.gps_longitude) : 0"
-                :label="addressLabel(addressForFile(fileInfo)) || fileInfo.name || 'Lap'"
+                :label="addressLabel(addressForFile(fileInfo)) || mediaDisplayName(fileInfo) || 'Lap'"
               />
             </div>
           </div>
@@ -462,6 +466,9 @@
 </template>
 
 <script setup lang="ts">
+import FileTitleEditor from './FileTitleEditor.vue';
+import { mediaDisplayName } from '@/common/mediaTitle';
+import { pendingChanges } from '@/common/pendingChanges';
 import PhotoOcrInfo from './PhotoOcrInfo.vue';
 import PhotoObjectInfo from './PhotoObjectInfo.vue';
 import { applyPersonRename } from '@/common/faceUpdates';
@@ -517,6 +524,7 @@ import PhotoLocationResolver from '@/components/PhotoLocationResolver.vue';
 import { hasResolvableGps } from '@/common/mapServices';
 
 const props = defineProps({
+  editorActive: { type: Boolean, default: true },
   navigatorViewport: { type: Object, default: null },
   fileInfo: {
     type: Object,
@@ -797,7 +805,12 @@ function decreasePreviewScale() {
 }
 
 function toggleBasicInfo() {
-  config.infoPanel.showBasicInfo = !config.infoPanel.showBasicInfo;
+  if (showBasicInfoPanel.value && pendingChanges.hasPending('media-title')) {
+    const library = libConfig._libraryId;
+    void pendingChanges.prepare('media-title').then(token => {
+      if (token && pendingChanges.valid(token) && library === libConfig._libraryId) config.infoPanel.showBasicInfo = false;
+    });
+  } else config.infoPanel.showBasicInfo = !config.infoPanel.showBasicInfo;
 }
 
 function toggleMetadata() {

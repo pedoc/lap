@@ -301,7 +301,7 @@ test('content routes media categories as queries, not inside its icon computatio
     new URL('../src/views/Home.vue', import.meta.url),
     'utf8',
   );
-  assert.match(home, /<Content v-show="!showMediaUtilities"/);
+  assert.match(home, /<div[^>]+v-show="!showMediaUtilities && !showHomeDashboard"[^>]+data-content-panel/);
   assert.match(home, /item.index !== SIDEBAR.LIBRARY/);
 });
 test('ordinary deletion never defaults to permanent and all frontend delete calls have library scope', () => {

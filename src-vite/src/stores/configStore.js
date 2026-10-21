@@ -9,10 +9,16 @@ import { SIDEBAR, MAP_MARKER_SIZES } from '@/common/constants';
 export const useConfigStore = defineStore('configStore', {
   state: () => ({
     main: {
-      sidebarIndex: SIDEBAR.ALBUM, // toolbar index
+      sidebarIndex: SIDEBAR.HOME, // toolbar index
       maxLibraryCount: 20,        // max library count
       maxCollectionCount: 100,    // max collection count
       selectionChunkSize: 200,    // virtual list fetch chunk size
+    },
+
+    home: {
+      minimumRating: 4,
+      intervalSeconds: 8,
+      autoplay: true,
     },
 
     content: {
