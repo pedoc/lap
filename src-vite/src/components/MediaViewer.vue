@@ -174,7 +174,7 @@
           :icon="IconFileInfo"
           :disabled="!file || fileIndex < 0 || !canInteract"
           :selected="infoPanelOpen"
-          :tooltip="$t('menu.meta.info')"
+          :tooltip="infoPanelOpen ? $t('toolbar.tooltip.hide_info') : $t('toolbar.tooltip.show_info')"
           :shortcut="shortcut('meta.info')"
           @click="$emit('item-action', { action: 'info', index: fileIndex })"
         />

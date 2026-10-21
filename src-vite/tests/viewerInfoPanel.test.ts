@@ -6,6 +6,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileTemplate } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
+import { createI18n } from 'vue-i18n';
 import { createPendingChangesRegistry } from '../src/common/pendingChanges.ts';
 import { findShortcutMatches } from '../src/common/shortcuts.ts';
 
@@ -146,6 +147,23 @@ test('actual toolbar stays above the photo/sidebar row and the information butto
     app.component('TButton', { props: ['selected'], render() { return Vue.h('button', { 'data-selected': this.selected }, 'info'); } });
     const html = await renderToString(app); assert.equal(html.includes('<button'), mode === 2);
     if (mode === 2) assert.match(html, /data-selected="true"/);
+  }
+});
+
+test('information tooltip uses translated show/hide labels instead of exposing a missing translation key', async () => {
+  const button = walk(parse(media).descriptor.template!.ast!, node => node.tag === 'TButton' && node.props.some((prop: any) => prop.exp?.content === 'IconFileInfo'));
+  const render = renderTemplate(button.loc.source);
+  for (const locale of ['zh-CN', 'zh-TW', 'en']) {
+    const messages = JSON.parse(read('locales/' + locale + '.json'));
+    for (const open of [false, true]) {
+      const app = Vue.createSSRApp({ data: () => ({ mode: 2, IconFileInfo: {}, file: { id: 1 }, fileIndex: 0,
+        canInteract: true, infoPanelOpen: open, shortcut: () => 'I' }), render });
+      app.use(createI18n({ legacy: false, locale, messages: { [locale]: messages } }));
+      app.component('TButton', { props: ['tooltip'], render() { return Vue.h('button', { title: this.tooltip }); } });
+      const html = await renderToString(app);
+      assert.ok(html.includes(`title="${messages.toolbar.tooltip[open ? 'hide_info' : 'show_info']}"`), html);
+      assert.ok(!html.includes('menu.meta.info'));
+    }
   }
 });
 
