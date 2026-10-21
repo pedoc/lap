@@ -48,6 +48,7 @@
           <p>{{ t('scan_tracking.original_error') }}: {{ item.message }}</p>
           <p :class="item.retry_state==='resolved'?'text-success':item.retry_state==='failed'?'text-warning':'text-base-content/60'">{{ t('scan_tracking.retry_state_'+item.retry_state) }}<template v-if="item.attempts"> · {{ t('scan_tracking.retry_attempts',{count:item.attempts}) }} · {{ item.last_attempt_at?date(item.last_attempt_at):'' }}</template></p>
           <p v-if="item.retry_error" class="text-warning whitespace-pre-wrap">{{ t('scan_tracking.retry_latest_error') }}: {{ item.retry_error }}</p>
+          <p v-if="videoErrorHint(item)" class="text-warning whitespace-pre-wrap">{{ videoErrorHint(item) }}</p>
           <p v-if="!item.retryable" class="text-base-content/50">{{ t('scan_tracking.retry_full_scan_hint') }}</p>
         </div>
         <p class="text-base-content/50">{{ t('scan_tracking.error_limit') }}</p>
@@ -92,6 +93,7 @@ const work=computed(()=>scanWorkProgress(selectedRun.value));
 const percentage=computed(()=>active.value ? work.value.percent : scanPercent(selectedRun.value));
 const action=computed(()=>scanAction(albumScanState(scope.albumId)));
 const date=(at:number)=>new Date(at).toLocaleString();
+const videoErrorHint=(item:ScanErrorDetail)=>/moov atom not found/i.test(item.retry_error||item.message||'') ? t('scan_tracking.video_index_missing_hint') : '';
 const stateLabel=(state:string)=>t('scan_tracking.state_'+(state==='completed'?'complete':state==='running'?'scanning':state));
 const historyLabel=(item:ScanRun)=>{const run=latestSnapshot(item.id)||item;return `${date(run.started_at)} · ${stateLabel(run.status)} · ${run.counts.discovered}/${run.counts.total}${run.retry?.resolved ? ' · '+t('scan_tracking.retry_resolved_count',{count:run.retry.resolved}) : ''}`;};
 const phaseLabel=(phase:string)=>t('scan_tracking.phase_'+(phase==='complete'&&!selectedRun.value?.finished_at?'finalizing':phase));

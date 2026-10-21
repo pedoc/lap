@@ -1,5 +1,6 @@
 {
   "scan_tracking": {
+    "video_index_missing_hint": "视频缺少可读的 MOV/MP4 索引，可能未完整下载、复制中断或未正常保存。请从 iCloud 或原设备重新获取完整副本，再重试；重复重试不会补回缺失内容。",
     "state_retrying": "正在重试失败项",
     "action_retrying": "正在重试…",
     "retry_errors": "重试失败项",

@@ -26,6 +26,8 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
+mod probe_diagnostics;
+
 static SIDE_CAR_DIR: OnceCell<PathBuf> = OnceCell::new();
 const PROCESS_TIMEOUT_SECS: u64 = 30;
 const PROBE_TIMEOUT_SECS: u64 = 5;
@@ -213,7 +215,7 @@ fn should_skip_duration_probe(file_path: &str) -> bool {
 async fn probe_json_with_timeout(file_path: &str, timeout_secs: u64) -> Result<Value, String> {
     let mut cmd = ffprobe_command();
 
-    cmd.args(["-v", "quiet"]);
+    cmd.args(["-v", "error"]);
     if crate::t_image::is_heic_path(file_path) && find_sidecar(ffprobe_sidecar_name()).is_some() {
         cmd.arg("-show_stream_groups");
     }
@@ -243,7 +245,7 @@ async fn probe_json_with_timeout(file_path: &str, timeout_secs: u64) -> Result<V
     let probe_child = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(debug_stderr())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("ffprobe failed to spawn: {}", e))?;
@@ -260,12 +262,7 @@ async fn probe_json_with_timeout(file_path: &str, timeout_secs: u64) -> Result<V
             if out.status.success() {
                 serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())
             } else {
-                let err = String::from_utf8_lossy(&out.stderr);
-                Err(format!(
-                    "ffprobe exited with code {}: {}",
-                    out.status.code().unwrap_or(-1),
-                    err
-                ))
+                Err(probe_diagnostics::failure_message(out.status.code(), &out.stderr))
             }
         }
         Ok(Err(e)) => Err(format!("ffprobe execution failed: {}", e)),

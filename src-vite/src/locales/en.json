@@ -1,5 +1,6 @@
 {
   "scan_tracking": {
+    "video_index_missing_hint": "The MOV/MP4 movie index is missing. The file may be incomplete or not finalized. Obtain a complete copy from iCloud or the original device, then retry; retrying cannot restore missing content.",
     "state_retrying": "Retrying failed items",
     "action_retrying": "Retrying…",
     "retry_errors": "Retry failed items",

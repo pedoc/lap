@@ -180,7 +180,7 @@ function reportHarness(handler?:(command:string,args:any)=>any,folderPath?:strin
   setTimeout:()=>1,clearTimeout(){},navigator:{clipboard:{writeText:async()=>{}}},
  };
  const script=stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\n/gm,'');
- const scope=Vue.effectScope();const api=scope.run(()=>runInNewContext(`${script};({history,selected,details,selectedRun,load,loadDetails,control,historyLabel,error,work,percentage,retryErrors,retryTargets,remainingErrors,canRetry,busyAction});`,ctx));
+ const scope=Vue.effectScope();const api=scope.run(()=>runInNewContext(`${script};({history,selected,details,selectedRun,load,loadDetails,control,historyLabel,error,work,percentage,retryErrors,retryTargets,remainingErrors,canRetry,busyAction,videoErrorHint});`,ctx));
  return {api,ctx,lib,store,current,emits,calls,async mount(){for(const fn of mounts)fn();await tick();},dispose(){unmounts.forEach(fn=>fn());scope.stop();}};
 }
 
@@ -379,4 +379,21 @@ test('retry IPC uses the report library and current rendering options, not an en
  await retry('report-id',[1],'A');assert.equal(calls[0][0],'retry_scan_errors');assert.equal(calls[0][1].libraryId,'A');assert.equal(calls[0][1].thumbnailSize,1024);assert.equal(calls[0][1].groupRawJpegPairs,false);assert.equal(calls[0][1].rawDisplayOptions.mode,'embedded');
  for(const lang of ['zh-CN','zh-TW','en'])for(const key of ['state_retrying','action_retrying','retry_summary','retry_item','retry_errors','retry_state_failed','retry_state_resolved','retry_state_interrupted'])assert.equal(typeof JSON.parse(read('locales/'+lang+'.json')).scan_tracking[key],'string');
  const dialog=read('components/ScanHistoryDialog.vue');assert.match(dialog,/item.retry_error/);assert.match(dialog,/item.attempts/);
+});
+
+test('a movie-index recovery hint is shown only for confirmed diagnostics, not an unexplained exit code',()=>{
+ const h=reportHarness(),item=errorItem(0,'failed');
+ assert.equal(h.api.videoErrorHint(item),'');
+ item.retry_error='ffprobe exited with code 1: [mov] moov atom not found';assert.match(h.api.videoErrorHint(item),/movie index is missing/);
+ item.retry_error='Permission denied';assert.equal(h.api.videoErrorHint(item),'');h.dispose();
+ for(const lang of ['zh-CN','zh-TW','en'])assert.equal(typeof JSON.parse(read('locales/'+lang+'.json')).scan_tracking.video_index_missing_hint,'string');
+});
+
+test('metadata probing preserves error-level diagnostics in release builds without removing timeouts or cancellation',()=>{
+ const source=readFileSync(new URL('../../src-tauri/src/t_video.rs',import.meta.url),'utf8');
+ const start=source.indexOf('async fn probe_json_with_timeout('),end=source.indexOf('\n/// Internal: Get bounded probe JSON.',start),body=source.slice(start,end);
+ assert.match(body,/cmd.args\(\["-v", "error"\]\)/);assert.ok(!body.includes('"quiet"'));
+ assert.match(body,/\.stderr\(std::process::Stdio::piped\(\)\)/);assert.ok(!body.includes('debug_stderr()'));
+ assert.match(body,/probe_diagnostics::failure_message\(out.status.code\(\), &out.stderr\)/);
+ assert.match(body,/\.kill_on_drop\(true\)/);assert.match(body,/tokio::time::timeout/);
 });
