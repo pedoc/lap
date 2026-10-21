@@ -13,8 +13,8 @@ export function homePhotoAddress(location: HomePhoto['location']): string {
   const fullAddress = normalize(address);
   return [...levels.filter(name => !fullAddress.includes(normalize(name))), address].join(' · ');
 }
-export type HomeMonth = { month: number; count: number; coverFileId: number | null };
-export type HomeYear = { year: number; count: number; coverFileId: number | null; months: HomeMonth[] };
+export type HomeMonth = { month: number; count: number; coverFileIds: number[] };
+export type HomeYear = { year: number; count: number; coverFileIds: number[]; months: HomeMonth[] };
 export type HomeEntity = { kind: 'tag' | 'person' | 'location' | 'object' | 'album' | 'collection' | 'camera' | 'lens'; value: string; name: string; count: number; coverFileId: number | null };
 export type HomeSearchResult = { libraryId: string; items: HomeEntity[] };
 export type HomeBrowseTarget = { kind: string; year?: number; month?: number; entity?: HomeEntity };
@@ -94,7 +94,11 @@ export function homeYearSpan(data: Pick<HomeOverview, 'firstYear' | 'lastYear'>)
   return data.firstYear !== null && data.lastYear !== null ? Math.max(1, data.lastYear - data.firstYear) : null;
 }
 export function homeMonths(year: HomeYear | undefined): HomeMonth[] {
-  return Array.from({ length: 12 }, (_, i) => year?.months?.find(month => month.month === i + 1) || { month: i + 1, count: 0, coverFileId: null });
+  return Array.from({ length: 12 }, (_, i) => year?.months?.find(month => month.month === i + 1) || { month: i + 1, count: 0, coverFileIds: [] });
+}
+export function homeTimelineCover(ids: number[] | undefined, step: number, failed: ReadonlySet<number>): number | null {
+  const available = (ids || []).filter(id => !failed.has(id));
+  return available.length ? available[step % available.length] : null;
 }
 export function homePeriodRules(year: number | undefined, month?: number): SmartRule[] {
   if (!Number.isInteger(year) || Math.abs(year!) > 9998 || (month !== undefined && (!Number.isInteger(month) || month < 1 || month > 12))) return [];

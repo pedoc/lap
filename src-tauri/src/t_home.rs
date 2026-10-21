@@ -39,7 +39,7 @@ pub struct Photo {
 pub struct Year {
     pub year: i32,
     pub count: i64,
-    pub cover_file_id: Option<i64>,
+    pub cover_file_ids: Vec<i64>,
     pub months: Vec<Month>,
 }
 
@@ -48,7 +48,7 @@ pub struct Year {
 pub struct Month {
     pub month: i32,
     pub count: i64,
-    pub cover_file_id: Option<i64>,
+    pub cover_file_ids: Vec<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,7 +205,7 @@ fn read_for_profiles(
     {
         let mut stmt = tx
             .prepare(&format!(
-                "{visible} SELECT year,month,COUNT(*),MAX(CASE WHEN file_type IN (1,3) THEN id END)
+                "{visible} SELECT year,month,COUNT(*)
              FROM visible WHERE taken_date<>0 AND year IS NOT NULL GROUP BY year,month ORDER BY year,month"
             ))
             .map_err(|e| e.to_string())?;
@@ -216,7 +216,7 @@ fn read_for_profiles(
                     Month {
                         month: row.get(1)?,
                         count: row.get(2)?,
-                        cover_file_id: row.get(3)?,
+                        cover_file_ids: Vec::new(),
                     },
                 ))
             })
@@ -228,14 +228,54 @@ fn read_for_profiles(
                 overview.years.push(Year {
                     year,
                     count: 0,
-                    cover_file_id: None,
+                    cover_file_ids: Vec::new(),
                     months: Vec::new(),
                 });
             }
             if let Some(entry) = overview.years.last_mut() {
                 entry.count += month.count;
-                entry.cover_file_id = entry.cover_file_id.max(month.cover_file_id);
                 entry.months.push(month);
+            }
+        }
+    }
+    // Rank once per period, returning only small ID lists; unrated periods keep one fallback.
+    {
+        let order = "COALESCE(rating,0) DESC,COALESCE(is_favorite,0) DESC,taken_date DESC,id DESC";
+        let sql = format!(
+            "{visible}, ranked AS (
+                SELECT year,month,id,COALESCE(rating,0) AS rating,
+                    ROW_NUMBER() OVER (PARTITION BY year ORDER BY {order}) AS year_rank,
+                    ROW_NUMBER() OVER (PARTITION BY year,month ORDER BY {order}) AS month_rank
+                FROM visible WHERE file_type IN (1,3) AND taken_date<>0 AND year IS NOT NULL
+                    AND COALESCE(culling_flag,0)<>2
+            )
+            SELECT year,0 AS month,id,year_rank AS rank FROM ranked
+                WHERE year_rank<=5 AND (rating>0 OR year_rank=1)
+            UNION ALL
+            SELECT year,month,id,month_rank AS rank FROM ranked
+                WHERE month_rank<=5 AND (rating>0 OR month_rank=1)
+            ORDER BY year,month,rank"
+        );
+        let mut stmt = tx.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i32>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (year, month, id) = row.map_err(|e| e.to_string())?;
+            if let Some(entry) = overview.years.iter_mut().find(|entry| entry.year == year) {
+                if month == 0 {
+                    entry.cover_file_ids.push(id);
+                } else if let Some(entry) =
+                    entry.months.iter_mut().find(|entry| entry.month == month)
+                {
+                    entry.cover_file_ids.push(id);
+                }
             }
         }
     }
@@ -657,7 +697,7 @@ mod tests {
         assert_eq!(data.anniversary_count, 2);
         assert_eq!(data.years.iter().map(|y| y.count).sum::<i64>(), 3);
         assert_eq!((data.first_year, data.last_year), (Some(2021), Some(2026)));
-        assert_eq!(data.years[1].cover_file_id, None);
+        assert!(data.years[1].cover_file_ids.is_empty());
     }
 
     #[test]
@@ -679,6 +719,9 @@ mod tests {
         let data = read_on(&conn, 4, today()).unwrap();
         assert_eq!(data.featured_count, 32);
         assert_eq!(data.featured.len(), 12);
+        let year = data.years.iter().find(|year| year.year == 2021).unwrap();
+        assert_eq!(year.cover_file_ids, vec![1, 2, 30, 29, 28]);
+        assert_eq!(year.months[0].cover_file_ids, year.cover_file_ids);
         assert_eq!(data.featured[0].id, 32);
         assert_eq!(data.featured[3].id, 2);
         assert!(!data.featured.iter().any(|p| p.id == 33));
@@ -690,6 +733,50 @@ mod tests {
                 .all(|p| p.taken_date.unwrap() < timestamp(2026, 1, 1))
         );
         assert_eq!(read_on(&conn, 5, today()).unwrap().featured_count, 3);
+    }
+
+    #[test]
+    fn timeline_covers_use_ratings_not_ids_and_keep_safe_unrated_fallbacks() {
+        let conn = fixture();
+        for (id, kind, rating, year, month, day) in [
+            (1, 1, 5, 2024, 1, 1),
+            (2, 3, 5, 2024, 1, 2),
+            (3, 1, 5, 2024, 1, 1),
+            (4, 1, 4, 2024, 1, 3),
+            (100, 1, 0, 2024, 1, 31),
+            (6, 1, 5, 2024, 1, 3),
+            (7, 1, 5, 2024, 1, 3),
+            (8, 1, 5, 2024, 1, 3),
+            (9, 2, 5, 2024, 1, 3),
+            (20, 1, 5, 2024, 2, 1),
+            (30, 1, 0, 2023, 1, 1),
+            (31, 1, 0, 2023, 1, 2),
+            (40, 2, 5, 2022, 1, 1),
+        ] {
+            add(&conn, id, kind, rating, Some(timestamp(year, month, day)));
+        }
+        conn.execute_batch(
+            "UPDATE afiles SET is_favorite=1 WHERE id IN (3,4,20);
+            UPDATE afiles SET culling_flag=2 WHERE id=6;
+            INSERT INTO media_states VALUES(7,1,NULL),(8,0,100);
+            PRAGMA query_only=ON;",
+        )
+        .unwrap();
+        let data = read_on(&conn, 4, today()).unwrap();
+        let year = data.years.iter().find(|year| year.year == 2024).unwrap();
+        assert_eq!(year.cover_file_ids, vec![20, 3, 2, 1, 4]);
+        assert_eq!(year.months[0].cover_file_ids, vec![3, 2, 1, 4]);
+        assert_eq!(year.months[1].cover_file_ids, vec![20]);
+        let unrated = data.years.iter().find(|year| year.year == 2023).unwrap();
+        assert_eq!(unrated.cover_file_ids, vec![31]);
+        assert_eq!(unrated.months[0].cover_file_ids, vec![31]);
+        assert!(data.years[0].cover_file_ids.is_empty());
+        assert!(data.years[0].months[0].cover_file_ids.is_empty());
+        let other = read_on(&conn, 5, today()).unwrap();
+        assert_eq!(
+            other.years.last().unwrap().cover_file_ids,
+            year.cover_file_ids
+        );
     }
 
     #[test]
@@ -741,7 +828,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(2, 2), (12, 1)]
         );
-        assert_eq!(year.months[1].cover_file_id, None);
+        assert!(year.months[1].cover_file_ids.is_empty());
         assert_eq!(year.months.iter().map(|m| m.count).sum::<i64>(), year.count);
     }
 

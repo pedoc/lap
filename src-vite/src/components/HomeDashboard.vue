@@ -47,7 +47,7 @@
         <div v-else-if="!yearWindow.years.length" class="home-empty-small">{{ t('home_dashboard.no_dates') }}</div>
         <div v-else class="home-year-list">
           <button v-for="year in yearWindow.years" :key="year.year" type="button" class="home-year" :class="{ 'home-year-current': year.year === selectedYear }" :aria-label="t('home_dashboard.year_count', { year: String(year.year), count: number(year.count) })" :aria-expanded="expandedYear === year.year" aria-controls="home-year-months" @click="toggleYear(year.year)">
-            <img v-if="year.coverFileId && !failedThumbs.has(year.coverFileId)" :src="getThumbUrl(year.coverFileId, false, 256)" alt="" loading="lazy" draggable="false" @error="failedThumbs.add(year.coverFileId!)" /><span v-else class="home-year-placeholder"><IconPhoto /></span>
+            <template v-for="id in [timelineCover(year.coverFileIds)]" :key="id || 0"><img v-if="id" :src="getThumbUrl(id, false, 256)" alt="" loading="lazy" draggable="false" @error="failedThumbs.add(id)" /><span v-else class="home-year-placeholder"><IconPhoto /></span></template>
             <span class="home-year-bar-space" aria-hidden="true"><span class="home-year-bar" :style="{ height: `${homeYearHeight(year.count, maximumYearCount)}%` }"></span></span><span class="home-year-dot" aria-hidden="true"></span><span class="home-year-label">{{ year.year }}</span><span class="home-year-count">{{ number(year.count) }}</span>
           </button>
         </div>
@@ -57,7 +57,7 @@
             <div class="home-month-heading"><h3>{{ expandedYearData.year }}<small>{{ t('home_dashboard.file_count', { count: number(expandedYearData.count) }) }}</small></h3><button type="button" class="home-text-button" @click="emit('browse', { kind: 'year', year: expandedYearData.year })">{{ t('home_dashboard.view_year') }}<IconRight /></button><button type="button" class="home-icon-button" :aria-label="t('home_dashboard.collapse_months')" @click="expandedYear = null"><IconClose /></button></div>
             <div class="home-month-grid">
               <button v-for="month in months" :key="month.month" type="button" class="home-month" :disabled="!month.count" :aria-label="t('home_dashboard.month_count', { year: expandedYearData.year, month: month.month, count: number(month.count) })" @click="emit('browse', { kind: 'month', year: expandedYearData.year, month: month.month })">
-                <img v-if="month.coverFileId && !failedThumbs.has(month.coverFileId)" :src="getThumbUrl(month.coverFileId, false, 256)" alt="" loading="lazy" @error="failedThumbs.add(month.coverFileId!)" /><span v-else class="home-month-placeholder"><IconPhoto v-if="month.count" /></span><span class="home-month-label">{{ monthLabel(month.month) }}<small>{{ month.count ? number(month.count) : '—' }}</small></span>
+                <template v-for="id in [timelineCover(month.coverFileIds)]" :key="id || 0"><img v-if="id" :src="getThumbUrl(id, false, 256)" alt="" loading="lazy" @error="failedThumbs.add(id)" /><span v-else class="home-month-placeholder"><IconPhoto v-if="month.count" /></span></template><span class="home-month-label">{{ monthLabel(month.month) }}<small>{{ month.count ? number(month.count) : '—' }}</small></span>
               </button>
             </div>
           </div>
@@ -108,7 +108,7 @@ import { listen } from '@tauri-apps/api/event';
 import { config, libConfig } from '@/common/config';
 import { getPreviewUrl, getThumbUrl } from '@/common/utils';
 import { useUIStore } from '@/stores/uiStore';
-import { createHomeLoader, homePreferences, homeMonths, homePhotoAddress, homeYearHeight, homeYearSpan, homeYearWindow, type HomeEntity, type HomeOverview, type HomePhoto } from '@/common/homeDashboard';
+import { createHomeLoader, homePreferences, homeMonths, homeTimelineCover, homePhotoAddress, homeYearHeight, homeYearSpan, homeYearWindow, type HomeEntity, type HomeOverview, type HomePhoto } from '@/common/homeDashboard';
 import { objectClassName } from '@/common/objectUi';
 import HomeSearch from '@/components/HomeSearch.vue';
 import { IconRefresh, IconPhoto, IconStar, IconStarFilled, IconPause, IconPlay, IconPrev, IconNext, IconRight, IconClose, IconPerson, IconLocation, IconHeart } from '@/common/icons';
@@ -123,6 +123,7 @@ const loader = createHomeLoader((libraryId, minimumRating) => invoke<HomeOvervie
 const { state } = loader;
 const activeIndex = ref(0), yearEnd = ref(0), hovered = ref(false), focused = ref(false), opening = ref(false), previewError = ref('');
 const expandedYear = ref<number | null>(null);
+const coverStep = ref(0);
 const searchRevision = ref(0);
 const imageReady = ref(false), imageFailed = ref(false), useThumbnail = ref(false), failedThumbs = reactive(new Set<number>());
 const pageVisible = ref(!document.hidden), reducedMotion = ref(false), manuallyPlaying = ref<boolean | null>(null);
@@ -160,6 +161,7 @@ function number(value: number) { return new Intl.NumberFormat(locale.value).form
 function monthLabel(month: number) { return new Intl.DateTimeFormat(locale.value, { month: 'short' }).format(new Date(2024, month - 1, 1)); }
 function objectName(entity: HomeEntity) { return objectClassName({ key: entity.value, name: entity.name }, t); }
 function browseEntity(entity: HomeEntity) { emit('browse', { kind: 'entity', entity }); }
+function timelineCover(ids: number[]) { return homeTimelineCover(ids, coverStep.value, failedThumbs); }
 function toggleYear(year: number) { expandedYear.value = expandedYear.value === year ? null : year; }
 function pageYears(direction: number) { expandedYear.value = null; yearEnd.value = direction < 0 ? Math.max(10, yearWindow.value.end - 10) : Math.min(state.data?.years.length || 0, yearWindow.value.end + 10); }
 function photoDate(seconds: number) { return new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(seconds * 1000)); }
@@ -176,6 +178,7 @@ function schedulePlayback() {
 }
 async function refresh(preserve = false) {
   const request = ++refreshRequest;
+  if (!preserve) coverStep.value = 0;
   const activeId = activePhoto.value?.id;
   const pageAnchor = yearWindow.value.hasNext ? yearWindow.value.years.at(-1)?.year : undefined;
   failedThumbs.clear();
@@ -215,9 +218,10 @@ onMounted(async () => {
   media = window.matchMedia('(prefers-reduced-motion: reduce)'); motionChanged(); media.addEventListener('change', motionChanged);
   document.addEventListener('visibilitychange', visibilityChanged);
   clock = setInterval(() => {
+    if (playing.value && pageVisible.value && !opening.value && !state.busy) coverStep.value++;
     const before = now.value.toDateString(); now.value = new Date();
     if (before !== now.value.toDateString()) void refresh();
-  }, 60_000);
+  }, 8_000);
   for (const name of ['media-lifecycle-changed', 'files-deleted', 'index_finished', 'albums-refreshed', 'album-updated', 'map-location-changed', 'location-resolution-progress', 'message-from-image-viewer', 'file-info-updated', 'culling-status-updated', 'face-person-changed', 'object-index-updated', 'object-annotations-changed', 'ai-configuration-changed', 'tags-changed']) {
     const stop = await listen(name, (event: any) => {
       const library = event.payload?.libraryId || event.payload?.library_id;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
-import { parse, compileScript } from '@vue/compiler-sfc';
+import { parse, compileScript, compileTemplate } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import * as home from '../src/common/homeDashboard.ts';
@@ -22,7 +22,7 @@ function overview(libraryId = 'lib'): home.HomeOverview {
     people: 3, objectClasses: 7, favorites: 8, tags: 2,
     objectLabels: [{ key: 'coco2017-80@1:16', name: 'Dog' }],
     featured: [{ id: 1, name: '湖畔.jpg', rating: 5, takenDate: 1_700_000_000, modifiedAt: 12, location: { hierarchy: [{ name: '浙江' }, { name: '杭州' }] } }, { id: 2, name: '山.jpg', rating: 4, takenDate: null, modifiedAt: null }],
-    years: [{ year: 2017, count: 10, coverFileId: 1, months: [{ month: 2, count: 10, coverFileId: 1 }] }, { year: 2026, count: 40, coverFileId: 2, months: [{ month: 10, count: 39, coverFileId: 2 }, { month: 12, count: 1, coverFileId: null }] }],
+    years: [{ year: 2017, count: 10, coverFileIds: [1], months: [{ month: 2, count: 10, coverFileIds: [1] }] }, { year: 2026, count: 40, coverFileIds: [2], months: [{ month: 10, count: 39, coverFileIds: [2] }, { month: 12, count: 1, coverFileIds: [] }] }],
     anniversaryCount: 1, anniversary: [{ id: 3, name: '旧照片.jpg', rating: 0, takenDate: 1_600_000_000, modifiedAt: null }],
     recent: [{ id: 4, name: '新照片.jpg', rating: 4, takenDate: null, modifiedAt: 12 }],
     topPlaces: [{ kind: 'location', value: '7', name: '杭州', count: 20, coverFileId: 1 }],
@@ -80,7 +80,7 @@ test('ordinary background refresh keeps the current photos while visibility inva
 });
 
 test('a bounded timeline keeps every year reachable and independent preview IDs preserve the selected photo', () => {
-  const years = Array.from({ length: 25 }, (_, i) => ({ year: 2000 + i, count: i + 1, coverFileId: i + 1 }));
+  const years = Array.from({ length: 25 }, (_, i) => ({ year: 2000 + i, count: i + 1, coverFileIds: [i + 1] }));
   let page = home.homeYearWindow(years, 25);
   assert.equal(page.years[0].year, 2015); assert.equal(page.hasPrevious, true); assert.equal(page.hasNext, false);
   page = home.homeYearWindow(years, 15);
@@ -124,7 +124,7 @@ test('discovery links use validated IDs and supported structured operators', () 
   assert.deepEqual(home.homeEntityRules({ ...data.topTags[0], value: '0' }), []);
   assert.deepEqual(home.homeEntityRules({ ...data.topTags[0], value: '1 OR 1' }), []);
   assert.equal(home.homeMonths(data.years[1]).length, 12);
-  assert.equal(home.homeMonths(data.years[1])[11].coverFileId, null);
+  assert.deepEqual(home.homeMonths(data.years[1])[11].coverFileIds, []);
   assert.equal(home.homeMonths(data.years[1])[0].count, 0);
 });
 
@@ -142,7 +142,8 @@ test('entity search rejects superseded, switched-library and disposed suggestion
 });
 
 function context(overrides: any = {}) {
-  const timers = new Map<number, { fn: () => void; delay: number }>(); let timerId = 0;
+  const timers = new Map<number, { fn: () => void; delay: number }>();
+  const intervals = new Map<number, { fn: () => void; delay: number }>(); let timerId = 0;
   const listeners: Record<string, (event: any) => void> = {}, mounts: Array<() => any> = [], unmounts: Array<() => any> = [], emitted: any[] = [], calls: any[] = [];
   const libConfig = Vue.reactive({ _libraryId: 'lib' });
   const config = Vue.reactive({ home: { minimumRating: 4, intervalSeconds: 8, autoplay: true }, settings: { face: { enabled: true }, ai: {} } });
@@ -158,7 +159,7 @@ function context(overrides: any = {}) {
     onMounted: (fn: any) => mounts.push(fn), onBeforeUnmount: (fn: any) => unmounts.push(fn),
     getPreviewUrl: (id: number) => `preview-${id}`, getThumbUrl: (id: number) => `thumb-${id}`,
     setTimeout: (fn: () => void, delay: number) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout: (id: number) => timers.delete(id),
-    setInterval: () => ++timerId, clearInterval() {}, ...overrides,
+    setInterval: (fn: () => void, delay: number) => { const id = ++timerId; intervals.set(id, { fn, delay }); return id; }, clearInterval: (id: number) => intervals.delete(id), ...overrides,
   };
   // Run the actual title subscription with the existing deterministic lifecycle/IPC fixtures.
   const hook = stripTypeScriptTypes(read('common/mediaTitleEvents.ts'))
@@ -167,13 +168,13 @@ function context(overrides: any = {}) {
   ctx.useMediaTitleEvents = runInNewContext(`${hook};useMediaTitleEvents`, {
     onMounted: ctx.onMounted, onBeforeUnmount: ctx.onBeforeUnmount, listen: ctx.listen,
   });
-  return { ctx, timers, listeners, mounts, unmounts, emitted, calls, match };
+  return { ctx, timers, intervals, listeners, mounts, unmounts, emitted, calls, match };
 }
 function harness(overrides: any = {}) {
   const h = context(overrides);
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
   const scope = Vue.effectScope();
-  const api = scope.run(() => runInNewContext(`${script};({state,activeIndex,activePhoto,step,selectPhoto,hovered,focused,pageVisible,playing,togglePlayback,preferences,refresh,openPhoto,previewError,heroFailed,useThumbnail,imageFailed,queueRefresh,expandedYear,expandedYearData,months,toggleYear,pageYears,yearWindow,stats,browseEntity});`, h.ctx));
+  const api = scope.run(() => runInNewContext(`${script};({state,activeIndex,activePhoto,step,selectPhoto,hovered,focused,pageVisible,playing,togglePlayback,preferences,refresh,openPhoto,previewError,heroFailed,useThumbnail,imageFailed,queueRefresh,expandedYear,expandedYearData,months,toggleYear,pageYears,yearWindow,stats,browseEntity,coverStep,timelineCover,failedThumbs,opening});`, h.ctx));
   return { ...h, api, mount: async () => { for (const mount of h.mounts) await mount(); }, dispose: () => { h.unmounts.forEach(fn => fn()); scope.stop(); } };
 }
 
@@ -218,7 +219,7 @@ test('the actual timeline expands in place, exposes all twelve months and keeps 
   assert.equal(h.api.months.value.length, 12);
   assert.equal(h.api.months.value[0].count, 0);
   assert.equal(h.api.months.value[11].count, 1);
-  assert.equal(h.api.months.value[11].coverFileId, null);
+  assert.deepEqual(Array.from(h.api.months.value[11].coverFileIds), []);
   assert.equal(h.emitted.length, 0, 'expanding a year must stay on Home');
   h.api.toggleYear(2026); assert.equal(h.api.expandedYear.value, null);
   h.api.toggleYear(2017); assert.equal(h.api.months.value[1].count, 10);
@@ -232,7 +233,7 @@ test('the actual timeline expands in place, exposes all twelve months and keeps 
 
 test('background refresh preserves the older year page and expanded month panel when new years arrive', async () => {
   let data = overview();
-  data.years = Array.from({ length: 25 }, (_, i) => ({ year: 2000 + i, count: 1, coverFileId: 1, months: [{ month: 1, count: 1, coverFileId: 1 }] }));
+  data.years = Array.from({ length: 25 }, (_, i) => ({ year: 2000 + i, count: 1, coverFileIds: [1], months: [{ month: 1, count: 1, coverFileIds: [1] }] }));
   const h = harness({ invoke: async () => data }); await tick();
   h.api.pageYears(-1); h.api.toggleYear(2010);
   assert.equal(h.api.yearWindow.value.years.at(-1).year, 2014);
@@ -255,6 +256,57 @@ async function render(data: home.HomeOverview | null, busy = false, error = '') 
   const component = runInNewContext(`${code};component`, { ...h.ctx, ...imports });
   return renderToString(Vue.createSSRApp(component, { openPreview: async () => {} }));
 }
+test('timeline shares one thumbnail-only clock, skips failed covers and pauses for hidden or inactive playback', async () => {
+  const h = harness(); await tick(); await h.mount();
+  assert.equal(h.intervals.size, 1);
+  const clock = [...h.intervals.values()][0]; assert.equal(clock.delay, 8000);
+  assert.equal(h.api.timelineCover([10,20]), 10);
+  clock.fn(); assert.equal(h.api.timelineCover([10,20]), 20);
+  h.api.pageVisible.value = false; clock.fn(); assert.equal(h.api.coverStep.value, 1);
+  h.api.pageVisible.value = true;
+  h.api.togglePlayback(); clock.fn(); assert.equal(h.api.coverStep.value, 1);
+  h.api.togglePlayback(); h.api.opening.value = true; clock.fn(); assert.equal(h.api.coverStep.value, 1);
+  h.api.opening.value = false; clock.fn(); assert.equal(h.api.coverStep.value, 2);
+  h.api.failedThumbs.add(10); assert.equal(h.api.timelineCover([10,20]), 20);
+  h.api.failedThumbs.add(20); assert.equal(h.api.timelineCover([10,20]), null);
+  assert.equal(h.api.timelineCover([]), null);
+  assert.equal(h.api.timelineCover(undefined), null);
+  h.dispose(); assert.equal(h.intervals.size, 0);
+});
+
+test('actual year and month images rotate their ranked IDs and use the next candidate after thumbnail errors', async () => {
+  const h = harness(); await tick(); await h.mount();
+  const clock = [...h.intervals.values()][0];
+  for (const period of ['year', 'month']) {
+    h.api.coverStep.value = 0; h.api.failedThumbs.clear();
+    const template = source.match(new RegExp(`<template v-for="id in \\[timelineCover\\(${period}.coverFileIds\\)\\]"[\\s\\S]*?<\\/template>`))![0];
+    const imports: any = {};
+    const { code, errors } = compileTemplate({ source: template, filename: 'TimelineCover.vue', id: 'timeline-cover' });
+    assert.deepEqual(errors, []);
+    const js = code.replace(/import\s*\{([^}]*?)\}\s*from\s*['"]vue['"];?/g, (_m, names) => {
+      for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return '';
+    }).replace('export function render', 'function render');
+    const render = runInNewContext(`${js};render`, imports);
+    const state = { [period]: { count: 2, coverFileIds: [10,20] }, timelineCover: h.api.timelineCover, failedThumbs: h.api.failedThumbs, getThumbUrl: (id: number) => `thumb-${id}` };
+    const html = async () => {
+      const app = Vue.createSSRApp({ data: () => state, render }); app.component('IconPhoto', () => Vue.h('svg')); return renderToString(app);
+    };
+    assert.match(await html(), /src="thumb-10"/); clock.fn(); assert.match(await html(), /src="thumb-20"/);
+    h.api.failedThumbs.add(20); assert.match(await html(), /src="thumb-10"/);
+    h.api.failedThumbs.add(10); assert.ok(!(await html()).includes('<img'));
+  }
+  h.dispose();
+});
+
+test('timeline clock respects reduced motion even when the featured carousel is empty', async () => {
+  const data = overview(); data.featured = [];
+  const h = harness({ invoke: async () => data }); await tick(); h.match.matches = true; await h.mount();
+  const clock = [...h.intervals.values()][0]; clock.fn(); assert.equal(h.api.coverStep.value, 0);
+  h.api.togglePlayback(); clock.fn(); assert.equal(h.api.coverStep.value, 1);
+  await h.api.refresh(); assert.equal(h.api.coverStep.value, 0);
+  h.dispose();
+});
+
 test('the real template renders real counts, scale-dependent years, photos and safe text', async () => {
   const data = overview(); data.featured[0].name = '<script>private</script>.jpg';
   const html = await render(data);
