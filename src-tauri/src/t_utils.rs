@@ -2092,26 +2092,38 @@ static ALBUM_SYNC_LOCKS: Lazy<Mutex<HashMap<i64, Arc<Mutex<()>>>>> =
 
 static REMOVING_ALBUMS: Lazy<Mutex<HashMap<i64, usize>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-struct AlbumScanGuard {
+static SCAN_BLOCKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub(crate) struct ScanAdmissionBlock { pub album_ids: Vec<i64> }
+impl Drop for ScanAdmissionBlock { fn drop(&mut self) { let _active=ACTIVE_ALBUM_SCANS.lock().unwrap_or_else(|e|e.into_inner()); SCAN_BLOCKS.fetch_sub(1,std::sync::atomic::Ordering::SeqCst); } }
+pub(crate) fn block_album_scans() -> ScanAdmissionBlock {
+    let active=ACTIVE_ALBUM_SCANS.lock().unwrap_or_else(|e|e.into_inner());
+    SCAN_BLOCKS.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+    ScanAdmissionBlock { album_ids:active.iter().copied().collect() }
+}
+pub(crate) struct AlbumScanGuard {
     album_id: i64,
+    cancellation: Arc<Mutex<HashMap<i64,bool>>>,
 }
 
 impl AlbumScanGuard {
-    fn acquire(album_id: i64) -> Result<Self, String> {
+    pub(crate) fn acquire(album_id: i64, cancellation: Arc<Mutex<HashMap<i64,bool>>>) -> Result<Self, String> {
         if album_removal_pending(album_id) {
             return Err(format!("Album {} is being removed", album_id));
         }
         let mut active = ACTIVE_ALBUM_SCANS.lock().unwrap();
+        if SCAN_BLOCKS.load(std::sync::atomic::Ordering::SeqCst)>0 {return Err("Library is switching; wait before starting a scan".into());}
         if !active.insert(album_id) {
             return Err(format!("Album {} is already being scanned", album_id));
         }
-        Ok(Self { album_id })
+        match cancellation.lock(){Ok(mut flags)=>{flags.insert(album_id,false);},Err(error)=>{active.remove(&album_id);return Err(error.to_string());}}
+        Ok(Self { album_id, cancellation })
     }
 }
 
 impl Drop for AlbumScanGuard {
     fn drop(&mut self) {
-        ACTIVE_ALBUM_SCANS.lock().unwrap().remove(&self.album_id);
+        self.cancellation.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.album_id);
+        ACTIVE_ALBUM_SCANS.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.album_id);
     }
 }
 
@@ -2147,7 +2159,7 @@ fn album_removal_pending(album_id: i64) -> bool {
     REMOVING_ALBUMS.lock().unwrap().contains_key(&album_id)
 }
 
-fn album_scan_active(album_id: i64) -> bool {
+pub(crate) fn album_scan_active(album_id: i64) -> bool {
     ACTIVE_ALBUM_SCANS.lock().unwrap().contains(&album_id)
 }
 
@@ -3169,6 +3181,9 @@ pub fn count_folder_files_filtered(path: &str, file_types: i64, excluded_folders
 
 fn count_folder_files_cancellable(path: &str, file_types: i64, excluded_folders: &[String],
     small_image_filter: i64, is_cancelled: impl Fn() -> bool) -> Option<(u64, u64, u64, u64, u64, u64, u64)> {
+    count_folder_files_observed(path,file_types,excluded_folders,small_image_filter,is_cancelled,|_,_|{}).ok().flatten()
+}
+fn count_folder_files_observed(path:&str,file_types:i64,excluded_folders:&[String],small_image_filter:i64,is_cancelled:impl Fn()->bool,mut observe:impl FnMut(&Path,Option<i64>))->Result<Option<(u64,u64,u64,u64,u64,u64,u64)>,String>{
     let mut folder_count = 0;
     let mut image_file_count = 0;
     let mut total_image_size = 0;
@@ -3182,13 +3197,14 @@ fn count_folder_files_cancellable(path: &str, file_types: i64, excluded_folders:
         .into_iter()
         .filter_entry(|entry| is_visible_or_root(entry)
             && !Album::path_is_excluded(Path::new(path), excluded_folders, entry.path()))
-        .filter_map(Result::ok)
     {
-        if is_cancelled() { return None; }
+        if is_cancelled() { return Ok(None); }
+        let entry=entry.map_err(|e|e.to_string())?;
         let entry_type = entry.file_type();
 
         if entry_type.is_dir() {
             folder_count += 1;
+            observe(entry.path(),None);
         } else if entry_type.is_file() {
             let kind = get_file_type(entry.path().to_str().unwrap_or(""));
             let bit = match kind { Some(1) => 1, Some(2) => 2, Some(3) => 4, _ => 0 };
@@ -3199,7 +3215,8 @@ fn count_folder_files_cancellable(path: &str, file_types: i64, excluded_folders:
                 scan_file_count += 1;
                 total_scan_size += size;
             }
-            if let Some(file_ext_type) = get_file_type(entry.path().to_str().unwrap_or("")) {
+            if let Some(file_ext_type) = kind {
+                observe(entry.path(),Some(file_ext_type));
                 match file_ext_type {
                     1 | 3 => {
                         image_file_count += 1;
@@ -3215,8 +3232,8 @@ fn count_folder_files_cancellable(path: &str, file_types: i64, excluded_folders:
         }
     }
 
-    if is_cancelled() { return None; }
-    Some((
+    if is_cancelled() { return Ok(None); }
+    Ok(Some((
         folder_count,
         image_file_count,
         total_image_size,
@@ -3224,7 +3241,7 @@ fn count_folder_files_cancellable(path: &str, file_types: i64, excluded_folders:
         total_video_size,
         scan_file_count,
         total_scan_size,
-    ))
+    )))
 }
 
 fn is_ignored_scan_sidecar(path: &Path) -> bool {
@@ -3519,6 +3536,8 @@ pub fn dms_to_decimal(degrees: f64, minutes: f64, seconds: f64, direction: Optio
 
 #[derive(serde::Serialize, Clone)]
 struct ProgressPayload {
+    library_id: String,
+    run_id: String,
     album_id: i64,
     phase: String,
     current: u64,
@@ -3537,7 +3556,11 @@ struct ProgressPayload {
 }
 
 #[derive(serde::Serialize, Clone)]
-struct FinishedPayload {
+pub(crate) struct FinishedPayload {
+    pub library_id: String,
+    pub run_id: String,
+    pub status: String,
+    discovered: u64,
     album_id: i64,
     phase: String,
     indexed: u64,
@@ -3744,8 +3767,10 @@ impl ProgressSnapshot {
         }
     }
 
-    fn to_payload(&self, album_id: i64) -> ProgressPayload {
+    fn to_payload(&self, album_id: i64, report: &crate::t_scan::Run) -> ProgressPayload {
         ProgressPayload {
+            library_id: report.library_id.clone(),
+            run_id: report.id.clone(),
             album_id,
             phase: self.phase().to_string(),
             current: self.processed,
@@ -3766,6 +3791,7 @@ impl ProgressSnapshot {
 }
 
 struct ProgressTracker {
+    journal: Arc<crate::t_scan::Session>,
     album_id: i64,
     app_handle: tauri::AppHandle,
     flush_interval: Duration,
@@ -3777,6 +3803,7 @@ struct ProgressTracker {
 impl ProgressTracker {
     fn new(
         app_handle: &tauri::AppHandle,
+        journal: Arc<crate::t_scan::Session>,
         album_id: i64,
         total: u64,
         search_total: u64,
@@ -3799,6 +3826,7 @@ impl ProgressTracker {
             scan_total_size,
         };
         Self {
+            journal,
             album_id,
             app_handle: app_handle.clone(),
             flush_interval: Duration::from_millis(150),
@@ -3834,7 +3862,8 @@ impl ProgressTracker {
     }
 
     fn emit_now(&mut self) {
-        let payload = self.snapshot.to_payload(self.album_id);
+        self.journal.phase(self.snapshot.phase());
+        let payload = self.snapshot.to_payload(self.album_id, &self.journal.snapshot());
         let _ = self.app_handle.emit("index_progress", payload);
         self.last_emit_at = Some(Instant::now());
         self.last_phase = self.snapshot.phase().to_string();
@@ -3891,7 +3920,8 @@ fn index_single_file(
     prefer_embedded_raw_thumbnail: RawDisplayOptions,
     last_scan_time: i64,
     small_image_filter: i64,
-) -> Option<FileIndexOutcome> {
+) -> Result<FileIndexOutcome,String> {
+    let mut failure="Unable to index the media file".to_string();
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let parent_path = Path::new(path_str)
             .parent()
@@ -3899,11 +3929,9 @@ fn index_single_file(
             .to_string_lossy()
             .to_string();
 
-        if let Ok(folder) = crate::t_sqlite::AFolder::add_to_db(album_id, &parent_path) {
+        let folder=crate::t_sqlite::AFolder::add_to_db(album_id, &parent_path).map_err(|e|{failure=e;}).ok()?; {
             if let Some(folder_id) = folder.id {
-                if let Ok((file, _)) =
-                    crate::t_sqlite::AFile::add_to_db(folder_id, path_str, ftype, last_scan_time)
-                {
+                let (file,_)=crate::t_sqlite::AFile::add_to_db(folder_id,path_str,ftype,last_scan_time).map_err(|e|{failure=e;}).ok()?; {
                     if dimensions_excluded(ftype, file.width.unwrap_or(0), file.height.unwrap_or(0), small_image_filter) {
                         return Some(FileIndexOutcome { excluded: true, task: None,
                             processed_immediately: false, search_ready_immediately: false });
@@ -3974,10 +4002,11 @@ fn index_single_file(
     }));
 
     match result {
-        Ok(task) => task,
+        Ok(Some(task)) => Ok(task),
+        Ok(None) => Err(failure),
         Err(_) => {
             eprintln!("Panic while indexing file, skipping: {}", path_str);
-            None
+            Err(format!("Media decoder panicked while reading {}",path_str))
         }
     }
 }
@@ -3987,7 +4016,12 @@ async fn process_thumbnail_task(
     task: ThumbnailTask,
     budget: ProcessingBudget,
     tracker: Arc<Mutex<ProgressTracker>>,
+    cancellation: Arc<Mutex<HashMap<i64,bool>>>,
 ) -> Result<bool, String> {
+    let session=with_progress_tracker(&tracker,|t|t.journal.clone());
+    let _report_guard=crate::t_scan::TaskReportGuard{session:session.clone(),path:task.file_path.clone()};
+    let album_id=session.snapshot().album_id;
+    if scan_cancelled(&cancellation,album_id){return Ok(false);}
     let thumb_semaphore = if task.is_heavy {
         budget.heavy_thumb.clone()
     } else {
@@ -3999,8 +4033,11 @@ async fn process_thumbnail_task(
         .await
         .map_err(|e| format!("Failed to acquire thumbnail permit: {}", e))?;
 
+    if scan_cancelled(&cancellation,album_id){return Ok(false);}
+    let lease=session.clone();
     let task_for_thumb = task.clone();
     let thumb_ok = tauri::async_runtime::spawn_blocking(move || {
+        let _keep_scan_alive=lease;
         match crate::t_sqlite::AThumb::get_or_create_thumb(
             task_for_thumb.file_id,
             &task_for_thumb.file_path,
@@ -4012,20 +4049,21 @@ async fn process_thumbnail_task(
             task_for_thumb.duration,
             None,
         ) {
-            Ok(Some(thumb)) if thumb.error_code == 0 => true,
-            Ok(Some(_)) => false,
-            Ok(None) => false,
+            Ok(Some(thumb)) if matches!(thumb.error_code,0|2) => Ok(true),
+            Ok(Some(thumb)) => Err(format!("Preview generation failed (decoder error code {})",thumb.error_code)),
+            Ok(None) => Err("Preview generator returned no image".to_string()),
             Err(e) => {
                 eprintln!(
                     "Failed to generate thumb for {}: {}",
                     task_for_thumb.file_path, e
                 );
-                false
+                Err(e)
             }
         }
     })
     .await
     .map_err(|e| format!("Thumbnail task failed: {}", e))?;
+    let thumb_ok=match thumb_ok {Ok(value)=>value,Err(error)=>{session.error(&task.file_path,"preview",&error);false}};
 
     if !thumb_ok {
         // The file record was created successfully. A preview failure must not
@@ -4043,6 +4081,7 @@ async fn process_thumbnail_task(
     );
 
     if !task.processed_already_ready {
+        session.stage_ready(&task.file_path,"preview");
         with_progress_tracker(&tracker, |tracker| {
             tracker.modify(|snapshot| {
                 snapshot.processed += 1;
@@ -4061,23 +4100,28 @@ async fn process_thumbnail_task(
         .await
         .map_err(|e| format!("Failed to acquire embedding permit: {}", e))?;
 
+    if scan_cancelled(&cancellation,album_id){return Ok(true);}
+    let embedding_lease=session.clone();
     let app_handle_for_embedding = app_handle.clone();
     let file_id = task.file_id;
     let file_path = task.file_path.clone();
     let embedding_ok = tauri::async_runtime::spawn_blocking(move || {
+        let _keep_scan_alive=embedding_lease;
         let ai_state: State<crate::t_ai::AiState> = app_handle_for_embedding.state();
         match crate::t_sqlite::AFile::generate_embedding(&ai_state, file_id) {
-            Ok(_) => true,
+            Ok(_) => Ok(true),
             Err(e) => {
                 eprintln!("Failed to generate embedding for {}: {}", file_path, e);
-                false
+                Err(e)
             }
         }
     })
     .await
     .map_err(|e| format!("Embedding task failed: {}", e))?;
+    let embedding_ok=match embedding_ok {Ok(value)=>value,Err(error)=>{session.error(&task.file_path,"search",&error);false}};
 
     if embedding_ok {
+        session.stage_ready(&task.file_path,"search");
         with_progress_tracker(&tracker, |tracker| {
             tracker.modify(|snapshot| {
                 snapshot.search_ready += 1;
@@ -4091,6 +4135,17 @@ async fn process_thumbnail_task(
     }
 }
 
+fn scan_cancelled(token:&Arc<Mutex<HashMap<i64,bool>>>,album:i64)->bool{token.lock().map(|flags|flags.get(&album)!=Some(&false)).unwrap_or(true)}
+fn mark_existing_scan_file(album:i64,path:&str,at:i64)->Result<(),String>{
+    let file=Path::new(path);let parent=file.parent().ok_or("File has no parent")?.to_string_lossy();let name=file.file_name().ok_or("File has no name")?.to_string_lossy();
+    let c=crate::t_sqlite::open_conn()?;mark_scan_file_seen_on(&c,album,&parent,&name,at)
+}
+fn mark_scan_file_seen_on(c:&rusqlite::Connection,album:i64,parent:&str,name:&str,at:i64)->Result<(),String>{
+    c.execute("UPDATE afiles SET last_scan_time=?1 WHERE name=?2 AND folder_id IN(SELECT id FROM afolders WHERE album_id=?3 AND path=?4)",rusqlite::params![at,name,album,parent]).map(|_|()).map_err(|e|e.to_string())
+}
+impl FinishedPayload{
+    pub(crate) fn from_report(r:&crate::t_scan::Run,status:&str)->Self{Self{library_id:r.library_id.clone(),run_id:r.id.clone(),status:status.into(),album_id:r.album_id,phase:r.phase.clone(),indexed:r.counts.previews_ready,processed:r.counts.previews_ready,discovered:r.counts.discovered,search_ready:r.counts.search_ready,total:r.counts.total,search_total:r.counts.search_total,skipped:r.counts.skipped,skipped_size:0,failed:r.counts.metadata_failed,failed_size:0,scan_total:r.counts.total+r.counts.skipped,scan_total_size:0}}
+}
 pub async fn index_album_worker(
     app_handle: &tauri::AppHandle,
     cancellation_token: Arc<Mutex<HashMap<i64, bool>>>,
@@ -4099,8 +4154,8 @@ pub async fn index_album_worker(
     prefer_embedded_raw_thumbnail: RawDisplayOptions,
     skip_file_path: Option<String>,
     group_raw_jpeg_pairs: bool,
-) -> Result<(), String> {
-    let _album_scan_guard = AlbumScanGuard::acquire(album_id)?;
+    journal: Arc<crate::t_scan::Session>,
+) -> Result<FinishedPayload, String> {
     let scan_start = std::time::Instant::now();
     // Generate a unique scan time for this session (current timestamp)
     let current_scan_time = Utc::now().timestamp_millis();
@@ -4109,72 +4164,25 @@ pub async fn index_album_worker(
     let album = Album::get_album_by_id(album_id).map_err(|e| e.to_string())?;
     let previous_indexed = album.indexed.unwrap_or(0).max(0) as u64;
     let previous_total = album.total.unwrap_or(0).max(0) as u64;
-    if !directory_accessible(&album.path) {
-        app_handle
-            .emit(
-                "index_finished",
-                FinishedPayload {
-                    album_id,
-                    phase: "complete".to_string(),
-                    indexed: previous_indexed,
-                    processed: previous_indexed,
-                    search_ready: previous_indexed,
-                    total: previous_total,
-                    search_total: previous_total,
-                    skipped: 0,
-                    skipped_size: 0,
-                    failed: 1,
-                    failed_size: 0,
-                    scan_total: previous_total,
-                    scan_total_size: 0,
-                },
-            )
-            .map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    // Never persist a partial pre-count when cancellation interrupts traversal.
-    let counts = count_folder_files_cancellable(&album.path, album.file_types, &album.excluded_folders, album.small_image_filter,
-        || cancellation_token.lock().map(|flags| flags.get(&album_id) == Some(&true)).unwrap_or(true));
-    let Some((_folders, image_count, _image_size, video_count, _video_size, scan_total, scan_total_size)) = counts else {
-        app_handle.emit("index_finished", FinishedPayload {
-            album_id,
-            phase: "discovering".to_string(),
-            indexed: previous_indexed,
-            processed: previous_indexed,
-            search_ready: previous_indexed,
-            total: previous_total,
-            search_total: previous_total,
-            skipped: album.skipped_count.unwrap_or(0),
-            skipped_size: album.skipped_size.unwrap_or(0),
-            failed: album.failed_count.unwrap_or(0),
-            failed_size: album.failed_size.unwrap_or(0),
-            scan_total: previous_total,
-            scan_total_size: 0,
-        }).map_err(|e| e.to_string())?;
-        return Ok(());
-    };
+    if !directory_accessible(&album.path) {return Err(format!("Album directory is unavailable or unreadable: {}",album.path));}
+    let count_path=album.path.clone();let count_types=album.file_types;let count_excluded=album.excluded_folders.clone();let count_small=album.small_image_filter;
+    let count_cancel=cancellation_token.clone();let count_journal=journal.clone();
+    let counts=tauri::async_runtime::spawn_blocking(move||count_folder_files_observed(&count_path,count_types,&count_excluded,count_small,
+        ||scan_cancelled(&count_cancel,album_id),|path,kind|count_journal.expected(&path.to_string_lossy(),kind))).await.map_err(|e|e.to_string())??;
+    let Some((_folders,image_count,_image_size,video_count,_video_size,scan_total,scan_total_size))=counts else {return Ok(FinishedPayload::from_report(&journal.snapshot(),"paused"));};
     let total_files = image_count + video_count;
-    let search_total = image_count;
+    let search_total = if crate::ai::settings::background_indexing_enabled(){image_count}else{0};
 
-    // Resume only when totals match and previous indexed is a valid in-progress value.
-    // This avoids breaking normal re-scan behavior after a completed run.
-    let resume_from = if previous_total == total_files
-        && previous_indexed > 0
-        && previous_indexed < total_files
-    {
-        previous_indexed
-    } else {
-        0
-    };
-
+    // Revisit the directory tree on resume and reuse cached file/preview records.
+    // Skipping an ordinal prefix can miss new files and make the sweep delete valid rows.
     // 3. Emit start progress
     let tracker = Arc::new(Mutex::new(ProgressTracker::new(
         app_handle,
+        journal.clone(),
         album_id,
         total_files,
         search_total,
-        resume_from,
+        0,
         scan_total,
         scan_total_size,
     )));
@@ -4186,7 +4194,6 @@ pub async fn index_album_worker(
     // 4. Traverse and index
     let mut is_cancelled = false;
     let mut traversal_failed = false;
-    let mut traversed_count = 0u64;
     // WalkDir already visits every directory during indexing.  Record the
     // direct-parent relationship here so the sidebar never needs to rescan an
     // unchanged directory just to decide whether to show its expand arrow.
@@ -4198,10 +4205,9 @@ pub async fn index_album_worker(
         .filter_entry(|entry| is_visible_or_root(entry) && !album.excludes_path(entry.path()))
     {
         // Check cancellation
-        if let Some(&true) = cancellation_token.lock().unwrap().get(&album_id) {
+        if scan_cancelled(&cancellation_token,album_id) {
             println!("Indexing cancelled for album {}", album_id);
             is_cancelled = true;
-            thumbnail_join_set.abort_all();
             break;
         }
 
@@ -4210,12 +4216,17 @@ pub async fn index_album_worker(
             Err(error) => {
                 eprintln!("Album traversal failed for {}: {}", album.path, error);
                 traversal_failed = true;
-                thumbnail_join_set.abort_all();
+                journal.error(&album.path,"directory",&error.to_string());
+                cancellation_token.lock().unwrap().insert(album_id,true);
                 break;
             }
         };
 
+        while directory_state_stack.len()>entry.depth() {
+            if let Some(index)=directory_state_stack.pop(){journal.enumerated(&folder_subfolder_states[index].path);}
+        }
         if entry.file_type().is_dir() {
+            journal.enter(&entry.path().to_string_lossy());
             let directory_path = entry.path().to_string_lossy().to_string();
             let metadata = entry.metadata().ok();
             let modified_at = metadata
@@ -4257,11 +4268,7 @@ pub async fn index_album_worker(
             let path_str = entry.path().to_string_lossy().to_string();
             if let Some(ftype) = get_file_type(&path_str) {
                 if !album.allows_file_type(ftype) || skip_excluded_image(&album, &path_str, ftype)? { continue; }
-                // Resume mode: skip already-indexed prefix files.
-                if traversed_count < resume_from {
-                    traversed_count += 1;
-                    continue;
-                }
+                mark_existing_scan_file(album_id,&path_str,current_scan_time)?;
 
                 // Persist current file pointer for post-crash diagnosis.
                 write_index_trace(album_id, &path_str);
@@ -4271,6 +4278,8 @@ pub async fn index_album_worker(
                         "Skipping suspected problematic file during recovered indexing: {}",
                         path_str
                     );
+                    journal.metadata(&path_str,ftype,false,false,false,false);
+                    journal.error(&path_str,"metadata","Skipped by the recovery option; existing catalogue metadata was preserved");
                     let file_size = std::fs::metadata(&path_str).map(|m| m.len()).unwrap_or(0);
                     with_progress_tracker(&tracker, |tracker| {
                         tracker.modify(|snapshot| {
@@ -4281,11 +4290,11 @@ pub async fn index_album_worker(
                         });
                         tracker.maybe_emit();
                     });
-                    traversed_count += 1;
                     continue;
                 }
 
-                if let Some(outcome) = index_single_file(
+                let mut metadata_error=None;
+                if let Ok(outcome) = index_single_file(
                     &album.path,
                     album_id,
                     &path_str,
@@ -4294,7 +4303,7 @@ pub async fn index_album_worker(
                     prefer_embedded_raw_thumbnail,
                     current_scan_time,
                     album.small_image_filter,
-                ) {
+                ).map_err(|error|{metadata_error=Some(error);}) {
                     let file_size = outcome
                         .task
                         .as_ref()
@@ -4303,6 +4312,7 @@ pub async fn index_album_worker(
                             std::fs::metadata(&path_str).map(|m| m.len()).unwrap_or(0)
                         });
                     if outcome.excluded {
+                        journal.excluded(&path_str,ftype);
                         // Some formats reveal dimensions only during metadata reading.
                         // Remove those candidates from all progress totals consistently.
                         with_progress_tracker(&tracker, |tracker| {
@@ -4314,15 +4324,16 @@ pub async fn index_album_worker(
                             });
                             tracker.maybe_emit();
                         });
-                        traversed_count += 1;
                         continue;
                     }
+                    journal.metadata(&path_str,ftype,true,outcome.processed_immediately,outcome.search_ready_immediately,outcome.task.is_some());
                     if let Some(task) = outcome.task {
                         thumbnail_join_set.spawn(process_thumbnail_task(
                             app_handle.clone(),
                             task,
                             processing_budget.clone(),
                             tracker.clone(),
+                            cancellation_token.clone(),
                         ));
                     }
                     with_progress_tracker(&tracker, |tracker| {
@@ -4347,6 +4358,8 @@ pub async fn index_album_worker(
                         let _ = Album::update_progress(album_id, processed_now, current_total);
                     }
                 } else {
+                    journal.metadata(&path_str,ftype,false,false,false,false);
+                    journal.error(&path_str,"metadata",metadata_error.as_deref().unwrap_or("Unable to read file metadata"));
                     let file_size = std::fs::metadata(&path_str).map(|m| m.len()).unwrap_or(0);
                     with_progress_tracker(&tracker, |tracker| {
                         tracker.modify(|snapshot| {
@@ -4359,8 +4372,8 @@ pub async fn index_album_worker(
                     });
                 }
 
-                traversed_count += 1;
             } else if !is_ignored_scan_sidecar(entry.path()) {
+                journal.skipped(&path_str);
                 let file_size = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
                 with_progress_tracker(&tracker, |tracker| {
                     tracker.modify(|snapshot| {
@@ -4374,14 +4387,17 @@ pub async fn index_album_worker(
         }
     }
 
+    if !is_cancelled&&!traversal_failed {while let Some(index)=directory_state_stack.pop(){journal.enumerated(&folder_subfolder_states[index].path);}}
     while let Some(result) = thumbnail_join_set.join_next().await {
         match result {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
+                journal.error(&album.path,"preview",&e);
                 eprintln!("Processing task failed: {}", e);
             }
             Err(e) => {
                 if !e.is_cancelled() {
+                    journal.error(&album.path, "preview", &format!("Processing task join failed: {e}"));
                     eprintln!("Processing task join failed: {}", e);
                 }
             }
@@ -4391,6 +4407,7 @@ pub async fn index_album_worker(
     with_progress_tracker(&tracker, |tracker| tracker.emit_now());
     let mut final_snapshot = with_progress_tracker(&tracker, |tracker| tracker.snapshot());
     let scan_failed = traversal_failed || !directory_accessible(&album.path);
+    is_cancelled = is_cancelled || scan_cancelled(&cancellation_token,album_id) && !scan_failed;
     let scan_complete = !is_cancelled && !scan_failed;
     if scan_complete {
         let _ = Album::update_progress(album_id, final_snapshot.processed, final_snapshot.total);
@@ -4404,6 +4421,7 @@ pub async fn index_album_worker(
     // Delete files that are in DB but not in file system (Mark-and-Sweep)
     if scan_complete {
         if let Err(error) = AFolder::ensure_subfolder_states(album_id, &folder_subfolder_states) {
+            journal.error(&album.path,"cleanup",&error);
             eprintln!(
                 "Failed to persist folder subfolder states for album {}: {}",
                 album_id, error
@@ -4413,16 +4431,18 @@ pub async fn index_album_worker(
             album_id,
             &folder_subfolder_states,
         ) {
+            journal.error(&album.path,"cleanup",&error);
             eprintln!("Failed to remove stale folders from album {}: {}", album_id, error);
         }
 
         println!("Cleaning up removed files from DB for album {}", album_id);
-        let deleted_count = AFile::delete_unseen_in_album(album_id, current_scan_time).unwrap_or(0);
+        let deleted_count = AFile::delete_unseen_in_album(album_id, current_scan_time).unwrap_or_else(|e|{journal.error(&album.path,"cleanup",&e);0});
         if deleted_count > 0 {
             println!("Deleted {} stale records from DB.", deleted_count);
         }
 
         if let Err(error) = pair_live_photos_after_album_index(album_id) {
+            journal.error(&album.path,"cleanup",&error);
             eprintln!(
                 "Failed to pair Live Photos after indexing album {}: {}",
                 album_id, error
@@ -4432,6 +4452,7 @@ pub async fn index_album_worker(
             album_id,
             group_raw_jpeg_pairs,
         ) {
+            journal.error(&album.path,"cleanup",&error);
             eprintln!(
                 "Failed to pair RAW+JPEG files after indexing album {}: {}",
                 album_id, error
@@ -4493,13 +4514,13 @@ pub async fn index_album_worker(
         elapsed
     );
 
-    // 6. Emit finished
-    app_handle
-        .emit(
-            "index_finished",
-            FinishedPayload {
+    Ok(FinishedPayload {
+                library_id: journal.snapshot().library_id,
+                run_id: journal.snapshot().id,
+                discovered: final_snapshot.discovered,
+                status: if is_cancelled {"paused"} else if scan_failed {"failed"} else {"completed"}.into(),
                 album_id,
-                phase: final_snapshot.phase().to_string(),
+                phase: if scan_complete {"complete".into()}else{final_snapshot.phase().into()},
                 indexed: if scan_failed {
                     previous_indexed
                 } else {
@@ -4523,11 +4544,7 @@ pub async fn index_album_worker(
                 failed_size: final_snapshot.failed_size,
                 scan_total: final_snapshot.scan_total,
                 scan_total_size: final_snapshot.scan_total_size,
-            },
-        )
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
+            })
 }
 
 #[cfg(test)]
@@ -4854,5 +4871,37 @@ mod import_file_concurrency_tests {
         assert_eq!(fs::read(destination.join("photo.jpg")).unwrap(), b"existing");
         assert_eq!(fs::read_dir(&destination).unwrap().count(), 17);
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod scan_lifecycle_tests {
+    use super::*;
+    static SERIAL:Mutex<()>=Mutex::new(());
+    #[test]
+    fn scan_lease_keeps_admission_reserved_until_every_blocking_clone_exits(){
+        let _serial=SERIAL.lock().unwrap();let token=Arc::new(Mutex::new(HashMap::new()));let id=9_900_001;
+        let lease=Arc::new(AlbumScanGuard::acquire(id,token.clone()).unwrap());let blocking=lease.clone();
+        assert!(album_scan_active(id));assert!(AlbumScanGuard::acquire(id,token.clone()).is_err());
+        drop(lease);assert!(album_scan_active(id));assert_eq!(token.lock().unwrap().get(&id),Some(&false));
+        drop(blocking);assert!(!album_scan_active(id));assert!(!token.lock().unwrap().contains_key(&id));
+    }
+    #[test]
+    fn switching_blocks_new_scans_until_the_scope_change_is_finished(){
+        let _serial=SERIAL.lock().unwrap();let token=Arc::new(Mutex::new(HashMap::new()));let id=9_900_002;
+        let block=block_album_scans();assert!(AlbumScanGuard::acquire(id,token.clone()).is_err());
+        drop(block);drop(AlbumScanGuard::acquire(id,token).unwrap());assert!(!album_scan_active(id));
+    }
+    #[test]
+    fn a_seen_but_unreadable_file_keeps_its_existing_title_and_visit_history(){
+        let c=rusqlite::Connection::open_in_memory().unwrap();c.execute_batch("CREATE TABLE afolders(id INTEGER PRIMARY KEY,album_id INTEGER,path TEXT);CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,name TEXT,last_scan_time INTEGER,title TEXT,view_count INTEGER);INSERT INTO afolders VALUES(1,1,'/photos'),(2,2,'/photos');INSERT INTO afiles VALUES(1,1,'bad.jpg',10,'Keep',7),(2,2,'bad.jpg',10,'Other',2);").unwrap();
+        mark_scan_file_seen_on(&c,1,"/photos","bad.jpg",20).unwrap();
+        assert_eq!(c.query_row("SELECT last_scan_time,title,view_count FROM afiles WHERE id=1",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?))).unwrap(),(20,"Keep".into(),7));
+        assert_eq!(c.query_row("SELECT last_scan_time FROM afiles WHERE id=2",[],|r|r.get::<_,i64>(0)).unwrap(),10);
+    }
+    #[test]
+    fn observed_precount_reports_filesystem_errors_instead_of_claiming_empty_success(){
+        let path=std::env::temp_dir().join(format!("lap-missing-scan-{}",uuid::Uuid::new_v4()));
+        assert!(count_folder_files_observed(path.to_str().unwrap(),7,&[],0,||false,|_,_|{}).is_err());
     }
 }

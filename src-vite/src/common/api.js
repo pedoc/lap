@@ -1836,9 +1836,10 @@ export async function searchSimilarImages(params) {
 // indexing
 
 // index album
-export async function indexAlbum(albumId, skipFilePath = null) {
+export async function indexAlbum(albumId, skipFilePath = null, runId = crypto.randomUUID(), libraryId = libConfig._libraryId) {
   try {
-    await invoke('index_album', {
+    return await invoke('index_album', {
+      libraryId, runId,
       albumId,
       thumbnailSize: config.settings.thumbnailSize || 512,
       rawDisplayOptions: getRawDisplayOptions(),
@@ -1847,30 +1848,32 @@ export async function indexAlbum(albumId, skipFilePath = null) {
     });
   } catch (error) {
     console.error('indexAlbum error:', error);
+    throw error;
   }
 }
 
 // cancel indexing
-export async function cancelIndexing(albumId) {
+export async function cancelIndexing(albumId, libraryId = libConfig._libraryId) {
   try {
-    await invoke('cancel_indexing', { albumId });
+    return await invoke('cancel_indexing', { albumId, libraryId });
   } catch (error) {
     console.error('cancelIndexing error:', error);
+    throw error;
   }
 }
 
-export async function getIndexRecoveryInfo() {
+export async function getIndexRecoveryInfo(libraryId = libConfig._libraryId) {
   try {
-    return await invoke('get_index_recovery_info');
+    return await invoke('get_index_recovery_info', { libraryId });
   } catch (error) {
     console.error('getIndexRecoveryInfo error:', error);
   }
   return null;
 }
 
-export async function clearIndexRecoveryInfo() {
+export async function clearIndexRecoveryInfo(libraryId = libConfig._libraryId) {
   try {
-    await invoke('clear_index_recovery_info');
+    await invoke('clear_index_recovery_info', { libraryId });
     return true;
   } catch (error) {
     console.error('Failed to clear index recovery info:', error);
@@ -1880,7 +1883,10 @@ export async function clearIndexRecoveryInfo() {
 
 // listen index progress
 export async function listenIndexProgress(callback) {
-  return await listen('index_progress', callback);
+  return await listen('index_progress', event => {
+    if (event.payload?.library_id && event.payload.library_id !== libConfig._libraryId) return;
+    return callback(event);
+  });
 }
 
 // deduplication
@@ -1987,7 +1993,10 @@ export async function listenSimilarScanProgress(callback) {
 
 // listen index finished
 export async function listenIndexFinished(callback) {
-  return await listen('index_finished', callback);
+  return await listen('index_finished', event => {
+    if (event.payload?.library_id && event.payload.library_id !== libConfig._libraryId) return;
+    return callback(event);
+  });
 }
 
 // index faces for all images in library

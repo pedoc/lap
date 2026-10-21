@@ -408,6 +408,16 @@ pub async fn switch_library(app_handle: tauri::AppHandle, id: String) -> Result<
     if *app_handle.state::<t_face::FaceIndexingStatus>().0.lock().map_err(|e|e.to_string())? {
         return Err("Stop face indexing before switching libraries".into());
     }
+    let scan_admission=t_utils::block_album_scans();
+    {
+        let cancellation=app_handle.state::<IndexCancellation>().0.clone();
+        let mut flags=cancellation.lock().map_err(|e|e.to_string())?;
+        for flag in flags.values_mut(){*flag=true;}
+    }
+    for album_id in &scan_admission.album_ids {
+        if let Some(session)=crate::t_scan::active_session(*album_id){session.pause_requested();}
+        t_utils::wait_for_album_scan_end(*album_id).await?;
+    }
     // The blocking task reports whether the target library turned out to be corrupt, deciding from
     // create_db's returned error itself rather than re-reading the process-global flag afterwards
     // (which a concurrent switch could resolve against a different library).
@@ -585,7 +595,7 @@ pub async fn edit_album(state: State<'_, IndexCancellation>, id: i64, name: Stri
         || old.small_image_filter != small_image_filter;
     let _scope_guard = scope_changed.then(|| t_utils::AlbumRemovalGuard::acquire(id));
     if scope_changed {
-        state.0.lock().unwrap().insert(id, true);
+        if let Some(flag)=state.0.lock().unwrap().get_mut(&id){*flag=true;}
         t_utils::wait_for_album_scan_end(id).await?;
     }
     let lock = t_utils::album_sync_lock(id);
@@ -613,7 +623,7 @@ pub async fn list_album_subfolders(path: String) -> Result<Vec<String>, String> 
 pub async fn remove_album(state: State<'_, IndexCancellation>, id: i64) -> Result<usize, String> {
     if crate::t_media_lifecycle::has_deleted_in_album(&*crate::t_sqlite::open_conn()?,id)? {return Err("Restore or clear Recently Deleted before removing this album".into());}
     let _removal_guard = t_utils::AlbumRemovalGuard::acquire(id);
-    state.0.lock().unwrap().insert(id, true);
+    if let Some(flag)=state.0.lock().unwrap().get_mut(&id){*flag=true;}
     t_utils::wait_for_album_scan_end(id).await?;
 
     let result = {
@@ -652,55 +662,55 @@ pub fn set_album_cover(id: i64, file_id: i64) -> Result<usize, String> {
         .map_err(|e| format!("Error while setting album cover: {}", e))
 }
 
-/// index album
+/// Start a full album scan with a stable identity before any filesystem work begins.
 #[tauri::command]
-pub fn index_album(
-    app_handle: tauri::AppHandle,
-    state: State<IndexCancellation>,
-    album_id: i64,
-    thumbnail_size: u32,
-    raw_display_options: RawDisplayOptions,
-    skip_file_path: Option<String>,
-    group_raw_jpeg_pairs: bool,
-) -> Result<(), String> {
-    // Reset cancellation flag
-    state.0.lock().unwrap().insert(album_id, false);
-    let cancellation_token = state.0.clone();
-
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = t_utils::index_album_worker(
-            &app_handle,
-            cancellation_token,
-            album_id,
-            thumbnail_size,
-            raw_display_options,
-            skip_file_path,
-            group_raw_jpeg_pairs,
-        )
-        .await
-        {
-            eprintln!("Error indexing album {}: {}", album_id, e);
+pub fn index_album(app_handle:tauri::AppHandle,state:State<IndexCancellation>,album_id:i64,thumbnail_size:u32,raw_display_options:RawDisplayOptions,skip_file_path:Option<String>,group_raw_jpeg_pairs:bool,library_id:Option<String>,run_id:Option<String>)->Result<crate::t_scan::Run,String>{
+    let library=library_id.unwrap_or(t_config::current_library_id()?);let token=state.0.clone();
+    let session=with_current_library(&library,||{
+        let lease=std::sync::Arc::new(t_utils::AlbumScanGuard::acquire(album_id,token.clone())?);
+        let album=Album::get_album_by_id(album_id)?;
+        crate::t_scan::Session::begin(&app_handle,&library,&album,run_id.unwrap_or_else(||uuid::Uuid::new_v4().to_string()),lease)
+    })?;
+    let initial=session.snapshot();let worker_session=session.clone();let worker_app=app_handle.clone();
+    let worker=tauri::async_runtime::spawn(async move{t_utils::index_album_worker(&worker_app,token,album_id,thumbnail_size,raw_display_options,skip_file_path,group_raw_jpeg_pairs,worker_session).await});
+    tauri::async_runtime::spawn(async move{
+        let result=worker.await.map_err(|e|format!("Scan worker failed: {e}")).and_then(|v|v);
+        let status=match &result {Ok(finished)=>finished.status.as_str(),Err(_)=>"failed"};
+        if let Err(error)=&result{session.error(&session.snapshot().root_path,"directory",error);}
+        if std::sync::Arc::strong_count(&session)>1 {
+            session.phase("draining");
+            while std::sync::Arc::strong_count(&session)>1 {tokio::time::sleep(std::time::Duration::from_millis(10)).await;}
         }
+        let report=session.finish(status).unwrap_or_else(|error|{eprintln!("Cannot save scan report: {error}");let mut run=session.snapshot();run.status="failed".into();run.error_count+=1;run.last_error=Some(error);let _=app_handle.emit("scan-status-changed",crate::t_scan::Event{run:run.clone(),folders:vec![]});run});
+        let mut finished=result.unwrap_or_else(|_|t_utils::FinishedPayload::from_report(&report,"failed"));
+        finished.status=report.status;finished.library_id=report.library_id;finished.run_id=report.id;
+        drop(session); // Safe to advance the queue only after all blocking work releases the scan lease.
+        let _=app_handle.emit("index_finished",finished);
     });
-    Ok(())
-}
-
-/// cancel indexing
-#[tauri::command]
-pub fn cancel_indexing(state: State<IndexCancellation>, album_id: i64) -> Result<(), String> {
-    state.0.lock().unwrap().insert(album_id, true);
-    Ok(())
+    Ok(initial)
 }
 
 #[tauri::command]
-pub fn get_index_recovery_info() -> Option<crate::t_utils::IndexRecoveryInfo> {
-    crate::t_utils::read_index_trace()
+pub async fn cancel_indexing(state:State<'_,IndexCancellation>,album_id:i64,library_id:Option<String>)->Result<Option<crate::t_scan::Run>,String>{
+    let library=library_id.unwrap_or(t_config::current_library_id()?);
+    let run_id=with_current_library(&library,||{
+        if let Some(flag)=state.0.lock().map_err(|e|e.to_string())?.get_mut(&album_id){*flag=true;}
+        Ok(crate::t_scan::active_session(album_id).map(|session|{session.pause_requested();session.snapshot().id}))
+    })?;
+    t_utils::wait_for_album_scan_end(album_id).await?;
+    with_current_library(&library,||Ok(crate::t_scan::history_on(&*t_sqlite::open_conn()?,&library,album_id,None)?.into_iter().find(|r|Some(&r.id)==run_id.as_ref())))
 }
 
 #[tauri::command]
-pub fn clear_index_recovery_info() -> Result<(), String> {
-    t_utils::clear_index_trace();
-    Ok(())
+pub fn get_index_recovery_info(library_id:Option<String>) -> Result<Option<crate::t_utils::IndexRecoveryInfo>,String> {
+    let library=library_id.unwrap_or(t_config::current_library_id()?);
+    with_current_library(&library,||Ok(crate::t_utils::read_index_trace()))
+}
+
+#[tauri::command]
+pub fn clear_index_recovery_info(library_id:Option<String>) -> Result<(), String> {
+    let library=library_id.unwrap_or(t_config::current_library_id()?);
+    with_current_library(&library,||{t_utils::clear_index_trace();Ok(())})
 }
 
 // folder

@@ -134,6 +134,7 @@ export const useLibraryStore = defineStore('libraryStore', {
 
     index: {
       status: 0,              // 0: idle, 1: indexing, 2: paused
+      runId: '',               // id of the active scan; used to reject stale completion events
       /** @type {number[]} */
       albumQueue: [],         // indexing album queue
       /** @type {number[]} */
@@ -171,6 +172,7 @@ export const useLibraryStore = defineStore('libraryStore', {
           });
         }
         this.index.status = Number(this.index.status || 0);
+        this.index.runId = String(this.index.runId || '');
         this.index.phase = this.index.phase || 'discovering';
         this.index.pausedAlbumIds = Array.isArray(this.index.pausedAlbumIds)
           ? Array.from(new Set(this.index.pausedAlbumIds.map(id => Number(id)).filter(id => id > 0)))
@@ -271,6 +273,7 @@ export const useLibraryStore = defineStore('libraryStore', {
             destFolder: this.destFolder,
             index: {
               status: this.index.status,
+              runId: this.index.runId,
               albumQueue: this.index.albumQueue,
               pausedAlbumIds: this.index.pausedAlbumIds,
               albumName: this.index.albumName,

@@ -67,6 +67,7 @@
             {{ child.name }}
           </div>
           <IconExclamation v-if="unavailable || isFolderUnavailable(child.path)" class="ml-1 size-3 shrink-0 text-warning/70" :aria-label="t('offline.original_unavailable')" />
+          <ScanStatusBadge v-if="allowContextMenu" :album-id="albumId" :folder-path="child.path" compact class="ml-1 shrink-0" />
           <div class="ml-auto flex flex-row items-center text-base-content/30">
             <IconHeartFilled v-if="child.is_favorite" class="mr-1 w-4 h-4 shrink-0 text-primary/70" />
             <span
@@ -185,14 +186,16 @@
 import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
 import { ref, nextTick, computed, inject, provide, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { watchScanFolders, showScanHistory, openScanDirectory } from '@/common/scanJobs';
+import ScanStatusBadge from './ScanStatusBadge.vue';
 import { useUIStore } from '@/stores/uiStore';
 import { startOcr } from '@/common/ocr';
 import { startObjectIndex } from '@/common/objects';
 import { config, libConfig } from '@/common/config';
-import { isMac, shortenFilename, isValidFileName, getFolderPath, getFullPath, normalizePathForCompare, isWithinRootPath } from '@/common/utils';
+import { shortenFilename, isValidFileName, getFolderPath, getFullPath, normalizePathForCompare, isWithinRootPath } from '@/common/utils';
 import {
   createFolder, renameFolder, fetchFolder, getAllAlbums, moveFolder, moveFolderOutsideLibrary,
-  copyFolder, checkFileExists, revealPath, deleteFolder, deleteFolderPermanently, recountAlbum, selectFolder as selectFolderInDb,
+  copyFolder, checkFileExists, deleteFolder, deleteFolderPermanently, recountAlbum, selectFolder as selectFolderInDb,
   isDirectoryAccessible, setFolderFavorite, setFolderSearchExcluded, hasImportableClipboard, refreshAlbumSubfolders,
 } from '@/common/api';
 import { DEFAULT_PLATFORM, getShortcutLabel } from '@/common/shortcuts';
@@ -205,7 +208,7 @@ import TButton from '@/components/TButton.vue';
 import MoveTo from '@/components/MoveTo.vue';
 import MessageBox from '@/components/MessageBox.vue';
 import FileConflictDialog from '@/components/FileConflictDialog.vue';
-import { isFolderUnavailable, setFolderAccessibility } from '@/common/availability';
+import { isFolderUnavailable } from '@/common/availability';
 import { useToast } from '@/common/toast';
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog';
 
@@ -218,6 +221,7 @@ import {
   IconFolderArrowRight,
   IconTrash,
   IconFolder,
+  IconFileInfo,
   IconFolderOff,
   IconRefresh,
   IconClipboard,
@@ -280,6 +284,9 @@ const visibleChildren = computed(() => (props.children || []).filter(folder =>
   !isFolderFiltering.value || visibleFolderPaths.value.has(folder.path)
 ));
 
+watch(()=>[libConfig._libraryId,props.albumId,props.allowContextMenu ? visibleChildren.value.map(folder=>folder.path) : []] as const,([_library,albumId,paths],_old,onCleanup)=>{
+  if(paths.length)onCleanup(watchScanFolders(Number(albumId),paths));
+},{immediate:true});
 const isSelectedFolder = (folder: Folder) => !selection.selected.value && selection.folderPath.value === folder.path && !isRenamingFolder.value;
 const folderClass = (folder: Folder) => {
   const selected = isSelectedFolder(folder);
@@ -393,8 +400,8 @@ const getMenuItemsForFolder = async (folder: any) => {
   const libraryId = libConfig._libraryId;
   const isRoot = folder.path === props.rootPath;
   const canPaste = !props.unavailable && await hasImportableClipboard();
-  const unavailable = props.unavailable || !await isDirectoryAccessible(folder.path);
-  setFolderAccessibility(folder.path, !unavailable);
+  const unavailable = props.unavailable || isFolderUnavailable(folder.path);
+  if(libraryId!==libConfig._libraryId)return [];
   return [
     {
       label: folder?.is_favorite ? localeMsg.value.menu.meta.unfavorite : localeMsg.value.menu.meta.favorite,
@@ -493,12 +500,11 @@ const getMenuItemsForFolder = async (folder: any) => {
       ]
     },
     {
-      label: isMac ? localeMsg.value.menu.file.reveal_in_finder : localeMsg.value.menu.file.reveal_in_file_explorer,
+      label: t('scan_tracking.open_folder'), icon: IconFolder,
       disabled: unavailable,
-      action: () => {
-        revealPath(folder.path);
-      }
+      action: async()=>{if(libraryId!==libConfig._libraryId)return;try{await openScanDirectory(folder.path);}catch(error){toast.error(t('scan_tracking.open_failed',{error:String(error)}));}}
     },
+    { label:t('scan_tracking.details'),icon:IconFileInfo,action:()=>showScanHistory({libraryId,albumId:Number(props.albumId),albumName:'',folderPath:folder.path}) },
     {
       label: "-",
       action: null

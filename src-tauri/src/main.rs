@@ -58,6 +58,7 @@ mod t_sqlite;
 mod t_search;
 mod t_media_title;
 mod t_media_views;
+mod t_scan;
 mod t_thumbnail_rebuild;
 mod t_storage;
 mod t_startup;
@@ -285,6 +286,11 @@ async fn main() {
             t_cmds::reorder_albums,
             t_cmds::set_album_cover,
             t_cmds::index_album,
+            t_scan::get_scan_overview,
+            t_scan::open_scan_directory,
+            t_scan::get_scan_history,
+            t_scan::get_scan_details,
+            t_scan::get_scan_folder_states,
             t_cmds::cancel_indexing,
             t_cmds::get_index_recovery_info,
             t_cmds::clear_index_recovery_info,

@@ -99,7 +99,7 @@
             :data-file-drop-path="album.is_accessible === false ? undefined : album.path"
             :data-file-drop-album-id="album.is_accessible === false ? undefined : album.id"
             :class="[
-              'mx-1 p-1 h-12 flex items-center rounded-box whitespace-nowrap cursor-pointer group border-2 border-transparent transition-all duration-200 ease-in-out',
+              'mx-1 p-1 min-h-12 flex items-center rounded-box whitespace-nowrap cursor-pointer group border-2 border-transparent transition-all duration-200 ease-in-out',
               selection.albumId.value === album.id
                 ? (selection.selected.value ? `${isMainSourceActive ? 'text-primary' : 'text-base-content/70 bg-base-100/30 hover:bg-base-100/70'} bg-base-100 hover:bg-base-100` : 'text-base-content hover:bg-base-100/30')
                 : 'hover:text-base-content hover:bg-base-100/30',
@@ -131,22 +131,22 @@
               <div v-if="isAlbumScanning(album.id)"
                 class="w-full h-full flex items-center justify-center cursor-pointer"
                 :title="$t('toolbar.tooltip.scanning')"
-                @click="toggleIndexAlbum(album.id)"
+                @click="openScanDetails(album)"
               >
                 <IconUpdate class="w-6 h-6 animate-spin" />
               </div>
-              <div v-else-if="isAlbumPaused(album.id) || (Number(album.indexed) > 0 && Number(album.indexed) < Number(album.total))"
+              <div v-else-if="['paused','pausing','interrupted'].includes(getAlbumStatus(album))"
                 class="w-full h-full flex items-center justify-center"
                 :class="album.is_accessible === false ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'"
                 :title="$t('toolbar.tooltip.scan_paused')"
-                @click="toggleIndexAlbum(album.id)"
+                @click="openScanDetails(album)"
               >
                 <IconUpdateDot class="w-6 h-6" />
               </div>
               <div v-else-if="getAlbumIcon(album) === 'update'"
                 class="w-full h-full flex items-center justify-center cursor-pointer hover:bg-base-100/30"
                 :title="$t('toolbar.tooltip.scan_queued')"
-                @click="toggleIndexAlbum(album.id)"
+                @click="openScanDetails(album)"
               >
                 <IconUpdate class="w-6 h-6" />
               </div>
@@ -172,6 +172,7 @@
                 <span class="truncate whitespace-pre">{{ album.name }}</span>
                 <IconExclamation v-if="album.is_accessible === false" class="size-4 shrink-0 text-warning/70" :aria-label="t('offline.original_unavailable')" />
               </div>
+              <ScanStatusBadge v-if="isMainPane" :album-id="Number(album.id)" :album-name="album.name" :last-scan-time="album.last_scan_time" />
               <div
                 v-if="album.description"
                 class="text-xs overflow-hidden whitespace-nowrap text-ellipsis text-base-content/50"
@@ -267,14 +268,14 @@
 
     <!-- Remove album dialog -->
     <MessageBox
-      v-if="showRemoveAlbumMsgbox"
+      v-if="removeAlbumTarget"
       :title="$t('msgbox.remove_album.title')"
-      :message="$t('msgbox.remove_album.content', { album: selectedAlbum?.name })"
+      :message="$t('msgbox.remove_album.content', { album: removeAlbumTarget.albumName })"
       :OkText="$t('msgbox.remove_album.ok')"
       :cancelText="$t('msgbox.cancel')"
       :warningOk="true"
       @ok="clickRemoveAlbum"
-      @cancel="showRemoveAlbumMsgbox = false"
+      @cancel="removeAlbumTarget = null"
     />
   </div>
 </template>
@@ -307,10 +308,13 @@ import {
   openFolderDialog,
   isWithinRootPath,
 } from '@/common/utils';
-import { getAlbumQueueIndex, getAlbumScanState, getAlbumScanIcon, shouldAnimateAlbumScanIcon } from '@/common/scanStatus';
+import { getAlbumQueueIndex, getAlbumScanIcon, shouldAnimateAlbumScanIcon } from '@/common/scanStatus';
+import { albumScanRun, albumScanState, pauseAlbumScan, showScanHistory, openScanDirectory } from '@/common/scanJobs';
+import { scanAction } from '@/common/scanStatus';
+import ScanStatusBadge from './ScanStatusBadge.vue';
 import { getAllAlbums, getAlbumVisibleCounts, getAllAlbumFolders, reorderAlbums, addAlbum, editAlbum, removeAlbum, getDragPayload, isDirectoryAccessible,
          fetchFolder, expandFinalFolder, getFileThumbById,
-         getAlbum, checkAlbumAccessibility, cancelIndexing as cancelIndexingApi, listenIndexProgress, listenIndexFinished, recountAlbum } from '@/common/api';
+         getAlbum, checkAlbumAccessibility, listenIndexProgress, listenIndexFinished, recountAlbum } from '@/common/api';
 import { Album, Folder } from '@/common/types';
 import { useAlbumSelectionProvider, SelectionSource } from '@/composables/useAlbumSelection';
 
@@ -335,6 +339,8 @@ import {
   IconDragHandle,
   IconOrder,
   IconFolders,
+  IconFolder,
+  IconFileInfo,
   IconSearch,
   IconClose,
   IconHeart,
@@ -520,7 +526,8 @@ const albumListRootRef = ref<HTMLElement | null>(null);
 // message boxes
 const albumEditBusy = ref(false);
 const showAlbumEdit = ref(false);           // show edit album
-const showRemoveAlbumMsgbox = ref(false);   // show remove album
+const removeAlbumTarget = ref<{ libraryId: string; albumId: number; albumName: string } | null>(null);
+watch(() => libConfig._libraryId, () => { removeAlbumTarget.value = null; });
 const importAlbum = ref<Album | null>(null);
 
 const albums = ref<Album[]>([]);
@@ -760,19 +767,14 @@ const updateFolderPath = (folders: Folder[] | undefined, oldPath: string, newPat
 const albumContextMenus = ref<Record<number, any>>({});
 
 function handleAlbumContextMenu(album: Album, event: MouseEvent) {
-  void (async () => {
-    await clickAlbum(album);
-    albumContextMenus.value[album.id]?.open?.(event.clientX, event.clientY);
-  })();
+  uiStore.setActivePane('left-sidebar');
+  void albumContextMenus.value[album.id]?.open?.(event.clientX,event.clientY);
 }
 
 const getAlbumById = (id: number) =>
   albums.value.find(album => Number(album.id) === Number(id));
 const isReorderingAlbum = (album: Album) => Number(album.id) === reorderingAlbumId.value;
-const selectedAlbum = computed(() => getAlbumById(selection.albumId.value)) || {};
 const editingAlbum = computed(() => getAlbumById(editingAlbumId.value));
-const isAlbumQueued = (albumId: number) =>
-  getAlbumQueueIndex(albumId, libConfig.index.albumQueue as any[]) >= 0;
 const syncIndexStatus = () => {
   if ((libConfig.index.albumQueue as any[]).length > 0) {
     libConfig.index.status = 1;
@@ -789,24 +791,9 @@ const removePausedAlbum = (albumId: number | null | undefined) => {
     id => Number(id) !== Number(albumId || 0)
   );
 };
-const addPausedAlbum = (albumId: number | null | undefined) => {
-  if (Number(albumId || 0) <= 0 || isAlbumPaused(albumId)) return;
-  (libConfig.index.pausedAlbumIds as any[]).push(Number(albumId));
-};
-const getAlbumStatus = (album: any) =>
-  getAlbumScanState({
-    albumId: album?.id,
-    albumQueue: libConfig.index.albumQueue as any[],
-    pausedAlbumIds: libConfig.index.pausedAlbumIds as any[],
-    status: Number(libConfig.index.status || 0),
-  });
-const isAlbumScanning = (albumId: number) =>
-  getAlbumScanState({
-    albumId,
-    albumQueue: libConfig.index.albumQueue as any[],
-    pausedAlbumIds: libConfig.index.pausedAlbumIds as any[],
-    status: Number(libConfig.index.status || 0),
-  }) === 'scanning';
+const getAlbumStatus = (album:any)=>albumScanState(Number(album?.id),album?.last_scan_time || getAlbumById(Number(album?.id))?.last_scan_time);
+const isAlbumScanning=(albumId:number)=>getAlbumStatus({id:albumId})==='scanning';
+const openScanDetails=(album:any)=>showScanHistory({libraryId:libConfig._libraryId,albumId:Number(album.id),albumName:album.name||''});
 const getAlbumIcon = (album: any) => getAlbumScanIcon(getAlbumStatus(album));
 const shouldAnimateAlbumIcon = (album: any) => shouldAnimateAlbumScanIcon(getAlbumStatus(album));
 const refreshAlbumAccess = async (album: Album) => {
@@ -843,7 +830,8 @@ const handleImportComplete = async () => {
 const thumbnailRebuildRequest = ref<any>(null);
 const getMoreMenuItems = async (album: any) => {
   const libraryId = libConfig._libraryId;
-  const isAccessible = await refreshAlbumAccess(album);
+  const isAccessible = album.is_accessible !== false; // Opening a menu must not wait for a slow/offline filesystem.
+  if(libraryId!==libConfig._libraryId)return [];
   return [
     {
       label: localeMsg.value.menu.album.edit,
@@ -855,18 +843,21 @@ const getMoreMenuItems = async (album: any) => {
       action: () => {}
     },
     {
+      label: t('scan_tracking.open_folder'), icon: IconFolder, disabled: !isAccessible,
+      action: async()=>{if(libraryId!==libConfig._libraryId)return;try{await openScanDirectory(album.path);}catch(error){useToast().error(t('scan_tracking.open_failed',{error:String(error)}));}},
+    },
+    { label: t('scan_tracking.details'), icon: IconFileInfo, action:()=>{if(libraryId===libConfig._libraryId)return openScanDetails(album);} },
+    {
       label: `${localeMsg.value.import_organize.import}…`,
       icon: IconDownload,
       disabled: !isAccessible,
       action: () => { importAlbum.value = album; }
     },
     {
-      label: isAlbumQueued(album.id)
-        ? localeMsg.value.menu.album.pause_scan
-        : localeMsg.value.menu.album.scan,
-      icon: isAlbumQueued(album.id) ? IconUpdateOff : IconUpdate,
-      disabled: !isAccessible && !isAlbumQueued(album.id),
-      action: () => toggleIndexAlbum(album.id)
+      get label() { return t('scan_tracking.action_'+scanAction(getAlbumStatus(album))); },
+      get icon() { const action=scanAction(getAlbumStatus(album));return action==='cancel_queue' ? IconRemove : ['pause','pausing'].includes(action) ? IconUpdateOff : IconUpdate; },
+      get disabled() { const action=scanAction(getAlbumStatus(album));return action==='pausing' || !isAccessible && !['pause','cancel_queue'].includes(action); },
+      action: () => {if(libraryId===libConfig._libraryId)return toggleIndexAlbum(album.id);}
     },
     {
       label: t('objects.recognize_folder'), icon: IconUpdate, disabled: !isAccessible,
@@ -913,7 +904,8 @@ const getMoreMenuItems = async (album: any) => {
       label: localeMsg.value.menu.album.remove,
       icon: IconRemove,
       action: () => {
-        showRemoveAlbumMsgbox.value = true;
+        if (libraryId !== libConfig._libraryId) return;
+        removeAlbumTarget.value = { libraryId, albumId: Number(album.id), albumName: album.name };
       }
     },
   ];
@@ -979,6 +971,7 @@ onMounted( async () => {
 
   // listen for album-cover-changed event
   unlistenAlbumCoverChanged = await listen('album-cover-changed', async (event: any) => {
+    if(event.payload?.libraryId&&event.payload.libraryId!==libConfig._libraryId)return;
     const eventAlbumId = Number(event.payload?.albumId || 0);
     const fileId = Number(event.payload?.fileId || 0);
     const album = getAlbumById(eventAlbumId);
@@ -1029,6 +1022,8 @@ onMounted( async () => {
 
   // listen for index progress
   unlistenIndexProgress = await listenIndexProgress(async (event: any) => {
+    const latest=albumScanRun(Number(event.payload?.album_id));
+    if(event.payload?.run_id && latest && latest.id!==event.payload.run_id)return;
     const { album_id, current, total } = event.payload;
     const album = getAlbumById(album_id);
     if (album) {
@@ -1039,6 +1034,8 @@ onMounted( async () => {
 
   // listen for index finished
   unlistenIndexFinished = await listenIndexFinished(async (event: any) => {
+    const latest=albumScanRun(Number(event.payload?.album_id));
+    if(event.payload?.run_id && latest && latest.id!==event.payload.run_id)return;
     const { album_id } = event.payload;
     const album = getAlbumById(album_id);
     if (album) {
@@ -1302,6 +1299,7 @@ const clickIndexAlbum = async (albumId: number) => {
 
 const toggleIndexAlbum = async (albumId: number) => {
   const state = getAlbumStatus({ id: albumId });
+  if (state === 'pausing') return;
   if (state === 'scanning' || state === 'queued') {
     await clickCancelIndexAlbum(albumId);
   } else {
@@ -1312,42 +1310,25 @@ const toggleIndexAlbum = async (albumId: number) => {
 }
 
 /// Cancel indexing for an album
-const clickCancelIndexAlbum = async (albumId: number) => {
-  const index = getAlbumQueueIndex(albumId, libConfig.index.albumQueue as any[]);
-  if (index === -1) return;
-
-  // Keep queue handling aligned with Content.vue cancel behavior.
-  if (index === 0) {
-    libConfig.index.albumQueue.shift();
-    await cancelIndexingApi(albumId);
-    addPausedAlbum(albumId);
-    if (libConfig.index.albumQueue.length > 0) {
-      // Resume queue on next waiting album.
-      syncIndexStatus();
-      setTimeout(() => {
-        tauriEmit('trigger-next-album');
-      }, 1000);
-    } else {
-      syncIndexStatus();
-    }
-  } else {
-    libConfig.index.albumQueue.splice(index, 1);
-    addPausedAlbum(albumId);
-    syncIndexStatus();
-  }
+const clickCancelIndexAlbum = async (albumId:number)=>{
+  try{await pauseAlbumScan(Number(albumId));}catch(error){useToast().error(t('scan_tracking.pause_failed',{error:String(error)}));}
 }
 
 /// Remove an album from the list
 const clickRemoveAlbum = async () => {
-  const albumId = selection.albumId.value;
+  const target = removeAlbumTarget.value;
+  if (!target || target.libraryId !== libConfig._libraryId) return;
+  const { albumId, libraryId } = target;
   const removedAlbumIndex = albums.value.findIndex(album => Number(album.id) === Number(albumId));
   if (albumId > 0 && isAlbumScanning(albumId)) {
     await clickCancelIndexAlbum(albumId);
   }
 
-  const removedAlbum = await removeAlbum(selection.albumId.value);
+  if (libraryId !== libConfig._libraryId) return;
+  const removedAlbum = await removeAlbum(albumId);
+  if (libraryId !== libConfig._libraryId) return;
   if(removedAlbum) {
-    showRemoveAlbumMsgbox.value = false;
+    removeAlbumTarget.value = null;
 
     // Keep scan state consistent when the removed album was queued or paused.
     libConfig.index.albumQueue = (libConfig.index.albumQueue as any[]).filter(
@@ -1372,18 +1353,17 @@ const clickRemoveAlbum = async () => {
     if (reorderingAlbumId.value === albumId) {
       reorderingAlbumId.value = null;
     }
-    showAlbumEdit.value = false; // Close the edit dialog if it's open
+    if (Number(editingAlbumId.value) === albumId) showAlbumEdit.value = false;
 
-    tauriEmit('albums-refreshed');
-    tauriEmit('library-total-refreshed');
+    tauriEmit('albums-refreshed', { libraryId });
+    tauriEmit('library-total-refreshed', { libraryId });
 
     const nextSelectedAlbum = removedAlbumIndex > 0
       ? albums.value[removedAlbumIndex - 1]
       : albums.value[0];
-    if (nextSelectedAlbum) {
-      await clickAlbum(nextSelectedAlbum);
-    } else {
-      selection.resetSelection();
+    if (Number(selection.albumId.value) === albumId) {
+      if (nextSelectedAlbum) await clickAlbum(nextSelectedAlbum);
+      else selection.resetSelection();
     }
   }
 };

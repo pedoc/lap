@@ -1,4 +1,5 @@
 <template>
+  <ScanHistoryDialog v-if="scanHistoryScope" :key="`${scanHistoryScope.libraryId}:${scanHistoryScope.albumId}:${scanHistoryScope.folderPath||''}`" :scope="scanHistoryScope" @cancel="scanHistoryScope=null" />
 
   <div
     ref="contentRootRef"
@@ -804,7 +805,7 @@ import { getAlbum, getAllAlbums, recountAlbum, getQueryCountAndSum, getQueryTime
          copyImages, renameFile, moveFile, moveFileOutsideLibrary, copyFile, deleteFile, deleteFilePermanently, batchDeleteFiles, editFileComment, getFileThumb, getFileThumbs, getFileInfo,
          setFileRotate, setFileFavorite, setFileRating, setFileCullingFlag, batchUpdateFileMetadata, getTagsForFile, getTagGroupName, searchSimilarImages, generateEmbedding,
          revealPath, getTagName, indexAlbum, listenIndexProgress, listenIndexFinished, setAlbumCover, setDesktopWallpaper,
-         updateFileInfo, refreshFileInfo, getSupportedFormatExtensions, importFile, importUrl, importFileBytes, getDragPayload, importClipboard, addFileToDb, checkFileExists, checkFileAccessibility, cancelIndexing as cancelIndexingApi, selectFolder, getFacesForFile, listenFaceIndexProgress,
+         updateFileInfo, refreshFileInfo, getSupportedFormatExtensions, importFile, importUrl, importFileBytes, getDragPayload, importClipboard, addFileToDb, checkFileExists, checkFileAccessibility, selectFolder, getFacesForFile, listenFaceIndexProgress,
          openFilesWithApp, getAppConfig, getIndexRecoveryInfo, clearIndexRecoveryInfo, setLastSelectedItemIndex,
          dedupDelete, getQueryFilePosition, getFolderSearchExcluded,
          listCollections, createCollection, addFilesToCollection, removeFilesFromCollection, getFileCollections, getCollectionCountAndSum, getCollectionFiles, getCollectionGroupedQueryRows, getCollectionGroupFileIds, getCollectionQueryFileIds, fetchFolder, isDirectoryAccessible, checkAlbumAccessibility, addTagToFile } from '@/common/api';
@@ -820,6 +821,9 @@ import { getSmartTagById } from '@/common/smartTags';
 import { clearFolderFileCounts, setFolderFileCount } from '@/composables/useAlbumSelection';
 import { createEmptyLibraryCounts } from '@/stores/libraryStore';
 import { getAlbumScanState, getAlbumScanIcon, shouldAnimateAlbumScanIcon } from '@/common/scanStatus';
+import { scanJobs, albumScanRun, albumScanState, useScanTracking, pauseAlbumScan, applyScanEvent, refreshScanJobs } from '@/common/scanJobs';
+import type { ScanScope } from '@/common/scanStatus';
+
 import { startOcr } from '@/common/ocr';
 import { normalizeOcrState } from '@/common/ocrUi';
 import { startObjectIndex } from '@/common/objects';
@@ -928,6 +932,8 @@ import {
 } from '@/common/icons';
 
 const thumbnailPlaceholder = new URL('@/assets/images/image-file.png', import.meta.url).href;
+
+const ScanHistoryDialog=defineAsyncComponent(()=>import('@/components/ScanHistoryDialog.vue'));
 
 const props = defineProps({
   titlebar: String,
@@ -5239,47 +5245,50 @@ const indexRecoveryMessage = computed(() => {
   return localeMsg.value.search.index.recovery.message;
 });
 
+const scanHistoryScope=ref<ScanScope|null>(null);
+const scanHistoryStops:Array<()=>void>=[];
+const activeScanRunId=computed({get:()=>String(libConfig.index.runId||''),set:(value:string)=>{libConfig.index.runId=value;}});
+const scanPresentationDeferred=ref<{libraryId:string;albumId:number}|null>(null);
+function scanHasPendingEdits(){return hasUnsavedChanges.value || pendingChanges.hasPending();}
+function deferScanPresentation(albumId=Number(libConfig.album.id)){scanPresentationDeferred.value={libraryId:libConfig._libraryId,albumId};}
+function flushScanPresentation(){
+  const scope=scanPresentationDeferred.value;if(!scope)return;
+  if(scope.libraryId!==libConfig._libraryId||config.main.sidebarIndex!==SIDEBAR.ALBUM||Number(libConfig.album.id)!==scope.albumId){scanPresentationDeferred.value=null;return;}
+  if(scanHasPendingEdits())return;
+  scanPresentationDeferred.value=null;rememberFocusedFileForPresentationRefresh();captureSelectionForFileListRefresh();void updateContent(true);
+}
+watch([()=>uiStore.inputStack.length,hasUnsavedChanges,()=>libConfig._libraryId,()=>config.main.sidebarIndex,()=>libConfig.album.id],flushScanPresentation);
+let scanStarting=false;
+useScanTracking();
 async function processNextAlbum(skipFilePath: string | null = null, skipRecoveryCheck = false) {
-  if (libConfig.index.albumQueue.length > 0) {
-    const albumId = libConfig.index.albumQueue[0];
-    // Hide the previous scan's completed progress before awaiting album lookup.
-    scanProgressSession.value++;
-    libConfig.index.phase = 'complete';
-    const album = await getAlbum(albumId);
-    if (album) {
-      // Check for crash recovery: if trace file exists and matches this album
-      if (!skipFilePath && !skipRecoveryCheck) {
-        const recoveryInfo = await getIndexRecoveryInfo();
-        if (recoveryInfo && Number(recoveryInfo.album_id) === Number(albumId)) {
-          recoverySkipFilePath.value = String(recoveryInfo.file_path || '');
-          libConfig.index.status = 2;
-          showIndexRecoveryMsgbox.value = true;
-          return;
-        }
-      }
-      libConfig.index.status = 1;
-      libConfig.index.pausedAlbumIds = (libConfig.index.pausedAlbumIds as any[]).filter(
-        id => Number(id) !== Number(albumId)
-      );
-      libConfig.index.albumName = album.name;
-      libConfig.index.phase = 'discovering';
-      libConfig.index.discovered = 0;
-      libConfig.index.processed = 0;
-      libConfig.index.searchReady = 0;
-      libConfig.index.indexed = 0;
-      libConfig.index.total = 0;
-      libConfig.index.searchTotal = 0;
-      libConfig.index.failed = 0;
-      await indexAlbum(albumId, skipFilePath || null);
-    } else {
-      // album not found (maybe deleted), remove from queue and process next
-      libConfig.index.albumQueue.shift();
-      processNextAlbum();
+  if (scanStarting || libConfig._initialized === false || Number(libConfig.index.status)!==1) return;
+  const library=libConfig._libraryId, albumId=Number(libConfig.index.albumQueue[0]||0);
+  if (!albumId) { syncIndexStatus(); return; }
+  if(scanJobs.pausing.has(albumId))return;
+  const backend=albumScanRun(albumId);
+  if (backend && ['running','pausing'].includes(backend.status)) {activeScanRunId.value=backend.id;return;}
+  if(scanHasPendingEdits()){libConfig.index.status=2;toast.info(t('scan_tracking.save_edits_first'));return;}
+  const runId=crypto.randomUUID();activeScanRunId.value=runId;scanStarting=true;
+  const current=()=>library===libConfig._libraryId && !scanJobs.pausing.has(albumId) && libConfig._initialized!==false && Number(libConfig.index.status)===1 && Number(libConfig.index.albumQueue[0])===albumId;
+  try {
+    scanProgressSession.value++;Object.assign(libConfig.index,{albumName:'',phase:'discovering',discovered:0,processed:0,searchReady:0,indexed:0,total:0,searchTotal:0,failed:0});
+    const album=await getAlbum(albumId);if(!current())return;
+    if(!album){libConfig.index.albumQueue.shift();return;}
+    if(!skipFilePath&&!skipRecoveryCheck){
+      const recoveryInfo=await getIndexRecoveryInfo();if(!current())return;
+      if(recoveryInfo&&Number(recoveryInfo.album_id)===albumId){recoverySkipFilePath.value=String(recoveryInfo.file_path||'');libConfig.index.status=2;showIndexRecoveryMsgbox.value=true;return;}
     }
-  } else {
-    if (libConfig.index.status !== 2) {
-      libConfig.index.status = 0;
-    }
+    libConfig.index.pausedAlbumIds=libConfig.index.pausedAlbumIds.filter((id:any)=>Number(id)!==albumId);
+    Object.assign(libConfig.index,{albumName:album.name,phase:'discovering',discovered:0,processed:0,searchReady:0,indexed:0,total:0,searchTotal:0,failed:0});
+    if(scanHasPendingEdits()){libConfig.index.status=2;toast.info(t('scan_tracking.save_edits_first'));return;}
+    const run=await indexAlbum(albumId,skipFilePath||null,runId,library);
+    if(library===libConfig._libraryId)applyScanEvent({run});
+  } catch(error) {
+    if(current()){libConfig.index.status=2;toast.error(t('scan_tracking.start_failed',{error:String(error)}));void refreshScanJobs();}
+  } finally {
+    scanStarting=false;
+    if(library===libConfig._libraryId&&!libConfig.index.albumQueue.length)syncIndexStatus();
+    if(library===libConfig._libraryId && Number(libConfig.index.status)===1 && libConfig.index.albumQueue.length && Number(libConfig.index.albumQueue[0])!==albumId) void processNextAlbum();
   }
 }
 
@@ -5305,10 +5314,14 @@ const isScanStreamingMode = computed(() =>
 // When scanning starts, close panels and multi-select which rely on a stable file list.
 watch(isScanStreamingMode, (streaming) => {
   if (streaming) {
+    if(scanHasPendingEdits()){
+      void pauseAlbumScan(Number(libConfig.album.id)).catch(error=>toast.error(String(error)));
+      toast.info(t('scan_tracking.save_edits_first'));return;
+    }
     config.rightPanel.show = false;
     if (selectMode.value) selectMode.value = false;
   }
-  if (groupedModeActive.value || effectiveGroupBy.value > 0) {
+  if (!scanHasPendingEdits() && (groupedModeActive.value || effectiveGroupBy.value > 0)) {
     updateContent();
   }
 });
@@ -5325,14 +5338,23 @@ const syncIndexStatus = () => {
   }
 };
 
+watch(()=>Object.values(scanJobs.runs).filter(run=>run.library_id===libConfig._libraryId && ['running','pausing'].includes(run.status)).sort((a,b)=>b.seq-a.seq)[0],run=>{
+  if(!run || scanJobs.libraryId!==libConfig._libraryId || libConfig._initialized===false)return;
+  if(!libConfig.index.albumQueue.some((id:any)=>Number(id)===run.album_id))libConfig.index.albumQueue.unshift(run.album_id);
+  if(Number(libConfig.index.albumQueue[0])===run.album_id){activeScanRunId.value=run.id;libConfig.index.status=1;}
+});
 const isRecoveryInProgress = ref(false);
 
 const confirmIndexRecoveryContinue = async (shouldSkip = false) => {
   showIndexRecoveryMsgbox.value = false;
+  if(scanHasPendingEdits()){toast.info(t('scan_tracking.save_edits_first'));return;}
   const skipFilePath = shouldSkip ? recoverySkipFilePath.value : null;
   recoverySkipFilePath.value = '';
+  const library=libConfig._libraryId;
   await clearIndexRecoveryInfo();  // delete trace file first to prevent re-detection
+  if(library!==libConfig._libraryId)return;
   isRecoveryInProgress.value = true;
+  libConfig.index.status = 1;
   await processNextAlbum(skipFilePath, true);
   isRecoveryInProgress.value = false;
 };
@@ -5345,6 +5367,9 @@ const activeScanningAlbumId = computed(() => Number(libConfig.index.albumQueue[0
 const suppressNextIndexingIdleRefresh = ref(false);
 const selectedAlbumIdForStatusBar = computed(() => Number(libConfig.album.id || 0));
 const selectedAlbumScanState = computed(() => getAlbumScanState({
+  run: albumScanRun(selectedAlbumIdForStatusBar.value),
+  runId: libConfig.index.runId,
+  pausing: scanJobs.pausing.has(selectedAlbumIdForStatusBar.value),
   albumId: selectedAlbumIdForStatusBar.value,
   albumQueue: libConfig.index.albumQueue as any[],
   pausedAlbumIds: libConfig.index.pausedAlbumIds as any[],
@@ -5358,7 +5383,7 @@ const isOtherTabScanning = computed(() =>
   Number(libConfig.index.status || 0) !== 2
 );
 const showBackgroundScanningIcon = computed(() =>
-  selectedAlbumScanState.value === 'complete' &&
+  !['scanning','pausing','queued','paused'].includes(selectedAlbumScanState.value) &&
   (libConfig.index.albumQueue as any[]).length > 0 &&
   Number(libConfig.index.status || 0) !== 2
 );
@@ -5368,6 +5393,7 @@ const statusBarScanMode = computed<'none' | 'current' | 'waiting' | 'background'
     if (selectedAlbumScanState.value === 'scanning') return 'current';
     if (selectedAlbumScanState.value === 'queued') return 'waiting';
     if (selectedAlbumScanState.value === 'paused') return 'paused';
+    if (selectedAlbumScanState.value === 'pausing') return 'current';
     if (showBackgroundScanningIcon.value) return 'background';
     return 'none';
   }
@@ -5386,6 +5412,7 @@ const statusBarIsUpdateAnimating = computed(() =>
 );
 
 const statusBarScanText = computed(() => {
+  if(selectedAlbumScanState.value==='pausing')return t('scan_tracking.state_pausing');
   const discovered = Number(libConfig.index.discovered || 0).toLocaleString();
   const processed = Number(libConfig.index.processed || libConfig.index.indexed || 0).toLocaleString();
   const searchReady = Number(libConfig.index.searchReady || 0).toLocaleString();
@@ -5488,6 +5515,7 @@ async function syncScanStreamingTitle(albumId: number) {
 }
 
 function enterScanStreamingMode(albumId: number) {
+  if(scanHasPendingEdits())return;
   scanStreamAlbumId.value = albumId;
   void syncScanStreamingTitle(albumId);
   clearSelectionForFileListUpdate();
@@ -5510,6 +5538,7 @@ function enterScanStreamingMode(albumId: number) {
 }
 
 async function pullScanStreamingDelta(albumId: number, current: number) {
+  if(scanHasPendingEdits())return;
   if (!isScanStreamingMode.value || Number(libConfig.album.id) !== Number(albumId)) {
     return;
   }
@@ -5619,6 +5648,7 @@ watch(isIndexing, (val) => {
       suppressNextIndexingIdleRefresh.value = false;
       return;
     }
+    if(scanHasPendingEdits()){deferScanPresentation();return;}
     updateContent();
   }
 });
@@ -5682,33 +5712,8 @@ watch(
 
 // Cancel indexing for current album
 async function cancelIndexing() {
-  const albumId = libConfig.album.id;
-  const index = normalizedAlbumQueue.value.findIndex(id => id === Number(albumId || 0));
-  if (index === -1) return;
-
-  showIndexRecoveryMsgbox.value = false;
-
-  if (index === 0) {
-      libConfig.index.albumQueue.shift();
-      await cancelIndexingApi(albumId);
-      if (!isAlbumPaused(albumId)) {
-        (libConfig.index.pausedAlbumIds as any[]).push(Number(albumId || 0));
-      }
-      if (libConfig.index.albumQueue.length > 0) {
-        syncIndexStatus();
-        setTimeout(() => {
-          processNextAlbum();
-        }, 1000);
-      } else {
-        syncIndexStatus();
-      }
-  } else {
-    libConfig.index.albumQueue.splice(index, 1);
-    if (!isAlbumPaused(albumId)) {
-      (libConfig.index.pausedAlbumIds as any[]).push(Number(albumId || 0));
-    }
-    syncIndexStatus();
-  }
+  showIndexRecoveryMsgbox.value=false;
+  try {await pauseAlbumScan(Number(libConfig.album.id));}catch(error){toast.error(t('scan_tracking.pause_failed',{error:String(error)}));}
 }
 
 onMounted( async() => {
@@ -6017,6 +6022,7 @@ onMounted( async() => {
 
   // Indexing listeners
   unlistenIndexProgress = await listenIndexProgress(async (event: any) => {
+    if(event.payload?.run_id && activeScanRunId.value && event.payload.run_id!==activeScanRunId.value)return;
     const { album_id, phase, current, discovered, processed, search_ready, total, search_total, current_size, failed } = event.payload;
     if (libConfig.index.albumQueue.length > 0 && libConfig.index.albumQueue[0] === album_id) {
         libConfig.index.phase = String(phase || libConfig.index.phase || 'discovering');
@@ -6037,14 +6043,16 @@ onMounted( async() => {
   });
 
   unlistenIndexFinished = await listenIndexFinished(async (event: any) => {
+    if(event.payload?.run_id && activeScanRunId.value && event.payload.run_id!==activeScanRunId.value)return;
     const { album_id, phase, indexed, processed, search_ready, total, search_total, failed } = event.payload;
     // notify album list to update cover
-    await tauriEmit('album-cover-changed', { albumId: album_id, fileId: null });
+
     const shouldRefreshCurrentView =
       config.main.sidebarIndex === SIDEBAR.ALBUM &&
       Number(libConfig.album.id) > 0 &&
       Number(libConfig.album.id) === Number(album_id);
 
+    if(shouldRefreshCurrentView)suppressNextIndexingIdleRefresh.value=true;
     if (libConfig.index.albumQueue.length > 0 && libConfig.index.albumQueue[0] === album_id) {
       libConfig.index.phase = String(phase || 'complete');
       libConfig.index.discovered = Number(total || 0);
@@ -6054,13 +6062,18 @@ onMounted( async() => {
       libConfig.index.total = Number(total || 0);
       libConfig.index.searchTotal = Number(search_total || 0);
       libConfig.index.failed = Number(failed || 0);
-      libConfig.index.albumQueue.shift();
+      libConfig.index.albumQueue.shift();activeScanRunId.value='';
+      if(event.payload.status==='paused'||event.payload.status==='interrupted'){
+        if(!isAlbumPaused(album_id))libConfig.index.pausedAlbumIds.push(Number(album_id));
+      }else libConfig.index.pausedAlbumIds=libConfig.index.pausedAlbumIds.filter((id:any)=>Number(id)!==Number(album_id));
       if (libConfig.index.albumQueue.length > 0) {
         processNextAlbum();
       } else {
         syncIndexStatus();
       }
     }
+
+    await tauriEmit('album-cover-changed', { albumId: album_id, fileId: null, libraryId: event.payload.library_id });
 
     if (shouldRefreshCurrentView) {
       scanStreamAlbumId.value = null;
@@ -6080,11 +6093,8 @@ onMounted( async() => {
       }
       // Avoid duplicated refresh: this explicit refresh replaces the
       // watch(isIndexing) idle refresh for this finish cycle.
-      suppressNextIndexingIdleRefresh.value = true;
-      selectedItemIndex.value = 0;
-      setTimeout(() => {
-        updateContent(true);
-      }, 200);
+      deferScanPresentation(Number(album_id));
+      setTimeout(flushScanPresentation,200);
     }
 
     refreshLibraryTotalCount();
@@ -6112,6 +6122,16 @@ onMounted( async() => {
     updateContent();
   });
 
+  scanHistoryStops.push(await listen<ScanScope>('scan-history-requested',event=>{
+    if(event.payload?.libraryId===libConfig._libraryId&&Number(event.payload.albumId)>0)scanHistoryScope.value=event.payload;
+  }));
+  scanHistoryStops.push(await listen<any>('scan-album-requested',event=>{
+    if(event.payload?.libraryId!==libConfig._libraryId)return;
+    const id=Number(event.payload.albumId);if(!(id>0)||scanJobs.pausing.has(id))return;
+    libConfig.index.pausedAlbumIds=libConfig.index.pausedAlbumIds.filter((value:any)=>Number(value)!==id);
+    if(!libConfig.index.albumQueue.some((value:any)=>Number(value)===id))libConfig.index.albumQueue.push(id);
+    libConfig.index.status=1;void processNextAlbum();
+  }));
   unlistenTriggerNextAlbum = await listen('trigger-next-album', () => {
     processNextAlbum();
   });
@@ -6177,6 +6197,16 @@ onMounted( async() => {
     }
   });
 
+  // Reconcile a persisted head only when its exact job is known to have ended.
+  await refreshScanJobs();
+  const savedScan=scanJobs.runs[activeScanRunId.value];
+  if(savedScan?.finished_at && Number(libConfig.index.albumQueue[0])===savedScan.album_id){
+    const wasPaused=Number(libConfig.index.status)===2;
+    libConfig.index.albumQueue.shift();activeScanRunId.value='';
+    libConfig.index.pausedAlbumIds=libConfig.index.pausedAlbumIds.filter((id:any)=>Number(id)!==savedScan.album_id);
+    if(savedScan.status==='paused')libConfig.index.pausedAlbumIds.push(savedScan.album_id);
+    if(wasPaused&&libConfig.index.albumQueue.length)libConfig.index.status=2;else syncIndexStatus();
+  }
   if (libConfig.index.albumQueue.length > 0 && libConfig.index.status === 1) {
     processNextAlbum();
   }
@@ -6226,6 +6256,7 @@ onBeforeUnmount(() => {
   if (unlistenMontage) unlistenMontage();
   if (unlistenKeydown) unlistenKeydown();
   if (unlistenTriggerNextAlbum) unlistenTriggerNextAlbum();
+  scanHistoryStops.forEach(stop=>stop());
   if (unlistenIndexProgress) unlistenIndexProgress();
   if (unlistenIndexFinished) unlistenIndexFinished();
   if (unlistenThumbnailReady) unlistenThumbnailReady();

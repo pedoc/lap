@@ -10030,7 +10030,8 @@ pub fn create_db() -> Result<(), String> {
 
 fn create_db_internal() -> Result<(), String> {
     let conn = open_conn()?;
-    initialize_database_schema(&conn)
+    initialize_database_schema(&conn)?;
+    crate::t_scan::recover_interrupted(&conn)
 }
 
 // Also used by query-contract tests with an isolated in-memory database.
@@ -10523,6 +10524,7 @@ fn initialize_database_schema(conn: &Connection) -> Result<(), String> {
 
     // Run schema migrations after base tables are ensured.
     crate::t_migration::check_and_migrate(&conn)?;
+    crate::t_scan::ensure_schema(conn)?;
     crate::ai::face_annotations::import_existing(&conn)?;
     crate::t_media_traits::ensure_schema(&conn)?;
     crate::ai::ocr::ensure_schema(&conn)?;
@@ -11052,7 +11054,7 @@ mod afile_row_mapping_tests {
         assert_eq!(
             conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            21
+            22
         );
     }
 }
