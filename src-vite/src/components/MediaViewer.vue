@@ -443,6 +443,7 @@
 
 <script setup lang="ts">
 import { mediaDisplayName, mediaNameTooltip } from '@/common/mediaTitle';
+import { useMediaViewTracking } from '@/common/mediaViewTracking';
 import { OVERLAY_CLICK_MOVE_TOLERANCE } from '@/common/constants';
 import { defineAsyncComponent, ref, computed, watch, onMounted, onUpdated, onBeforeUnmount, type Component, type CSSProperties } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -600,6 +601,7 @@ const props = defineProps({
     type: Boolean,
     default: true
   },
+  trackViews: { type: Boolean, default: true },
   toolbarOnly: {
     type: Boolean,
     default: false
@@ -686,6 +688,9 @@ const backgroundContextMenuRef = ref<any>(null);
 const containerRef = ref<HTMLElement | null>(null);
 const mediaAreaRef = ref<HTMLElement | null>(null);
 const mediaRef = ref<any>(null);
+useMediaViewTracking(() => props.file,
+  () => props.trackViews && !props.toolbarOnly && props.canInteract && props.isPlaybackActive && !props.isSlideShow,
+  () => !!mediaRef.value?.viewReady);
 const toast = useToast();
 const isHoverLeft = ref(false);
 const isHoverRight = ref(false);

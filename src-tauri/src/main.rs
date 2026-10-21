@@ -57,6 +57,7 @@ mod t_private_lock;
 mod t_sqlite;
 mod t_search;
 mod t_media_title;
+mod t_media_views;
 mod t_thumbnail_rebuild;
 mod t_storage;
 mod t_startup;
@@ -426,6 +427,7 @@ async fn main() {
             t_cmds::edit_file_comment,
             t_media_title::get_media_title,
             t_media_title::set_media_title,
+            t_media_views::record_media_view,
             t_cmds::clean_unused_thumbnail_cache,
             t_cmds::get_file_thumb,
             t_cmds::get_file_thumb_by_id,

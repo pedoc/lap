@@ -2222,6 +2222,7 @@ function clampPosition(force: boolean = false) {
 
 // Expose methods
 defineExpose({ 
+  viewReady: computed(() => !isLoading.value && !loadError.value && !!imageSrc.value[activeImage.value] && imageFilePath.value[activeImage.value] === props.filePath),
   zoomIn, 
   zoomOut,
   zoomActual,

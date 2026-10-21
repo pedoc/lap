@@ -327,6 +327,7 @@
             >
               <MediaViewer
                 ref="filmStripMediaRef"
+                :trackViews="!showQuickView && !isImageViewerWindowOpen && config.main.sidebarIndex !== SIDEBAR.HOME"
                 :suppress-auto-navigator="infoNavigatorVisible"
                 @viewport-change="previewViewports.filmstrip = $event"
                 @close="closeFilmstripFullScreen"
@@ -384,6 +385,7 @@
           >
             <MediaViewer
               ref="quickViewMediaRef"
+              :trackViews="!isImageViewerWindowOpen && config.main.sidebarIndex !== SIDEBAR.HOME"
               :suppress-auto-navigator="infoNavigatorVisible"
               @viewport-change="previewViewports.quick = $event"
               :mode="0"
@@ -776,6 +778,8 @@
 </template>
 
 <script setup lang="ts">
+import { applyMediaViewChange, mediaViewSortOptions } from '@/common/mediaViews';
+import { useMediaViewEvents } from '@/common/mediaViewTracking';
 import { mediaDisplayName, applyMediaTitleChange, mediaSortOptions } from '@/common/mediaTitle';
 import { useMediaTitleEvents } from '@/common/mediaTitleEvents';
 import { pendingChanges } from '@/common/pendingChanges';
@@ -10631,7 +10635,7 @@ const fileTypeOptions = computed(() => {
 
 // sort type options
 const sortOptions = computed(() => {
-  return mediaSortOptions(getSelectOptions(localeMsg.value.toolbar.filter?.sort_type_options), t('media_title.filename'), t('media_title.sort'));
+  return mediaViewSortOptions(mediaSortOptions(getSelectOptions(localeMsg.value.toolbar.filter?.sort_type_options), t('media_title.filename'), t('media_title.sort')), t('media_views.count'), t('media_views.last_viewed'));
 });
 
 const fixedAiSortOptions = computed(() => [{
@@ -11460,6 +11464,14 @@ defineExpose({
   openHomePhoto,
   focusContent: activateContentPane,
   refreshCenteredGridLayout: refreshGridLayoutPreservingScroll,
+});
+useMediaViewEvents(change => {
+  if (change.library_id !== libConfig._libraryId) return;
+  for (const file of fileList.value) applyMediaViewChange(file, libConfig._libraryId, change);
+  for (const row of groupedRows.value) applyMediaViewChange(row?.file || row?.item || row, libConfig._libraryId, change);
+  if (imageViewerSession.value.mode === 'compare') {
+    for (const file of imageViewerSession.value.files) applyMediaViewChange(file, libConfig._libraryId, change);
+  }
 });
 useMediaTitleEvents(change => {
   if (change.library_id !== libConfig._libraryId) return;

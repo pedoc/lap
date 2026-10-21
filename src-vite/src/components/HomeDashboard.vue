@@ -84,6 +84,14 @@
       </section>
     </div>
 
+    <section v-if="state.data?.mostViewed?.length" class="home-discovery home-recent" :aria-label="t('media_views.most_viewed')">
+      <div class="home-section-heading"><h2>{{ t('media_views.most_viewed') }}</h2><button type="button" class="home-text-button" @click="emit('browse', { kind: 'most-viewed' })">{{ t('home_dashboard.view_all') }}<IconRight /></button></div>
+      <div class="home-recent-grid"><button v-for="photo in state.data.mostViewed" :key="photo.id" type="button" class="home-recent-photo" :disabled="opening" @click="openPhoto(photo, state.data.mostViewed)">
+        <span class="home-recent-image"><img v-if="!failedThumbs.has(photo.id)" :src="getThumbUrl(photo.id, false, 384)" :alt="mediaDisplayName(photo)" loading="lazy" @error="failedThumbs.add(photo.id)" /><IconPhoto v-else /></span>
+        <span class="home-recent-name" :title="mediaNameTooltip(photo)">{{ mediaDisplayName(photo) }}</span><small>{{ t('media_views.times', { count: number(photo.viewCount) }) }}</small>
+      </button></div>
+    </section>
+
     <div v-if="state.data && (state.data.topPlaces.length || state.data.topObjects.length || state.data.topTags.length)" class="home-explore" :class="{ 'home-explore-with-places': !!state.data.topPlaces.length && !!(state.data.topObjects.length || state.data.topTags.length) }">
       <section v-if="state.data.topPlaces.length" class="home-places" :aria-label="t('home_dashboard.familiar_places')">
         <div class="home-section-heading"><h2>{{ t('home_dashboard.familiar_places') }}</h2><button type="button" class="home-text-button" @click="emit('browse', { kind: 'places' })">{{ t('home_dashboard.view_all') }}<IconRight /></button></div>
@@ -99,6 +107,7 @@
 </template>
 
 <script setup lang="ts">
+import { useMediaViewEvents } from '@/common/mediaViewTracking';
 import { mediaDisplayName, mediaNameTooltip, applyMediaTitleChange } from '@/common/mediaTitle';
 import { useMediaTitleEvents } from '@/common/mediaTitleEvents';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
@@ -238,9 +247,19 @@ onBeforeUnmount(() => {
   stops.forEach(stop => stop()); media?.removeEventListener('change', motionChanged); document.removeEventListener('visibilitychange', visibilityChanged);
 });
 defineExpose({ focusContent: () => root.value?.focus(), refresh });
+useMediaViewEvents(change => {
+  if (!state.data || change.library_id !== libConfig._libraryId) return;
+  for (const photo of [...state.data.featured, ...state.data.anniversary, ...state.data.recent, ...(state.data.mostViewed || [])]) {
+    if (photo.id === change.file_id) {
+      photo.viewCount = Math.max(Number(photo.viewCount || 0), change.view_count);
+      photo.lastViewedAt = Math.max(Number(photo.lastViewedAt || 0), change.last_viewed_at);
+    }
+  }
+  queueRefresh();
+});
 useMediaTitleEvents(change => {
   if (!state.data || change.library_id !== libConfig._libraryId) return;
-  for (const photo of [...state.data.featured, ...state.data.anniversary, ...state.data.recent]) {
+  for (const photo of [...state.data.featured, ...state.data.anniversary, ...state.data.recent, ...(state.data.mostViewed || [])]) {
     applyMediaTitleChange(photo, libConfig._libraryId, change);
   }
 });

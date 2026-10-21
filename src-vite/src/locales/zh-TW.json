@@ -1,4 +1,11 @@
 {
+  "media_views": {
+    "count": "檢視次數",
+    "last_viewed": "最近檢視",
+    "never": "尚無檢視紀錄",
+    "times": "{count} 次檢視",
+    "most_viewed": "經常檢視"
+  },
   "media_title": {
     "display": "顯示名稱（標題優先）",
     "discard": "標題尚未儲存，是否放棄修改？",

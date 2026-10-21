@@ -31,7 +31,7 @@ export function hasTimeSmartRules(rules: SmartRule[]): boolean {
   visitSmartRules(rules, (rule) => {
     if (
       rule.field === "anniversary" ||
-      (["date_taken", "date_created", "date_modified"].includes(rule.field) &&
+      (["date_taken", "date_created", "date_modified", "date_viewed"].includes(rule.field) &&
         (["in_last", "older_than"].includes(rule.operator) ||
           ["this_week", "this_month", "this_year"].includes(rule.value)))
     )
@@ -49,6 +49,11 @@ export function hasSemanticRules(rules: SmartRule[]): boolean {
 export function hasObjectRules(rules: SmartRule[]): boolean {
   let result = false;
   visitSmartRules(rules, rule => { if (['object_state','object_class','object_count'].includes(rule.field)) result = true; });
+  return result;
+}
+export function hasViewRules(rules: SmartRule[]): boolean {
+  let result = false;
+  visitSmartRules(rules, rule => { if (['view_count', 'date_viewed'].includes(rule.field)) result = true; });
   return result;
 }
 export function hasOcrRules(rules: SmartRule[]): boolean {

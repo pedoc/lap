@@ -1,4 +1,11 @@
 {
+  "media_views": {
+    "count": "访问次数",
+    "last_viewed": "最近查看",
+    "never": "尚无查看记录",
+    "times": "{count} 次查看",
+    "most_viewed": "经常查看"
+  },
   "media_title": {
     "display": "显示名称（标题优先）",
     "discard": "标题尚未保存，是否放弃修改？",

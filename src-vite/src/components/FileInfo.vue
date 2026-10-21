@@ -240,6 +240,11 @@
                 <div class="flex items-center text-[11px] text-base-content/45 h-6">{{ $t('file_info.modified_at') }}</div>
                 <div class="flex items-center text-[12px] text-base-content/75">{{ formatTimestamp(generalFileInfo?.modified_at, 'date_time') }}</div>
 
+                <div class="flex items-center text-[11px] text-base-content/45 h-6">{{ $t('media_views.count') }}</div>
+                <div class="flex items-center text-[12px] text-base-content/75">{{ Number(fileInfo?.view_count || 0).toLocaleString() }}</div>
+                <div class="flex items-center text-[11px] text-base-content/45 h-6">{{ $t('media_views.last_viewed') }}</div>
+                <div class="flex items-center text-[12px] text-base-content/75">{{ fileInfo?.last_viewed_at ? formatTimestamp(fileInfo.last_viewed_at, 'date_time') : $t('media_views.never') }}</div>
+
                 <!-- Last Scan -->
                 <template v-if="generalFileInfo?.last_scan_time && generalFileInfo.last_scan_time > 0">
                   <div class="flex items-center text-[11px] text-base-content/45 h-6">{{ $t('file_info.last_scan_time') }}</div>

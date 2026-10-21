@@ -639,6 +639,8 @@ const getGridLabelText = (file: any, option: number) => {
     case 0: return '';
     case 1: return (file.title?.trim() ? mediaDisplayName(file) : shortenFilename(file.name)) || ' ';
     case 9: return shortenFilename(file.name) || ' ';
+    case 10: return t('media_views.times', { count: Number(file.view_count || 0).toLocaleString() });
+    case 11: return file.last_viewed_at ? formatTimestamp(file.last_viewed_at, 'date_time') : t('media_views.never');
     case 2: return formatFileSize(file.size) || ' ';
     case 3: return formatDimensionText(file.width, file.height) || ' ';
     case 4: return formatTimestamp(file.taken_date, 'date_time') || ' ';

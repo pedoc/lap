@@ -552,6 +552,7 @@
 </template>
 
 <script setup lang="ts">
+import { mediaViewGridLabels } from '@/common/mediaViews';
 import { mediaGridLabels } from '@/common/mediaTitle';
 
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
@@ -783,7 +784,7 @@ const mapMarkerSizeOptions = computed(() => {
 
 // Define the grid label options
 const gridLabelOptions = computed(() => {
-  const options = mediaGridLabels(localeMsg.value.settings.grid.label_options, t('media_title.display'), t('media_title.filename'));
+  const options = mediaViewGridLabels(mediaGridLabels(localeMsg.value.settings.grid.label_options, t('media_title.display'), t('media_title.filename')), t('media_views.count'), t('media_views.last_viewed'));
   const result = [];
 
   for (let i = 0; i < options.length; i++) {

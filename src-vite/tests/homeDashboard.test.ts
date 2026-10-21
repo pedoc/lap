@@ -24,6 +24,7 @@ function overview(libraryId = 'lib'): home.HomeOverview {
     featured: [{ id: 1, name: '湖畔.jpg', rating: 5, takenDate: 1_700_000_000, modifiedAt: 12, location: { hierarchy: [{ name: '浙江' }, { name: '杭州' }] } }, { id: 2, name: '山.jpg', rating: 4, takenDate: null, modifiedAt: null }],
     years: [{ year: 2017, count: 10, coverFileIds: [1], months: [{ month: 2, count: 10, coverFileIds: [1] }] }, { year: 2026, count: 40, coverFileIds: [2], months: [{ month: 10, count: 39, coverFileIds: [2] }, { month: 12, count: 1, coverFileIds: [] }] }],
     anniversaryCount: 1, anniversary: [{ id: 3, name: '旧照片.jpg', rating: 0, takenDate: 1_600_000_000, modifiedAt: null }],
+    mostViewed: [],
     recent: [{ id: 4, name: '新照片.jpg', rating: 4, takenDate: null, modifiedAt: 12 }],
     topPlaces: [{ kind: 'location', value: '7', name: '杭州', count: 20, coverFileId: 1 }],
     topPeople: [{ kind: 'person', value: '2', name: '小明', count: 7, coverFileId: 2 }],
@@ -166,6 +167,12 @@ function context(overrides: any = {}) {
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '')
     .replace('export function', 'function');
   ctx.useMediaTitleEvents = runInNewContext(`${hook};useMediaTitleEvents`, {
+    onMounted: ctx.onMounted, onBeforeUnmount: ctx.onBeforeUnmount, listen: ctx.listen,
+  });
+  const viewHook = stripTypeScriptTypes(read('common/mediaViewTracking.ts'))
+    .slice(stripTypeScriptTypes(read('common/mediaViewTracking.ts')).indexOf('export function useMediaViewEvents('))
+    .replace('export function', 'function');
+  ctx.useMediaViewEvents = runInNewContext(`${viewHook};useMediaViewEvents`, {
     onMounted: ctx.onMounted, onBeforeUnmount: ctx.onBeforeUnmount, listen: ctx.listen,
   });
   return { ctx, timers, intervals, listeners, mounts, unmounts, emitted, calls, match };
@@ -375,4 +382,41 @@ test('title events update the real dashboard in place without reloading or cross
   h.listeners['media-title-changed']({ payload: { library_id: 'other', file_id: 1, title: 'Wrong library' } });
   assert.equal(h.api.activePhoto.value.title, '自定义标题');
   h.dispose(); assert.equal(h.listeners['media-title-changed'], undefined);
+});
+
+
+test('frequently viewed photos show local counters and browse only viewed photos', async () => {
+  const data = overview(); data.mostViewed = [{ ...data.featured[0], viewCount: 7, lastViewedAt: 1000 }];
+  const html = await render(data);
+  assert.match(html, /经常查看/); assert.match(html, /7 次查看/);
+  const rules = home.homeBrowseRules('most-viewed');
+  assert.equal(rules.find(rule => rule.field === 'view_count')?.operator, 'gt');
+  assert.equal(rules.find(rule => rule.field === 'view_count')?.value, 0);
+  assert.equal(rules.find(rule => rule.field === 'file_type')?.value, 5);
+  assert.ok(!rules.some(rule => rule.field === 'semantic'));
+  assert.ok(!(await render(overview())).includes('经常查看'));
+});
+
+test('view events patch the home counters and debounce a preserved overview refresh without crossing libraries', async () => {
+  const data = overview(); data.mostViewed = [{ ...data.featured[0], viewCount: 1, lastViewedAt: 1000 }];
+  const h = harness({ invoke: async () => data }); await tick(); await h.mount();
+  h.listeners['media-view-changed']({ payload: { library_id: 'other', file_id: 1, view_count: 9, last_viewed_at: 2000 } });
+  assert.equal(h.api.state.data.mostViewed[0].viewCount, 1);
+  h.listeners['media-view-changed']({ payload: { library_id: 'lib', file_id: 1, view_count: 2, last_viewed_at: 2000 } });
+  assert.equal(h.api.state.data.mostViewed[0].viewCount, 2);
+  assert.equal(h.api.state.data.featured[0].viewCount, 2);
+  assert.ok([...h.timers.values()].some(timer => timer.delay === 600));
+  assert.ok(h.api.state.data, 'statistics events must not blank the current dashboard'); h.dispose();
+});
+
+test('frequently viewed navigation opens the standard query in descending view-count order', () => {
+  const page = read('views/Home.vue'); const start = page.indexOf('function browseHome('), end = page.indexOf('\n}', start) + 2;
+  const config = { main: { sidebarIndex: SIDEBAR.HOME }, search: { fileType: 0, sortType: 0, sortOrder: 0, groupBy: 3 }, home: {} };
+  let query: any;
+  const run = runInNewContext(`(${stripTypeScriptTypes(page.slice(start,end))})`, { config, SIDEBAR, ...home,
+    activateMainPanel() {}, showPanel: { value: false }, libConfig: { _libraryId: 'lib' },
+    structuredSearch: { libraryId: 'lib' }, applyStructuredSearch: (value: any) => { query = value; return true; } });
+  run({ kind: 'most-viewed' });
+  assert.equal(config.search.sortType, 11); assert.equal(config.search.sortOrder, 1); assert.equal(config.search.groupBy, 0);
+  assert.equal(config.main.sidebarIndex, SIDEBAR.SEARCH); assert.ok(query.query.rules.some((rule: any) => rule.field === 'view_count'));
 });

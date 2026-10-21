@@ -100,6 +100,7 @@
 </template>
 
 <script setup lang="ts">
+import { mediaViewSortOptions } from '@/common/mediaViews';
 import { mediaSortOptions } from '@/common/mediaTitle';
 import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -109,7 +110,7 @@ import SmartAlbumStatus from './SmartAlbumStatus.vue';
 import { SMART_TAG_CATEGORIES } from '@/common/smartTags';
 import { useObjects } from '@/common/objects';
 import { OBJECT_STATES, objectClassName } from '@/common/objectUi';
-import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules, hasOcrRules, hasObjectRules, hasAiRules } from '@/common/smartAlbums';
+import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules, hasOcrRules, hasViewRules, hasObjectRules, hasAiRules } from '@/common/smartAlbums';
 import { listen } from '@tauri-apps/api/event';
 import { config, libConfig } from '@/common/config';
 import { getSmartQueryCountAndSum, getSmartQueryFiles, getSmartAlbumStatus, getFileThumbById } from '@/common/api';
@@ -193,8 +194,9 @@ function queryParams() {
   };
 }
 const ocrPreviewRevision = ref(0);
+const viewPreviewRevision = ref(0);
 const ocrPreviewStops: Array<() => void> = [];
-const previewSignature = computed(() => JSON.stringify([queryParams(), hasOcrRules(rules.value) ? [config.settings.ai?.ocrProfile, ocrPreviewRevision.value] : null, hasObjectRules(rules.value) ? [config.settings.ai?.detectionProfile, ocrPreviewRevision.value] : null]));
+const previewSignature = computed(() => JSON.stringify([queryParams(), hasOcrRules(rules.value) ? [config.settings.ai?.ocrProfile, ocrPreviewRevision.value] : null, hasObjectRules(rules.value) ? [config.settings.ai?.detectionProfile, ocrPreviewRevision.value] : null, (hasViewRules(rules.value) || [11,12].includes(sortType.value)) ? viewPreviewRevision.value : null]));
 const previewStale = computed(() => preview.value && preview.value.signature !== previewSignature.value);
 function applyTemplate() {
   if (!template.value) return;
@@ -326,10 +328,10 @@ function indexedOptions(labels: unknown, fallbacks: string[]) {
   }));
 }
 
-const sortOptions = computed(() => mediaSortOptions(indexedOptions(
+const sortOptions = computed(() => mediaViewSortOptions(mediaSortOptions(indexedOptions(
   localeMsg.value.toolbar.filter?.sort_type_options,
   ['Taken Date', 'Created Date', 'Modified Date', 'Name', 'Size', 'Dimension', 'Duration', 'Random'],
-), t('media_title.filename'), t('media_title.sort')));
+), t('media_title.filename'), t('media_title.sort')), t('media_views.count'), t('media_views.last_viewed')));
 
 const sortOrderOptions = computed(() => indexedOptions(
   localeMsg.value.toolbar.filter?.sort_order_options,
@@ -359,6 +361,8 @@ const fieldOptions = computed(() => [
   // Workflow
   { value: 'favorite', label: t('album.smart_edit.fields.favorite') },
   { value: 'rating', label: t('album.smart_edit.fields.rating') },
+  { value: 'view_count', label: t('media_views.count') },
+  { value: 'date_viewed', label: t('media_views.last_viewed') },
   { value: 'culling', label: t('album.smart_edit.fields.culling') },
 
   // Organization
@@ -451,7 +455,7 @@ function getOperatorOptions(field: string) {
   if (field === 'favorite' || field === 'has_gps') return [op('is')];
   if (field === 'culling') return [op('is'), op('is_not')];
   if (field === 'orientation') return [op('is')];
-  if (field === 'rating') return [op('is'), op('is_not'), op('gt'), op('gte'), op('lt'), op('lte'), op('between'), op('empty'), op('not_empty')];
+  if (['rating', 'view_count'].includes(field)) return [op('is'), op('is_not'), op('gt'), op('gte'), op('lt'), op('lte'), op('between'), op('empty'), op('not_empty')];
   if (isDateRuleField(field)) return [op('is'), op('before'), op('after'), op('between'), op('in_last'), op('older_than')];
   if (['size', 'width', 'height', 'duration'].includes(field)) return [op('gt'), op('gte'), op('lt'), op('lte'), op('between'), op('empty'), op('not_empty')];
   if (field === 'tag' || field === 'person') return [op('has'), op('not_has'), op('empty'), op('not_empty')];
@@ -481,6 +485,7 @@ function setDefaultRuleValue(rule: any) {
   else if (rule.field === 'extension') rule.value = extensionOptions.value[0]?.value || 'jpg';
   else if (rule.field === 'favorite' || rule.field === 'has_gps') rule.value = true;
   else if (rule.field === 'orientation') rule.value = 'landscape';
+  else if (rule.field === 'view_count') rule.value = rule.operator === 'between' ? { min: 0, max: 10 } : 0;
   else if (rule.field === 'rating') rule.value = rule.operator === 'between' ? { min: 1, max: 5 } : 1;
   else if (rule.field === 'culling') rule.value = 0;
   else if (isDateRuleField(rule.field)) {
@@ -511,6 +516,13 @@ function isRuleValid(rule: any) {
   if (rule.field === 'object_count') return ['gte','lte','eq'].includes(rule.operator) && typeof rule.value?.classKey === 'string' && rule.value.classKey.length > 0 && rule.value.classKey.length <= 512 && Number.isSafeInteger(rule.value.count) && rule.value.count >= 0 && rule.value.count <= 10000;
   if (rule.field === 'ocr_text') return ['contains','not_contains'].includes(rule.operator) && typeof rule.value === 'string' && rule.value.trim().length > 0 && rule.value.length <= 512;
   if (rule.field === 'ocr_state') return ['is','is_not'].includes(rule.operator) && ['text','pending','empty','failed'].includes(rule.value);
+  if (rule.field === 'view_count') {
+    if (['empty', 'not_empty'].includes(rule.operator)) return true;
+    const valid = (value: any) => Number.isSafeInteger(value) && value >= 0;
+    return rule.operator === 'between'
+      ? valid(rule.value?.min) && valid(rule.value?.max) && rule.value.min <= rule.value.max
+      : ['is', 'is_not', 'gt', 'gte', 'lt', 'lte'].includes(rule.operator) && valid(rule.value);
+  }
   if (['empty', 'not_empty'].includes(rule.operator)) return true;
   if (rule.operator === 'between') {
     return Boolean(
@@ -661,7 +673,7 @@ function normalizeRuleFieldForEdit(rule: any) {
 }
 
 function isDateRuleField(field: string) {
-  return ['date_taken', 'date_created', 'date_modified'].includes(field);
+  return ['date_taken', 'date_created', 'date_modified', 'date_viewed'].includes(field);
 }
 
 function isRelativeDateOperator(operator: string) {
@@ -846,8 +858,12 @@ watch([tagOptions, personOptions, albumOptions, collectionOptions, cameraOptions
 });
 
 onMounted(async () => {
-  for (const name of ['ocr-index-updated','ocr-annotations-changed','object-index-updated','object-annotations-changed']) {
+  for (const name of ['ocr-index-updated','ocr-annotations-changed','object-index-updated','object-annotations-changed','media-view-changed']) {
     const off = await listen(name, (event:any) => {
+      if (name === 'media-view-changed') {
+        if (event.payload?.library_id === libConfig._libraryId && (hasViewRules(rules.value) || [11,12].includes(sortType.value))) viewPreviewRevision.value++;
+        return;
+      }
       if (event.payload?.libraryId && event.payload.libraryId !== libConfig._libraryId || !(name.startsWith('object-') ? hasObjectRules(rules.value) : hasOcrRules(rules.value))) return;
       ocrPreviewRevision.value++;
     });
@@ -1106,6 +1122,7 @@ const RuleValueControl = defineComponent({
       if (props.rule.field === 'extension') return extensionInput();
       if (props.rule.field === 'favorite' || props.rule.field === 'has_gps') return boolSelect();
       if (props.rule.field === 'orientation') return orientationSelect();
+      if (props.rule.field === 'view_count') return props.rule.operator === 'between' ? rangeInput('', 1, { min: 0, step: 1 }) : numberInput(props.rule.value, (event: any) => { props.rule.value = Number(event.target.value); }, { min: 0, step: 1 });
       if (props.rule.field === 'rating') return props.rule.operator === 'between' ? rangeInput('', 1, { min: 0, max: 5, step: 1 }) : numberInput(props.rule.value, (event: any) => { props.rule.value = Number(event.target.value); }, { min: 0, max: 5, step: 1 });
       if (isDateRuleField(props.rule.field)) return dateControl();
       if (props.rule.field === 'size') return props.rule.operator === 'between' ? rangeInput(valueUnit()) : unitNumberInput(props.rule.value, valueUnit(), (event: any) => { props.rule.value = Number(event.target.value); });

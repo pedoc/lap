@@ -1513,6 +1513,10 @@ pub struct AFile {
     pub name: String,                 // physical filename; never a display title
     #[serde(default)]
     pub title: Option<String>,        // user-authored catalogue title
+    #[serde(default)]
+    pub view_count: i64,
+    #[serde(default)]
+    pub last_viewed_at: Option<i64>,
     pub name_pinyin: Option<String>,  // file name pinyin(for sort)
     pub size: i64,                    // file size
     pub file_type: Option<i64>,       // file type (0: all, 1: image, 2: video, 3: audio, 4: other)
@@ -2731,6 +2735,8 @@ impl AFile {
 
             name: file_info.file_name.clone(),
             title: None,
+            view_count: 0,
+            last_viewed_at: None,
             name_pinyin: Some(t_utils::natural_sort_key(
                 &file_info.file_name.to_lowercase(),
             )), // natural sort key (case-insensitive, pinyin + zero-padded numbers)
@@ -3385,7 +3391,8 @@ impl AFile {
                 {} AS album_visible,
                 {} AS location_json,
                 a.cloud_only,
-                a.metadata_pending
+                a.metadata_pending,
+                a.view_count,a.last_viewed_at
             FROM afiles a
             LEFT JOIN afolders b ON a.folder_id = b.id
             LEFT JOIN albums c ON b.album_id = c.id
@@ -3404,6 +3411,8 @@ impl AFile {
 
             name: row.get("name")?,
             title: row.get("title")?,
+            view_count: row.get("view_count")?,
+            last_viewed_at: row.get("last_viewed_at")?,
             name_pinyin: row.get("name_pinyin")?,
             size: row.get("size")?,
             file_type: row.get("file_type")?,
@@ -5605,6 +5614,8 @@ impl AFile {
             }
             8 => format!("a.id {}", dir), // added order
             10 => format!("COALESCE(NULLIF(a.title_sort_key, ''), NULLIF(a.title, ''), a.name_pinyin, a.name) COLLATE NOCASE {dir}, a.id {dir}"),
+            11 => format!("a.view_count {dir}, a.last_viewed_at {dir}, a.id {dir}"),
+            12 => format!("a.last_viewed_at {dir}, a.id {dir}"),
             9 => "a.id ASC".to_string(), // internal: stable append order during scanning
             _ => format!("a.taken_date {}, a.id {}", dir, dir),
         }
@@ -5703,6 +5714,7 @@ impl AFile {
             "date_taken" => Ok("a.taken_date"),
             "date_created" => Ok("a.created_at"),
             "date_modified" => Ok("a.modified_at"),
+            "date_viewed" => Ok("a.last_viewed_at"),
             _ => Err(format!("Unsupported date field: {}", field)),
         }
     }
@@ -5948,6 +5960,11 @@ impl AFile {
                     "(a.is_favorite = 0 OR a.is_favorite IS NULL)".to_string()
                 })
             }
+            "view_count" => {
+                let mut conditions = Vec::new();
+                Self::push_numeric_rule(&mut conditions, sql_params, "a.view_count", operator, value)?;
+                Ok(conditions.pop().unwrap_or_else(|| "1 = 1".to_string()))
+            }
             "rating" => {
                 let mut conditions = Vec::new();
                 Self::push_numeric_rule(&mut conditions, sql_params, "a.rating", operator, value)?;
@@ -5964,7 +5981,7 @@ impl AFile {
                 )?;
                 Ok(conditions.pop().unwrap_or_else(|| "1 = 1".to_string()))
             }
-            "date_taken" | "date_created" | "date_modified" => {
+            "date_taken" | "date_created" | "date_modified" | "date_viewed" => {
                 let date_col = Self::smart_rule_date_column(field)?;
                 match operator {
                     "is" | "eq" => {
@@ -10102,6 +10119,8 @@ fn initialize_database_schema(conn: &Connection) -> Result<(), String> {
             name TEXT NOT NULL,
             title TEXT,
             title_sort_key TEXT,
+            view_count INTEGER NOT NULL DEFAULT 0,
+            last_viewed_at INTEGER,
             name_pinyin TEXT,
             size INTEGER NOT NULL,
             file_type INTEGER,
@@ -10976,6 +10995,39 @@ mod afile_row_mapping_tests {
     }
 
     #[test]
+    fn view_statistics_survive_metadata_refresh_and_use_named_projection() {
+        let conn = fixture();
+        let change = crate::t_media_views::record_on(&conn, "fixture", 1, 1000).unwrap();
+        assert_eq!(change.view_count, 1);
+        let sql = format!("{} WHERE a.id=1", AFile::build_base_query());
+        let rows = assert_order_independent(&conn, &sql, AFile::from_row);
+        assert_eq!((rows[0].view_count, rows[0].last_viewed_at), (1,Some(1000)));
+        let mut file = conn.query_row(&sql, [], AFile::from_row).unwrap();
+        file.view_count=0;file.last_viewed_at=None;
+        AFile::update_on(&conn, 1, &file).unwrap();
+        let file = conn.query_row(&sql, [], AFile::from_row).unwrap();
+        assert_eq!((file.view_count,file.last_viewed_at),(1,Some(1000)));
+        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+        let rule: SmartRule = serde_json::from_value(serde_json::json!({"id":"v","field":"view_count","operator":"gte","value":1})).unwrap();
+        let where_sql=AFile::build_smart_rule_condition(&rule,&mut Vec::new(),&mut false,&mut params).unwrap();
+        let count:i64=conn.query_row(&format!("SELECT COUNT(*) FROM afiles a WHERE {where_sql}"),rusqlite::params_from_iter(params.iter()),|r|r.get(0)).unwrap();
+        assert_eq!(count,1);
+        let order=AFile::build_order_clause_values(11,1,0);
+        assert_eq!(conn.query_row(&format!("SELECT a.id FROM afiles a ORDER BY {order} LIMIT 1"),[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    fn view_statistics_migration_is_restartable_and_preserves_existing_values() {
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,name TEXT,title TEXT); INSERT INTO afiles VALUES(1,'old.jpg','Keep'); PRAGMA user_version=20;").unwrap();
+        crate::t_migration::check_and_migrate(&conn).unwrap();
+        assert_eq!(conn.query_row("SELECT view_count FROM afiles WHERE id=1",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        conn.execute_batch("UPDATE afiles SET view_count=7,last_viewed_at=1000; PRAGMA user_version=20;").unwrap();
+        crate::t_migration::check_and_migrate(&conn).unwrap();
+        assert_eq!(conn.query_row("SELECT view_count,last_viewed_at,title FROM afiles WHERE id=1",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?))).unwrap(),(7,1000,"Keep".into()));
+    }
+
+    #[test]
     fn media_title_migration_preserves_legacy_rows_and_is_restartable() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,name TEXT); INSERT INTO afiles VALUES(1,'old.jpg'); PRAGMA user_version=19;").unwrap();
@@ -11000,7 +11052,7 @@ mod afile_row_mapping_tests {
         assert_eq!(
             conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            20
+            21
         );
     }
 }

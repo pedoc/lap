@@ -227,6 +227,8 @@
 
 <script setup lang="ts">
 import { pendingChanges } from '@/common/pendingChanges';
+import { useMediaViewEvents } from '@/common/mediaViewTracking';
+import { applyMediaViewChange } from '@/common/mediaViews';
 import { mediaDisplayName } from '@/common/mediaTitle';
 import { useMediaTitleEvents } from '@/common/mediaTitleEvents';
 import { startOcr } from '@/common/ocr';
@@ -1548,6 +1550,10 @@ const handleItemAction = async (payload: { action: string }) => {
   }
 };
 
+useMediaViewEvents(change => {
+  if (change.library_id !== libConfig._libraryId) return;
+  for (const pane of allPanes) applyMediaViewChange(getFileInfoByPane(pane), libConfig._libraryId, change);
+});
 useMediaTitleEvents(change => {
   if (change.library_id === libConfig._libraryId) applyFileMetaToPanes(change.file_id, { title: change.title });
 });

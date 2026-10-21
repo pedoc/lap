@@ -3,6 +3,7 @@ import type { SmartRule } from './smartAlbums.ts';
 
 export type HomePhoto = {
   id: number; name: string; title?: string | null; rating: number; takenDate: number | null;
+  viewCount: number; lastViewedAt: number | null;
   modifiedAt: number | null; location?: { hierarchy?: Array<{ name: string }>; address?: string } | null;
 };
 export function homePhotoAddress(location: HomePhoto['location']): string {
@@ -23,7 +24,7 @@ export type HomeOverview = {
   people: number; objectClasses: number; favorites: number; tags: number;
   firstYear: number | null; lastYear: number | null; featuredCount: number;
   featured: HomePhoto[]; years: HomeYear[]; anniversaryCount: number; anniversary: HomePhoto[];
-  recent: HomePhoto[]; topPlaces: HomeEntity[]; topPeople: HomeEntity[]; topObjects: HomeEntity[]; topTags: HomeEntity[];
+  recent: HomePhoto[]; mostViewed: HomePhoto[]; topPlaces: HomeEntity[]; topPeople: HomeEntity[]; topObjects: HomeEntity[]; topTags: HomeEntity[];
   objectLabels: Array<{ key: string; name: string }>;
 };
 export type HomePreferences = { minimumRating: number; intervalSeconds: number; autoplay: boolean };
@@ -124,9 +125,10 @@ export function homePhotoIds(selectedId: number, ids: number[]): number[] {
   const bounded = valid.slice(0, 12);
   return bounded.includes(selectedId) ? bounded : [selectedId, ...bounded.slice(0, 11)];
 }
-export function homeBrowseRules(kind: 'featured' | 'anniversary', minimumRating = 4): SmartRule[] {
+export function homeBrowseRules(kind: 'featured' | 'anniversary' | 'most-viewed', minimumRating = 4): SmartRule[] {
   const rule = (field: string, operator: string, value: any): SmartRule => ({ id: `home-${field}`, field, operator, value });
   return [rule('file_type', 'is', 5), ...(kind === 'anniversary'
     ? [rule('anniversary', 'is', true)]
+    : kind === 'most-viewed' ? [rule('view_count', 'gt', 0)]
     : [rule('rating', 'gte', homePreferences({ minimumRating }).minimumRating), rule('culling', 'is_not', 2)])];
 }

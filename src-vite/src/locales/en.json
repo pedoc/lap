@@ -1,4 +1,11 @@
 {
+  "media_views": {
+    "count": "View count",
+    "last_viewed": "Last viewed",
+    "never": "No recorded views",
+    "times": "{count} views",
+    "most_viewed": "Frequently viewed"
+  },
   "media_title": {
     "display": "Display name (title first)",
     "discard": "Discard your unsaved title?",

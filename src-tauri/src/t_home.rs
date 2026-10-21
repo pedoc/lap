@@ -28,6 +28,8 @@ pub struct Photo {
     pub id: i64,
     pub name: String,
     pub title: Option<String>,
+    pub view_count: i64,
+    pub last_viewed_at: Option<i64>,
     pub rating: i32,
     pub taken_date: Option<i64>,
     pub modified_at: Option<i64>,
@@ -81,6 +83,7 @@ pub struct Overview {
     pub anniversary_count: i64,
     pub anniversary: Vec<Photo>,
     pub recent: Vec<Photo>,
+    pub most_viewed: Vec<Photo>,
     pub top_places: Vec<Entity>,
     pub top_people: Vec<Entity>,
     pub top_objects: Vec<Entity>,
@@ -92,7 +95,7 @@ fn visible_query() -> String {
     format!(
         "WITH visible AS MATERIALIZED (
             SELECT a.id,a.name,a.title,a.file_type,a.rating,a.is_favorite,a.culling_flag,
-                a.taken_date,a.modified_at,a.size,a.folder_id,b.album_id,
+                a.taken_date,a.modified_at,a.size,a.folder_id,b.album_id,a.view_count,a.last_viewed_at,
                 a.e_make,a.e_model,a.e_lens_make,a.e_lens_model,
                 CAST(strftime('%Y',a.taken_date,'unixepoch','localtime') AS INTEGER) AS year,
                 CAST(strftime('%m',a.taken_date,'unixepoch','localtime') AS INTEGER) AS month,
@@ -116,6 +119,8 @@ fn photo(row: &Row<'_>) -> rusqlite::Result<Photo> {
         id: row.get("id")?,
         name: row.get("name")?,
         title: row.get("title")?,
+        view_count: row.get("view_count")?,
+        last_viewed_at: row.get("last_viewed_at")?,
         rating: row.get("rating")?,
         taken_date: row.get("taken_date")?,
         modified_at: row.get("modified_at")?,
@@ -180,6 +185,7 @@ fn read_for_profiles(
                 anniversary_count: 0,
                 anniversary: Vec::new(),
                 recent: Vec::new(),
+                most_viewed: Vec::new(),
                 top_places: Vec::new(),
                 top_people: Vec::new(),
                 top_objects: Vec::new(),
@@ -191,7 +197,7 @@ fn read_for_profiles(
     {
         let mut stmt = tx
             .prepare(&format!(
-                "{visible} SELECT id,name,title,COALESCE(rating,0) AS rating,taken_date,modified_at,address_json
+                "{visible} SELECT id,name,title,COALESCE(rating,0) AS rating,taken_date,modified_at,address_json,view_count,last_viewed_at
              FROM visible WHERE {featured_scope}
              ORDER BY rating DESC,COALESCE(is_favorite,0) DESC,taken_date DESC,id DESC LIMIT 12"
             ))
@@ -292,7 +298,7 @@ fn read_for_profiles(
     {
         let mut stmt = tx
             .prepare(&format!(
-                "{visible} SELECT id,name,title,COALESCE(rating,0) AS rating,taken_date,modified_at,address_json
+                "{visible} SELECT id,name,title,COALESCE(rating,0) AS rating,taken_date,modified_at,address_json,view_count,last_viewed_at
              FROM visible WHERE {anniversary_scope} ORDER BY taken_date DESC,id DESC LIMIT 2"
             ))
             .map_err(|e| e.to_string())?;
@@ -305,7 +311,7 @@ fn read_for_profiles(
     {
         let mut stmt = tx
             .prepare(&format!(
-                "{visible} SELECT id,name,title,COALESCE(rating,0) AS rating,taken_date,modified_at,address_json
+                "{visible} SELECT id,name,title,COALESCE(rating,0) AS rating,taken_date,modified_at,address_json,view_count,last_viewed_at
             FROM visible WHERE file_type IN(1,3) ORDER BY id DESC LIMIT 6"
             ))
             .map_err(|e| e.to_string())?;
@@ -323,6 +329,16 @@ fn read_for_profiles(
         )
         .map_err(|e| e.to_string())?;
     overview.tags = tx.query_row(&format!("{visible} SELECT COUNT(DISTINCT ft.tag_id) FROM visible v JOIN afile_tags ft ON ft.file_id=v.id JOIN atags t ON t.id=ft.tag_id"),[],|r|r.get(0)).map_err(|e|e.to_string())?;
+    {
+        let mut stmt = tx.prepare(&format!("{visible} SELECT id,name,title,COALESCE(rating,0) AS rating,taken_date,modified_at,address_json,view_count,last_viewed_at
+            FROM visible WHERE file_type IN (1,3) AND view_count>0
+            ORDER BY view_count DESC,last_viewed_at DESC,id DESC LIMIT 6")).map_err(|e|e.to_string())?;
+        overview.most_viewed = stmt
+            .query_map([], photo)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+    }
     overview.top_places = entities_on(&tx, profiles, "location", "", &[], 3)?;
     overview.top_people = entities_on(&tx, profiles, "person", "", &[], 4)?;
     overview.top_objects = entities_on(&tx, profiles, "object", "", &[], 8)?;
@@ -591,6 +607,8 @@ mod tests {
             ALTER TABLE afolders ADD COLUMN name TEXT DEFAULT 'Folder';
             ALTER TABLE afiles ADD COLUMN size INTEGER DEFAULT 100;
             ALTER TABLE afiles ADD COLUMN title TEXT;
+            ALTER TABLE afiles ADD COLUMN view_count INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE afiles ADD COLUMN last_viewed_at INTEGER;
             ALTER TABLE afiles ADD COLUMN e_make TEXT;
             ALTER TABLE afiles ADD COLUMN e_model TEXT;
             ALTER TABLE afiles ADD COLUMN e_lens_make TEXT;
@@ -733,6 +751,28 @@ mod tests {
                 .all(|p| p.taken_date.unwrap() < timestamp(2026, 1, 1))
         );
         assert_eq!(read_on(&conn, 5, today()).unwrap().featured_count, 3);
+    }
+
+    #[test]
+    fn most_viewed_is_bounded_and_never_exposes_hidden_deleted_or_companion_files() {
+        let conn = fixture();
+        for id in 1..=12 {
+            add(&conn, id, 1, 0, Some(timestamp(2024, 1, 1)));
+        }
+        conn.execute_batch(
+            "UPDATE afiles SET view_count=id,last_viewed_at=1000;
+            INSERT INTO media_states VALUES(12,1,NULL),(11,0,100);
+            UPDATE afiles SET live_photo_video_id=10 WHERE id=1;
+            UPDATE afiles SET file_type=2 WHERE id=9;",
+        )
+        .unwrap();
+        let data = read_on(&conn, 4, today()).unwrap();
+        assert_eq!(
+            data.most_viewed.iter().map(|p| p.id).collect::<Vec<_>>(),
+            vec![8, 7, 6, 5, 4, 3]
+        );
+        assert_eq!(data.most_viewed[0].view_count, 8);
+        assert_eq!(data.most_viewed[0].last_viewed_at, Some(1000));
     }
 
     #[test]

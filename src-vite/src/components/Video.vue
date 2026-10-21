@@ -1080,6 +1080,7 @@ function applyViewportState(
 }
 
 defineExpose({
+  viewReady: computed(() => !props.originalUnavailable && !isLoading.value && !hasError.value && Number(players.value[activeVideo.value]?.readyState()) >= 2),
   zoomIn,
   zoomOut,
   zoomActual,

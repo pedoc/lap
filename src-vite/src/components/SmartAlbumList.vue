@@ -191,6 +191,7 @@ import { config, libConfig } from "@/common/config";
 import {
   hasTimeSmartRules,
   hasOcrRules,
+  hasViewRules,
   hasObjectRules,
   isSmartFolder,
   smartTreeRows,
@@ -434,6 +435,11 @@ function scheduleOcrCounts() {
   if (ocrCountTimer || !nodes.value.some(n => (hasOcrRules(n.query?.rules || []) || hasObjectRules(n.query?.rules || [])))) return;
   ocrCountTimer = setTimeout(() => { ocrCountTimer = undefined; void refreshCounts(true); }, 1500);
 }
+let viewCountTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleViewCounts() {
+  if (viewCountTimer || !nodes.value.some(node => hasViewRules(node.query?.rules || []))) return;
+  viewCountTimer = setTimeout(() => { viewCountTimer = undefined; void refreshCounts('views'); }, 1500);
+}
 let counting = false;
 let countAgain = false;
 function scheduleCounts() {
@@ -443,15 +449,16 @@ function scheduleCounts() {
     void refreshCounts();
   }, 600);
 }
-async function refreshCounts(onlyOcr = false) {
+async function refreshCounts(onlyOcr: boolean | 'views' = false) {
   if (counting) {
+    if (onlyOcr === 'views') { scheduleViewCounts(); return; }
     countAgain = true;
     return;
   }
   counting = true;
   const token = ++request;
   const library = libConfig._libraryId;
-  const albums = nodes.value.filter((n) => !isSmartFolder(n) && (!onlyOcr || (hasOcrRules(n.query?.rules || []) || hasObjectRules(n.query?.rules || []))));
+  const albums = nodes.value.filter((n) => !isSmartFolder(n) && (onlyOcr === 'views' ? hasViewRules(n.query?.rules || []) : !onlyOcr || (hasOcrRules(n.query?.rules || []) || hasObjectRules(n.query?.rules || []))));
   let cursor = 0;
   async function worker() {
     while (cursor < albums.length) {
@@ -591,6 +598,7 @@ onMounted(async () => {
     "ocr-index-updated",
     "ocr-annotations-changed",
     "media-lifecycle-changed",
+    "media-view-changed",
     "files-deleted",
     "semantic-index-changed",
     "album-updated",
@@ -606,6 +614,7 @@ onMounted(async () => {
     const stop = await listen(eventName, (event: any) => {
       const library = event.payload?.libraryId || event.payload?.library_id;
       if (library && library !== libConfig._libraryId) return;
+      if (eventName === 'media-view-changed') { scheduleViewCounts(); return; }
       if (['ocr-index-updated','ocr-annotations-changed','object-index-updated','object-annotations-changed'].includes(eventName)) { scheduleOcrCounts(); return; }
       if(eventName==='face-person-changed'&&(isFaceRename(event.payload||{})||event.payload?.membershipChanged===false))return;
       if(eventName==='album-updated'&&!event.payload?.filtersChanged)return;
@@ -625,6 +634,7 @@ onBeforeUnmount(() => {
   coverRequest++;
   clearTimeout(countTimer);
   clearTimeout(ocrCountTimer);
+  clearTimeout(viewCountTimer);
   clearInterval(clock);
   stops.forEach((stop) => stop());
 });

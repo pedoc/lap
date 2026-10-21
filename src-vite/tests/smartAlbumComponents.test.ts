@@ -1,5 +1,6 @@
 import test from "node:test";
 import * as mediaTitles from '../src/common/mediaTitle.ts';
+import * as mediaViews from '../src/common/mediaViews.ts';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -26,7 +27,7 @@ function context(overrides: any = {}) {
   const libConfig = Vue.reactive({ _libraryId: "lib" });
   return {
     ...helpers,
-    ...mediaTitles,
+    ...mediaTitles, ...mediaViews,
     ...objectHelpers,
     useObjects: () => ({ view: Vue.ref({classes:[{key:"coco2017-80@1:0",name:"person",supported:true}]}) }),
     ...Vue,
@@ -106,7 +107,7 @@ function harness(overrides: any = {}) {
     source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1],
   ).replace(/^import[\s\S]*?from\s*[\'"][^\'"]+[\'"];?\r?\n/gm, "");
   const api = runInNewContext(
-    `${script}\n;({rules,name,parentId,template,applyTemplate,previewResults,preview,previewError,previewStale,canSave,clickOk,includeIds,excludeIds,recalibrate,makeRule,getOperatorOptions,isRuleValid,ocrPreviewRevision});`,
+    `${script}\n;({rules,name,parentId,template,applyTemplate,previewResults,preview,previewError,previewStale,canSave,clickOk,includeIds,excludeIds,recalibrate,makeRule,getOperatorOptions,isRuleValid,ocrPreviewRevision,viewPreviewRevision});`,
     ctx,
   );
   return { api, ctx, emits, watches };
@@ -481,4 +482,30 @@ test('actual combined-filter editor hides album setup and semantic fields while 
   assert.doesNotMatch(html, /smart_albums.template|album.smart_edit.validation_name|value="semantic"|value="similar_image"/);
   assert.match(html, /value="ocr_text"/);
   assert.match(html, /value="object_class"/);
+});
+
+
+test('view-count smart rules accept zero, reject invalid counts and invalidate their previews independently', async () => {
+  const h = harness(); h.api.name.value = 'Unseen';
+  h.api.rules.value = [{ id: 'views', field: 'view_count', operator: 'is', value: 0 }];
+  assert.equal(h.api.isRuleValid(h.api.rules.value[0]), true);
+  assert.ok(h.api.getOperatorOptions('view_count').some((option: any) => option.value === 'gte'));
+  for (const value of [-1, 1.5, NaN]) assert.equal(h.api.isRuleValid({ field: 'view_count', operator: 'is', value }), false);
+  assert.equal(h.api.isRuleValid({ field: 'view_count', operator: 'between', value: { min: 4, max: 2 } }), false);
+  await h.api.previewResults(); assert.ok(h.api.preview.value); assert.equal(h.api.previewStale.value, false);
+  h.api.ocrPreviewRevision.value++; assert.equal(h.api.previewStale.value, false);
+  h.api.viewPreviewRevision.value++; assert.equal(h.api.previewStale.value, true);
+  assert.equal(helpers.hasViewRules([{ id: 'g', field: 'group', operator: 'all', value: { rules: [{ id: 'v', field: 'date_viewed', operator: 'in_last', value: { amount: 7, unit: 'day' } }] } }]), true);
+  assert.equal(helpers.hasTimeSmartRules([{ id: 'v', field: 'date_viewed', operator: 'in_last', value: { amount: 7, unit: 'day' } }]), true);
+});
+
+test('view-driven sidebar counts refresh only albums depending on viewing statistics, not unrelated AI queries', async () => {
+  const queries: any[] = [];
+  const h = sidebarHarness({ getSmartQueryCountAndSum: async (params: any) => { queries.push(params); return [1, 100]; } });
+  const unseen = { ...h.album, id: 'unseen', query: { match: 'all', rules: [{ id: 'v', field: 'view_count', operator: 'is', value: 0 }] } };
+  const ai = { ...h.album, id: 'ai', query: { match: 'all', rules: [{ id: 's', field: 'semantic', operator: 'matches', value: { prompt: 'travel', threshold: .2 } }] } };
+  h.ctx.libConfig.smartAlbums = [h.album, unseen, ai];
+  await h.api.refreshCounts('views');
+  assert.equal(queries.length, 1); assert.equal(queries[0].rules[0].field, 'view_count');
+  assert.equal(h.ctx.libConfig.smartAlbums[0].count, 12); assert.equal(h.ctx.libConfig.smartAlbums[1].count, 1);
 });

@@ -713,10 +713,10 @@ function browseHome(target: HomeBrowseTarget) {
   const rules = target.kind === 'year' || target.kind === 'month' ? homePeriodRules(target.year, target.kind === 'month' ? target.month : undefined)
     : target.kind === 'entity' ? homeEntityRules(target.entity)
     : target.kind === 'recent' ? [{ id: 'home-recent', field: 'file_type', operator: 'is', value: 5 }]
-    : target.kind === 'featured' || target.kind === 'anniversary' ? homeBrowseRules(target.kind, homePreferences(config.home).minimumRating) : [];
+    : target.kind === 'featured' || target.kind === 'anniversary' || target.kind === 'most-viewed' ? homeBrowseRules(target.kind, homePreferences(config.home).minimumRating) : [];
   if (!rules.length) return;
   config.search.fileType = 0;
-  if (target.kind === 'recent') { config.search.sortType = 8; config.search.sortOrder = 1; config.search.groupBy = 0; }
+  if (target.kind === 'recent' || target.kind === 'most-viewed') { config.search.sortType = target.kind === 'recent' ? 8 : 11; config.search.sortOrder = 1; config.search.groupBy = 0; }
   if (structuredSearch.libraryId !== libConfig._libraryId) resetStructuredSearch(libConfig._libraryId);
   if (applyStructuredSearch({ query: { version: 2, match: 'all', rules } }, libConfig._libraryId)) config.main.sidebarIndex = SIDEBAR.SEARCH;
 }
