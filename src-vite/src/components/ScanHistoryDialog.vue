@@ -5,7 +5,7 @@
       <p class="text-xs text-base-content/50">{{ t('scan_tracking.scope_hint') }}</p>
       <p class="text-xs">{{ t('scan_tracking.current_album_state') }}: {{ stateLabel(albumScanState(scope.albumId)) }}</p>
       <p v-if="scope.folderPath" class="text-xs text-base-content/50">{{ t('scan_tracking.folder_readonly_hint') }}</p>
-      <p v-if="error" class="text-error text-xs whitespace-pre-wrap">{{ error }} <button class="underline" @click="load">{{ t('scan_tracking.retry') }}</button></p>
+      <p v-if="error" class="rounded border-l-2 border-error bg-base-100 p-2 text-xs text-base-content whitespace-pre-wrap">{{ error }} <button class="underline" @click="load">{{ t('scan_tracking.retry') }}</button></p>
       <p v-if="loading" class="text-xs text-base-content/50">{{ t('tooltip.loading') }}</p>
       <select v-if="history.length" v-model="selected" class="select select-sm w-full" :aria-label="t('scan_tracking.history')" @change="offset=0; details=null; void loadDetails()">
         <option v-for="item in history" :key="item.id" :value="item.id">{{ historyLabel(item) }}</option>
@@ -13,10 +13,10 @@
       <div v-if="selectedRun" class="rounded-box border border-base-content/10 p-3 space-y-2">
         <p class="text-xs text-base-content/50">{{ t('scan_tracking.album_progress') }}</p>
         <div class="flex items-center justify-between gap-2"><strong>{{ stateLabel(scanReportStatus(selectedRun)) }}</strong><span v-if="!selectedRun.retry?.running" class="text-xs text-base-content/50">{{ phaseLabel(work.phase) }}</span></div>
-        <p v-if="selectedRun.status==='pausing'" class="text-xs text-warning">{{ t('scan_tracking.pausing_hint') }}</p>
-        <p v-if="selectedRun.status==='interrupted'" class="text-xs text-warning">{{ t('scan_tracking.interrupted_hint') }}</p>
+        <p v-if="selectedRun.status==='pausing'" class="text-xs text-base-content">{{ t('scan_tracking.pausing_hint') }}</p>
+        <p v-if="selectedRun.status==='interrupted'" class="text-xs text-base-content">{{ t('scan_tracking.interrupted_hint') }}</p>
         <p class="text-xs">{{ t('scan_tracking.checked',{current:selectedRun.counts.discovered,total:selectedRun.counts.total}) }}</p>
-        <p v-if="active && selectedRun.counts.discovered>=selectedRun.counts.total && selectedRun.counts.pending>0" class="text-xs text-info">{{ t('scan_tracking.postprocessing_hint',{count:selectedRun.counts.pending}) }}</p>
+        <p v-if="active && selectedRun.counts.discovered>=selectedRun.counts.total && selectedRun.counts.pending>0" class="text-xs text-base-content">{{ t('scan_tracking.postprocessing_hint',{count:selectedRun.counts.pending}) }}</p>
         <p v-if="active && ['preparing_previews','preparing_search'].includes(work.phase)" class="text-xs">{{ phaseLabel(work.phase) }}: {{ work.current }}/{{ work.total }}</p>
         <progress v-if="selectedRun.retry?.running" class="progress progress-primary w-full" :aria-label="t('scan_tracking.state_retrying')" />
         <progress v-else-if="percentage!==null" class="progress progress-primary w-full" :value="percentage" max="100" :aria-label="active ? phaseLabel(work.phase) : t('scan_tracking.checked_short')" />
@@ -28,10 +28,10 @@
           <span>{{ t('scan_tracking.pending') }}: {{ selectedRun.counts.pending }}</span>
         </div>
         <p v-if="selectedRun.error_count" class="text-xs text-base-content/60">{{ t('scan_tracking.retry_summary',{total:selectedRun.error_count,resolved:selectedRun.retry?.resolved||0,remaining:remainingErrors}) }}</p>
-        <p v-if="selectedRun.retry?.running" class="text-xs text-info">{{ t('scan_tracking.retry_running_hint',{count:selectedRun.retry.running}) }}</p>
-        <p v-if="selectedRun.last_error && remainingErrors>0" class="text-xs text-warning break-all whitespace-pre-wrap">{{ t('scan_tracking.last_error') }}: {{ selectedRun.last_error }}</p>
-        <p v-else-if="selectedRun.error_count && remainingErrors===0" class="text-xs text-success">{{ t('scan_tracking.retry_all_resolved') }}</p>
-        <p v-else-if="selectedRun.status==='failed'" class="text-xs text-warning">{{ t('scan_tracking.failed_hint') }}</p>
+        <p v-if="selectedRun.retry?.running" class="text-xs text-base-content">{{ t('scan_tracking.retry_running_hint',{count:selectedRun.retry.running}) }}</p>
+        <p v-if="selectedRun.last_error && remainingErrors>0" class="rounded border-l-2 border-warning bg-base-100 p-2 text-xs text-base-content break-all whitespace-pre-wrap">{{ t('scan_tracking.last_error') }}: {{ selectedRun.last_error }}</p>
+        <p v-else-if="selectedRun.error_count && remainingErrors===0" class="text-xs font-medium text-base-content">{{ t('scan_tracking.retry_all_resolved') }}</p>
+        <p v-else-if="selectedRun.status==='failed'" class="text-xs text-base-content">{{ t('scan_tracking.failed_hint') }}</p>
         <p class="text-xs text-base-content/50 break-all">{{ t('scan_tracking.recent_path') }}: {{ selectedRun.current_path }}</p>
         <p class="text-xs text-base-content/50">{{ t('scan_tracking.started') }}: {{ date(selectedRun.started_at) }}<template v-if="selectedRun.finished_at"> · {{ t(selectedRun.status==='interrupted'?'scan_tracking.last_confirmed':'scan_tracking.finished') }}: {{ date(selectedRun.finished_at) }}</template></p>
       </div>
@@ -42,13 +42,13 @@
         </table>
       </div>
       <div v-if="details && details.folder_count>100" class="flex items-center gap-2 text-xs"><button class="btn btn-xs" :disabled="offset===0" @click="offset-=100; void loadDetails()">{{ t('scan_tracking.previous') }}</button><span>{{ offset+1 }}–{{ Math.min(offset+100,details.folder_count) }}/{{ details.folder_count }}</span><button class="btn btn-xs" :disabled="offset+100>=details.folder_count" @click="offset+=100; void loadDetails()">{{ t('scan_tracking.next') }}</button></div>
-      <div v-if="details?.errors.length" class="max-h-52 overflow-auto rounded-box bg-warning/5 p-2 space-y-3 text-xs">
-        <div v-for="item in details.errors" :key="item.ordinal" class="break-all space-y-1">
+      <div v-if="details?.errors.length" class="max-h-52 overflow-auto rounded-box border border-base-content/15 bg-base-100 p-3 space-y-3 text-xs text-base-content">
+        <div v-for="item in details.errors" :key="item.ordinal" class="break-all space-y-1 border-l-2 pl-3" :class="item.retry_state==='resolved'?'border-success':'border-warning'">
           <div class="flex items-start gap-2"><p class="min-w-0 flex-1"><strong>{{ t('scan_tracking.stage_'+item.stage) }}</strong> · {{ item.path }}</p><button v-if="latestReport && item.retryable && item.retry_state!=='resolved'" class="btn btn-xs shrink-0" :disabled="!canRetry || busyAction" @click="retryErrors(item.ordinal)">{{ t('scan_tracking.retry_item') }}</button></div>
           <p>{{ t('scan_tracking.original_error') }}: {{ item.message }}</p>
-          <p :class="item.retry_state==='resolved'?'text-success':item.retry_state==='failed'?'text-warning':'text-base-content/60'">{{ t('scan_tracking.retry_state_'+item.retry_state) }}<template v-if="item.attempts"> · {{ t('scan_tracking.retry_attempts',{count:item.attempts}) }} · {{ item.last_attempt_at?date(item.last_attempt_at):'' }}</template></p>
-          <p v-if="item.retry_error" class="text-warning whitespace-pre-wrap">{{ t('scan_tracking.retry_latest_error') }}: {{ item.retry_error }}</p>
-          <p v-if="videoErrorHint(item)" class="text-warning whitespace-pre-wrap">{{ videoErrorHint(item) }}</p>
+          <p class="font-semibold text-base-content">{{ t('scan_tracking.retry_state_'+item.retry_state) }}<template v-if="item.attempts"> · {{ t('scan_tracking.retry_attempts',{count:item.attempts}) }} · {{ item.last_attempt_at?date(item.last_attempt_at):'' }}</template></p>
+          <p v-if="item.retry_error" class="text-base-content leading-relaxed whitespace-pre-wrap">{{ t('scan_tracking.retry_latest_error') }}: {{ item.retry_error }}</p>
+          <p v-if="videoErrorHint(item)" class="text-base-content leading-relaxed whitespace-pre-wrap">{{ videoErrorHint(item) }}</p>
           <p v-if="!item.retryable" class="text-base-content/50">{{ t('scan_tracking.retry_full_scan_hint') }}</p>
         </div>
         <p class="text-base-content/50">{{ t('scan_tracking.error_limit') }}</p>
@@ -56,7 +56,7 @@
       </div>
       <p v-if="scope.folderPath && details && details.folder_count===0" class="text-xs text-base-content/50">{{ t('scan_tracking.state_waiting_record') }}</p>
       <p v-if="!loading && !error && !history.length" class="text-xs text-base-content/50 py-5">{{ t('scan_tracking.no_history') }}</p>
-      <p v-if="actionError" class="text-error text-xs whitespace-pre-wrap">{{ actionError }}</p>
+      <p v-if="actionError" class="rounded border-l-2 border-error bg-base-100 p-2 text-xs text-base-content whitespace-pre-wrap">{{ actionError }}</p>
       <div class="flex flex-wrap items-center gap-2 pt-2"><span class="text-xs text-base-content/40 mr-auto">{{ t('scan_tracking.retention') }}</span><button v-if="details" class="btn btn-sm" @click="copy">{{ t('scan_tracking.copy') }}</button><button v-if="latestReport && retryTargets.length" class="btn btn-sm" :disabled="!canRetry || busyAction" @click="retryErrors()">{{ t(scope.folderPath?'scan_tracking.retry_folder_errors':'scan_tracking.retry_errors') }}</button><button v-if="!scope.folderPath" class="btn btn-sm" :disabled="['pausing','retrying'].includes(action) || busyAction" @click="control">{{ t('scan_tracking.action_'+action) }}</button><button class="btn btn-sm" @click="emit('cancel')">{{ t('msgbox.close') }}</button></div>
     </div>
   </ModalDialog>

@@ -397,3 +397,19 @@ test('metadata probing preserves error-level diagnostics in release builds witho
  assert.match(body,/probe_diagnostics::failure_message\(out.status.code\(\), &out.stderr\)/);
  assert.match(body,/\.kill_on_drop\(true\)/);assert.match(body,/tokio::time::timeout/);
 });
+
+test('scan diagnostic text stays high contrast, while semantic colors only decorate borders and icons',()=>{
+ const dialog=read('components/ScanHistoryDialog.vue').split('<script setup')[0];
+ assert.ok(!dialog.includes('text-warning'),'yellow must not be used for diagnostic body text');
+ assert.match(dialog,/v-if="details\?\.errors.length"[^>]*class="[^"]*bg-base-100[^"]*text-base-content"/);
+ for(const expression of ['item.retry_error','videoErrorHint(item)']){
+  const line=dialog.split('\n').find(line=>line.includes(`v-if="${expression}"`))||'';
+  assert.match(line,/class="text-base-content leading-relaxed whitespace-pre-wrap"/);
+ }
+ const source=read('components/ScanStatusBadge.vue'),state=Vue.ref<scan.AlbumScanState>('warnings');
+ const start=source.indexOf('const color=computed('),end=source.indexOf('\nconst hint=',start);
+ const api=runInNewContext(`${source.slice(start,end)};({color,iconColor});`,{computed:Vue.computed,state});
+ assert.match(api.color.value,/text-base-content/);assert.ok(!api.color.value.includes('text-warning'));assert.equal(api.iconColor.value,'text-warning');
+ state.value='complete';assert.match(api.color.value,/text-base-content/);assert.equal(api.iconColor.value,'text-success');
+ assert.match(source,/:class="\[busy \? 'motion-safe:animate-spin' : '', iconColor\]"/);
+});
