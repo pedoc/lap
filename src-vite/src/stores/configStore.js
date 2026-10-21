@@ -4,6 +4,7 @@
 import { defineStore } from 'pinia';
 import { i18n, loadLanguage } from '@/common/i18n';
 let languageRequest = 0;
+let pendingUserLanguageRequest = 0;
 import { SIDEBAR, MAP_MARKER_SIZES } from '@/common/constants';
 import { normalizeMediaChatSettings } from '@/common/mediaChatPosition';
 import { DEFAULT_SIDEBAR_ORDER, normalizeSidebarOrder } from '@/common/sidebarOrder';
@@ -139,6 +140,7 @@ export const useConfigStore = defineStore('configStore', {
 
       // general settings
       language: 'en',             // default language
+      languageInitialized: false, // match system language once, then preserve the saved choice
       dateTimeFormat: 0,          // date/time locale source (0: follow system region, 1: follow app language)
       appearance: 1,              // appearance (0: light; 1: dark)
       lightTheme: 0,              // light theme color index
@@ -295,8 +297,14 @@ export const useConfigStore = defineStore('configStore', {
         video: normalizeGroup('video'),
       };
     },
-    async setLanguage(language) {
+    async setLanguage(language, { fromUser = false } = {}) {
+      if (!fromUser && pendingUserLanguageRequest) return;
       const request = ++languageRequest;
+      if (fromUser) {
+        // Protect user intent before loading, including while startup probes the OS.
+        this.settings.languageInitialized = true;
+        pendingUserLanguageRequest = request;
+      }
       try {
         await loadLanguage(language);
         if (request !== languageRequest) return;
@@ -304,6 +312,8 @@ export const useConfigStore = defineStore('configStore', {
         i18n.global.locale.value = language;
       } catch (error) {
         console.error('Failed to switch language:', error);
+      } finally {
+        if (pendingUserLanguageRequest === request) pendingUserLanguageRequest = 0;
       }
     },
     setDateTimeFormat(dateTimeFormat) {
@@ -463,6 +473,10 @@ export const useConfigStore = defineStore('configStore', {
         if (settings) {
           settings.sidebarOrder = normalizeSidebarOrder(settings.sidebarOrder);
           settings.mediaChat = normalizeMediaChatSettings(settings.mediaChat);
+          // Existing installations already have a language choice; do not replace it.
+          if (typeof settings.languageInitialized !== 'boolean' && typeof settings.language === 'string' && settings.language) {
+            settings.languageInitialized = true;
+          }
           settings.rawPreviewSource = settings.rawPreviewSource === 'rendered' ? 'rendered' : 'embedded';
           settings.rawRenderBrightness = settings.rawRenderBrightness === 'brightened' ? 'brightened' : 'original';
           settings.rawPairDisplaySource = settings.rawPairDisplaySource === 'raw' ? 'raw' : 'jpeg';
