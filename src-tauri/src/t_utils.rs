@@ -4136,6 +4136,61 @@ async fn process_thumbnail_task(
 }
 
 fn scan_cancelled(token:&Arc<Mutex<HashMap<i64,bool>>>,album:i64)->bool{token.lock().map(|flags|flags.get(&album)!=Some(&false)).unwrap_or(true)}
+fn validate_scan_retry_path(root: &str, path: &str) -> Result<std::fs::Metadata,String> {
+    let root = std::fs::canonicalize(root).map_err(|e|format!("Cannot access album directory: {e}"))?;
+    let file = std::fs::canonicalize(path).map_err(|e|format!("Cannot access failed file: {e}"))?;
+    let root = crate::t_scan::path_key(&root.to_string_lossy());
+    let file_key = crate::t_scan::path_key(&file.to_string_lossy());
+    if !file_key.starts_with(&format!("{}/",root.trim_end_matches('/'))) {return Err("Failed file is outside the current album directory".into());}
+    let meta = std::fs::metadata(&file).map_err(|e|e.to_string())?;
+    if !meta.is_file() {return Err("The failed path is not a regular media file".into());}
+    if is_cloud_only(&meta) {return Err("The original is cloud-only. Download it locally before retrying; this action will not trigger a cloud download".into());}
+    if meta.len()==0 {return Err("The original file is empty (0 bytes). Restore a valid copy before retrying".into());}
+    Ok(meta)
+}
+pub(crate) fn retry_scan_file(app: &tauri::AppHandle, album: &Album, path: &str, stage: &str, thumbnail_size: u32, raw: RawDisplayOptions, group_raw_jpeg_pairs: bool, cancelled: &impl Fn()->bool) -> Result<i64,String> {
+    use rusqlite::OptionalExtension;
+    let check_cancel = || if cancelled(){Err("Retry stopped before all file processing finished".to_string())}else{Ok(())};
+    check_cancel()?;
+    if !matches!(stage,"metadata"|"preview"|"search") {return Err("This error requires a full album scan".into());}
+    let meta = validate_scan_retry_path(&album.path,path)?;
+    let kind = get_file_type(path).ok_or("The file type is not supported")?;
+    if !album.allows_file_type(kind) || album.excludes_path(Path::new(path)) {return Err("The file is excluded by the current album filters".into());}
+    let parent = Path::new(path).parent().ok_or("File has no parent directory")?.to_string_lossy();
+    let conn = crate::t_sqlite::open_conn()?;
+    let existing: Option<i64> = conn.query_row("SELECT a.id FROM afiles a JOIN afolders f ON f.id=a.folder_id WHERE f.album_id=?1 AND f.path=?2 AND a.name=?3",rusqlite::params![album.id,parent,get_file_name(path)],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+    drop(conn);
+    if let Some(id)=existing {
+        if !AFile::is_album_visible(id)? {return Err("Hidden, deleted or excluded files cannot be retried. Restore or unhide the file first".into());}
+    }
+    let outcome = index_single_file(&album.path,album.id.ok_or("Album has no id")?,path,kind,thumbnail_size,raw,Utc::now().timestamp_millis(),album.small_image_filter)
+        .map_err(|e|format!("{e} (local file: {} bytes; if it still fails, check whether the original can be played or decoded)",meta.len()))?;
+    if outcome.excluded {return Err("The image is excluded by the current dimension filter".into());}
+    let folder = AFolder::fetch(&parent)?.ok_or("Indexed folder was not found")?;
+    let folder_id = folder.id.ok_or("Indexed folder has no id")?;
+    let file = AFile::fetch(folder_id,path)?.ok_or("Indexed media was not found")?;
+    let file_id = file.id.ok_or("Indexed media has no id")?;
+    check_cancel()?;
+    if stage!="search" {
+        let preview = AThumb::get_or_create_thumb(file_id,path,kind,file.e_orientation.unwrap_or(1) as i32,thumbnail_size,raw,stage=="preview",file.duration.map(|v|v as u64),None)?;
+        match preview {
+            Some(thumb) if matches!(thumb.error_code,0|2)=>{},
+            Some(thumb)=>return Err(format!("Preview generation failed (decoder error code {})",thumb.error_code)),
+            None=>return Err("Preview generator returned no image".into()),
+        }
+        let _=app.emit("thumbnail_ready",serde_json::json!({"library_id":crate::t_config::current_library_id()?,"album_id":album.id,"file_ids":[file_id],"invalidate":true}));
+    }
+    check_cancel()?;
+    if matches!(kind,1|3) && (stage=="search" || crate::ai::settings::background_indexing_enabled()) {
+        let ai=app.state::<crate::t_ai::AiState>();
+        AFile::generate_embedding(&ai,file_id)?;
+        let _=app.emit("semantic-index-changed",serde_json::json!({"library_id":crate::t_config::current_library_id()?,"file_id":file_id}));
+    }
+    check_cancel()?;
+    AFile::pair_live_photos_in_folder(folder_id,&HashSet::from([get_file_name(path)]),false)?;
+    if group_raw_jpeg_pairs { AFile::pair_raw_jpeg_in_folder(folder_id)?; }
+    Ok(file_id)
+}
 fn mark_existing_scan_file(album:i64,path:&str,at:i64)->Result<(),String>{
     let file=Path::new(path);let parent=file.parent().ok_or("File has no parent")?.to_string_lossy();let name=file.file_name().ok_or("File has no name")?.to_string_lossy();
     let c=crate::t_sqlite::open_conn()?;mark_scan_file_seen_on(&c,album,&parent,&name,at)
@@ -4898,6 +4953,18 @@ mod scan_lifecycle_tests {
         mark_scan_file_seen_on(&c,1,"/photos","bad.jpg",20).unwrap();
         assert_eq!(c.query_row("SELECT last_scan_time,title,view_count FROM afiles WHERE id=1",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?))).unwrap(),(20,"Keep".into(),7));
         assert_eq!(c.query_row("SELECT last_scan_time FROM afiles WHERE id=2",[],|r|r.get::<_,i64>(0)).unwrap(),10);
+    }
+    #[test]
+    fn retry_path_validation_rejects_outside_roots_empty_files_and_directories(){
+        let root=std::env::temp_dir().join(format!("lap-retry-path-{}",uuid::Uuid::new_v4()));fs::create_dir_all(root.join("album")).unwrap();
+        let valid=root.join("album/valid.jpg");let empty=root.join("album/empty.jpg");let outside=root.join("outside.jpg");
+        fs::write(&valid,b"fixture").unwrap();fs::write(&empty,b"").unwrap();fs::write(&outside,b"fixture").unwrap();let album=root.join("album");
+        assert!(validate_scan_retry_path(album.to_str().unwrap(),valid.to_str().unwrap()).is_ok());
+        assert!(validate_scan_retry_path(album.to_str().unwrap(),empty.to_str().unwrap()).unwrap_err().contains("0 bytes"));
+        assert!(validate_scan_retry_path(album.to_str().unwrap(),outside.to_str().unwrap()).is_err());
+        assert!(validate_scan_retry_path(album.to_str().unwrap(),album.to_str().unwrap()).is_err());
+        assert!(validate_scan_retry_path(album.to_str().unwrap(),"https://example.invalid/a.jpg").is_err());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn observed_precount_reports_filesystem_errors_instead_of_claiming_empty_success(){

@@ -5266,6 +5266,7 @@ async function processNextAlbum(skipFilePath: string | null = null, skipRecovery
   if (!albumId) { syncIndexStatus(); return; }
   if(scanJobs.pausing.has(albumId))return;
   const backend=albumScanRun(albumId);
+  if (backend?.retry?.running) return;
   if (backend && ['running','pausing'].includes(backend.status)) {activeScanRunId.value=backend.id;return;}
   if(scanHasPendingEdits()){libConfig.index.status=2;toast.info(t('scan_tracking.save_edits_first'));return;}
   const runId=crypto.randomUUID();activeScanRunId.value=runId;scanStarting=true;
@@ -6139,9 +6140,16 @@ onMounted( async() => {
   scanHistoryStops.push(await listen<ScanScope>('scan-history-requested',event=>{
     if(event.payload?.libraryId===libConfig._libraryId&&Number(event.payload.albumId)>0)scanHistoryScope.value=event.payload;
   }));
+  scanHistoryStops.push(await listen<any>('scan-retry-finished',event=>{
+    if(event.payload?.library_id!==libConfig._libraryId)return;
+    void refreshLibraryTotalCount();
+    if(config.main.sidebarIndex===SIDEBAR.ALBUM && Number(libConfig.album.id)===Number(event.payload.album_id)){
+      deferScanPresentation(Number(event.payload.album_id));flushScanPresentation();
+    }
+  }));
   scanHistoryStops.push(await listen<any>('scan-album-requested',event=>{
     if(event.payload?.libraryId!==libConfig._libraryId)return;
-    const id=Number(event.payload.albumId);if(!(id>0)||scanJobs.pausing.has(id))return;
+    const id=Number(event.payload.albumId);if(!(id>0)||scanJobs.pausing.has(id)||albumScanRun(id)?.retry?.running)return;
     libConfig.index.pausedAlbumIds=libConfig.index.pausedAlbumIds.filter((value:any)=>Number(value)!==id);
     if(!libConfig.index.albumQueue.some((value:any)=>Number(value)===id))libConfig.index.albumQueue.push(id);
     libConfig.index.status=1;void processNextAlbum();

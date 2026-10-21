@@ -1852,6 +1852,16 @@ export async function indexAlbum(albumId, skipFilePath = null, runId = crypto.ra
   }
 }
 
+// Retry saved file errors without a full album scan.
+export async function retryScanErrors(runId, ordinals, libraryId = libConfig._libraryId) {
+  return await invoke('retry_scan_errors', {
+    libraryId, runId, ordinals,
+    thumbnailSize: config.settings.thumbnailSize || 512,
+    rawDisplayOptions: getRawDisplayOptions(),
+    groupRawJpegPairs: Boolean(config.settings.groupRawJpegPairs),
+  });
+}
+
 // cancel indexing
 export async function cancelIndexing(albumId, libraryId = libConfig._libraryId) {
   try {

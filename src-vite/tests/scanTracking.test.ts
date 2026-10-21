@@ -172,13 +172,15 @@ function reportHarness(handler?:(command:string,args:any)=>any,folderPath?:strin
  const dict=JSON.parse(read('locales/en.json'));
  const ctx:any={...Vue,...scan,props:{scope:{libraryId:'A',albumId:1,albumName:'Photos',folderPath}},defineProps:()=>ctx.props,defineEmits:()=> (...args:any[])=>emits.push(args),
   useI18n:()=>({t:(key:string)=>key.split('.').reduce((value:any,part)=>value?.[part],dict)||key}),useUIStore:()=>({pushInputHandler(){},removeInputHandler(){}}),libConfig:lib,scanJobs:store,
-  albumScanRun:()=>current.value,albumScanState:()=> 'unscanned',pauseAlbumScan:async()=>{},appEmit:async()=>{},
+  albumScanRun:()=>current.value,albumScanState:()=>current.value ? scan.getAlbumScanState({albumId:1,albumQueue:[],run:current.value}) : 'unscanned',pauseAlbumScan:async()=>{},appEmit:async()=>{},
+  applyScanEvent:({run}:any)=>{store.runs[run.id]=run;if(current.value?.id===run.id)current.value=run;},
+  retryScanErrors:(runId:string,ordinals:number[],libraryId:string)=>ctx.invoke('retry_scan_errors',{runId,ordinals,libraryId}),
   invoke:async(command:string,args:any)=>{calls.push([command,args]);return handler?handler(command,args):command==='get_scan_history'?[run('old',1,'completed')]:{run:run(args.runId),folders:[],folder_count:0,errors:[]};},
   onMounted:(fn:any)=>mounts.push(fn),onBeforeUnmount:(fn:any)=>unmounts.push(fn),
   setTimeout:()=>1,clearTimeout(){},navigator:{clipboard:{writeText:async()=>{}}},
  };
  const script=stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\n/gm,'');
- const scope=Vue.effectScope();const api=scope.run(()=>runInNewContext(`${script};({history,selected,details,selectedRun,load,loadDetails,control,historyLabel,error,work,percentage});`,ctx));
+ const scope=Vue.effectScope();const api=scope.run(()=>runInNewContext(`${script};({history,selected,details,selectedRun,load,loadDetails,control,historyLabel,error,work,percentage,retryErrors,retryTargets,remainingErrors,canRetry,busyAction});`,ctx));
  return {api,ctx,lib,store,current,emits,calls,async mount(){for(const fn of mounts)fn();await tick();},dispose(){unmounts.forEach(fn=>fn());scope.stop();}};
 }
 
@@ -317,4 +319,64 @@ test('the footer and top bar keep tracking background work even when the legacy 
  mode.value='waiting';assert.ok(!api.statusBarScanText.value.includes('准备语义搜索'));
  current.value.status='warnings';lib.index.albumQueue=[];assert.equal(api.showTopProgressBar.value,false);assert.equal(api.activeScanWork.value,null);
  for(const lang of ['zh-CN','zh-TW','en'])for(const key of ['pending','pending_short','postprocessing_hint'])assert.equal(typeof JSON.parse(read('locales/'+lang+'.json')).scan_tracking[key],'string');
+});
+
+test('resolved errors clear the current warning without rewriting history or hiding unsaved errors',()=>{
+ const source=run('old',1,'warnings',{phase:'complete',error_count:2,counts:counts({deferred:0}),retry:{resolved:0,running:0}});
+ const state=()=>scan.getAlbumScanState({albumId:1,albumQueue:[],run:source});
+ assert.equal(state(),'warnings');source.retry!.resolved=1;assert.equal(state(),'warnings');
+ source.retry!.running=1;assert.equal(state(),'retrying');assert.equal(scan.scanAction(state()),'retrying');
+ source.retry={resolved:2,running:0};assert.equal(state(),'complete');assert.equal(source.status,'warnings');
+ source.counts.deferred=1;assert.equal(state(),'warnings');source.counts.deferred=0;source.error_count=150;source.retry.resolved=100;assert.equal(state(),'warnings');
+ const dir=folder('old',{entered:true,enumerated:true,counts:counts({total:1,discovered:1,indexed:0,previews_ready:0,metadata_failed:1,preview_failed:0,search_failed:0,deferred:0,pending:0}),retry:{resolved:0,running:0}});
+ assert.equal(scan.folderScanState(source,dir),'warnings');dir.retry={resolved:1,running:0};assert.equal(scan.folderScanState(source,dir),'complete');
+ dir.retry.running=1;assert.equal(scan.folderScanState(source,dir),'retrying');
+});
+
+test('a queued full scan waits for the targeted retry to release the album',async()=>{
+ const h=starterHarness({albumScanRun:()=>run('previous',1,'warnings',{retry:{resolved:0,running:2}})});
+ await h.fn();assert.equal(h.calls.length,0);assert.equal(h.context.activeScanRunId.value,'');
+});
+
+const errorItem=(ordinal:number,state='untried')=>({ordinal,path:`C:\\Photos\\${ordinal}.mov`,stage:'metadata',message:'Original probe error',attempts:state==='untried'?0:1,retry_state:state,last_attempt_at:state==='untried'?null:3000,resolved_at:state==='resolved'?3000:null,retry_error:state==='failed'?'New probe error':null,retryable:true});
+test('the report retries only selected unresolved items, prevents double clicks and shows partial then full resolution',async()=>{
+ let source=run('old',1,'warnings',{phase:'complete',error_count:2,revision:2,retry:{resolved:0,running:0}}),errors=[errorItem(0),errorItem(1)];
+ let finish:any;
+ const h=reportHarness((command,args)=>command==='get_scan_history'?[source]:command==='retry_scan_errors'?new Promise(resolve=>finish=resolve):{run:source,folders:[],folder_count:0,errors});
+ h.current.value=source;h.store.runs.old=source;await h.mount();assert.equal(h.api.canRetry.value,true);
+ const first=h.api.retryErrors(0);assert.equal(h.api.busyAction.value,true);await h.api.retryErrors(0);
+ const calls=h.calls.filter(([name])=>name==='retry_scan_errors');assert.equal(calls.length,1);assert.deepEqual(Array.from(calls[0][1].ordinals),[0]);assert.equal(calls[0][1].libraryId,'A');
+ source={...source,revision:3,retry:{resolved:1,running:0}};errors=[errorItem(0,'resolved'),errorItem(1,'failed')];finish(source);await first;
+ assert.equal(h.api.remainingErrors.value,1);assert.equal(h.api.busyAction.value,false);assert.deepEqual(Array.from(h.api.retryTargets.value),[1]);
+ const second=h.api.retryErrors();const last=h.calls.filter(([name])=>name==='retry_scan_errors').at(-1);assert.deepEqual(Array.from(last[1].ordinals),[1]);
+ source={...source,revision:4,retry:{resolved:2,running:0}};errors=[errorItem(0,'resolved'),errorItem(1,'resolved')];finish(source);await second;
+ assert.equal(h.api.remainingErrors.value,0);assert.equal(h.api.retryTargets.value.length,0);assert.equal(h.api.selectedRun.value.status,'warnings');h.dispose();
+});
+
+test('historical reports are read-only and an old retry response cannot populate a switched library',async()=>{
+ let finish:any;const original=run('old',1,'warnings',{error_count:1,retry:{resolved:0,running:0}});
+ const h=reportHarness((command)=>command==='get_scan_history'?[original]:command==='retry_scan_errors'?new Promise(resolve=>finish=resolve):{run:original,folders:[],folder_count:0,errors:[errorItem(0)]});
+ h.current.value=original;h.store.runs.old=original;await h.mount();
+ const pending=h.api.retryErrors(0);h.lib._libraryId='B';finish({...original,revision:3,retry:{resolved:1,running:0}});await pending;
+ assert.equal(h.store.runs.old.retry?.resolved,0);assert.equal(h.emits[0][0],'cancel');h.dispose();
+ const historical=reportHarness((command)=>command==='get_scan_history'?[run('new',2,'warnings'),original]:{run:original,folders:[],folder_count:0,errors:[errorItem(0)]});
+ historical.current.value=run('new',2,'warnings');await historical.mount();historical.api.selected.value='old';await historical.api.loadDetails();
+ assert.equal(historical.api.canRetry.value,false);await historical.api.retryErrors(0);assert.ok(!historical.calls.some(([name])=>name==='retry_scan_errors'));historical.dispose();
+});
+
+test('visible directory retry states refresh in a coalesced batch and stop polling once current',async()=>{
+ let snapshot=run('one',1,'warnings',{retry:{resolved:0,running:0}});
+ const h=harness(()=>({runs:[snapshot],folders:[folder('one',{retry:snapshot.retry})]}));
+ const stop=h.api.watchScanFolders(1,['C:\\Photos\\Sub']);await h.flush();assert.equal(h.calls.length,1);
+ snapshot=run('one',1,'warnings',{revision:2,retry:{resolved:0,running:1}});h.api.applyScanEvent({run:snapshot});await h.flush();
+ assert.equal(h.calls.length,2);assert.equal(h.api.directoryScan(1,'C:\\Photos\\Sub').folder.retry.running,1);
+ await h.flush();assert.equal(h.calls.length,2);stop();h.dispose();
+});
+
+test('retry IPC uses the report library and current rendering options, not an entire album rescan',async()=>{
+ const source=read('common/api.js'),start=source.indexOf('export async function retryScanErrors('),end=source.indexOf('\n}',start)+2,calls:any[]=[];
+ const retry=runInNewContext(`${source.slice(start,end).replace('export ','')};retryScanErrors`,{libConfig:{_libraryId:'other'},config:{settings:{thumbnailSize:1024,groupRawJpegPairs:false}},getRawDisplayOptions:()=>({mode:'embedded'}),invoke:async(...args:any[])=>{calls.push(args);return run();}});
+ await retry('report-id',[1],'A');assert.equal(calls[0][0],'retry_scan_errors');assert.equal(calls[0][1].libraryId,'A');assert.equal(calls[0][1].thumbnailSize,1024);assert.equal(calls[0][1].groupRawJpegPairs,false);assert.equal(calls[0][1].rawDisplayOptions.mode,'embedded');
+ for(const lang of ['zh-CN','zh-TW','en'])for(const key of ['state_retrying','action_retrying','retry_summary','retry_item','retry_errors','retry_state_failed','retry_state_resolved','retry_state_interrupted'])assert.equal(typeof JSON.parse(read('locales/'+lang+'.json')).scan_tracking[key],'string');
+ const dialog=read('components/ScanHistoryDialog.vue');assert.match(dialog,/item.retry_error/);assert.match(dialog,/item.attempts/);
 });

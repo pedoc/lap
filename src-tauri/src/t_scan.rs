@@ -10,6 +10,8 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 
+mod retry;
+
 pub const HISTORY_LIMIT: usize = 20;
 pub const ERROR_LIMIT: usize = 100;
 pub fn ensure_schema(c: &Connection) -> Result<(), String> {
@@ -20,6 +22,7 @@ pub fn ensure_schema(c: &Connection) -> Result<(), String> {
  CREATE INDEX IF NOT EXISTS scan_runs_album ON scan_runs(album_id,seq DESC);
  CREATE TABLE IF NOT EXISTS scan_folders(run_id TEXT NOT NULL,path_key TEXT NOT NULL,snapshot_json TEXT NOT NULL,PRIMARY KEY(run_id,path_key));
  CREATE INDEX IF NOT EXISTS scan_folders_path ON scan_folders(path_key,run_id);
+ CREATE TABLE IF NOT EXISTS scan_error_retries(run_id TEXT NOT NULL,ordinal INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,last_attempt_at INTEGER,resolved_at INTEGER,last_error TEXT,PRIMARY KEY(run_id,ordinal));
  CREATE TABLE IF NOT EXISTS scan_errors(run_id TEXT NOT NULL,ordinal INTEGER NOT NULL,path_key TEXT NOT NULL,path TEXT NOT NULL,stage TEXT NOT NULL,message TEXT NOT NULL,PRIMARY KEY(run_id,ordinal));
  ").map_err(|e|e.to_string())?;
     let albums: bool = c
@@ -31,7 +34,8 @@ pub fn ensure_schema(c: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     if albums {
         c.execute_batch(
-            "CREATE TRIGGER IF NOT EXISTS scan_reports_album_delete AFTER DELETE ON albums BEGIN
+            "DROP TRIGGER IF EXISTS scan_reports_album_delete; CREATE TRIGGER scan_reports_album_delete AFTER DELETE ON albums BEGIN
+        DELETE FROM scan_error_retries WHERE run_id IN(SELECT id FROM scan_runs WHERE album_id=OLD.id);
         DELETE FROM scan_errors WHERE run_id IN(SELECT id FROM scan_runs WHERE album_id=OLD.id);
         DELETE FROM scan_folders WHERE run_id IN(SELECT id FROM scan_runs WHERE album_id=OLD.id);
         DELETE FROM scan_runs WHERE album_id=OLD.id;
@@ -76,9 +80,30 @@ pub struct Run {
     pub revision: i64,
     pub counts: Counts,
     pub current_path: String,
+    #[serde(default)]
+    pub retry: RetrySummary,
     pub error_count: u64,
     pub last_error: Option<String>,
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RetrySummary {
+    pub resolved: u64,
+    pub running: u64,
+}
+#[derive(Serialize)]
+pub struct ErrorDetail {
+    pub ordinal: i64,
+    pub path: String,
+    pub stage: String,
+    pub message: String,
+    pub attempts: u64,
+    pub retry_state: String,
+    pub last_attempt_at: Option<i64>,
+    pub resolved_at: Option<i64>,
+    pub retry_error: Option<String>,
+    pub retryable: bool,
+}
+const RUN_COLUMNS: &str = "r.*, (SELECT COUNT(*) FROM scan_error_retries q WHERE q.run_id=r.id AND q.state='resolved') AS resolved_errors, (SELECT COUNT(*) FROM scan_error_retries q WHERE q.run_id=r.id AND q.state IN ('queued','running')) AS retrying_errors";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Folder {
     pub run_id: String,
@@ -87,6 +112,8 @@ pub struct Folder {
     pub counts: Counts,
     pub entered: bool,
     pub enumerated: bool,
+    #[serde(default)]
+    pub retry: RetrySummary,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ScanError {
@@ -109,7 +136,7 @@ pub struct Details {
     pub run: Run,
     pub folders: Vec<Folder>,
     pub folder_count: i64,
-    pub errors: Vec<ScanError>,
+    pub errors: Vec<ErrorDetail>,
 }
 
 pub fn path_key_for(path: &str, windows: bool) -> String {
@@ -160,11 +187,16 @@ fn read_run(row: &Row, library: &str) -> rusqlite::Result<Run> {
         revision: row.get("revision")?,
         counts: json(row, "counts_json")?,
         current_path: row.get("current_path")?,
+        retry: RetrySummary {
+            resolved: row.get("resolved_errors")?,
+            running: row.get("retrying_errors")?,
+        },
         error_count: row.get("error_count")?,
         last_error: row.get("last_error")?,
     })
 }
 pub fn recover_interrupted(c: &Connection) -> Result<(), String> {
+    retry::recover_on(c)?;
     c.execute("UPDATE scan_runs SET status='interrupted',finished_at=updated_at,updated_at=MAX(updated_at,?1),revision=revision+1 WHERE status IN ('running','pausing')",[chrono::Utc::now().timestamp_millis()]).map(|_|()).map_err(|e|e.to_string())
 }
 fn persist(
@@ -203,6 +235,8 @@ fn persist(
                 .map_err(|e| e.to_string())?
         };
         for id in old {
+            tx.execute("DELETE FROM scan_error_retries WHERE run_id=?1", [&id])
+                .map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM scan_errors WHERE run_id=?1", [&id])
                 .map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM scan_folders WHERE run_id=?1", [&id])
@@ -261,6 +295,7 @@ impl Session {
             revision: 0,
             counts: Counts::default(),
             current_path: album.path.clone(),
+            retry: RetrySummary::default(),
             error_count: 0,
             last_error: None,
         };
@@ -354,6 +389,7 @@ impl Session {
                 path: display,
                 path_key: key.clone(),
                 counts: Counts::default(),
+                retry: RetrySummary::default(),
                 entered: false,
                 enumerated: false,
             });
@@ -550,7 +586,7 @@ impl Drop for TaskReportGuard {
 }
 
 pub fn overview_on(c: &Connection, library: &str) -> Result<Vec<Run>, String> {
-    let mut s=c.prepare("SELECT r.* FROM scan_runs r WHERE r.seq=(SELECT MAX(x.seq) FROM scan_runs x WHERE x.album_id=r.album_id) ORDER BY r.seq DESC LIMIT 1000").map_err(|e|e.to_string())?;
+    let mut s=c.prepare(&format!("SELECT {RUN_COLUMNS} FROM scan_runs r WHERE r.seq=(SELECT MAX(x.seq) FROM scan_runs x WHERE x.album_id=r.album_id) ORDER BY r.seq DESC LIMIT 1000")).map_err(|e|e.to_string())?;
     s.query_map([], |r| read_run(r, library))
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
@@ -563,7 +599,7 @@ pub fn history_on(
     folder: Option<&str>,
 ) -> Result<Vec<Run>, String> {
     let key = folder.map(path_key);
-    let mut s=c.prepare("SELECT r.* FROM scan_runs r WHERE r.album_id=?1 AND (?2 IS NULL OR EXISTS(SELECT 1 FROM scan_folders f WHERE f.run_id=r.id AND f.path_key=?2)) ORDER BY r.seq DESC LIMIT 20").map_err(|e|e.to_string())?;
+    let mut s=c.prepare(&format!("SELECT {RUN_COLUMNS} FROM scan_runs r WHERE r.album_id=?1 AND (?2 IS NULL OR EXISTS(SELECT 1 FROM scan_folders f WHERE f.run_id=r.id AND f.path_key=?2)) ORDER BY r.seq DESC LIMIT 20")).map_err(|e|e.to_string())?;
     s.query_map(params![album, key], |r| read_run(r, library))
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
@@ -577,9 +613,11 @@ pub fn details_on(
     offset: u32,
 ) -> Result<Details, String> {
     let run = c
-        .query_row("SELECT * FROM scan_runs WHERE id=?1", [id], |r| {
-            read_run(r, library)
-        })
+        .query_row(
+            &format!("SELECT {RUN_COLUMNS} FROM scan_runs r WHERE r.id=?1"),
+            [id],
+            |r| read_run(r, library),
+        )
         .map_err(|e| e.to_string())?;
     let key = folder.map(path_key);
     let prefix = key
@@ -594,25 +632,17 @@ pub fn details_on(
         )
         .map_err(|e| e.to_string())?;
     let mut s=c.prepare(&format!("SELECT snapshot_json FROM scan_folders WHERE {predicate} ORDER BY length(path_key),path_key LIMIT 100 OFFSET ?4")).map_err(|e|e.to_string())?;
-    let folders = s
+    let mut folders: Vec<Folder> = s
         .query_map(params![id, key, prefix, offset], |r| {
             json(r, "snapshot_json")
         })
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-    let mut s=c.prepare(&format!("SELECT path,stage,message FROM scan_errors WHERE {predicate} ORDER BY ordinal LIMIT 100")).map_err(|e|e.to_string())?;
-    let errors = s
-        .query_map(params![id, key, prefix], |r| {
-            Ok(ScanError {
-                path: r.get("path")?,
-                stage: r.get("stage")?,
-                message: r.get("message")?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<_, _>>()
-        .map_err(|e| e.to_string())?;
+    for folder in &mut folders {
+        retry::decorate_folder_on(c, folder)?;
+    }
+    let errors = retry::errors_on(c, id, folder)?;
     Ok(Details {
         run,
         folders,
@@ -631,14 +661,16 @@ pub fn folders_on(
     }
     let mut runs = BTreeMap::new();
     let mut folders = Vec::new();
-    let mut stmt=c.prepare("SELECT r.*,f.snapshot_json FROM scan_folders f JOIN scan_runs r ON r.id=f.run_id WHERE r.album_id=?1 AND f.path_key=?2 ORDER BY r.seq DESC LIMIT 1").map_err(|e|e.to_string())?;
+    let mut stmt=c.prepare(&format!("SELECT {RUN_COLUMNS},f.snapshot_json FROM scan_folders f JOIN scan_runs r ON r.id=f.run_id WHERE r.album_id=?1 AND f.path_key=?2 ORDER BY r.seq DESC LIMIT 1")).map_err(|e|e.to_string())?;
     for path in paths {
         let mut rows = stmt
             .query(params![album, path_key(path)])
             .map_err(|e| e.to_string())?;
         if let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let run = read_run(row, library).map_err(|e| e.to_string())?;
-            folders.push(json(row, "snapshot_json").map_err(|e| e.to_string())?);
+            let mut folder: Folder = json(row, "snapshot_json").map_err(|e| e.to_string())?;
+            retry::decorate_folder_on(c, &mut folder)?;
+            folders.push(folder);
             runs.insert(run.id.clone(), run);
         }
     }
@@ -714,6 +746,27 @@ pub async fn get_scan_details(
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
+pub async fn retry_scan_errors(
+    app: AppHandle,
+    library_id: String,
+    run_id: String,
+    ordinals: Option<Vec<i64>>,
+    thumbnail_size: u32,
+    raw_display_options: crate::t_raw_display::RawDisplayOptions,
+    group_raw_jpeg_pairs: bool,
+) -> Result<Run, String> {
+    retry::execute(
+        app,
+        library_id,
+        run_id,
+        ordinals,
+        thumbnail_size,
+        raw_display_options,
+        group_raw_jpeg_pairs,
+    )
+    .await
+}
+#[tauri::command]
 pub async fn get_scan_folder_states(
     library_id: String,
     album_id: i64,
@@ -756,6 +809,7 @@ mod tests {
             revision: 1,
             counts: Counts::default(),
             current_path: "/photos".into(),
+            retry: RetrySummary::default(),
             error_count: 0,
             last_error: None,
         }
@@ -800,6 +854,7 @@ mod tests {
                 path: path.into(),
                 path_key: path_key(path),
                 counts: Counts::default(),
+                retry: RetrySummary::default(),
                 entered: true,
                 enumerated: true,
             })
@@ -850,6 +905,7 @@ mod report_contract_tests {
             revision: 0,
             counts: Counts::default(),
             current_path: "/photos".into(),
+            retry: RetrySummary::default(),
             error_count: 0,
             last_error: None,
         };
@@ -907,6 +963,7 @@ mod cleanup_tests {
             revision: 1,
             counts: Counts::default(),
             current_path: "/photos".into(),
+            retry: RetrySummary::default(),
             error_count: 1,
             last_error: Some("bad".into()),
         };
@@ -915,6 +972,7 @@ mod cleanup_tests {
             path: "/photos".into(),
             path_key: path_key("/photos"),
             counts: Counts::default(),
+            retry: RetrySummary::default(),
             entered: true,
             enumerated: true,
         };
@@ -929,8 +987,18 @@ mod cleanup_tests {
             }],
         )
         .unwrap();
+        c.execute(
+            "INSERT INTO scan_error_retries(run_id,ordinal,state) VALUES('owned',0,'failed')",
+            [],
+        )
+        .unwrap();
         c.execute("DELETE FROM albums WHERE id=1", []).unwrap();
-        for table in ["scan_runs", "scan_folders", "scan_errors"] {
+        for table in [
+            "scan_runs",
+            "scan_folders",
+            "scan_errors",
+            "scan_error_retries",
+        ] {
             assert_eq!(
                 c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
                     .get::<_, i64>(0))

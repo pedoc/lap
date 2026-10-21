@@ -1,4 +1,4 @@
-export type AlbumScanState = 'scanning' | 'queued' | 'paused' | 'complete' | 'pausing' | 'failed' | 'interrupted' | 'unscanned' | 'warnings';
+export type AlbumScanState = 'scanning' | 'queued' | 'paused' | 'complete' | 'pausing' | 'failed' | 'interrupted' | 'unscanned' | 'warnings' | 'retrying';
 export type AlbumScanIcon = 'update' | 'dot' | 'none';
 
 type AlbumScanStateParams = {
@@ -30,21 +30,23 @@ export function getAlbumScanState({
 }: AlbumScanStateParams): AlbumScanState {
   const normalizedAlbumId = Number(albumId || 0);
   if (normalizedAlbumId <= 0) return 'unscanned';
+  if (run?.retry?.running) return 'retrying';
+  const runState = run ? scanReportStatus(run) : '';
   if (pausing || run?.status === 'pausing') return 'pausing';
   if (run?.status === 'running') return 'scanning';
 
   const queueIndex = getAlbumQueueIndex(albumId, albumQueue);
   if (queueIndex===0 && run?.id===runId && run?.finished_at) {
-    if(run.status==='completed')return 'complete';
-    if(['warnings','paused','interrupted','failed'].includes(run.status))return run.status as AlbumScanState;
+    if(runState==='completed')return 'complete';
+    if(['warnings','paused','interrupted','failed'].includes(runState))return runState as AlbumScanState;
   }
   if (Number(status || 0) === 2 && queueIndex >= 0) return 'paused';
   if (queueIndex === 0) return 'scanning';
   if (queueIndex > 0) return 'queued';
   if ((pausedAlbumIds || []).some(id => Number(id) === normalizedAlbumId)) return 'paused';
 
-  if (run?.status === 'completed') return 'complete';
-  if (run?.status === 'warnings') return 'warnings';
+  if (runState === 'completed') return 'complete';
+  if (runState === 'warnings') return 'warnings';
   if (['paused','interrupted','failed'].includes(run?.status || '')) return run!.status as AlbumScanState;
   return Number(lastScanTime || 0) > 0 ? 'complete' : 'unscanned';
 }
@@ -53,6 +55,7 @@ export function getAlbumScanIcon(state: AlbumScanState): AlbumScanIcon {
   switch (state) {
     case 'scanning':
     case 'queued':
+    case 'retrying':
       return 'update';
     case 'paused':
     case 'pausing':
@@ -63,12 +66,18 @@ export function getAlbumScanIcon(state: AlbumScanState): AlbumScanIcon {
 }
 
 export function shouldAnimateAlbumScanIcon(state: AlbumScanState): boolean {
-  return state === 'scanning';
+  return state === 'scanning' || state === 'retrying';
 }
 
 export type ScanCounts = { total: number; discovered: number; indexed: number; previews_ready: number; search_total: number; search_ready: number; images: number; skipped: number; metadata_failed: number; preview_failed: number; search_failed: number; deferred: number; pending: number };
-export type ScanRun = { id: string; seq: number; library_id: string; album_id: number; album_name: string; root_path: string; started_at: number; updated_at: number; finished_at: number | null; status: string; phase: string; revision: number; counts: ScanCounts; current_path: string; error_count: number; last_error: string | null };
-export type ScanFolder = { run_id: string; path: string; path_key: string; entered: boolean; enumerated: boolean; counts: ScanCounts };
+export type ScanRun = { id: string; seq: number; library_id: string; album_id: number; album_name: string; root_path: string; started_at: number; updated_at: number; finished_at: number | null; status: string; phase: string; revision: number; counts: ScanCounts; current_path: string; error_count: number; last_error: string | null; retry?: {resolved:number;running:number} };
+export type ScanErrorDetail = {ordinal:number;path:string;stage:string;message:string;attempts:number;retry_state:string;last_attempt_at:number|null;resolved_at:number|null;retry_error:string|null;retryable:boolean};
+export function scanReportStatus(run: ScanRun): string {
+  if (run.retry?.running) return 'retrying';
+  if (run.status === 'warnings' && run.error_count > 0 && (run.retry?.resolved || 0) >= run.error_count && run.counts.deferred === 0) return 'completed';
+  return run.status;
+}
+export type ScanFolder = { run_id: string; path: string; path_key: string; entered: boolean; enumerated: boolean; counts: ScanCounts; retry?: {resolved:number;running:number} };
 export type ScanScope = { libraryId: string; albumId: number; albumName: string; folderPath?: string };
 export function scanPathKey(path: string, windows: boolean): string {
   let key = windows ? path.replace(/\\/g, '/') : path;
@@ -77,6 +86,7 @@ export function scanPathKey(path: string, windows: boolean): string {
   return key;
 }
 export function scanAction(state: AlbumScanState): string {
+  if (state === 'retrying') return 'retrying';
   if (state === 'scanning') return 'pause';
   if (state === 'queued') return 'cancel_queue';
   if (state === 'pausing') return 'pausing';
@@ -85,9 +95,10 @@ export function scanAction(state: AlbumScanState): string {
 }
 export function folderScanState(run: ScanRun | undefined, folder: ScanFolder | undefined): string {
   if (!run || !folder) return 'unscanned';
+  if (folder.retry?.running) return 'retrying';
   if (['paused','pausing','failed','interrupted'].includes(run.status)) return run.status;
   const c = folder.counts;
-  const failures = c.metadata_failed + c.preview_failed + c.search_failed;
+  const failures = Math.max(0,c.metadata_failed + c.preview_failed + c.search_failed - (folder.retry?.resolved||0));
   const ready = folder.enumerated && c.pending === 0;
   if (['completed','warnings'].includes(run.status)) {
     if (!folder.entered || !folder.enumerated) return 'not_visited';

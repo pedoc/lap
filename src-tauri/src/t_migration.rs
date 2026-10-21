@@ -170,6 +170,7 @@ fn get_migrations() -> Vec<Migration> {
         },
         Migration { version: 21, description: "Local media viewing statistics", sql: "" },
         Migration { version: 22, description: "Durable album and directory scan reports", sql: "" },
+        Migration { version: 23, description: "Tracked scan error retries", sql: "" },
     ]
 }
 
@@ -533,7 +534,7 @@ pub fn check_and_migrate(conn: &Connection) -> Result<(), String> {
                     }
                 }
                 tx.commit().map_err(|e| e.to_string())?;
-            } else if migration.version == 22 {
+            } else if matches!(migration.version, 22 | 23) {
                 crate::t_scan::ensure_schema(conn)?;
             } else if !migration.sql.trim().is_empty() {
                 conn.execute_batch(migration.sql)
@@ -608,7 +609,7 @@ mod album_filter_migration_tests {
         // Simulate migration completing before the version was persisted.
         conn.execute_batch("PRAGMA user_version=17;").unwrap();
         check_and_migrate(&conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(),22);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(),23);
     }
 
     #[test]
@@ -622,6 +623,6 @@ mod album_filter_migration_tests {
         // Simulate migration completing before the version was persisted.
         conn.execute_batch("PRAGMA user_version=18;").unwrap();
         check_and_migrate(&conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 22);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 23);
     }
 }

@@ -290,6 +290,7 @@ async fn main() {
             t_scan::open_scan_directory,
             t_scan::get_scan_history,
             t_scan::get_scan_details,
+            t_scan::retry_scan_errors,
             t_scan::get_scan_folder_states,
             t_cmds::cancel_indexing,
             t_cmds::get_index_recovery_info,

@@ -19,6 +19,7 @@ export function applyScanEvent(event: { run: ScanRun; folders?: ScanFolder[] }) 
   ensureLibrary(); const run = event?.run;
   if (!run || run.library_id !== libConfig._libraryId) return;
   const old = scanJobs.runs[run.id];
+  const retryChanged=(!old || run.revision>=old.revision) && ((old?.retry?.resolved||0)!==(run.retry?.resolved||0) || (old?.retry?.running||0)!==(run.retry?.running||0));
   if (!old || run.revision >= old.revision) scanJobs.runs[run.id] = run;
   const latest = albumScanRun(run.album_id);
   if (!latest || latest.seq <= run.seq) scanJobs.latest[run.album_id] = run.id;
@@ -29,6 +30,14 @@ export function applyScanEvent(event: { run: ScanRun; folders?: ScanFolder[] }) 
     const current = scanJobs.folders[key];
     if (current && (current.seq > run.seq || current.seq === run.seq && current.revision > run.revision)) continue;
     scanJobs.folders[key] = { folder, revision: run.revision, seq: run.seq };
+  }
+  if(retryChanged){
+    const prefix=`${run.album_id}:`;
+    for(const key of wanted.keys())if(key.startsWith(prefix)){
+      if(!batches.has(run.album_id))batches.set(run.album_id,new Set());
+      batches.get(run.album_id)!.add(key.slice(prefix.length));
+    }
+    if(batches.size&&!batchTimer)batchTimer=setTimeout(()=>{void flushFolders();},40);
   }
 }
 export async function refreshScanJobs() {

@@ -145,7 +145,7 @@
               </div>
               <div v-else-if="getAlbumIcon(album) === 'update'"
                 class="w-full h-full flex items-center justify-center cursor-pointer hover:bg-base-100/30"
-                :title="$t('toolbar.tooltip.scan_queued')"
+                :title="getAlbumStatus(album)==='retrying' ? t('scan_tracking.state_retrying') : $t('toolbar.tooltip.scan_queued')"
                 @click="openScanDetails(album)"
               >
                 <IconUpdate class="w-6 h-6" />
@@ -856,7 +856,7 @@ const getMoreMenuItems = async (album: any) => {
     {
       get label() { return t('scan_tracking.action_'+scanAction(getAlbumStatus(album))); },
       get icon() { const action=scanAction(getAlbumStatus(album));return action==='cancel_queue' ? IconRemove : ['pause','pausing'].includes(action) ? IconUpdateOff : IconUpdate; },
-      get disabled() { const action=scanAction(getAlbumStatus(album));return action==='pausing' || !isAccessible && !['pause','cancel_queue'].includes(action); },
+      get disabled() { const action=scanAction(getAlbumStatus(album));return ['pausing','retrying'].includes(action) || !isAccessible && !['pause','cancel_queue'].includes(action); },
       action: () => {if(libraryId===libConfig._libraryId)return toggleIndexAlbum(album.id);}
     },
     {
@@ -1299,7 +1299,7 @@ const clickIndexAlbum = async (albumId: number) => {
 
 const toggleIndexAlbum = async (albumId: number) => {
   const state = getAlbumStatus({ id: albumId });
-  if (state === 'pausing') return;
+  if (state === 'pausing' || state === 'retrying') return;
   if (state === 'scanning' || state === 'queued') {
     await clickCancelIndexAlbum(albumId);
   } else {
