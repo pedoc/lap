@@ -212,6 +212,21 @@ jobs:
           if ($msis.Count -ne 1) { throw "Expected exactly one Windows MSI." }
           .\scripts\test_windows_msi_runtime.ps1 -MsiPath $msis[0].FullName
 
+      - name: Load portable packager from workflow revision
+        shell: pwsh
+        env:
+          PACKAGING_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          if ($env:PACKAGING_WORKFLOW_SHA -notmatch '^[0-9a-f]{40}$') { throw "Invalid workflow revision." }
+          if ((git rev-parse HEAD) -ne $env:PACKAGING_WORKFLOW_SHA) {
+            git fetch --no-tags --depth=1 origin $env:PACKAGING_WORKFLOW_SHA
+            if ($LASTEXITCODE -ne 0) { throw "Could not fetch the workflow's packaging helper." }
+            $packagerRef = "$($env:PACKAGING_WORKFLOW_SHA):scripts/package_windows_portable.ps1"
+            $packager = git show $packagerRef
+            if ($LASTEXITCODE -ne 0) { throw "Could not load the workflow's packaging helper." }
+            $packager | Set-Content -LiteralPath scripts/package_windows_portable.ps1 -Encoding utf8
+          }
+
       - name: Package portable ZIP (Windows ${{ matrix.arch }})
         shell: pwsh
         run: .\scripts\package_windows_portable.ps1 -Target "${{ matrix.target }}"

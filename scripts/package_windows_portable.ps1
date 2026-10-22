@@ -19,7 +19,7 @@ $version = $config.version
 if ($version -notmatch '^[0-9A-Za-z.+-]+$') { throw 'Invalid application version for the portable filename.' }
 if (-not $VcRedistDir) { throw 'VCToolsRedistDir is missing. Run this script in the MSVC build environment.' }
 
-function Assert-PeArchitecture([string]$Path) {
+function Get-PeMachine([string]$Path) {
     $reader = [System.IO.BinaryReader]::new([System.IO.File]::OpenRead($Path))
     try {
         if ($reader.BaseStream.Length -lt 64 -or $reader.ReadUInt16() -ne 0x5A4D) { throw "Invalid Windows binary: $Path" }
@@ -27,10 +27,16 @@ function Assert-PeArchitecture([string]$Path) {
         $header = $reader.ReadInt32()
         if ($header -lt 64 -or $header -gt $reader.BaseStream.Length - 6) { throw "Invalid PE header: $Path" }
         $reader.BaseStream.Position = $header
-        if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne $expectedMachine) {
-            throw "Windows binary does not match ${arch}: $Path"
-        }
+        if ($reader.ReadUInt32() -ne 0x4550) { throw "Invalid PE signature: $Path" }
+        return $reader.ReadUInt16()
     } finally { $reader.Dispose() }
+}
+
+function Assert-PeArchitecture([string]$Path) {
+    $machine = Get-PeMachine $Path
+    if ($machine -ne $expectedMachine) {
+        throw ('Windows binary does not match {0} (PE 0x{1:X4}, expected 0x{2:X4}): {3}' -f $arch, $machine, $expectedMachine, $Path)
+    }
 }
 
 # The build directory also contains intermediate files; only ship the executable and runtime DLLs.
@@ -44,8 +50,20 @@ if ($crtDirs.Count -ne 1) { throw "Expected one redistributable CRT directory fo
 foreach ($required in @('msvcp140.dll', 'vcruntime140.dll')) {
     Assert-PeArchitecture (Join-Path $crtDirs[0].FullName $required)
 }
-$crtDlls = @(Get-ChildItem -LiteralPath $crtDirs[0].FullName -Filter '*.dll' -File)
-foreach ($dll in @($runtimeDlls) + @($crtDlls)) { Assert-PeArchitecture $dll.FullName }
+foreach ($dll in $runtimeDlls) { Assert-PeArchitecture $dll.FullName }
+$crtDlls = @(
+    foreach ($dll in Get-ChildItem -LiteralPath $crtDirs[0].FullName -Filter '*.dll' -File) {
+        $machine = Get-PeMachine $dll.FullName
+        if ($machine -eq $expectedMachine) {
+            $dll
+        } elseif ($arch -eq 'arm64' -and $machine -eq 0x8664) {
+            # Microsoft's ARM64 CRT directory also contains x64-only helpers, such as vcruntime140_1.dll.
+            Write-Host "Skipping x64-only VC runtime companion in ARM64 package: $($dll.Name)"
+        } else {
+            Assert-PeArchitecture $dll.FullName
+        }
+    }
+)
 $resources = @{} + $config.bundle.resources + $windowsConfig.bundle.resources
 
 $name = "Lap_${version}_${arch}_portable"

@@ -56,6 +56,18 @@ test('Windows builds the exact release tag rather than the workflow branch', () 
   assert.match(build, /uses: actions\/checkout@v4\s+with:\s+ref: \$\{\{ inputs\.release_tag \}\}\s+submodules: recursive/);
 });
 
+test('manual Windows rebuilds can use a fixed packager without moving the application release tag', () => {
+  const build = job(windows, 'build-windows');
+  assert.match(build, /PACKAGING_WORKFLOW_SHA: \$\{\{ github\.workflow_sha \}\}/);
+  assert.match(build, /git fetch --no-tags --depth=1 origin \$env:PACKAGING_WORKFLOW_SHA/);
+  assert.match(build, /\$packagerRef = "\$\(\$env:PACKAGING_WORKFLOW_SHA\):scripts\/package_windows_portable\.ps1"/);
+  assert.match(build, /git show \$packagerRef/);
+  assert.match(build, /Set-Content -LiteralPath scripts\/package_windows_portable\.ps1/);
+  assert.ok(build.indexOf('Load portable packager from workflow revision') > build.indexOf('Build and Sign'));
+  assert.ok(build.indexOf('Load portable packager from workflow revision') < build.indexOf('Package portable ZIP'));
+  assert.doesNotMatch(build, /git (?:reset|checkout) .*PACKAGING_WORKFLOW_SHA/);
+});
+
 test('formal and PR Windows builds package and upload portable ZIPs alongside MSI files', () => {
   for (const source of [windows, prBuild]) {
     const build = job(source, 'build-windows');

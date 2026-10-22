@@ -51,7 +51,9 @@ function fixture(t, arch = 'x64') {
   write(join(project, 'tauri.conf.json'), JSON.stringify({ version: '1.2.3', bundle: { resources: { '../THIRD_PARTY_NOTICES.txt': 'licenses/THIRD_PARTY_NOTICES.txt' } } }));
   write(join(project, 'tauri.windows.conf.json'), JSON.stringify({ bundle: { resources: { 'resources/lap_cuda_bridge.dll': 'resources/lap_cuda_bridge.dll' } } }));
   for (const [name, value] of Object.entries(files)) write(join(release, name), value);
-  for (const name of ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']) write(join(crt, name), binary(machine, name));
+  for (const name of ['msvcp140.dll', 'vcruntime140.dll']) write(join(crt, name), binary(machine, name));
+  // The official ARM64 redistributable includes this x64-only exception-handling helper.
+  write(join(crt, 'vcruntime140_1.dll'), binary(0x8664, 'vcruntime140_1.dll'));
   write(join(release, 'Lap.pdb'), 'must not ship');
   write(join(release, 'deps/unused.dll'), 'must not ship');
   write(join(release, 'bundle/msi/Lap.msi'), 'must not ship inside the ZIP');
@@ -83,7 +85,7 @@ test('Windows portable archives keep the complete runtime and resource layout fo
     assert.equal(expanded.status, 0, expanded.stderr);
     const packaged = join(unpack, name);
     const shipped = readdirSync(packaged, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => resolve(entry.parentPath ?? entry.path, entry.name));
-    const expected = [...Object.keys(f.files), 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'resources/lap_cuda_bridge.dll', 'licenses/THIRD_PARTY_NOTICES.txt', 'README-portable.txt'].map((path) => resolve(packaged, path));
+    const expected = [...Object.keys(f.files), 'msvcp140.dll', 'vcruntime140.dll', ...(arch === 'x64' ? ['vcruntime140_1.dll'] : []), 'resources/lap_cuda_bridge.dll', 'licenses/THIRD_PARTY_NOTICES.txt', 'README-portable.txt'].map((path) => resolve(packaged, path));
     assert.deepEqual(shipped.sort(), expected.sort());
     for (const [name, bytes] of Object.entries(f.files)) assert.deepEqual(readFileSync(join(packaged, name)), bytes);
     assert.deepEqual(readFileSync(join(packaged, 'resources/lap_cuda_bridge.dll')), readFileSync(join(f.project, 'resources/lap_cuda_bridge.dll')));
@@ -109,6 +111,15 @@ test('portable packaging rejects DLLs from the wrong architecture', { skip }, (t
   const result = run(f);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /does not match arm64/);
+  assert.ok(!existsSync(f.output));
+});
+
+test('ARM64 packaging still rejects a wrong-architecture required VC runtime DLL', { skip }, (t) => {
+  const f = fixture(t, 'arm64');
+  f.write(join(f.crt, 'msvcp140.dll'), binary(0x8664, 'wrong required CRT'));
+  const result = run(f);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not match arm64.*msvcp140\.dll/s);
   assert.ok(!existsSync(f.output));
 });
 
