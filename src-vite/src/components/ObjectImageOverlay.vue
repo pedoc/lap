@@ -43,7 +43,7 @@
           />
         </svg>
         <div
-          v-for="(box, index) in editing.boxes"
+          v-for="({ object: box, index }) in visibleEditBoxes"
           :key="box.id"
           :data-object-box="box.id"
           class="absolute"
@@ -98,6 +98,11 @@
         @keydown.escape.stop.prevent="!editing.busy && cancelObjectEdit()"
       >
         <p class="font-medium">{{ t('objects.correct_box_title', { name: name(inlineBox.class) }) }}</p>
+        <select v-if="currentClassKey" v-model="boxScope" data-object-box-scope class="select select-sm w-full" :aria-label="t('objects.box_scope')" :disabled="editing.busy" @keydown.stop>
+          <option value="current">{{ t('objects.boxes_only_class', { name: currentClassName }) }}</option>
+          <option value="all">{{ t('objects.boxes_all_classes') }}</option>
+        </select>
+        <p v-if="currentClassKey && boxScope==='current'" class="text-xs text-base-content/70">{{ t('objects.boxes_edit_scope_hint') }}</p>
         <label class="block text-xs">
           {{ t('objects.set_class') }}
           <select
@@ -178,6 +183,10 @@
             {{ name(choice) }}
           </option>
         </select>
+        <select v-if="currentClassKey" v-model="boxScope" data-object-box-scope class="select select-sm bg-base-100 text-base-content" :aria-label="t('objects.box_scope')" :disabled="editing.busy" @pointerdown.stop @keydown.stop @wheel.stop>
+          <option value="current">{{ t('objects.boxes_only_class', { name: currentClassName }) }}</option>
+          <option value="all">{{ t('objects.boxes_all_classes') }}</option>
+        </select>
         <template v-if="editing.selected.length > 1">
           <button
             class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
@@ -238,7 +247,7 @@
         }"
       >
         <button
-          v-for="(object, index) in document.objects"
+          v-for="({ object, index }) in visibleObjects"
           :key="object.id"
           type="button"
           class="absolute pointer-events-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
@@ -281,8 +290,12 @@
         :aria-pressed="showObjectBoxes"
         @click.stop="showObjectBoxes = !showObjectBoxes"
       >
-        {{ t('objects.boxes') }} · {{ document.objects.length }}
+        {{ t('objects.boxes') }} · {{ visibleObjects.length }}<template v-if="currentClassKey && boxScope==='current'"> / {{ document.objects.length }}</template>
       </button>
+      <select v-if="showObjectBoxes && currentClassKey && document.objects.length" v-model="boxScope" data-object-box-scope class="select select-sm max-w-64 bg-base-100 text-base-content shadow-sm" :aria-label="t('objects.box_scope')" @pointerdown.stop @keydown.stop @wheel.stop>
+        <option value="current">{{ t('objects.boxes_only_class', { name: currentClassName }) }}</option>
+        <option value="all">{{ t('objects.boxes_all_classes') }}</option>
+      </select>
       <button
         class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
         :disabled="!canCorrect"
@@ -291,6 +304,10 @@
       >
         {{ t('objects.draw_box') }}
       </button>
+      <p
+        v-if="showObjectBoxes && compatible && currentClassKey && boxScope==='current' && !visibleObjects.length && document.objects.length"
+        class="max-w-64 rounded-box bg-base-100 p-2 text-xs text-base-content"
+      >{{ t('objects.boxes_no_current', { name: currentClassName }) }}</p>
       <p
         v-if="showObjectBoxes && !compatible"
         class="max-w-60 rounded-box bg-base-100/90 p-2 text-xs text-warning"
@@ -313,6 +330,7 @@ import {
   objectGeometryCompatible,
   objectClassName,
   objectEditorPosition,
+  objectOverlayEntries,
 } from '@/common/objectUi';
 import {
   objectEdit,
@@ -326,6 +344,7 @@ import {
 const props = defineProps<{
   fileId?: number;
   fileVersion?: number;
+  objectClassKey?: string;
   width: number;
   height: number;
   x: number;
@@ -368,6 +387,7 @@ function beginCorrection(objectId?: string) {
     startObjectEdit(fileId, data, choices.value, objectId);
     const selectedBox = editing.value?.boxes.find((box) => box.id === objectId);
     if (selectedBox) draftClass.value = selectedBox.class.key;
+    else if (choices.value.some((choice: any) => choice.key === currentClassKey.value)) draftClass.value = currentClassKey.value;
   };
   const answer = confirmObjectEditReplacement(() => ask(t('objects.discard_draft'), { kind: 'warning' }));
   return typeof answer === 'boolean' ? open(answer) : answer.then(open);
@@ -392,6 +412,16 @@ function selectBox(id: string, event?: MouseEvent) {
   draftClass.value = box.class.key;
 }
 const name = (label: any) => objectClassName(label, t);
+const boxScope = ref<'current' | 'all'>('current');
+const currentClassKey = computed(() => props.objectClassKey || '');
+const currentClassName = computed(() => name(
+  view.value?.classes?.find((label: any) => label.key === currentClassKey.value)
+  || document.value?.objects?.find((object: any) => object.class.key === currentClassKey.value)?.class
+  || { key: currentClassKey.value, name: currentClassKey.value },
+));
+const visibleObjects = computed(() => objectOverlayEntries(document.value?.objects || [], currentClassKey.value, boxScope.value));
+const visibleEditBoxes = computed(() => objectOverlayEntries(editing.value?.boxes || [], currentClassKey.value, boxScope.value, editing.value?.selected || []));
+watch(() => [props.objectClassKey, libConfig._libraryId, config.settings.ai?.detectionProfile], () => { boxScope.value = 'current'; });
 const active = computed(() =>
   objectFocus.value?.libraryId === libConfig._libraryId &&
   objectFocus.value?.fileId === props.fileId &&
@@ -727,10 +757,12 @@ watch([active, document, () => props.ready, compatible], () => {
     !compatible.value
   )
     return;
-  const bounds = document.value?.objects.find(
+  const focused = document.value?.objects.find(
     (o: any) => o.id === active.value?.objectId,
-  )?.bounds;
+  );
+  const bounds = focused?.bounds;
   if (bounds) {
+    if (currentClassKey.value && focused.class.key !== currentClassKey.value) boxScope.value = 'all';
     lastFocus = active.value;
     emit('locate', bounds);
   }

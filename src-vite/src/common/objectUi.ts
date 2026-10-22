@@ -66,6 +66,14 @@ export function objectSelectionIds(files: any[]) {
     throw new Error('Select 1–10000 indexed photos or RAW images');
   return [...new Set(files.map((file) => Number(file.id)))];
 }
+/** Keep source indexes stable across display filters; editing always retains selected drafts. */
+export function objectOverlayEntries(
+  objects: any[], classKey: string, scope: 'current' | 'all', selected: string[] = [],
+) {
+  return objects.map((object, index) => ({ object, index })).filter(({ object }) =>
+    scope === 'all' || !classKey || object.class.key === classKey || selected.includes(object.id),
+  );
+}
 export function objectBoxStyle(
   bounds: number[],
   width: number,

@@ -14,6 +14,7 @@
       v-if="fileIndex >= 0"
       class="shrink-0 z-[100]"
       :mode="2"
+      :object-class-key="objectBoxClassKey"
       :toolbarOnly="true"
       :showToolbar="true"
       :showWindowControls="true"
@@ -59,6 +60,7 @@
           <MediaViewer
             ref="mediaViewerRef"
             :mode="2"
+            :object-class-key="objectBoxClassKey"
             :isFullScreen="isFullScreen"
             :file="fileInfo"
             :showThumbnailPlaceholder="true"
@@ -111,6 +113,7 @@
                 <MediaViewer
                   :ref="(el) => setPaneViewerRef(pane, el)"
                   :mode="2"
+                  :object-class-key="objectBoxClassKey"
                   :isFullScreen="isFullScreen"
                   :file="getFileInfoByPane(pane)"
                   :showThumbnailPlaceholder="true"
@@ -290,6 +293,7 @@ const fileIndex = ref(0);       // Index of the current file
 const fileCount = ref(0);       // Total number of files
 
 const fileInfo = ref<any>(null);
+const objectBoxClassKey = ref('');
 const showInfoPanel = ref(false);
 const nextFilePath = ref('');
 const iconRotate = ref(0);      // icon rotation angle
@@ -411,6 +415,7 @@ onMounted(async() => {
   window.addEventListener('resize', handleResize);
 
   const urlParams = new URLSearchParams(window.location.search);
+  objectBoxClassKey.value = urlParams.get('objectClassKey') || '';
 
   fileId.value    = Number(urlParams.get('fileId'));
   fileIndex.value = Number(urlParams.get('fileIndex'));
@@ -1561,6 +1566,7 @@ watch(() => mediaDisplayName(activeFileInfo.value), name => {
   void appWindow.setTitle(name ? `Lap — ${name}` : 'Lap').catch(() => {});
 });
 function applyViewerImage(payload: any) {
+  if (typeof payload?.objectClassKey === 'string') objectBoxClassKey.value = payload.objectClassKey;
   const requestedPane = String(payload?.pane || 'left');
   const pane: Pane = allPanes.includes(requestedPane as Pane) ? requestedPane as Pane : 'left';
   if (typeof payload?.compareMode === 'boolean') {

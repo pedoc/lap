@@ -221,6 +221,11 @@
     "failed": "視窗未回應或內容已變更，已取消關閉。草稿仍保留，請稍後重試。"
   },
   "objects": {
+    "boxes_edit_scope_hint": "僅顯示目前類別及選取的框；未顯示的其他標記會原樣保留。",
+    "box_scope": "物件標記框顯示範圍",
+    "boxes_only_class": "僅{name}",
+    "boxes_all_classes": "全部物件",
+    "boxes_no_current": "這張照片沒有「{name}」的標記框，可切換為「全部物件」查看其他類別。",
     "undo_ignore": "撤銷忽略",
     "ignore_pending": "此框已標為誤報，儲存後才會移除。可撤銷忽略或取消本次修訂。",
     "discard_draft": "另一張照片有未儲存的物件修訂。是否放棄該草稿並開始新的修訂？選擇取消可保留草稿，返回原照片後繼續編輯。",

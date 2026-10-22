@@ -330,6 +330,7 @@
                 ref="filmStripMediaRef"
                 :trackViews="!showQuickView && !isImageViewerWindowOpen && config.main.sidebarIndex !== SIDEBAR.HOME"
                 :suppress-auto-navigator="infoNavigatorVisible"
+              :object-class-key="objectBoxClassKey"
                 @viewport-change="previewViewports.filmstrip = $event"
                 @close="closeFilmstripFullScreen"
                 :mode="1"
@@ -388,6 +389,7 @@
               ref="quickViewMediaRef"
               :trackViews="!isImageViewerWindowOpen && config.main.sidebarIndex !== SIDEBAR.HOME"
               :suppress-auto-navigator="infoNavigatorVisible"
+                :object-class-key="objectBoxClassKey"
               @viewport-change="previewViewports.quick = $event"
               :mode="0"
               :isFullScreen="false"
@@ -3483,6 +3485,11 @@ const currentQueryParams = ref({
   personId: 0,
 });
 const currentQuerySource = ref<'query' | 'smart' | 'collection' | 'search'>('query');
+const objectBoxClassKey = computed(() =>
+  tempViewMode.value === 'none' && currentQuerySource.value === 'query' &&
+  config.main.sidebarIndex === SIDEBAR.OBJECTS && libConfig.activePane !== 'collection'
+    ? String(libConfig.objects?.classKey || '') : '',
+);
 const isMapView = computed(() => config.settings.grid.viewMode === 'map');
 const isGridLayoutView = computed(() => config.settings.grid.viewMode === 'grid');
 const isFilmstripView = computed(() => config.settings.grid.viewMode === 'filmstrip');
@@ -11164,6 +11171,7 @@ async function openImageViewer(
     imageViewerSession.value = { mode: 'normal' };
   }
 
+  const viewerObjectClassKey = objectBoxClassKey.value;
   const viewerFiles = isCompareRequest ? options.files! : fileList.value;
   const fileCount = viewerFiles.length;
   const isRealFile = (item: any) => !!item && !item.isPlaceholder && typeof item.id === 'number';
@@ -11218,7 +11226,7 @@ async function openImageViewer(
       const compareModeParam = compareMode ? 1 : 0;
       imageWindow = new WebviewWindow(webViewLabel, {
         ...await startupWindowProxy(),
-        url: `/image-viewer?fileId=${leftFileId}&fileIndex=${leftIndex}&fileCount=${fileCount}&rightFileId=${rightFileId}&rightFileIndex=${rightIndex}&forceSplitCount=${forceSplitParam}&compareFileCount=${compareMode ? fileCount : 0}&compareMode=${compareModeParam}&nextFilePath=${encodeURIComponent(leftNextFilePath)}&rightNextFilePath=${encodeURIComponent(rightNextFilePath)}`,
+        url: `/image-viewer?fileId=${leftFileId}&fileIndex=${leftIndex}&fileCount=${fileCount}&rightFileId=${rightFileId}&rightFileIndex=${rightIndex}&forceSplitCount=${forceSplitParam}&compareFileCount=${compareMode ? fileCount : 0}&compareMode=${compareModeParam}&nextFilePath=${encodeURIComponent(leftNextFilePath)}&rightNextFilePath=${encodeURIComponent(rightNextFilePath)}&objectClassKey=${encodeURIComponent(viewerObjectClassKey)}`,
         title: 'Image Viewer',
         width: 1200,
         height: 800,
@@ -11254,6 +11262,7 @@ async function openImageViewer(
     isImageViewerWindowOpen.value = true;
     await imageWindow.emit('update-img', { 
       fileId: leftFileId, 
+      objectClassKey: viewerObjectClassKey,
       fileIndex: leftIndex,   // selected file index
       fileCount: fileCount, // total files length
       nextFilePath: leftNextFilePath,
@@ -11315,6 +11324,7 @@ async function syncSelectionToImageViewer(index: number) {
   const next = fileList.value[index + 1];
   imageWindow.emit('update-img', {
     fileId: file.id,
+    objectClassKey: objectBoxClassKey.value,
     fileIndex: index,
     fileCount: fileList.value.length,
     nextFilePath: next && !next.isPlaceholder && next.file_type === 1 ? next.file_path : '',

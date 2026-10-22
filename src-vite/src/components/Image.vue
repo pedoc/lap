@@ -76,7 +76,7 @@
     </TransitionGroup>
 
     <OcrImageOverlay :file-id="fileId" :file-version="fileVersion" :width="imageSize[activeImage].width" :height="imageSize[activeImage].height" :x="position[activeImage].x" :y="position[activeImage].y" :zoom="scale[activeImage]" :rotate="imageRotate[activeImage]" :ready="!isLoading && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath" :transition="!noTransition && !isResizingContainer" @locate="locateOcrBounds" />
-    <ObjectImageOverlay :file-id="fileId" :file-version="fileVersion" :width="imageSize[activeImage].width" :height="imageSize[activeImage].height" :x="position[activeImage].x" :y="position[activeImage].y" :zoom="scale[activeImage]" :rotate="imageRotate[activeImage]" :ready="!isLoading && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath" :transition="!noTransition && !isResizingContainer" @locate="locateOcrBounds" />
+    <ObjectImageOverlay :file-id="fileId" :object-class-key="objectClassKey" :file-version="fileVersion" :width="imageSize[activeImage].width" :height="imageSize[activeImage].height" :x="position[activeImage].x" :y="position[activeImage].y" :zoom="scale[activeImage]" :rotate="imageRotate[activeImage]" :ready="!isLoading && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath" :transition="!noTransition && !isResizingContainer" @locate="locateOcrBounds" />
 
     <!-- All detected faces, including unnamed faces and other people in the photo. -->
     <div v-if="showFaceOverlay && faces.length && !isDraggingImage && !isSlideShow && imageFilePath[activeImage] === filePath"
@@ -158,6 +158,7 @@ const toast = useToast();
 // Props
 const props = defineProps({
   originalUnavailable: { type: Boolean, default: false },
+  objectClassKey: { type: String, default: '' },
   filePath: {
     type: String,
     required: false,

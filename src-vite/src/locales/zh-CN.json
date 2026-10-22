@@ -221,6 +221,11 @@
     "failed": "窗口未响应或内容已变化，已取消关闭。草稿仍保留，请稍后重试。"
   },
   "objects": {
+    "boxes_edit_scope_hint": "仅显示当前类别及选中的框；未显示的其他标记会原样保留。",
+    "box_scope": "对象标记框显示范围",
+    "boxes_only_class": "仅{name}",
+    "boxes_all_classes": "全部对象",
+    "boxes_no_current": "这张照片没有“{name}”的标记框，可切换为“全部对象”查看其他类别。",
     "undo_ignore": "撤销忽略",
     "ignore_pending": "此框已标为误报，保存后才会移除。可撤销忽略或取消本次修订。",
     "discard_draft": "另一张照片有未保存的对象修订。是否放弃该草稿并开始新的修订？选择取消可保留草稿，返回原照片后继续编辑。",

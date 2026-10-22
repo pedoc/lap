@@ -221,6 +221,11 @@
     "failed": "A window did not respond or its contents changed. Closing was cancelled; drafts are preserved. Please retry."
   },
   "objects": {
+    "boxes_edit_scope_hint": "Shows the current class and selected boxes. Other hidden annotations are preserved.",
+    "box_scope": "Object box display scope",
+    "boxes_only_class": "Only {name}",
+    "boxes_all_classes": "All objects",
+    "boxes_no_current": "This photo has no boxes for “{name}”. Select “All objects” to see other classes.",
     "undo_ignore": "Undo ignore",
     "ignore_pending": "Marked as a false positive. This box is removed only after saving. Undo ignore or cancel to keep it.",
     "discard_draft": "Another photo has unsaved object revisions. Discard that draft and start a new revision? Cancel keeps the draft so you can return to the original photo.",

@@ -360,6 +360,7 @@
           ref="mediaRef"
           :filePath="file?.file_path"
           :fileId="file?.id"
+          :object-class-key="objectClassKey"
           :fileType="file?.file_type"
           :originalUnavailable="originalUnavailable"
           :rawPairPath="file?.media_subtype === 'raw_jpeg_pair' ? file?.live_photo_video_path : ''"
@@ -515,6 +516,7 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  objectClassKey: { type: String, default: '' },
   file: {
     type: Object,
     default: null

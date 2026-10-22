@@ -16,6 +16,7 @@ import {
   objectBoxStyle,
   objectGeometryCompatible,
   resolveObjectTextClasses,
+  objectOverlayEntries,
 } from '../src/common/objectUi.ts';
 import {
   hasObjectRules,
@@ -1322,4 +1323,109 @@ test('completed historical tasks do not reopen floating banners on startup, but 
  ctx.useObjects=()=>({view,error:Vue.ref(''),busy:Vue.ref(false),stop:async()=>{}});
  let html=await renderToString(Vue.createSSRApp(component('ObjectTaskBanner',ctx)));assert.doesNotMatch(html,/<aside/);
  view.value.status.phase='interrupted';html=await renderToString(Vue.createSSRApp(component('ObjectTaskBanner',ctx)));assert.match(html,/意外中断/);
+});
+const bicycle = { key: 'coco2017-80@1:1', name: 'bicycle', sourceId: 1 };
+const car = { key: 'coco2017-80@1:2', name: 'car', sourceId: 2 };
+function boxScopeContext(key = '') {
+  const ctx = context();
+  const objects = [car, bicycle, dog, car, bicycle].map((label, index) => ({
+    ...observation, id: `box-${index}`, class: { ...label }, bounds: [index * 0.1, 0.1, 0.1, 0.2],
+  }));
+  ctx.result.value = { ...photo(), document: { ...document, objects }, modelDocument: { ...document, objects: JSON.parse(JSON.stringify(objects)) } };
+  ctx.props = Vue.reactive({ fileId: 7, objectClassKey: key, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false });
+  const view = Vue.ref({ classes: [bicycle, car, dog].map(label => ({ ...label, supported: true })) });
+  ctx.useObjects = () => ({ view });
+  return ctx;
+}
+
+test('box scopes use exact taxonomy keys, preserve source indexes and never change stored annotations', () => {
+  const objects = [{ ...observation, class: car }, { ...observation, id: 'bike', class: bicycle }, { ...observation, id: 'foreign', class: { ...bicycle, key: 'custom@2:1' } }];
+  const original = JSON.stringify(objects);
+  const filtered = objectOverlayEntries(objects, bicycle.key, 'current');
+  assert.deepEqual(filtered.map(entry => [entry.object.id, entry.index]), [['bike', 1]]);
+  assert.equal(objectOverlayEntries(objects, bicycle.key, 'all').length, 3);
+  assert.equal(objectOverlayEntries(objects, '', 'current').length, 3);
+  assert.deepEqual(objectOverlayEntries(objects, bicycle.key, 'current', ['foreign']).map(entry => entry.object.id), ['bike', 'foreign']);
+  assert.equal(JSON.stringify(objects), original);
+});
+
+test('the real overlay defaults to the selected class, with truthful counts and a visible all-objects option', async () => {
+  const ctx = boxScopeContext(bicycle.key); ctx.showObjectBoxes.value = true;
+  const html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), ctx.props));
+  assert.equal((html.match(/aria-label="自行车"/g) || []).length, 2);
+  assert.ok(!html.includes('aria-label="汽车"')); assert.ok(!html.includes('aria-label="狗"'));
+  assert.match(html, /对象标记框 · 2/); assert.match(html, /\/ 5/);
+  assert.match(html, /2 · 自行车/); assert.match(html, /5 · 自行车/);
+  assert.match(html, /data-object-box-scope/); assert.match(html, /仅自行车/); assert.match(html, /全部对象/);
+  const h = script('ObjectImageOverlay', ctx, 'boxScope,visibleObjects');
+  h.api.boxScope.value = 'all'; assert.equal(h.api.visibleObjects.value.length, 5); h.dispose();
+});
+
+test('the chosen scope persists between photos, but a new class, profile or library restores the current-class default', async () => {
+  const ctx = boxScopeContext(bicycle.key), h = script('ObjectImageOverlay', ctx, 'boxScope,visibleObjects');
+  h.api.boxScope.value = 'all'; ctx.props.fileId = 8; await tick(); assert.equal(h.api.boxScope.value, 'all');
+  ctx.props.objectClassKey = car.key; await tick(); assert.equal(h.api.boxScope.value, 'current'); assert.equal(h.api.visibleObjects.value.length, 2);
+  h.api.boxScope.value = 'all'; ctx.config.settings.ai.detectionProfile = 'p2'; await tick(); assert.equal(h.api.boxScope.value, 'current');
+  h.api.boxScope.value = 'all'; ctx.libConfig._libraryId = 'B'; await tick(); assert.equal(h.api.boxScope.value, 'current'); h.dispose();
+});
+
+test('filtered editing retains every annotation, keeps a reclassified selected box visible and draws the selected class by default', async () => {
+  const ctx = boxScopeContext(bicycle.key), h = script('ObjectImageOverlay', ctx, 'beginCorrection,visibleEditBoxes,setBoxClass,boxScope,draftClass,startDrawing');
+  const original = JSON.stringify(ctx.result.value.document);
+  h.api.beginCorrection('box-1'); assert.equal(ctx.objectEdit.value.boxes.length, 5); assert.equal(h.api.visibleEditBoxes.value.length, 2);
+  const selected = ctx.objectEdit.value.boxes.find((box: any) => box.id === 'box-1'); h.api.setBoxClass(selected, car.key);
+  assert.ok(h.api.visibleEditBoxes.value.some((entry: any) => entry.object.id === 'box-1'));
+  assert.equal(ctx.objectEdit.value.boxes.length, 5); assert.equal(ctx.objectEdit.value.boxes.find((box: any) => box.id === 'box-0').class.key, car.key);
+  assert.equal(JSON.stringify(ctx.result.value.document), original);
+  h.api.boxScope.value = 'all'; assert.equal(h.api.visibleEditBoxes.value.length, 5);
+  ctx.cancelObjectEdit(); h.api.startDrawing(); assert.equal(h.api.draftClass.value, bicycle.key); assert.equal(ctx.objectEdit.value.drawing, true); assert.equal(ctx.objectEdit.value.boxes.length, 5); h.dispose();
+});
+
+test('an explicit focus from object details reveals that object rather than locating an invisible frame', async () => {
+  const ctx = boxScopeContext(bicycle.key), events: any[] = []; ctx.defineEmits = () => (...args: any[]) => events.push(args);
+  const h = script('ObjectImageOverlay', ctx, 'boxScope,visibleObjects');
+  ctx.objectFocus.value = { libraryId: 'A', fileId: 7, profile: 'p1', objectId: 'box-0' }; await tick();
+  assert.equal(h.api.boxScope.value, 'all'); assert.equal(h.api.visibleObjects.value.length, 5);
+  assert.equal(events[0][0], 'locate'); assert.deepEqual(Array.from(events[0][1]), Array.from(ctx.result.value.document.objects[0].bounds)); h.dispose();
+});
+
+test('an empty class filter is explained and unrelated viewers never inherit the sidebar category accidentally', async () => {
+  const ctx = boxScopeContext(bicycle.key); ctx.showObjectBoxes.value = true;
+  ctx.result.value.document.objects = ctx.result.value.document.objects.filter((object: any) => object.class.key === car.key);
+  let html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), ctx.props));
+  assert.match(html, /这张照片没有/); assert.match(html, /全部对象/); assert.ok(!html.includes('aria-label="汽车"'));
+  ctx.props.objectClassKey = ''; ctx.libConfig.objects.classKey = bicycle.key;
+  html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), ctx.props));
+  assert.equal((html.match(/aria-label="汽车"/g) || []).length, 2); assert.ok(!html.includes('data-object-box-scope'));
+});
+
+test('category context is scoped to the active object query and is wired through every image viewer surface', () => {
+  const content = read('Content'), start = content.indexOf('const objectBoxClassKey = computed('), end = content.indexOf('\nconst isMapView', start);
+  const cfg = Vue.reactive({ main: { sidebarIndex: SIDEBAR.OBJECTS } }), lib = Vue.reactive({ activePane: 'main', objects: { classKey: bicycle.key } }), temp = Vue.ref('none'), source = Vue.ref('query');
+  const value = runInNewContext(`${content.slice(start,end)};objectBoxClassKey`, { computed: Vue.computed, config: cfg, libConfig: lib, tempViewMode: temp, currentQuerySource: source, SIDEBAR });
+  assert.equal(value.value, bicycle.key); source.value = 'smart'; assert.equal(value.value, ''); source.value = 'query';
+  temp.value = 'album'; assert.equal(value.value, ''); temp.value = 'none'; lib.activePane = 'collection'; assert.equal(value.value, ''); lib.activePane = 'main';
+  cfg.main.sidebarIndex = SIDEBAR.LIBRARY; assert.equal(value.value, '');
+  assert.equal((content.match(/:object-class-key="objectBoxClassKey"/g) || []).length, 2);
+  assert.match(read('MediaViewer'), /:object-class-key="objectClassKey"/); assert.match(read('Image'), /<ObjectImageOverlay[^>]*:object-class-key="objectClassKey"/);
+  const viewer = readFileSync(new URL('../src/views/ImageViewer.vue',import.meta.url),'utf8');
+  assert.equal((viewer.match(/:object-class-key="objectBoxClassKey"/g) || []).length, 3);
+  assert.match(content, /objectClassKey=\$\{encodeURIComponent\(viewerObjectClassKey\)\}/);
+  assert.match(viewer, /urlParams.get\('objectClassKey'\) \|\| ''/);
+  for(const lang of ['zh-CN','zh-TW','en']){
+    const locale = JSON.parse(readFileSync(new URL(`../src/locales/${lang}.json`,import.meta.url),'utf8')).objects;
+    for(const key of ['box_scope','boxes_only_class','boxes_all_classes','boxes_no_current','boxes_edit_scope_hint'])assert.equal(typeof locale[key], 'string');
+  }
+});
+
+test('standalone viewer navigation keeps its originating category until another source explicitly replaces it', () => {
+  const viewer = readFileSync(new URL('../src/views/ImageViewer.vue',import.meta.url),'utf8');
+  const start = viewer.indexOf('function applyViewerImage('), end = viewer.indexOf('\nfunction receiveViewerImage(',start);
+  const category = Vue.ref(''), ctx: any = { ...Vue, objectBoxClassKey: category, allPanes: ['left','right','bottomLeft','bottomRight'], isCompareModeSession: Vue.ref(false), compareFileCount: Vue.ref(0), splitCount: Vue.ref(1), normalizeSplitCount: () => 0, clearSecondaryPanes(){}, isSyncViewport: Vue.ref(false), config: {imageViewer:{}}, fileCount: Vue.ref(0), fileId: Vue.ref(0), fileIndex: Vue.ref(0), nextFilePath: Vue.ref('') };
+  const apply = runInNewContext(`${stripTypeScriptTypes(viewer.slice(start,end))};applyViewerImage`,ctx);
+  apply({fileId:7,fileIndex:0,fileCount:5,objectClassKey:bicycle.key}); assert.equal(category.value,bicycle.key);
+  apply({fileId:8,fileIndex:1,fileCount:5}); assert.equal(category.value,bicycle.key);
+  apply({fileId:9,fileIndex:2,fileCount:5,objectClassKey:''}); assert.equal(category.value,'');
+  apply({fileId:9,fileIndex:2,fileCount:5,objectClassKey:[]}); assert.equal(category.value,'');
+  assert.ok(!viewer.slice(end,viewer.indexOf('// Revalidate both',end)).includes('objectBoxClassKey'), 'category changes must follow the existing title-draft consent gate');
 });
