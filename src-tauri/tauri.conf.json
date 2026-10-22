@@ -1,6 +1,6 @@
 {
   "productName": "Lap",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "identifier": "com.julyx10.lap",
   "build": {
     "beforeBuildCommand": "node ../scripts/prepare-native-runtime.mjs && pnpm --dir ../src-vite build",
