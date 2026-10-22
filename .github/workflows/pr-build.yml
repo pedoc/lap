@@ -340,6 +340,10 @@ jobs:
             Move-Item -Path $sigPath -Destination "$newMsiPath.sig" -Force
           }
 
+      - name: Package portable ZIP (Windows ${{ matrix.arch }})
+        shell: pwsh
+        run: .\scripts\package_windows_portable.ps1 -Target "${{ matrix.target }}" -Suffix "pr-${{ github.event.pull_request.number || github.run_number }}"
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -347,6 +351,7 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/portable/*.zip
           if-no-files-found: error
  
   build-linux:
@@ -511,7 +516,7 @@ jobs:
 
           # Remove only the stale assets whose file type was rebuilt in THIS run,
           # so a partial run (e.g. macOS only) keeps the other platforms' files.
-          # Extensions are platform-unique (dmg | msi/sig | deb/AppImage/zsync),
+          # Extensions are platform-unique (dmg | msi/sig/zip | deb/AppImage/zsync),
           # so matching the produced extensions scopes the cleanup per platform.
           mapfile -t rebuilt_exts < <(find release-files -type f | sed -E 's/.*(\.[A-Za-z0-9]+)$/\1/' | sort -u)
 

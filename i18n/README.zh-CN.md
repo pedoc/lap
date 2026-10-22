@@ -16,14 +16,17 @@ Lap 是一款开源、本地优先的照片管理工具，帮助您轻松浏览�
 
 ## 下载 Lap
 
-打开 [最新版本发布页面](https://github.com/julyx10/lap/releases/latest)，下载匹配您系统的文件：
+打开 [最新版本发布页面](https://github.com/pedoc/lap/releases/latest)，下载匹配您系统的文件：
 
 | 平台 | 安装包 | 备注 |
 | :-- | :-- | :-- |
 | **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | 已通过 Apple 公证 |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | 未签名 — 如果 SmartScreen 阻止下载，请点击**仍要保留** |
+| **Windows 免安装版（x64 / ARM64）** | `_x64_portable.zip` / `_arm64_portable.zip` | 完整解压后运行 `Lap.exe`；需要 WebView2 Runtime |
 | **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | 适用于 Debian 系发行版（Ubuntu、Debian、Linux Mint 等） |
 | **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | 赋予文件执行权限后，双击运行 |
+
+Windows 免安装 ZIP 包含原生 DLL、Visual C++ 运行库及配套资源。设置、资料库和缓存仍保存在 Lap 原有的用户数据目录。更新免安装版时，先退出 Lap，再将新版 ZIP 解压到新目录；软件内置 Windows 更新使用 MSI 安装程序。
 
 ### 使用 Homebrew 安装 macOS 版
 

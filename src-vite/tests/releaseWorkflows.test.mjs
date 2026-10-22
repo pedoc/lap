@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const release = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8');
 const windows = readFileSync(new URL('../../.github/workflows/release-windows.yml', import.meta.url), 'utf8');
+const prBuild = readFileSync(new URL('../../.github/workflows/pr-build.yml', import.meta.url), 'utf8');
 const macosConfig = readFileSync(new URL('../../src-tauri/tauri.macos.conf.json', import.meta.url), 'utf8');
 const windowsConfig = readFileSync(new URL('../../src-tauri/tauri.windows.conf.json', import.meta.url), 'utf8');
 
@@ -55,10 +56,26 @@ test('Windows builds the exact release tag rather than the workflow branch', () 
   assert.match(build, /uses: actions\/checkout@v4\s+with:\s+ref: \$\{\{ inputs\.release_tag \}\}\s+submodules: recursive/);
 });
 
+test('formal and PR Windows builds package and upload portable ZIPs alongside MSI files', () => {
+  for (const source of [windows, prBuild]) {
+    const build = job(source, 'build-windows');
+    assert.match(build, /package_windows_portable\.ps1 -Target "\$\{\{ matrix\.target \}\}"/);
+    assert.match(build, /release\/bundle\/portable\/\*\.zip/);
+    assert.match(build, /release\/bundle\/msi\/\*\.msi/);
+    assert.ok(build.indexOf('Package portable ZIP') > build.indexOf('Build and Sign'));
+    assert.ok(build.indexOf('Package portable ZIP') < build.indexOf('uses: actions/upload-artifact'));
+  }
+  assert.match(job(prBuild, 'build-windows'), /-Suffix "pr-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_number \}\}"/);
+});
+
 test('Windows publish steps all target the selected release and merge updater platforms', () => {
   const publish = job(windows, 'publish-windows');
   assert.equal((publish.match(/TAG="\$RELEASE_TAG"/g) || []).length, 4);
   assert.match(publish, /gh release upload "\$TAG"/);
+  assert.match(publish, /path: windows-artifacts/);
+  assert.match(publish, /find windows-artifacts -type f/);
+  assert.match(publish, /-name '\*\.zip'/);
+  assert.match(publish, /-exec cp \{\} release-files\//);
   assert.match(publish, /\.platforms\[\$key\] =/);
   assert.match(publish, /merge_entry "windows-x86_64"/);
   assert.match(publish, /merge_entry "windows-aarch64"/);

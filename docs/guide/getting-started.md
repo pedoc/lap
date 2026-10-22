@@ -37,11 +37,15 @@ The AppImage uses system multimedia libraries for video playback. On Ubuntu/Debi
 
 ### Windows 10/11 (x64 / ARM64)
 
-1. Download the latest `_x64_en-US.msi` or `_arm64_en-US.msi` installer from the [Releases page](https://github.com/julyx10/lap/releases/latest).
+1. Download the latest `_x64_en-US.msi` or `_arm64_en-US.msi` installer from the [Releases page](https://github.com/pedoc/lap/releases/latest).
 2. Run the installer and complete the setup wizard.
 3. Launch **Lap** from the Start menu or desktop shortcut.
 
 Lap's Windows installer is currently unsigned. If Microsoft SmartScreen blocks the download or installer, choose **Keep anyway** or **More info** > **Run anyway**.
+
+For an installation-free copy, choose `_x64_portable.zip` or `_arm64_portable.zip`, extract the entire archive, and run `Lap.exe`. Keep the included DLLs, `resources` and `licenses` directories together. The ZIP includes the Visual C++ runtime; Microsoft Edge WebView2 Runtime must be installed. AI models, FFmpeg and the optional CUDA runtime are downloaded separately inside Lap.
+
+The portable package uses the same per-user settings, libraries and cache locations as the installer. To update it, quit Lap and extract the new ZIP into a new folder. The built-in Windows updater installs the MSI package, so use ZIP downloads to keep using the installation-free version.
 
 ## First Run
 

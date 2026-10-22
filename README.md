@@ -19,14 +19,17 @@ It is a privacy-focused alternative to cloud photo services: no forced upload, l
 
 ## Download Lap
 
-Open the [latest release page](https://github.com/julyx10/lap/releases/latest), then download the file that matches your system:
+Open the [latest release page](https://github.com/pedoc/lap/releases/latest), then download the file that matches your system:
 
 | Platform | Package | Note |
 | :-- | :-- | :-- |
 | **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Notarized by Apple |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | Unsigned — if SmartScreen blocks the download, click **Keep anyway** |
+| **Windows portable (x64 / ARM64)** | `_x64_portable.zip` / `_arm64_portable.zip` | Extract the entire ZIP and run `Lap.exe`; WebView2 Runtime is required |
 | **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | For Debian-based distros (Ubuntu, Debian, Linux Mint, etc.) |
 | **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | Make the file executable, then double-click to run |
+
+Windows portable ZIPs include the native DLLs, Visual C++ runtime and bundled resources. Settings, libraries and caches still use Lap's normal per-user data directories. To update a portable copy, quit Lap and extract the new ZIP into a new folder; the built-in Windows updater uses the MSI installer.
 
 ### macOS with Homebrew
 

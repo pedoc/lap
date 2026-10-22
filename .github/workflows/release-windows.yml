@@ -212,6 +212,10 @@ jobs:
           if ($msis.Count -ne 1) { throw "Expected exactly one Windows MSI." }
           .\scripts\test_windows_msi_runtime.ps1 -MsiPath $msis[0].FullName
 
+      - name: Package portable ZIP (Windows ${{ matrix.arch }})
+        shell: pwsh
+        run: .\scripts\package_windows_portable.ps1 -Target "${{ matrix.target }}"
+
       - name: Upload Build Artifact (Windows ${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
@@ -219,6 +223,7 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/portable/*.zip
           if-no-files-found: error
 
   publish-windows:
@@ -230,8 +235,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: windows-*
-          path: release-files
+          path: windows-artifacts
           merge-multiple: true
+
+      - name: Collect Windows release files
+        run: |
+          mkdir -p release-files
+          find windows-artifacts -type f \( -name '*.msi' -o -name '*.msi.sig' -o -name '*.zip' \) -exec cp {} release-files/ \;
 
       - name: Show release files
         run: ls -la release-files
