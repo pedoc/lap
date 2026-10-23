@@ -6,5 +6,7 @@ function taskButtons(){
 function configCard(title,body){return `<section class="setting-card"><h3>${title}</h3>${body}</section>`;}
 function compactRole(label,role,cap,help=''){
   const follow=role==='text'?`<option value="@media" ${App.state.followMediaForText?'selected':''} ${roleReady('image','text')?'':'disabled'}>与媒体理解相同</option>`:'';
-  return `<div class="compact-role"><label for="route-${role}">${label}</label><select id="route-${role}" class="select" data-role="${role}">${follow}${UI.options(cap,role==='text'&&App.state.followMediaForText?'@media':App.state.roles[role])}</select>${help?`<p class="helper">${help}</p>`:''}</div>`;
+  const configure=role==='textEmbed'?nativeButton('配置','setup-embedding'):'';
+  if(role==='textEmbed'&&!help)help='把分析文字转为检索向量；从这里添加、检测并设为默认模型。';
+  return `<div class="compact-role ${configure?'with-config':''}"><label for="route-${role}">${label}</label><select id="route-${role}" class="select" data-role="${role}">${follow}${UI.options(cap,role==='text'&&App.state.followMediaForText?'@media':App.state.roles[role])}</select>${configure}${help?`<p class="helper">${help}</p>`:''}</div>`;
 }

@@ -24,7 +24,7 @@
     "proposed-settings-window.png",
     "NOTES.md"
   ],
-  "galleryCards": 20,
+  "galleryCards": 22,
   "pages": [
     {
       "id": "baseline",
@@ -146,7 +146,7 @@
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
         "deployment-neutral; only one additional task tab",
-        "endpoint changes invalidate only this service; connection detection does not restore model capabilities; model inherits credentials",
+        "endpoint changes invalidate only this service; embedding row and default shortcut share one editor; connection is stored on the provider",
         "no script errors or external requests"
       ],
       "window": {
@@ -222,22 +222,109 @@
     },
     {
       "id": "embedding",
-      "title": "文本 Embedding 编码契约",
+      "title": "配置 Embedding 并设为默认",
       "file": "21-embedding-contract.png",
       "group": "模型与服务",
-      "caption": "标准文本向量接口、1024 维、正文编码与查询指令，对应实际部署配置。",
+      "caption": "从默认 Embedding 旁的配置按钮进入；填写连接和 Model ID，检测后一次保存并绑定。",
       "result": "passed",
       "checks": [
         "layout",
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
         "deployment-neutral; only one additional task tab",
-        "embedding format, dimensions, alias and query instruction match deploy profiles",
+        "guided form preloads shared service and model; dimensions come from detection",
         "no script errors or external requests"
       ],
       "window": {
         "width": 1437,
         "height": 833,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "embeddingAdd",
+      "title": "添加 Embedding 服务与模型",
+      "file": "24-add-embedding.png",
+      "group": "模型与服务",
+      "caption": "单个表单选择已有或新建服务，填写 API 地址、Key 和 Model ID；能力已选好，维度由检测读取。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "deployment-neutral; only one additional task tab",
+        "new service and model in one form; detected dimensions; edits invalidate detection; one save binds default without starting jobs; secret is not exported",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "embeddingAdd",
+      "title": "添加 Embedding 最小窗口",
+      "file": "25-embedding-compact.png",
+      "group": "窗口适配",
+      "query": "size=compact",
+      "caption": "同一配置表单在最小设置窗口内滚动，按钮与验证结果可到达。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 600x620 compact layout",
+        "deployment-neutral; only one additional task tab",
+        "new service and model in one form; detected dimensions; edits invalidate detection; one save binds default without starting jobs; secret is not exported",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 600,
+        "height": 620,
         "settings": true
       },
       "controls": [

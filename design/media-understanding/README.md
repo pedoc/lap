@@ -6,6 +6,8 @@ AI 模型默认仍打开原图文语义检索与 CLIP 配置。原四项任务�
 
 先看 [完整配置](17-media-model.png)、[Embedding 设置](21-embedding-contract.png)、[业务链路验证](22-workflow-verification.png)，再对比 [仅部署生成模型](20-generation-only.png) 与 [仅理解和填充](23-analysis-without-embedding.png)。[全部设计图](gallery.html) 可直接打开；PNG 不包含说明栏，理由单独位于 [NOTES.md](NOTES.md)。交互原型需先运行下方渲染命令，再打开 `index.html`，无需启动 Lap 或模型服务。
 
+**Embedding 的明确入口**：设置 → AI 模型 → 媒体理解 → 默认模型区域 → Embedding 旁的“配置”。可选择已有服务或在同一表单添加服务，填写 API 地址、按服务要求填写 Key、填写 Embedding Model ID，点击“检测 Embedding”，再“保存并设为默认 Embedding”。文本能力预选、维度从检测结果读取；显示名和编码方案折叠到高级设置。新服务流程见 [24](24-add-embedding.png)，最小窗口见 [25](25-embedding-compact.png)。
+
 本轮将脚本与设计绑定到同一份 `scripts/ai-server/profiles.json`：Mage :8000 或 Qwen :8001 承担理解与语言生成，Qwen3-Embedding :8002 承担分析文字和查询的向量编码。不要求两个生成模型同时部署。原型里的端口、model ID、维度、查询指令来自该文件，仍均为模拟能力状态。
 
 - [BASELINE.md](BASELINE.md)：当前源码布局、证据和组件对应关系。
@@ -25,6 +27,8 @@ AI 模型默认仍打开原图文语义检索与 CLIP 配置。原四项任务�
 | 切换服务及查看不同模型能力 | [08](08-api-connection.png) |
 | 模型 ID、显示分组、能力标记与参数 | [16](16-model-properties.png) |
 | 文本向量设置与查询编码 | [21](21-embedding-contract.png) |
+| 同表单添加服务与 Embedding 模型 | [24](24-add-embedding.png) |
+| 新表单最小窗口适配 | [25](25-embedding-compact.png) |
 | 模型到业务的分阶段验证 | [22](22-workflow-verification.png) |
 | 只有 Mage／Qwen 生成服务时的配置 | [20](20-generation-only.png) |
 | 未配 Embedding 时仍可理解与填充 | [23](23-analysis-without-embedding.png) |
@@ -43,13 +47,14 @@ AI 模型默认仍打开原图文语义检索与 CLIP 配置。原四项任务�
 
 ## 可演示的交互
 
-- 顶部评审导航切换全部 20 个视图；产品设置只新增媒体理解一个标签页，页内完成服务、模型及默认选择。
+- 顶部评审导航切换全部 22 个视图；产品设置只新增媒体理解一个标签页，页内完成服务、模型及默认选择。
 - 左侧搜索与选择服务；右侧配置名称、地址与密钥、检测连接，按分组显示模型及能力图标；最小窗口通过选择器切换服务。
 - 模型配置 ID、显示名、展示分组、能力和参数；分组不决定能力，连接检测不能代替能力检测。
 - 仅使用 OpenAI Chat Completions 与文本 Embeddings；界面不再提供协议选择、本机生成引擎和资源下载。
 - 默认用途可复用同一部署；任务创建后保留当时的配置快照。
 - 语言生成默认跟随媒体理解；缺少 Embedding 时禁止向量步骤，不阻止分析和资料填充。
 - 补配向量服务、检测与绑定、创建索引任务、再进入语义检索的流程可演示；协议链路真实探测见服务器工具。
+- Embedding 旁始终有配置入口；同表单创建服务／模型、检测并一次保存为默认。修改字段使检测失效；换向量方案后不直接混用旧索引，保存本身不创建分析任务。
 - 选中、筛选、当前图库三个处理范围；生成向量和填充标题、说明、标签可分别选择。
 - 采用标题／说明、拒绝标签、采用其余标签；操作仅改变原型内存状态。
 - 图片提问 → 既有证据不足 → 仅复核当前图片 → 回答引用证据；不自动写正式资料。

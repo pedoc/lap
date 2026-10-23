@@ -9,7 +9,7 @@ const UI = {
   model(id) { return MODELS.find(m=>m.id===id)||MODELS[0]; },
   options(cap, selected) {
     const rows=MODELS.filter(m=>!cap||m.caps.includes(cap));
-    return `<option value="" ${selected?'':'selected'}>未配置</option>`+[...new Set(rows.map(m=>m.providerId||'local'))].map(id=>`<optgroup label="${id==='local'?'本地模型':service(id).name}">${rows.filter(m=>(m.providerId||'local')===id).map(m=>`<option value="${m.id}" ${m.id===selected?'selected':''} ${modelReady(m)?'':'disabled'}>${modelLabel(m)}${modelReady(m)?'':' · 不可用／待验证'}</option>`).join('')}</optgroup>`).join('');
+    return `<option value="" ${selected?'':'selected'}>未配置</option>`+[...new Set(rows.map(m=>m.providerId||'local'))].map(id=>`<optgroup label="${id==='local'?'本地模型':UI.escape(service(id).name)}">${rows.filter(m=>(m.providerId||'local')===id).map(m=>`<option value="${m.id}" ${m.id===selected?'selected':''} ${modelReady(m)?'':'disabled'}>${UI.escape(modelLabel(m))}${modelReady(m)?'':' · 不可用／待验证'}</option>`).join('')}</optgroup>`).join('');
   },
   field(label, control, help='') { return `<div class="field"><label class="field-label">${label}</label>${control}${help?`<span class="helper">${help}</span>`:''}</div>`; },
   note(text, kind='info') { return `<div class="note">${icon(kind,14)}<span>${text}</span></div>`; },

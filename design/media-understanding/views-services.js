@@ -14,7 +14,7 @@ function serviceConnection(p){
 }
 function workflowReadiness(){
   const understanding=roleReady('image','image')&&roleReady('text','text'),embedding=roleReady('textEmbed','embed_text');
-  return `<div class="workflow-readiness"><span class="${understanding?'success':'warning'}">${understanding?'媒体理解、问答与资料建议已就绪':'媒体理解模型待配置／检测'}</span><span class="${embedding?'success':'warning'}">${embedding?'文本向量已就绪，可建立内容索引':'未配置文本 Embedding；理解与资料填充仍可使用'}</span><div class="row">${!embedding?nativeButton('配置向量模型','setup-embedding'):''}<button class="btn btn-xs" data-action="verification">查看业务链路</button></div></div>`;
+  return `<div class="workflow-readiness"><span class="${understanding?'success':'warning'}">${understanding?'媒体理解、问答与资料建议已就绪':'媒体理解模型待配置／检测'}</span><span class="${embedding?'success':'warning'}">${embedding?'文本向量已就绪，可建立内容索引':'未配置文本 Embedding；理解与资料填充仍可使用'}</span><div class="row"><button class="btn btn-xs" data-action="verification">查看业务链路</button></div></div>`;
 }
 function embeddingFields(m){
   if(!m.caps.includes('embed_text'))return '';
