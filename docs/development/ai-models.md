@@ -48,6 +48,10 @@ Online background indexing is disabled independently of foreground consent. Enab
 
 For another model in an existing adapter family, add/import a manifest; feature code, settings forms, and database query paths do not need model-specific branches. For a new architecture/protocol, implement a capability adapter, register its contract/schema and factory, and provide contract tests. Do not execute scripts obtained from catalog entries. GPU providers extend the runtime layer rather than model selection.
 
+## Generative backend investigation
+
+The generative-model investigation and proposed native/Python/API backend boundaries are documented in [生成式模型本地运行与 API 接入调查](generative-backends.md). This is design research; the current adapters do not implement those generative backends.
+
 ## Verification
 
 ```sh
