@@ -1,4 +1,4 @@
-const VIEWS={...ConfigViews,...LibraryViews,...MediaViews,...FlowViews};
+const VIEWS={...ConfigViews,...ServiceViews,...LibraryViews,...MediaViews,...FlowViews};
 let toastTimer;
 let messageSerial=10;
 function toast(text){const box=document.getElementById('toast');box.textContent=text;box.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.classList.remove('visible'),3000);}
@@ -57,8 +57,10 @@ function inspectCurrent(){
   render();
 }
 function startJob(){
+  const roles=['image','video',...(App.state.indexEnabled?['textEmbed']:[])];
+  if(roles.some(role=>!modelReady(UI.model(App.state.roles[role])))){toast('所选服务已停用或模型能力待验证，请到默认模型检查。');return;}
   App.state.createdJobs++;App.state.jobScope=App.state.scope;App.state.jobStopped=false;
-  App.state.job={scope:App.state.scope,roles:{...App.state.roles},indexEnabled:App.state.indexEnabled,fields:{...App.state.fields},existingTagsOnly:App.state.existingTagsOnly};
+  App.state.job={scope:App.state.scope,roles:{...App.state.roles},providers:PROVIDERS.map(p=>({...service(p.id)})),indexEnabled:App.state.indexEnabled,fields:{...App.state.fields},existingTagsOnly:App.state.existingTagsOnly};
   navigate('task');
 }
 function runSearch(){
@@ -66,6 +68,8 @@ function runSearch(){
   App.state.searchRan=true;navigate('search');toast('这是检索流程示意，没有运行真实 Embedding 或媒体分析。');
 }
 document.addEventListener('click',event=>{
+  const provider=event.target.closest('[data-provider]');if(provider){App.state.providerId=provider.dataset.provider;App.state.apiTested=false;navigate('api');return;}
+  const modelSettings=event.target.closest('[data-model-settings]');if(modelSettings){App.state.editingModelId=modelSettings.dataset.modelSettings;App.state.providerId=UI.model(App.state.editingModelId).providerId;navigate('model');return;}
   const task=event.target.closest('[data-task]');if(task){App.state.task=task.dataset.task;render();return;}
   const cap=event.target.closest('[data-filter]');if(cap){App.state.filter=cap.dataset.filter;render();return;}
   const indexFilter=event.target.closest('[data-index-filter]');if(indexFilter){indexFilter.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));indexFilter.classList.add('active');toast('示例：筛选分析与索引状态。');return;}
@@ -74,6 +78,13 @@ document.addEventListener('click',event=>{
   const target=event.target.closest('[data-action]');
   if(!target){const nav=event.target.closest('[data-nav]');if(nav)navigate(nav.dataset.nav);return;}
   const action=target.dataset.action;
+  if(action==='add-service'){const id='custom-'+(PROVIDERS.length+1);PROVIDERS.push({id,name:'自定义服务',protocol:'chat',baseUrl:'http://127.0.0.1:8000/v1',location:'待确认',enabled:false,mark:'+'});App.state.providerId=id;App.state.apiTested=false;navigate('api');return;}
+  if(action==='local-runtime'){App.state.localDetails=true;navigate('local');return;}
+  if(action==='remote-guide'){window.open('../../scripts/ai-server/README.md','_blank');return;}
+  if(action==='sync-models'){toast('模拟同步当前服务模型；不改变默认模型，未发送真实网络请求。');return;}
+  if(action==='add-provider-model'){toast('示例：可手填服务端模型 ID；不支持列举模型的服务也可配置。');return;}
+  if(action==='check-model'){const m=UI.model(App.state.editingModelId);App.state.verifiedModels[m.id]=true;render();toast('模拟当前模型声明能力测试通过；真实实现需对各项分别运行测试。');return;}
+  if(action==='save-model'){toast('模型属性保存示意；连接信息仍继承所属服务。');return;}
   if(VIEWS[action]){navigate(action);return;}
   if(action==='library-batch'){navigate('batch',{scope:'library'});return;}
   if(action==='add-model'){navigate('catalog');return;}
@@ -81,7 +92,7 @@ document.addEventListener('click',event=>{
   if(action==='previous-screen'||action==='next-screen'){let i=currentScreenIndex();i=(i+(action==='next-screen'?1:-1)+SCREENS.length)%SCREENS.length;const s=SCREENS[i];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
   if(action==='prepare-local'){App.state.localReady=true;render();toast('模拟资源准备完成；没有下载或安装真实运行环境。');return;}
   if(action==='probe-local'){toast('模拟检测入口：加载能力、设备条件与实际推理分别报告。');return;}
-  if(action==='test-api'){App.state.apiTested=true;render();document.getElementById('api-status')?.scrollIntoView({block:'nearest'});toast('模拟保存并测试完成；没有保存真实配置或发送请求。');return;}
+  if(action==='test-api'){App.state.apiTested=true;render();document.getElementById('api-status')?.scrollIntoView({block:'nearest'});toast('模拟连接检测完成；模型能力仍需分别检测，没有发送请求。');return;}
   if(action==='save-api'){toast('已模拟保存参数；保存不自动验证、启用或切换用途。');return;}
   if(action==='save-routes'){toast('示例用途绑定已保留；已提交任务仍使用原快照。');return;}
   if(action==='start-index-job'){startJob();return;}
@@ -128,6 +139,7 @@ document.addEventListener('click',event=>{
 });
 document.addEventListener('change',event=>{
   const el=event.target;
+  if(el.dataset.serviceField){const id=App.state.providerId,key=el.dataset.serviceField;App.state.providerOverrides[id]={...App.state.providerOverrides[id],[key]:key==='enabled'?el.checked:el.value};if(key==='protocol'||key==='baseUrl'){App.state.apiTested=false;App.state.dirtyProviders=[...new Set([...App.state.dirtyProviders,id])];MODELS.filter(m=>m.providerId===id).forEach(m=>delete App.state.verifiedModels[m.id]);}render();return;}
   if(el.id==='configured-model'){navigate(el.value==='mage-local'?'local':el.value==='vision-lan'||el.value==='cloud-text'?'api':'models');return;}
   if(el.id==='screen-select'){const s=SCREENS[Number(el.value)];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
   if(el.id==='local-model'){App.state.localModel=el.value;App.state.localEngine=el.value==='mage'?'python':'onnx';App.state.localReady=false;render();return;}

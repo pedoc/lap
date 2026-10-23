@@ -11,7 +11,7 @@
     "current-settings-window.png",
     "proposed-settings-window.png"
   ],
-  "galleryCards": 16,
+  "galleryCards": 17,
   "pages": [
     {
       "id": "baseline",
@@ -51,15 +51,15 @@
     },
     {
       "id": "models",
-      "title": "AI 模型任务与配置",
+      "title": "模型服务",
       "file": "01-model-management.png",
       "group": "模型与部署",
-      "caption": "在原独立设置窗口中增加用途按钮，保留模型选择、配置、测试和下方目录。",
+      "caption": "参考 Cherry Studio：先管理服务，再管理该服务的模型；地址与密钥只配置一次。",
       "result": "passed",
       "checks": [
         "layout",
         "existing 600x620 settings window and navigation",
-        "new purpose filters configured deployments",
+        "provider → model; connection fields are not duplicated",
         "no script errors or external requests"
       ],
       "window": {
@@ -67,36 +67,7 @@
         "height": 620,
         "settings": true
       },
-      "controls": [
-        {
-          "label": "图文语义检索",
-          "visible": true
-        },
-        {
-          "label": "人脸识别",
-          "visible": true
-        },
-        {
-          "label": "文字识别",
-          "visible": true
-        },
-        {
-          "label": "对象检测",
-          "visible": true
-        },
-        {
-          "label": "媒体理解",
-          "visible": true
-        },
-        {
-          "label": "语言生成",
-          "visible": true
-        },
-        {
-          "label": "Embedding",
-          "visible": true
-        }
-      ]
+      "controls": []
     },
     {
       "id": "local",
@@ -116,28 +87,20 @@
         "height": 620,
         "settings": true
       },
-      "controls": [
-        {
-          "label": "准备环境并下载",
-          "visible": true
-        },
-        {
-          "label": "保存并测试",
-          "visible": true
-        }
-      ]
+      "controls": []
     },
     {
       "id": "api",
-      "title": "API 部署配置",
+      "title": "服务连接与协议",
       "file": "08-api-connection.png",
       "group": "模型与部署",
-      "caption": "本机、内网和外部 API 使用明确的连接配置，能力按部署分别验证。",
+      "caption": "服务统一管理协议、地址与密钥；Chat Completions、Responses、Messages 各用相应适配器。",
       "result": "passed",
       "checks": [
         "layout",
         "existing 600x620 settings window and navigation",
         "save without activation; separate simulated deployment test",
+        "protocol changes invalidate model receipt; connection test cannot restore it",
         "no script errors or external requests"
       ],
       "window": {
@@ -147,21 +110,21 @@
       },
       "controls": [
         {
-          "label": "保存参数",
+          "label": "保存",
           "visible": true
         },
         {
-          "label": "保存并测试",
+          "label": "保存并检测",
           "visible": true
         }
       ]
     },
     {
       "id": "routing",
-      "title": "默认用途与路由",
+      "title": "默认模型",
       "file": "09-task-routing.png",
       "group": "模型与部署",
-      "caption": "同一部署可以承担多个用途，理解、生成、Embedding 各有明确默认绑定。",
+      "caption": "媒体理解、语言生成、Embedding 只引用服务中的模型，不重复连接配置。",
       "result": "passed",
       "checks": [
         "layout",
@@ -175,17 +138,17 @@
       },
       "controls": [
         {
-          "label": "保存默认用途",
+          "label": "保存默认模型",
           "visible": true
         }
       ]
     },
     {
       "id": "catalog",
-      "title": "同页模型目录与添加",
+      "title": "服务下的模型列表",
       "file": "14-model-catalog.png",
       "group": "模型与部署",
-      "caption": "沿用 AI 模型页下方的目录、下载和导入区域；此图展示滚动到目录的状态。",
+      "caption": "同步模型或手填 ID，能力图标、可用状态与模型参数分别管理。",
       "result": "passed",
       "checks": [
         "layout",
@@ -199,11 +162,31 @@
       },
       "controls": [
         {
-          "label": "添加本机模型",
+          "label": "服务连接设置",
           "visible": true
-        },
+        }
+      ]
+    },
+    {
+      "id": "model",
+      "title": "模型能力与接口",
+      "file": "16-model-properties.png",
+      "group": "模型与部署",
+      "caption": "模型设置只管理 ID、能力和覆盖参数；连接信息继承服务，不再按业务重复填写。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "existing 600x620 settings window and navigation",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 600,
+        "height": 620,
+        "settings": true
+      },
+      "controls": [
         {
-          "label": "添加 API",
+          "label": "保存模型",
           "visible": true
         }
       ]

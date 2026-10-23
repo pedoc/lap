@@ -1,0 +1,28 @@
+{
+  "checkedOn": "2026-10-23",
+  "python": "3.12",
+  "profiles": {
+    "mage": {
+      "engine": "sglang",
+      "source": "https://github.com/kcz358/sglang.git",
+      "sourceRevision": "73beeb4003c8b665b7f769675f31ccc697b207c1",
+      "model": "microsoft/Mage-VL",
+      "modelRevision": "d88b153285f1633a61b2f693c59c8576693af185",
+      "servedModel": "mage-vl",
+      "port": 8000,
+      "minimumDriverCuda": "13.0",
+      "packages": ["torch==2.11.0", "transformers==5.8.1"],
+      "requiresRemoteCode": true
+    },
+    "qwen": {
+      "engine": "vllm",
+      "model": "Qwen/Qwen3-VL-4B-Instruct",
+      "modelRevision": "ebb281ec70b05090aa6165b016eac8ec08e71b17",
+      "servedModel": "qwen3-vl-4b-instruct",
+      "port": 8001,
+      "minimumDriverCuda": "12.8",
+      "packages": ["vllm==0.11.0", "transformers==4.57.1", "huggingface-hub==0.35.3"],
+      "requiresRemoteCode": false
+    }
+  }
+}

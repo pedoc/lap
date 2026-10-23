@@ -54,6 +54,8 @@ The generative-model investigation and proposed native/Python/API backend bounda
 
 The proposed media-understanding, retrieval, and scoped Q&A workflows are described in the [开发蓝图与交互设计](../../design/media-understanding/SPEC.md), with [viewable mockups](../../design/media-understanding/gallery.html). The revised mockups preserve the existing standalone 600×620 settings window and current component entry points; they do not change the implemented runtime or settings contracts described above.
 
+The revised [模型服务与标准 API 调查](ai-service-protocols.md) covers the Cherry Studio-style provider/model/default organization, Chat Completions, Responses and Messages boundaries, and [remote GPU deployment tools](../../scripts/ai-server/README.md) for pinned Mage/Qwen backends. These tools have protocol/loopback checks but still require real GPU acceptance; the production Lap generative adapters remain unimplemented.
+
 ## Verification
 
 ```sh
