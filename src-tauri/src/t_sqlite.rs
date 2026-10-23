@@ -9819,6 +9819,7 @@ impl ALocation {
 /// the cluster, while `count` contains every matching photo in the cell.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AGpsMapPoint {
+    pub rank: i64,
     pub lat: f64,
     pub lon: f64,
     pub count: i64,
@@ -9828,6 +9829,7 @@ pub struct AGpsMapPoint {
 impl AGpsMapPoint {
     fn from_row(row: &rusqlite::Row) -> Result<Self, rusqlite::Error> {
         Ok(Self {
+            rank: row.get("rank")?,
             lat: row.get("lat")?,
             lon: row.get("lon")?,
             count: row.get("count")?,
@@ -9839,9 +9841,9 @@ impl AGpsMapPoint {
         let conn = open_conn()?;
         let (joins, where_clause, sql_params) = AFile::build_search_query_parts(params)?;
         let query = format!(
-            "SELECT AVG(gps_latitude) AS lat, AVG(gps_longitude) AS lon, COUNT(*) AS count, MIN(id) AS file_id
+            "SELECT AVG(gps_latitude) AS lat, AVG(gps_longitude) AS lon, COUNT(*) AS count, id AS file_id, MIN(query_rank) AS rank
              FROM (
-                 SELECT a.id, a.gps_latitude, a.gps_longitude
+                 SELECT a.id, a.gps_latitude, a.gps_longitude, ROW_NUMBER() OVER (ORDER BY {}) AS query_rank
                  FROM afiles a
                  LEFT JOIN afolders b ON a.folder_id = b.id
                  LEFT JOIN albums c ON b.album_id = c.id
@@ -9849,6 +9851,7 @@ impl AGpsMapPoint {
                  GROUP BY a.id
              )
              GROUP BY ROUND(gps_latitude, 2), ROUND(gps_longitude, 2)",
+            AFile::build_order_clause(params),
             joins,
             where_clause,
             crate::t_map::address_store::gps_predicate("a"),
@@ -10850,13 +10853,14 @@ mod afile_row_mapping_tests {
         let rows = assert_order_independent(
             &conn,
             "SELECT AVG(gps_latitude) AS lat,AVG(gps_longitude) AS lon,
-                    COUNT(*) AS count,MIN(id) AS file_id FROM afiles",
+                    COUNT(*) AS count,MIN(id) AS file_id,1 AS rank FROM afiles",
             AGpsMapPoint::from_row,
         );
         assert_eq!(rows[0].lat, 30.0);
         assert_eq!(rows[0].lon, 120.0);
         assert_eq!(rows[0].count, 4);
         assert_eq!(rows[0].file_id, 1);
+        assert_eq!(rows[0].rank, 1);
     }
     #[test]
     fn library_summary_uses_named_aggregate_columns() {
