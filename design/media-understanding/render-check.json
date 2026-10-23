@@ -1,0 +1,114 @@
+{
+  "date": "2026-10-23",
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "result": "passed",
+  "pages": [
+    {
+      "screen": "models",
+      "name": "01-model-management.png",
+      "scope": null,
+      "brokenImages": [],
+      "horizontalOverflow": false,
+      "controls": [
+        {
+          "label": "测试模型",
+          "visible": true
+        },
+        {
+          "label": "保存配置",
+          "visible": true
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "screen": "viewer",
+      "name": "02-image-viewer.png",
+      "scope": null,
+      "brokenImages": [],
+      "horizontalOverflow": false,
+      "controls": [
+        {
+          "label": "发送问题",
+          "visible": true
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "screen": "video",
+      "name": "03-video-viewer.png",
+      "scope": null,
+      "brokenImages": [],
+      "horizontalOverflow": false,
+      "controls": [
+        {
+          "label": "发送问题",
+          "visible": true
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "screen": "batch",
+      "name": "04-batch-fill.png",
+      "scope": "selected",
+      "brokenImages": [],
+      "horizontalOverflow": false,
+      "controls": [
+        {
+          "label": "取消",
+          "visible": true
+        },
+        {
+          "label": "先看样例",
+          "visible": true
+        },
+        {
+          "label": "开始处理 36 项",
+          "visible": true
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "screen": "workspace",
+      "name": "05-library-workspace.png",
+      "scope": null,
+      "brokenImages": [],
+      "horizontalOverflow": false,
+      "controls": [
+        {
+          "label": "停止任务",
+          "visible": true
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "screen": "batch",
+      "name": "06-library-batch.png",
+      "scope": "library",
+      "brokenImages": [],
+      "horizontalOverflow": false,
+      "controls": [
+        {
+          "label": "取消",
+          "visible": true
+        },
+        {
+          "label": "先看样例",
+          "visible": true
+        },
+        {
+          "label": "开始处理 1,286 项",
+          "visible": true
+        }
+      ],
+      "exceptions": []
+    }
+  ]
+}
