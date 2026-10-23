@@ -21,13 +21,13 @@
 
 修订稿仅扩展这个区域，参考 Cherry Studio 调整配置组织：
 
-- 默认入口、原四项任务、CLIP 模型选择与配置保持原位；任务栏后追加三类新用途。
-- 服务管理协议、地址、凭据和模型列表；模型独立管理能力、ID、限制与参数，多个用途可复用。
-- 模型服务与默认模型从原任务栏右侧进入管理；原有识别与下载不迁移到新子导航。
-- `14-model-catalog.png` 展示服务下的模型列表，本机适配包与资源下载在 `07-local-runtime.png` 的本地模型入口中。
+- 默认入口、原四项任务、CLIP 模型选择与配置保持原位；任务栏只追加媒体理解。
+- 媒体理解页上方管理多个 OpenAI 兼容服务的地址、凭据和模型；模型可标记多项能力。
+- 同页下方分别选择媒体理解、语言生成、Embedding 默认模型，不再拆成三个标签页。
+- `17-media-model.png` 展示整页；`08-api-connection.png` 展示同页展开连接；`16-model-properties.png` 展示能力详情。本机生成模型与多协议选择不在本期界面出现。
 - 保存与测试按钮保留在原表单中，随内容滚动，不新增固定底栏。保存参数、测试、启用继续保持不同含义。
 
-渲染入口为 `prepare-native.mjs` 与 `native-frame.js`，复用 Settings、TitleBar、AiModelSettings、CudaRuntimeSettings 模板。新增用途仅在设计夹具中追加模板入口、替换共享服务摘要；生产文件未修改。
+渲染入口为 `prepare-native.mjs` 与 `native-frame.js`，复用 Settings、TitleBar、AiModelSettings、CudaRuntimeSettings 模板。新增媒体理解表单在设计夹具中使用实际组件样式与原设置外壳；生产文件未修改。
 
 当前后端并不是通用生成式模型系统：配置按模型 ID 保存，每任务一个全局选择；远程适配器目前是 Jina embedding 协议。新增部署、多能力和生成式 API 都属于后续开发，见 [SPEC.md](SPEC.md)。
 

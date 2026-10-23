@@ -20,10 +20,9 @@
   let ai=clean(source.templates.ai);
   ai=ai.replace('id="global-ai-model"','id="global-ai-model" data-ai-model');
   if(native.task&&!native.task.baseline){
-    ai=ai.replace("['semantic', 'face', 'ocr', 'detection']","['semantic', 'face', 'ocr', 'detection', 'media', 'text', 'embedding']")
+    ai=ai.replace("['semantic', 'face', 'ocr', 'detection']","['semantic', 'face', 'ocr', 'detection', 'media']")
       .replace('class="flex gap-2"','class="flex flex-wrap gap-2"')
-      .replace(':key="kind" class="btn btn-sm"',':key="kind" :data-task="kind" class="btn btn-sm"')
-      .replace('</button>','</button><div class="ml-auto flex items-center gap-1"><button class="btn btn-xs btn-ghost" data-action="services">模型服务</button><button class="btn btn-xs btn-ghost" data-action="routing">默认模型</button></div>');
+      .replace(':key="kind" class="btn btn-sm"',':key="kind" :data-task="kind" class="btn btn-sm"');
     const start=ai.indexOf('<div v-if="isRemote" class="space-y-2">');
     const end=ai.indexOf('<div class="text-xs opacity-60">{{ t(\'settings.ai_models.runtime\') }}',start);
     ai=ai.slice(0,start)+`<div v-if="isRemote" class="space-y-2 text-xs"><div>所属模型服务：{{ nativeService.name }} <button class="btn btn-xs ml-2" data-action="api">配置服务</button></div><div class="opacity-60">{{ nativeService.protocolName }} · {{ nativeService.baseUrl }}</div><div class="opacity-60">实际执行位置：{{ nativeService.location }}</div><p class="opacity-60">地址与密钥继承模型服务；图片、视频采样帧与结构化输出按该模型分别检测。</p></div>`+ai.slice(end);
@@ -58,7 +57,6 @@
     box.querySelectorAll('.input').forEach(e=>e.classList.add('input-bordered','input-sm'));
     box.querySelectorAll('.select').forEach(e=>e.classList.add('select-bordered','select-sm'));
     box.querySelectorAll('.pill').forEach(e=>{e.classList.add('badge','badge-sm');});
-    if(!box.querySelector('.settings-subhead,.provider-heading'))box.insertAdjacentHTML('afterbegin','<div class="mb-3"><button class="btn btn-xs btn-ghost" data-action="models">‹ 返回 AI 模型</button></div>');
     return box.innerHTML;
   }
   const Raw={render:()=>V.h('div',{class:'space-y-3',innerHTML:rawMarkup()})};

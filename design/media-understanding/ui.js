@@ -35,20 +35,18 @@ const UI = {
     App.currentNativeView={task:App.currentNativeTask,html:content+(footer?`<div class="flex flex-wrap items-center gap-2 mt-3">${footer}</div>`:'')};
     if(App.currentNativeTask){
       const task=App.currentNativeTask.task;
-      const role={media:'image',text:'text',embedding:'textEmbed'}[task];
-      const cap={semantic:'clip_query',ocr:'ocr',media:'image',text:'text',embedding:'embed_text'}[task];
+      const cap={semantic:'clip_query',ocr:'ocr'}[task];
       let choices=MODELS.filter(m=>cap&&m.caps.includes(cap));
       if(task==='semantic')choices=choices.filter(m=>m.id==='clip-local');
       if(!choices.length)choices=[{id:'current-'+task,name:task==='face'?'当前人脸识别模型':'当前对象检测模型',mode:'本机',status:'ready',caps:[]}];
-      const activeId=role?App.state.roles[role]:choices[0].id;
+      const activeId=choices[0].id;
       const editingId=App.state.nativeEditingByTask?.[task]||activeId;
       const selected=choices.find(m=>m.id===editingId)||choices[0];
       App.state.editingModelId=selected.id;
       if(selected.providerId)App.state.providerId=selected.providerId;
-      const language={key:'analysis_language',kind:'choice',default:'中文',options:['中文','跟随媒体']};
       const number=(key,value,min=0,max=4096)=>({key,kind:'number',default:value,min,max,step:1});
-      const parameters=role?task==='embedding'?[number('timeout_seconds',60,1,600)]:[language,number('max_tokens',512,32,8192),...(task==='media'?[number('video_frames',8,1,32)]:[]),number('timeout_seconds',120,1,600)]:[number('threads',2,1,64),{key:'device',kind:'choice',default:'auto',options:['auto','cpu','cuda','directml']},number('cuda_device_id',0,0,15),number('cuda_memory_limit_mb',0,0,65536),{key:'cuda_max_workspace',kind:'choice',default:true,options:[true,false]}];
-      App.currentNativeView={...App.currentNativeView,activeId,editingId,models:choices.map(m=>({...m,name:m.id==='clip-local'?'CLIP ViT-B/32 multilingual':m.providerId?modelLabel(m):m.name,adapter:m.providerId?'openai_'+service(m.providerId).protocol:m.id==='clip-local'?'clip_onnx':'本机适配器',runtime:m.id==='mage-local'?'受管 Python 服务':'ONNX Runtime',dimension:task==='embedding'?1536:512,installed:m.mode==='API'||m.status==='ready',contractTested:modelReady(m),parameters})),service:selected.providerId?{...service(selected.providerId),protocolName:PROTOCOLS[service(selected.providerId).protocol].name}:null};
+      const parameters=[number('threads',2,1,64),{key:'device',kind:'choice',default:'auto',options:['auto','cpu','cuda','directml']},number('cuda_device_id',0,0,15),number('cuda_memory_limit_mb',0,0,65536),{key:'cuda_max_workspace',kind:'choice',default:true,options:[true,false]}];
+      App.currentNativeView={...App.currentNativeView,activeId,editingId,models:choices.map(m=>({...m,name:m.id==='clip-local'?'CLIP ViT-B/32 multilingual':m.name,adapter:m.id==='clip-local'?'clip_onnx':'本机适配器',runtime:'ONNX Runtime',dimension:512,installed:m.status==='ready',contractTested:modelReady(m),parameters}))};
     }
     const compact=App.params.get('size')==='compact';
     return `<div class="settings-presentation"><div class="app-window settings-window native-host" style="width:${compact?600:1437}px;height:${compact?620:833}px"><iframe id="native-settings-frame" title="设置界面预览"></iframe></div></div>`;

@@ -1,4 +1,4 @@
-const VIEWS={...ConfigViews,...ServiceViews,...LibraryViews,...MediaViews,...FlowViews,...NativeSettingsViews};
+const VIEWS={...ServiceViews,...LibraryViews,...MediaViews,...FlowViews,...NativeSettingsViews};
 let toastTimer;
 let messageSerial=10;
 function toast(text){const box=document.getElementById('toast');box.textContent=text;box.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.classList.remove('visible'),3000);}
@@ -69,6 +69,7 @@ function inspectCurrent(){
 function startJob(){
   const roles=['image','video',...(App.state.indexEnabled?['textEmbed']:[])];
   if(roles.some(role=>!modelReady(UI.model(App.state.roles[role])))){toast('所选服务已停用或模型能力待验证，请到默认模型检查。');return;}
+  if(scopeData().videos&&!UI.model(App.state.roles.video).caps.includes('video_frames')){toast('当前媒体理解模型未提供视频采样帧能力，请修改本次范围或模型。');return;}
   App.state.createdJobs++;App.state.jobScope=App.state.scope;App.state.jobStopped=false;
   App.state.job={scope:App.state.scope,roles:{...App.state.roles},providers:PROVIDERS.map(p=>({...service(p.id)})),indexEnabled:App.state.indexEnabled,fields:{...App.state.fields},existingTagsOnly:App.state.existingTagsOnly};
   navigate('task');
@@ -80,7 +81,7 @@ function runSearch(){
 function handleClick(event){
   const provider=event.target.closest('[data-provider]');if(provider){App.state.providerId=provider.dataset.provider;App.state.apiTested=false;navigate('api');return;}
   const modelSettings=event.target.closest('[data-model-settings]');if(modelSettings){App.state.editingModelId=modelSettings.dataset.modelSettings;App.state.providerId=UI.model(App.state.editingModelId).providerId;navigate('model');return;}
-  const task=event.target.closest('[data-task]');if(task){App.state.task=task.dataset.task;render();return;}
+  const task=event.target.closest('[data-task]');if(task){App.state.task=task.dataset.task;navigate(App.state.task==='media'?'understand':'models');return;}
   const cap=event.target.closest('[data-filter]');if(cap){App.state.filter=cap.dataset.filter;render();return;}
   const indexFilter=event.target.closest('[data-index-filter]');if(indexFilter){indexFilter.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));indexFilter.classList.add('active');toast('示例：筛选分析与索引状态。');return;}
   const seek=event.target.closest('[data-seek]');if(seek){App.state.videoTime=seek.dataset.seek;render();return;}
@@ -88,20 +89,17 @@ function handleClick(event){
   const target=event.target.closest('[data-action]');
   if(!target){const nav=event.target.closest('[data-nav]');if(nav)navigate(nav.dataset.nav);return;}
   const action=target.dataset.action;
-  if(action==='add-service'){const id='custom-'+(PROVIDERS.length+1);PROVIDERS.push({id,name:'自定义服务',protocol:'chat',baseUrl:'http://127.0.0.1:8000/v1',location:'待确认',enabled:false,mark:'+'});App.state.providerId=id;App.state.apiTested=false;navigate('api');return;}
-  if(action==='local-runtime'){App.state.localDetails=true;navigate('local');return;}
+  if(action==='add-service'){const id='custom-'+(PROVIDERS.length+1);PROVIDERS.push({id,name:'自定义服务',baseUrl:'https://api.example.com/v1',enabled:false});App.state.providerId=id;App.state.apiTested=false;navigate('api');return;}
   if(action==='remote-guide'){window.open('../../scripts/ai-server/README.md','_blank');return;}
   if(action==='sync-models'){toast('模拟同步当前服务模型；不改变默认模型，未发送真实网络请求。');return;}
   if(action==='add-provider-model'){toast('示例：可手填服务端模型 ID；不支持列举模型的服务也可配置。');return;}
-  if(action==='check-model'){const m=UI.model(App.state.editingModelId);App.state.verifiedModels[m.id]=true;render();toast('模拟当前模型声明能力测试通过；真实实现需对各项分别运行测试。');return;}
+  if(action==='check-model'){const m=UI.model(App.state.editingModelId);if(m.caps.includes('embed_multimodal')){toast('多模态 Embedding 接口尚未接入，当前保持待验证。');return;}m.status='ready';m.state='示例已验证';App.state.verifiedModels[m.id]=true;render();toast('模拟能力检测通过；没有调用真实模型。');return;}
   if(action==='save-model'){toast('模型属性保存示意；连接信息仍继承所属服务。');return;}
   if(VIEWS[action]){navigate(action);return;}
   if(action==='library-batch'){navigate('batch',{scope:'library'});return;}
   if(action==='add-model'){navigate('catalog');return;}
   if(action==='gallery'){location.href='gallery.html';return;}
   if(action==='previous-screen'||action==='next-screen'){let i=currentScreenIndex();i=(i+(action==='next-screen'?1:-1)+SCREENS.length)%SCREENS.length;const s=SCREENS[i];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
-  if(action==='prepare-local'){App.state.localReady=true;render();toast('模拟资源准备完成；没有下载或安装真实运行环境。');return;}
-  if(action==='probe-local'){toast('模拟检测入口：加载能力、设备条件与实际推理分别报告。');return;}
   if(action==='test-api'){App.state.apiTested=true;render();document.getElementById('api-status')?.scrollIntoView({block:'nearest'});toast('模拟连接检测完成；模型能力仍需分别检测，没有发送请求。');return;}
   if(action==='save-api'){toast('已模拟保存参数；保存不自动验证、启用或切换用途。');return;}
   if(action==='save-routes'){toast('示例用途绑定已保留；已提交任务仍使用原快照。');return;}
@@ -151,12 +149,11 @@ document.addEventListener('click',handleClick);
 function handleChange(event){
   const el=event.target;
   if(el.hasAttribute('data-ai-model')){App.state.nativeEditingByTask={...App.state.nativeEditingByTask,[App.state.task]:el.value};App.state.editingModelId=el.value;render();return;}
-  if(el.dataset.serviceField){const id=App.state.providerId,key=el.dataset.serviceField;App.state.providerOverrides[id]={...App.state.providerOverrides[id],[key]:key==='enabled'?el.checked:el.value};if(key==='protocol'||key==='baseUrl'){App.state.apiTested=false;App.state.dirtyProviders=[...new Set([...App.state.dirtyProviders,id])];MODELS.filter(m=>m.providerId===id).forEach(m=>delete App.state.verifiedModels[m.id]);}render();return;}
-  if(el.id==='configured-model'){navigate(el.value==='mage-local'?'local':el.value==='vision-lan'||el.value==='cloud-text'?'api':'models');return;}
+  if(el.dataset.providerEnabled){const id=el.dataset.providerEnabled;App.state.providerOverrides[id]={...App.state.providerOverrides[id],enabled:el.checked};render();return;}
+  if(el.dataset.modelField||el.dataset.modelCap){const m=UI.model(App.state.editingModelId);if(el.dataset.modelField)m[el.dataset.modelField]=el.value;else{const caps=new Set(m.caps);el.checked?caps.add(el.dataset.modelCap):caps.delete(el.dataset.modelCap);m.caps=[...caps];}m.status='untested';m.state='待验证';delete App.state.verifiedModels[m.id];render();return;}
+  if(el.dataset.serviceField){const id=App.state.providerId,key=el.dataset.serviceField;App.state.providerOverrides[id]={...App.state.providerOverrides[id],[key]:el.value};if(key==='baseUrl'){App.state.apiTested=false;App.state.dirtyProviders=[...new Set([...App.state.dirtyProviders,id])];MODELS.filter(m=>m.providerId===id).forEach(m=>delete App.state.verifiedModels[m.id]);}render();return;}
   if(el.id==='screen-select'){const s=SCREENS[Number(el.value)];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
-  if(el.id==='local-model'){App.state.localModel=el.value;App.state.localEngine=el.value==='mage'?'python':'onnx';App.state.localReady=false;render();return;}
-  if(el.name==='engine'){App.state.localEngine=el.value;render();return;}
-  if(el.dataset.role){App.state.roles[el.dataset.role]=el.value;render();return;}
+  if(el.dataset.role){App.state.roles[el.dataset.role]=el.value;if(el.dataset.role==='image')App.state.roles.video=el.value;render();return;}
   if(el.id==='scope-select'){App.state.scope=el.value;navigate('batch',{scope:el.value});return;}
   if(el.id==='index-enabled'){App.state.indexEnabled=el.checked;render();return;}
   if(el.dataset.fillField){App.state.fields[el.dataset.fillField]=el.checked;render();return;}

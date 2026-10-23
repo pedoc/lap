@@ -2,13 +2,15 @@
 
 核对日期：2026-10-23。本次基于用户给出的 Cherry Studio 设置图、上游源码和官方协议文档。结论用于修订设计及准备远程部署工具；未修改 Lap 正式后端，也未完成 GPU 实机验收。
 
+本轮重新读取了 Mage 官方 `inference_base.py`、Qwen3-VL 官方 README、DeepSeek 调用说明和 OpenAI Embeddings 文档：前两者有 OpenAI SDK Chat Completions 示例，DeepSeek 明确声明兼容 OpenAI，标准 Embeddings 的输入定义为文本或 token 数组。这里核对的是文档／源码契约，真实服务仍需按模型能力验收。
+
 ## 结论
 
-Lap 应采用 **模型服务 → 服务内模型 → 默认模型** 的配置结构。服务持有地址、协议、凭据与启用状态；模型持有服务内 ID、能力、参数与验证回执；媒体理解、语言生成、Embedding 只选择模型引用。本机模型与 API 服务并列管理。
+Lap 采用 **一个媒体理解标签页 → 多个 OpenAI 兼容服务 → 每个服务的多个模型 → 页下方三个默认模型**。服务持有名称、地址、凭据与启用状态；模型持有 ID、能力、参数与验证回执。媒体理解、语言生成、Embedding 是默认用途，不再分别设置标签页。服务可部署在任意位置，产品配置不绑定托管平台。
 
 Mage 不是只能暴露私有协议：官方在线样例通过 OpenAI SDK 的 `client.chat.completions.create` 调用 SGLang，并用标准 `image_url` 发送图片或视频抽样帧。其专用部分是服务端 Mage 分支和完整媒体处理能力，不应让每个 Lap 业务都写一个 Mage 客户端。
 
-Qwen3-VL 官方也给出了 vLLM／SGLang 的 OpenAI 风格服务部署。初次交付应优先把自建服务统一到 Chat Completions；Lap 同时保留 Responses 与 Anthropic Messages 两个明确的协议适配器，不强制自建服务都实现三套协议。
+Qwen3-VL 官方也给出了 vLLM／SGLang 的 OpenAI 风格服务部署，DeepSeek 官方提供兼容 OpenAI 的调用方式。首版仅接 Chat Completions 和文本 Embeddings，不实现 Responses／Messages，也不展示协议选择。本机 Mage／Qwen 下载及运行环境延后；既有四类本机识别继续保持现状。
 
 ## 1. Cherry Studio 参考了什么
 
@@ -20,7 +22,7 @@ Qwen3-VL 官方也给出了 vLLM／SGLang 的 OpenAI 风格服务部署。初次
 - `src/main/ai/provider/listModels.ts`：模型列表按服务协议取得，并有差异处理。
 - `src/renderer/pages/settings/ModelSettings/ModelSettings.tsx`：默认模型按业务引用已有模型。
 
-取其共享数据组织，不复制管理台导航。Lap 保留原“AI 模型”任务栏、模型选择和参数表单；追加新用途，模型服务与默认模型从任务栏右侧进入。设置可从最小 600×620 拉宽，设计主图按用户 1437×833 浅色截图展示，继续使用现有组件 CSS。
+取其共享数据组织与能力标记，不复制管理台导航。Lap 保留原四项任务，只追加媒体理解；新标签页上方管理服务及模型，下方分别选择媒体理解、语言生成、Embedding。连接在服务卡片中展开，不另设服务／默认模型顶层入口。设置仍按用户 1437×833 浅色截图展示，并检查 600×620 最小窗口。
 
 服务可以有多个模型，但“支持列举模型”“模型可推理”“图片或视频能力可用”分别验证。同步失败时允许手填 ID；同步不自动切换默认模型，不删除任务或历史引用所需的模型身份。
 
@@ -28,34 +30,30 @@ Qwen3-VL 官方也给出了 vLLM／SGLang 的 OpenAI 风格服务部署。初次
 
 | 对象 | 字段 |
 | --- | --- |
-| 服务 | ID、名称、启用、默认 API 格式、基础地址、凭据引用、位置声明、上传与后台许可、超时 |
+| 服务 | ID、名称、启用、基础地址、凭据引用、上传与后台许可、超时；首版固定 OpenAI 兼容 |
 | 服务内模型 | 稳定内部 ID、providerId、远程 model ID、显示名、能力、输入限制、模型参数覆盖、按能力回执 |
-| 可选高级覆盖 | 服务明确支持多种接口时，可为模型选择接口类型；覆盖后相关回执失效 |
-| 默认模型 | 图片理解、视频理解、文字生成、描述向量、可选原媒体向量 → 已配置模型引用 |
-| 本机资源定义 | 已有 ONNX 专用模型或生成引擎的资源、处理器、设备与版本；不要求有 API 地址 |
+| 能力标记 | 图片理解、视频理解（首版采样帧）、文本生成、文本 Embedding、多模态 Embedding；另记按能力检测结果 |
+| 默认模型 | 媒体理解、语言生成、Embedding → 已配置模型引用；媒体项按类型预检能力 |
+| 后续本机来源 | 与 API 分开声明，由 Lap 管理资源和引擎；首版不新增本机生成运行环境 |
 
 现有 Lap `ai-config.json` 每模型一份配置、每任务一个全局选择，当前远程适配仅为 Jina embedding。新增 Provider 与多能力不是改名就能获得，需要迁移旧配置、保留既有四类专用任务的参数／索引语义和草稿保护。
 
 实际 HTTP 协议适配应位于 Rust 后端，复用现有凭据存储与传输策略的公共部分；Vue 只编辑配置、选择模型并展示结果。现有 Jina 请求体仍留在专用适配器，不把密钥交给前端组件直接请求各服务。
 
-成熟客户端的选择与回环验证见 [Rust SDK 可行性](ai-client-libraries.md)。建议优先用 `genai` 承担三套生成协议与标准文本 Embedding，Lap 保留薄业务门面及专用多模态向量扩展。
+成熟客户端的选择与回环验证见 [Rust SDK 可行性](ai-client-libraries.md)。可以继续使用 `genai` 的 OpenAI 适配器及文本 Embedding，Lap 保留薄业务门面；其支持其他协议不等于产品本期需要暴露这些选项。
 
-## 2. 三种生成协议与向量协议
+## 2. 首版 OpenAI 接口与能力边界
 
 | 协议 | 路由 | 图片与文本的主要结构 | 流与结果 |
 | --- | --- | --- | --- |
 | OpenAI Chat Completions | `POST /v1/chat/completions` | `messages`；内容块 `text`、`image_url` | `choices[].message`／`delta` |
-| OpenAI Responses | `POST /v1/responses` | `input`；`input_text`、`input_image` | `output[]` 与类型化 SSE 事件；处理可见文本和推理信息的区别 |
-| Anthropic Messages | `POST /v1/messages` | `messages`；`text`、`image.source`；系统提示独立 | `content[]` 与类型化 SSE；`x-api-key`、版本头 |
 | OpenAI 文本 Embeddings | `POST /v1/embeddings` | `input` 为文本或 token；并非标准的图片／视频上传字段 | `data[].embedding`，检查维度、有限性、范数与索引身份 |
 
 不要使用旧式 `/v1/completions` 代指多模态聊天接口。API 地址只填基础地址，界面预览最终路由；保留网关路径前缀，拒绝内嵌密钥和重复拼接版本段。
 
-通用内部请求可以使用角色、文本、图片、带原片时间的帧引用、输出约束和预算；分别由三个 wire adapter 编码。响应统一为可见文本、结构化结果、用量、结束原因、错误与引用元数据。各协议的认证、系统提示、工具调用、输出长度参数、取消和流结束事件不能仅靠改路径解决。
+内部请求使用角色、文本、图片、带原片时间的帧引用、输出约束和预算，由 OpenAI 适配器编码。响应统一为可见文本、结构化结果、用量、结束原因、错误与引用元数据；文本向量调用 /embeddings。模型列表不提供可靠能力元数据时，允许手工标记再检测，不从模型名推断所有能力。
 
 通用视频路径建议为客户端采样帧＋时间说明，再编码为标准多图输入。它可以覆盖很多图片／片段描述任务，但不等于原生视频 API，更不自动具备语音理解、帧级事件边界或 Mage codec 的完整能力。服务和模型输入上限需要单独记录。
-
-Anthropic 于 **2026-10-21** 发布了新 API 版本，官方迁移说明仍允许需要旧行为的请求继续使用 `2023-06-01`。新版移除 `temperature`、`top_p`、`top_k` 等采样字段；本工具不发送它们。探测器默认发送 `anthropic-version: 2026-10-21`，兼容服务可通过 `--anthropic-version 2023-06-01` 明确覆盖。官方仍接受 `x-api-key`，新版 SDK 默认改为 Bearer；服务配置应记录认证／版本差异，而不是依赖 SDK 升级自动猜测。
 
 标准 `/v1/embeddings` 不定义通用图像／视频内容块。多模态 embedding 可由现有 Jina 契约或已验证的其他扩展适配器提供；Qwen3-VL-Embedding 等专用向量模型也需按其部署协议核对。不能因“OpenAI-compatible”就把所有生成模型作为 embedding 服务。
 
@@ -84,7 +82,7 @@ Anthropic 于 **2026-10-21** 发布了新 API 版本，官方迁移说明仍允�
 
 ```mermaid
 flowchart LR
-  L[Lap 业务与模型默认值] --> A[Chat / Responses / Messages 适配器]
+  L[Lap 业务与三个默认模型] --> A[OpenAI Chat / Embeddings]
   A --> T[SSH 隧道 或 受认证的 TLS 端点]
   T --> S[远程标准模型 API]
   S --> M[Mage SGLang worker]
@@ -115,5 +113,5 @@ flowchart LR
 - [OpenAI Embeddings](https://developers.openai.com/api/reference/resources/embeddings/methods/create)
 - [Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create)
 - [Anthropic 2026-10-21 版本迁移](https://platform.claude.com/docs/en/api/migration-2026-10-21)
-- [AutoDL SSH 隧道](https://www.autodl.com/docs/ssh_proxy/)
+- [DeepSeek 兼容 OpenAI 的调用说明](https://api-docs.deepseek.com/)
 - [Qwen3-VL-Embedding 官方仓库](https://github.com/QwenLM/Qwen3-VL-Embedding)

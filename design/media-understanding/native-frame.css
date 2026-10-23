@@ -22,6 +22,7 @@ body{font-family:var(--font-sans);font-size:16px;line-height:1.5}
 .provider-row small{opacity:.6}.provider-mark,.provider-model-symbol{display:none}
 .provider-model-row,.local-model-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid color-mix(in oklab,var(--color-base-content) 10%,transparent)}
 .provider-model-row>div,.local-model-row>div{display:flex;flex:1;flex-direction:column;gap:4px}.provider-model-row b,.local-model-row b{font-size:14px;font-weight:500}.provider-model-row small,.local-model-row small{font-size:12px;opacity:.6}
+.service-card{gap:8px}.service-card strong{font-size:14px;font-weight:600}.service-card summary{font-size:12px;cursor:pointer}.service-card .provider-models{gap:4px;margin-top:8px}.service-card .provider-switch{font-size:12px}.service-card .provider-model-row:last-child{border:0}.service-card .cap-line{gap:6px}
 .provider-details{font-size:12px}.provider-details summary{cursor:pointer}.provider-details p,.provider-details .check{margin-top:8px}
 .compact-role{display:grid;grid-template-columns:minmax(140px,1fr) minmax(160px,320px);gap:4px 16px;align-items:center}.compact-role .select{width:100%}.compact-role .helper{grid-column:1/-1}
 .cap-line,.service-shortcuts{display:flex;gap:8px;flex-wrap:wrap}.service-tip,.test-status{display:flex;gap:8px;align-items:center;opacity:.6;font-size:12px;line-height:16px}.service-tip svg,.test-status svg{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5}

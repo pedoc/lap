@@ -24,7 +24,7 @@
     "proposed-settings-window.png",
     "NOTES.md"
   ],
-  "galleryCards": 20,
+  "galleryCards": 16,
   "pages": [
     {
       "id": "baseline",
@@ -37,6 +37,7 @@
         "layout",
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "deployment-neutral; only one additional task tab",
         "no script errors or external requests"
       ],
       "window": {
@@ -50,14 +51,15 @@
       "id": "models",
       "title": "AI 模型原位扩展",
       "file": "01-model-management.png",
-      "group": "模型与部署",
-      "caption": "默认仍为 CLIP，原四类任务保持原位；新增用途与模型服务管理入口无感融入。",
+      "group": "模型与服务",
+      "caption": "默认仍为 CLIP，原四项任务保留，只追加一个媒体理解标签页。",
       "result": "passed",
       "checks": [
         "layout",
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
-        "original CLIP task preserved; additional purpose uses the same native selector",
+        "deployment-neutral; only one additional task tab",
+        "original CLIP preserved; one media tab with three default models; return to existing task",
         "no script errors or external requests"
       ],
       "window": {
@@ -84,37 +86,23 @@
         },
         {
           "label": "媒体理解",
-          "visible": true
-        },
-        {
-          "label": "语言生成",
-          "visible": true
-        },
-        {
-          "label": "Embedding",
-          "visible": true
-        },
-        {
-          "label": "模型服务",
-          "visible": true
-        },
-        {
-          "label": "默认模型",
           "visible": true
         }
       ]
     },
     {
       "id": "understand",
-      "title": "媒体理解模型配置",
+      "title": "媒体理解统一配置",
       "file": "17-media-model.png",
-      "group": "模型与部署",
-      "caption": "沿用同一个模型选择器和参数表单，媒体理解追加到原任务栏，连接继承模型服务。",
+      "group": "模型与服务",
+      "caption": "同一页管理多个 OpenAI 兼容服务及其模型，下方分别选择媒体理解、语言生成和 Embedding 默认模型。",
       "result": "passed",
       "checks": [
         "layout",
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "deployment-neutral; only one additional task tab",
+        "multiple services and models; three capability-filtered defaults; multimodal embeddings stay unverified; shared media default",
         "no script errors or external requests"
       ],
       "window": {
@@ -142,140 +130,65 @@
         {
           "label": "媒体理解",
           "visible": true
-        },
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "title": "服务连接配置",
+      "file": "08-api-connection.png",
+      "group": "模型与服务",
+      "caption": "在媒体理解页展开服务连接，只填写名称、基础地址和密钥；不绑定部署平台。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "deployment-neutral; only one additional task tab",
+        "OpenAI only; endpoint changes invalidate model receipts; connection detection cannot restore them; model inherits credentials",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": [
         {
-          "label": "语言生成",
+          "label": "图文语义检索",
           "visible": true
         },
         {
-          "label": "Embedding",
+          "label": "人脸识别",
           "visible": true
         },
         {
-          "label": "模型服务",
+          "label": "文字识别",
           "visible": true
         },
         {
-          "label": "默认模型",
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
           "visible": true
         }
       ]
     },
     {
-      "id": "services",
-      "title": "模型服务管理",
-      "file": "18-model-services.png",
-      "group": "模型与部署",
-      "caption": "从原任务栏右侧进入共享服务管理，不替换 AI 模型默认入口。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
-        "secondary service management; model does not duplicate credentials",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 1437,
-        "height": 833,
-        "settings": true
-      },
-      "controls": []
-    },
-    {
-      "id": "local",
-      "title": "本机运行与下载",
-      "file": "07-local-runtime.png",
-      "group": "模型与部署",
-      "caption": "分别准备运行环境与模型包，本机可用性不等同于模型是否受支持。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
-        "model-scoped runtime choices",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 1437,
-        "height": 833,
-        "settings": true
-      },
-      "controls": []
-    },
-    {
-      "id": "api",
-      "title": "服务连接与协议",
-      "file": "08-api-connection.png",
-      "group": "模型与部署",
-      "caption": "服务统一管理协议、地址与密钥；Chat Completions、Responses、Messages 各用相应适配器。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
-        "save without activation; separate simulated deployment test",
-        "protocol changes invalidate model receipt; connection test cannot restore it",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 1437,
-        "height": 833,
-        "settings": true
-      },
-      "controls": []
-    },
-    {
-      "id": "routing",
-      "title": "默认模型",
-      "file": "09-task-routing.png",
-      "group": "模型与部署",
-      "caption": "媒体理解、语言生成、Embedding 只引用服务中的模型，不重复连接配置。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 1437,
-        "height": 833,
-        "settings": true
-      },
-      "controls": []
-    },
-    {
-      "id": "catalog",
-      "title": "服务下的模型列表",
-      "file": "14-model-catalog.png",
-      "group": "模型与部署",
-      "caption": "同步模型或手填 ID，能力图标、可用状态与模型参数分别管理。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 1437,
-        "height": 833,
-        "settings": true
-      },
-      "controls": []
-    },
-    {
       "id": "model",
-      "title": "模型能力与接口",
+      "title": "模型能力标记",
       "file": "16-model-properties.png",
-      "group": "模型与部署",
-      "caption": "模型设置只管理 ID、能力和覆盖参数；连接信息继承服务，不再按业务重复填写。",
+      "group": "模型与服务",
+      "caption": "模型归属服务；标记图片、视频、文本生成和向量能力，用于筛选默认模型。",
       "result": "passed",
       "checks": [
         "layout",
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "deployment-neutral; only one additional task tab",
+        "capability changes update default-model candidates",
         "no script errors or external requests"
       ],
       "window": {
@@ -283,7 +196,28 @@
         "height": 833,
         "settings": true
       },
-      "controls": []
+      "controls": [
+        {
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        }
+      ]
     },
     {
       "id": "understand",
@@ -297,6 +231,8 @@
         "layout",
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 600x620 compact layout",
+        "deployment-neutral; only one additional task tab",
+        "multiple services and models; three capability-filtered defaults; multimodal embeddings stay unverified; shared media default",
         "no script errors or external requests"
       ],
       "window": {
@@ -323,22 +259,6 @@
         },
         {
           "label": "媒体理解",
-          "visible": true
-        },
-        {
-          "label": "语言生成",
-          "visible": true
-        },
-        {
-          "label": "Embedding",
-          "visible": true
-        },
-        {
-          "label": "模型服务",
-          "visible": true
-        },
-        {
-          "label": "默认模型",
           "visible": true
         }
       ]
