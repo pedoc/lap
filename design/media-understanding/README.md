@@ -2,13 +2,14 @@
 
 本版参考 Cherry Studio 改为“模型服务 → 服务内模型 → 默认模型”，同时以当前 Lap 界面为基础。设置保持独立 **600×620** 窗口、原左侧分类和右侧滚动内容区；业务入口沿用文件信息、多选面板、对话框和搜索面板。
 
-先看 [现状与修订并排对照](settings-comparison.png)，再打开 [全部设计图](gallery.html) 或 [交互原型](index.html?screen=models)。直接用浏览器打开即可，无需启动 Lap。
+先看 [现状与修订并排对照](settings-comparison.png)，再打开 [全部设计图](gallery.html) 或 [交互原型](index.html?screen=models)。直接用浏览器打开即可，无需启动 Lap。PNG 仅导出应用窗口，设计理由与交互解释集中在 [单独设计说明](NOTES.md)，不嵌入图中。
 
 - [BASELINE.md](BASELINE.md)：当前源码布局、证据和组件对应关系。
 - [SPEC.md](SPEC.md)：业务场景、模型抽象、索引与问答闭环、数据边界、开发顺序及验收条件。
 - [生成式后端调查](../../docs/development/generative-backends.md)：本机后端、资源包与 API 的前期调查。
 - [标准 API 与配置调查](../../docs/development/ai-service-protocols.md)：Cherry Studio 源码、三种生成协议、实际 Mage／Qwen 服务路径。
 - [远程 GPU 部署工具](../../scripts/ai-server/README.md)：固定版本安装、启动和协议探测；尚待真实 GPU 验收。
+- [Rust SDK 可行性与选型](../../docs/development/ai-client-libraries.md)：成熟客户端对比、Tauri IPC、现有依赖边界与实际回环检查。
 
 ## 设计图
 
@@ -61,7 +62,7 @@
 node design/media-understanding/render.mjs
 ```
 
-可用 `LAP_DESIGN_BROWSER` 指定浏览器可执行文件。脚本以独立临时配置启动无界面浏览器，导出 1600×1000 设计图、总览和设置对照，结果见 [render-check.json](render-check.json)。
+可用 `LAP_DESIGN_BROWSER` 指定浏览器可执行文件。脚本以独立临时配置启动无界面浏览器，在 1600×1000 检查视口中导出窗口本身：设置为 600×620，主窗口为 1536×850。评审导航、右侧说明和页脚不进入单页 PNG；总览按原比例排布。设计说明另写入 `NOTES.md`，结果见 [render-check.json](render-check.json)。
 
 检查包括：脚本异常、图片加载、横向溢出、主要操作裁切、600×620 设置尺寸与分类顺序、用途切换、资源选项、显式采用、标签拒绝、问答范围、视频时间跳转、搜索不创建分析任务、任务配置快照。它不代表真实 Tauri 界面、数据库、模型或设备的验收。
 

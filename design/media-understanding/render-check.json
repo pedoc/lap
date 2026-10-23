@@ -4,12 +4,15 @@
     "width": 1600,
     "height": 1000
   },
+  "export": "application-window-only",
+  "explanations": "NOTES.md",
   "result": "passed",
   "artifacts": [
     "overview.png",
     "settings-comparison.png",
     "current-settings-window.png",
-    "proposed-settings-window.png"
+    "proposed-settings-window.png",
+    "NOTES.md"
   ],
   "galleryCards": 17,
   "pages": [
@@ -22,6 +25,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "existing 600x620 settings window and navigation",
         "no script errors or external requests"
       ],
@@ -58,6 +62,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "existing 600x620 settings window and navigation",
         "provider → model; connection fields are not duplicated",
         "no script errors or external requests"
@@ -78,6 +83,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "existing 600x620 settings window and navigation",
         "model-scoped runtime choices",
         "no script errors or external requests"
@@ -98,6 +104,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "existing 600x620 settings window and navigation",
         "save without activation; separate simulated deployment test",
         "protocol changes invalidate model receipt; connection test cannot restore it",
@@ -128,6 +135,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "existing 600x620 settings window and navigation",
         "no script errors or external requests"
       ],
@@ -152,6 +160,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "existing 600x620 settings window and navigation",
         "no script errors or external requests"
       ],
@@ -176,6 +185,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "existing 600x620 settings window and navigation",
         "no script errors or external requests"
       ],
@@ -200,6 +210,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "no script errors or external requests"
       ],
       "window": {
@@ -235,6 +246,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "no script errors or external requests"
       ],
       "window": {
@@ -258,6 +270,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "scope and deployment snapshot",
         "optional vectors and formal writes stay skipped",
         "no script errors or external requests"
@@ -292,6 +305,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "scope and deployment snapshot",
         "optional vectors and formal writes stay skipped",
         "no script errors or external requests"
@@ -325,6 +339,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "explicit adoption and rejected-tag protection",
         "no script errors or external requests"
       ],
@@ -344,6 +359,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "indexed answer → insufficient evidence → bounded inspection; no implicit writes",
         "no script errors or external requests"
       ],
@@ -368,6 +384,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "source-time jump",
         "no script errors or external requests"
       ],
@@ -392,6 +409,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "search does not create analysis jobs",
         "no script errors or external requests"
       ],
@@ -416,6 +434,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "no script errors or external requests"
       ],
       "window": {
@@ -443,6 +462,7 @@
       "result": "passed",
       "checks": [
         "layout",
+        "window-only export; explanations stored separately",
         "no script errors or external requests"
       ],
       "window": {

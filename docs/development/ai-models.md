@@ -56,6 +56,8 @@ The proposed media-understanding, retrieval, and scoped Q&A workflows are descri
 
 The revised [模型服务与标准 API 调查](ai-service-protocols.md) covers the Cherry Studio-style provider/model/default organization, Chat Completions, Responses and Messages boundaries, and [remote GPU deployment tools](../../scripts/ai-server/README.md) for pinned Mage/Qwen backends. These tools have protocol/loopback checks but still require real GPU acceptance; the production Lap generative adapters remain unimplemented.
 
+The [Rust SDK feasibility report](ai-client-libraries.md) recommends evaluating pinned `genai` behind a thin native service, with Tauri IPC streaming and existing credential/task policies. An [independent SDK check](../../scripts/ai-sdk-check/README.md) exercises eight loopback cases without changing production dependencies or calling a model.
+
 ## Verification
 
 ```sh

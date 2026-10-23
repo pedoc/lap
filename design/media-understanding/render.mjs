@@ -22,6 +22,7 @@ async function connect(url){const ws=new WebSocket(url);await new Promise((resol
 async function ready(c,screen){for(let i=0;i<100;i++){try{if(await c.eval(`document.body?.dataset.ready==='true'&&window.LapDesign?.screen==='${screen}'`)){await c.eval('Promise.all([document.fonts.ready,...Array.from(document.images).map(i=>i.decode().catch(()=>{}))])');await c.eval('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');return}}catch{}await sleep(50)}throw new Error('Page not ready: '+screen)}
 let browser;
 const pages=[];
+const designNotes=[];
 try{
  let port;for(let i=0;i<120;i++){try{port=Number((await readFile(path.join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0]);if(port)break}catch{}await sleep(100)}assert.ok(port,'Render browser did not start');
  const host='http://127.0.0.1:'+port;
@@ -35,14 +36,17 @@ try{
   const url=pathToFileURL(path.join(root,'index.html')).href+'?screen='+descriptor.id+(descriptor.query?'&'+descriptor.query:'');
   await c.send('Page.navigate',{url});await ready(c,descriptor.id);
   const layout=await c.eval(`(()=>{const win=document.querySelector('.app-window');const app=win.getBoundingClientRect();const settings=win.classList.contains('settings-window');const selector='.commit-bar .button,.qa-footer .button,.v2-heading .button,.job-strip>.button,.settings-actions .button,.settings-task-buttons .button';const controls=Array.from(document.querySelectorAll(selector)).map(e=>{const b=e.getBoundingClientRect();let visible=b.bottom<=app.bottom-(settings?1:26)&&b.top>=app.top&&b.left>=app.left&&b.right<=app.right;for(let p=e.parentElement;p;p=p.parentElement){const s=getComputedStyle(p);if(/hidden|auto|scroll|clip/.test(s.overflowY+' '+s.overflowX)){const r=p.getBoundingClientRect();if(b.bottom>r.bottom+1||b.top<r.top-1||b.left<r.left-1||b.right>r.right+1)visible=false}}return {label:e.innerText,visible}});return {window:{width:app.width,height:app.height,settings},nav:Array.from(document.querySelectorAll('.settings-root-nav button')).map(e=>e.innerText),settingsHorizontalOverflow:!!document.querySelector('.settings-content')&&document.querySelector('.settings-content').scrollWidth>document.querySelector('.settings-content').clientWidth,brokenImages:Array.from(document.images).filter(i=>!i.complete||!i.naturalWidth).map(i=>i.src),horizontalOverflow:document.documentElement.scrollWidth>innerWidth,controls}})()`);
-  const shot=await c.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,fromSurface:true});await writeFile(path.join(root,descriptor.file),Buffer.from(shot.data,'base64'));
+  const notes=await c.eval('LapDesign.designNotes');designNotes.push({...descriptor,details:notes});
+  assert.equal(await c.eval("document.querySelector('.design-notes,.source-note,.window-measure')===null"),true,'Design explanations must stay outside the UI');
+  const clip=await c.eval("(()=>{const r=document.querySelector('.app-window').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1}})()");
+  const shot=await c.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,fromSurface:true,clip});
+  const png=Buffer.from(shot.data,'base64');assert.equal(png.readUInt32BE(16),Math.round(clip.width));assert.equal(png.readUInt32BE(20),Math.round(clip.height));await writeFile(path.join(root,descriptor.file),png);
   if(descriptor.id==='baseline'||descriptor.id==='models'){
-   const clip=await c.eval("(()=>{const r=document.querySelector('.settings-window').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1}})()");
-   const crop=await c.send('Page.captureScreenshot',{format:'png',clip,fromSurface:true});await writeFile(path.join(root,descriptor.id==='baseline'?'current-settings-window.png':'proposed-settings-window.png'),Buffer.from(crop.data,'base64'));
+   await writeFile(path.join(root,descriptor.id==='baseline'?'current-settings-window.png':'proposed-settings-window.png'),png);
   }
   const checks=[];
   try{
-   assert.deepEqual(layout.brokenImages,[]);assert.equal(layout.horizontalOverflow,false);assert.ok(layout.controls.every(x=>x.visible),'Clipped primary controls: '+JSON.stringify(layout.controls.filter(x=>!x.visible)));checks.push('layout');
+   assert.deepEqual(layout.brokenImages,[]);assert.equal(layout.horizontalOverflow,false);assert.ok(layout.controls.every(x=>x.visible),'Clipped primary controls: '+JSON.stringify(layout.controls.filter(x=>!x.visible)));checks.push('layout','window-only export; explanations stored separately');
    if(layout.window.settings){assert.equal(layout.window.width,600);assert.equal(layout.window.height,620);assert.deepEqual(layout.nav,['通用','网络','布局','查看器','RAW','AI 模型','高级','快捷键','关于']);assert.equal(layout.settingsHorizontalOverflow,false);assert.equal(await c.eval("document.querySelector('.settings-window .icon-rail')===null"),true);checks.push('existing 600x620 settings window and navigation');}
    if(descriptor.id==='api'){await c.eval("document.querySelector('[data-action=save-api]').click();document.querySelector('[data-action=test-api]').click()");assert.equal(await c.eval('LapDesign.state.apiTested'),true);checks.push('save without activation; separate simulated deployment test');}
    if(descriptor.id==='models'){await c.eval("document.querySelector('[data-provider=autodl]').click()");await ready(c,'api');assert.equal(await c.eval('LapDesign.state.providerId'),'autodl');await c.eval("document.querySelector('[data-model-settings=vision-lan]').click()");await ready(c,'model');assert.equal(await c.eval("document.querySelector('input[aria-label=\"服务 API 密钥\"]')===null"),true);checks.push('provider → model; connection fields are not duplicated');}
@@ -77,14 +81,16 @@ try{
   const screens=${JSON.stringify(pages.map(p=>({title:p.title,file:p.file})))};
   const canvas=document.createElement('canvas');canvas.width=1800;canvas.height=100+Math.ceil(screens.length/4)*324;
   const ctx=canvas.getContext('2d');ctx.fillStyle='#101319';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#edf1f8';ctx.font='26px "Microsoft YaHei",sans-serif';ctx.fillText('Lap AI · 完整设计总览',36,44);ctx.fillStyle='#9aa8bb';ctx.font='14px "Microsoft YaHei",sans-serif';ctx.fillText('现有独立设置窗口 · 媒体理解与索引 · 自然语言搜索 · 当前媒体问答',36,75);
-  for(let i=0;i<screens.length;i++){const x=36+(i%4)*438,y=108+Math.floor(i/4)*324;const im=await load(screens[i].file);ctx.drawImage(im,x,y,414,259);ctx.fillStyle='#c8d1df';ctx.font='16px "Microsoft YaHei",sans-serif';ctx.fillText(String(i+1).padStart(2,'0')+'  '+screens[i].title,x,y+285);}
+  for(let i=0;i<screens.length;i++){const x=36+(i%4)*438,y=108+Math.floor(i/4)*324;const im=await load(screens[i].file);const k=Math.min(414/im.width,259/im.height);ctx.drawImage(im,x+(414-im.width*k)/2,y+(259-im.height*k)/2,im.width*k,im.height*k);ctx.fillStyle='#c8d1df';ctx.font='16px "Microsoft YaHei",sans-serif';ctx.fillText(String(i+1).padStart(2,'0')+'  '+screens[i].title,x,y+285);}
   const overview=canvas.toDataURL('image/png').split(',')[1];
-  canvas.width=1360;canvas.height=766;ctx.fillStyle='#101319';ctx.fillRect(0,0,1360,766);ctx.fillStyle='#edf1f8';ctx.font='21px "Microsoft YaHei",sans-serif';ctx.fillText('现有设置布局（源码重建）',40,42);ctx.fillText('修订方案（同一独立设置窗口）',720,42);
-  ctx.drawImage(await load('current-settings-window.png'),40,66,600,620);ctx.drawImage(await load('proposed-settings-window.png'),720,66,600,620);ctx.fillStyle='#9aa8bb';ctx.font='15px "Microsoft YaHei",sans-serif';ctx.fillText('窗口均为 600×620 · 保留左侧分类与单列滚动区域 · 模型和能力状态为示例',40,726);ctx.font='12px "Microsoft YaHei",sans-serif';ctx.fillText('当前布局依据工作区源码重建，并非真实 Tauri 运行截图。新增功能集中扩展 AI 模型页。',40,750);
+  canvas.width=1360;canvas.height=720;ctx.fillStyle='#101319';ctx.fillRect(0,0,1360,720);ctx.fillStyle='#edf1f8';ctx.font='21px "Microsoft YaHei",sans-serif';ctx.fillText('现有设置布局',40,42);ctx.fillText('调整后',720,42);
+  ctx.drawImage(await load('current-settings-window.png'),40,66,600,620);ctx.drawImage(await load('proposed-settings-window.png'),720,66,600,620);
   return {overview,comparison:canvas.toDataURL('image/png').split(',')[1],galleryCards:document.querySelectorAll('article').length};
  })()`);
  assert.equal(art.galleryCards,pages.length);await writeFile(path.join(root,'overview.png'),Buffer.from(art.overview,'base64'));await writeFile(path.join(root,'settings-comparison.png'),Buffer.from(art.comparison,'base64'));composition.ws.close();await browser.send('Target.closeTarget',{targetId:compositionTarget.id});
- const report={date:'2026-10-23',viewport:{width:1600,height:1000},result:pages.every(p=>p.result==='passed')?'passed':'failed',artifacts:['overview.png','settings-comparison.png','current-settings-window.png','proposed-settings-window.png'],galleryCards:art.galleryCards,pages};await writeFile(path.join(root,'render-check.json'),JSON.stringify(report,null,2)+'\n');assert.equal(report.result,'passed','Review render-check.json for failed checks');
+ const notesText='# 设计说明\n\n设计图仅导出应用窗口，本文件单独记录设计理由与交互边界。模型、能力、任务和设备状态均为示例；当前设置布局图依据源码重建，非原生运行截图。\n\n'+designNotes.map(s=>`## ${s.title}\n\n[查看设计图](${s.file})\n\n${s.caption}\n\n${(s.details?.notes||[]).map(([title,body])=>`### ${title}\n\n${body}\n`).join('\n')}`).join('\n')+'\n完整流程见 [SPEC.md](SPEC.md)，当前源码依据见 [BASELINE.md](BASELINE.md)。\n';
+ await writeFile(path.join(root,'NOTES.md'),notesText);
+ const report={date:'2026-10-23',viewport:{width:1600,height:1000},export:'application-window-only',explanations:'NOTES.md',result:pages.every(p=>p.result==='passed')?'passed':'failed',artifacts:['overview.png','settings-comparison.png','current-settings-window.png','proposed-settings-window.png','NOTES.md'],galleryCards:art.galleryCards,pages};await writeFile(path.join(root,'render-check.json'),JSON.stringify(report,null,2)+'\n');assert.equal(report.result,'passed','Review render-check.json for failed checks');
 }finally{
  try{if(browser)await browser.send('Browser.close')}catch{}if(browser)browser.ws.close();
  await Promise.race([new Promise(r=>child.once('exit',r)),sleep(2000)]);

@@ -1,0 +1,21 @@
+[package]
+name = "lap-ai-sdk-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Independent feasibility check; no production Lap dependencies are changed.
+[workspace]
+
+[[test]]
+name = "protocols"
+path = "protocols.rs"
+
+[dev-dependencies]
+genai = { version = "=0.7.0", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "socks"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+serde_json = "1"
+futures-util = "0.3"

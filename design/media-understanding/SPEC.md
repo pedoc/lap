@@ -83,7 +83,9 @@ Mage-VL 一类完整生成模型通过媒体理解适配器接入。单独的视
 
 服务字段包括名称、默认协议、基础地址、凭据引用、位置和传输许可；服务内模型分别保存模型 ID、版本、输入方式、容量和参数覆盖。模型可在服务明确支持的前提下覆盖接口类型。服务位置区分本机、指定内网、远程 GPU 与外部服务；URL 和协议不单独证明实际推理位置。
 
-生成接口分别支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages；默认自建 Mage／Qwen 使用 Chat Completions。三个适配器转换请求体、认证与流事件，不能仅改路由。文本 Embedding 与多模态向量扩展独立验收；详见 [协议矩阵](../../docs/development/ai-service-protocols.md#2-三种生成协议与向量协议)。
+生成接口分别支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages；默认自建 Mage／Qwen 使用 Chat Completions。协议转换优先交给成熟 Rust SDK，当前候选为 `genai 0.7.0`；Lap 的薄业务层管理配置、授权、上下文与结果，不重新实现三套请求体和 SSE 解析。文本 Embedding 与多模态向量扩展独立验收；详见 [协议矩阵](../../docs/development/ai-service-protocols.md#2-三种生成协议与向量协议) 和 [SDK 可行性](../../docs/development/ai-client-libraries.md)。
+
+Vue 负责设置和交互，Rust 通过 Tauri command 接收业务请求，逐段内容通过 IPC Channel 回传，后台任务继续由 Rust 持有。SDK 自定义 HTTP 客户端必须应用项目的代理、TLS 和超时策略；现有 reqwest 0.12 与 SDK 0.13 的类型边界单独处理。图中的设计解释另列于 [NOTES.md](NOTES.md)，不作为产品 UI 导出。
 
 保留现有 HTTPS 规则，回环服务例外；设计中的内网例子使用 HTTPS。远程测试用公开或合成样例，不默认读取真实图库。前台传输与后台批量许可分开；本机严格模式不得向未允许的端点发送媒体、分析文字或查询证据。凭据、原始图片和服务响应正文不进入普通日志。
 

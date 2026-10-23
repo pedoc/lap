@@ -17,7 +17,7 @@ const UI = {
   titlebar(title='我的照片图库') {
     return `<div class="titlebar windows-titlebar"><span>${title==='我的照片图库'?'Lap':title}</span><span class="spacer"></span><span class="win-controls" aria-hidden="true"><i>−</i><i>□</i><i>×</i></span></div>`;
   },
-  statusbar(text) { return `<div class="statusbar">${icon('info',12)}<span>${text}</span><span class="right">设计示例 · 不调用模型，不修改真实图库</span></div>`; },
+  statusbar(text) { return `<div class="statusbar">${icon('info',12)}<span>${text}</span><span class="right">当前图库 · 1,286 项</span></div>`; },
   rail(active='understand') {
     return `<div class="icon-rail">${[['home','首页','workspace'],['gallery','图库','workspace'],['folder','文件夹','workspace'],['search','搜索','search'],['tag','标签','viewer'],['person','人物','workspace'],['text','文字识别','workspace'],['box','对象','workspace'],['understand','媒体理解（新增）','workspace']].map(([i,label,to])=>`<button class="rail-item ${active===i?'active':''}" data-nav="${to}" aria-label="${label}" title="${label}">${icon(i)}</button>`).join('')}<div class="spacer"></div><button class="rail-item" data-nav="models" aria-label="打开独立设置窗口" title="打开独立设置窗口">${icon('settings')}</button></div>`;
   },
@@ -31,7 +31,8 @@ const UI = {
     return `<aside class="settings-root-nav" aria-label="设置分类">${['通用','网络','布局','查看器','RAW','AI 模型','高级','快捷键','关于'].map(label=>`<button class="${label==='AI 模型'?'active':''}" ${label==='AI 模型'?'data-nav="models"':'data-action="existing-tab"'}>${label}</button>`).join('')}</aside>`;
   },
   settingsWindow(content,{baseline=false,footer='',title='',notes=[]}={}) {
-    return `<div class="settings-presentation"><section><div class="window-measure">${baseline?'当前布局复核 · 源码重建':'建议方案 · 同一独立设置窗口'}<span>600 × 620 · 100%</span></div><div class="app-window settings-window"><div class="titlebar windows-titlebar"><span>设置</span><span class="spacer"></span><span class="win-controls" aria-hidden="true"><i>×</i></span></div><div class="settings-body">${UI.settingsNav()}<main class="settings-content"><div class="settings-scroll">${content}</div>${footer?`<div class="settings-actions">${footer}</div>`:''}</main></div></div><div class="window-measure bottom">${baseline?'按 Settings.vue / AiModelSettings.vue 模板重建；非运行截图':'新增能力仅扩展 AI 模型页，左侧导航与窗口尺寸沿用当前代码'}</div></section><aside class="design-notes"><span class="design-note-label">设计说明 · 不属于产品界面</span><h1>${title}</h1>${notes.map(([heading,body])=>`<div><h3>${heading}</h3><p>${body}</p></div>`).join('')}<div class="source-note"><b>已核对当前源码</b><p>Home.vue → clickSettings()<br>Settings.vue → 左导航／滚动内容区<br>AiModelSettings.vue → 任务／选择／配置／目录<br>TitleBar.vue → 40px 标题栏</p></div><div class="row wrap">${UI.button(baseline?'查看修订稿':'对照现有布局',baseline?'models':'baseline','quiet','back')}${UI.button('默认用途','routing','quiet','settings')}</div></aside></div>`;
+    App.currentDesignNotes={title,baseline,notes};
+    return `<div class="settings-presentation"><div class="app-window settings-window"><div class="titlebar windows-titlebar"><span>设置</span><span class="spacer"></span><span class="win-controls" aria-hidden="true"><i>×</i></span></div><div class="settings-body">${UI.settingsNav()}<main class="settings-content"><div class="settings-scroll">${content}</div>${footer?`<div class="settings-actions">${footer}</div>`:''}</main></div></div></div>`;
   },
   batchModal(content,options={}) {
     const background=`${UI.heading('全部媒体','已选择 36 项 · 32 张图片，4 段视频')}<div class="v2-library-body"><div class="index-grid">${Array.from({length:9},(_,i)=>catalogMediaCard(i)).join('')}</div></div>`;

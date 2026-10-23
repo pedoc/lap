@@ -14,6 +14,7 @@ function seedQA(){
 }
 function render(){
   document.body.dataset.ready='false';
+  App.currentDesignNotes=null;
   if(App.screen==='qa'&&!App.state.qaSeeded)seedQA();
   const descriptor=SCREENS[currentScreenIndex()]||SCREENS.find(s=>s.id===App.screen)||SCREENS[0];
   document.getElementById('app').innerHTML=(VIEWS[App.screen]||VIEWS.models)();
@@ -156,5 +157,5 @@ document.addEventListener('keydown',event=>{
   if(event.target.id==='natural-query'){event.preventDefault();runSearch();}
 });
 addEventListener('popstate',loadLocation);
-window.LapDesign={screens:SCREENS,get screen(){return App.screen;},get state(){return JSON.parse(JSON.stringify(App.state));},navigate};
+window.LapDesign={screens:SCREENS,get screen(){return App.screen;},get state(){return JSON.parse(JSON.stringify(App.state));},get designNotes(){return App.currentDesignNotes?JSON.parse(JSON.stringify(App.currentDesignNotes)):null;},navigate};
 loadLocation();
