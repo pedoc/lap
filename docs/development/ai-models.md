@@ -52,6 +52,8 @@ For another model in an existing adapter family, add/import a manifest; feature 
 
 The generative-model investigation and proposed native/Python/API backend boundaries are documented in [生成式模型本地运行与 API 接入调查](generative-backends.md). This is design research; the current adapters do not implement those generative backends.
 
+The proposed media-understanding, retrieval, and scoped Q&A workflows are described in the [开发蓝图与交互设计](../../design/media-understanding/SPEC.md), with [viewable mockups](../../design/media-understanding/gallery.html). The revised mockups preserve the existing standalone 600×620 settings window and current component entry points; they do not change the implemented runtime or settings contracts described above.
+
 ## Verification
 
 ```sh

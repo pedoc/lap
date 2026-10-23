@@ -1,0 +1,50 @@
+const UI = {
+  button(label, action='demo', kind='', name='') {
+    return `<button class="button ${kind}" data-action="${action}">${name?icon(name,14):''}${label}</button>`;
+  },
+  pill(label, kind='', name='') {
+    return `<span class="pill ${kind}">${name?icon(name,11):''}${label}</span>`;
+  },
+  escape(value) { return String(value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); },
+  model(id) { return MODELS.find(m=>m.id===id)||MODELS[0]; },
+  options(cap, selected) {
+    return MODELS.filter(m=>!cap||m.caps.includes(cap)).map(m=>`<option value="${m.id}" ${m.id===selected?'selected':''} ${m.status!=='ready'?'disabled':''}>${m.name}${m.status!=='ready'?' · '+m.state:''}</option>`).join('');
+  },
+  field(label, control, help='') { return `<div class="field"><label class="field-label">${label}</label>${control}${help?`<span class="helper">${help}</span>`:''}</div>`; },
+  note(text, kind='info') { return `<div class="note">${icon(kind,14)}<span>${text}</span></div>`; },
+  heading(title, subtitle='', actions='') { return `<div class="v2-heading"><div><h1>${title}</h1>${subtitle?`<p class="subtext">${subtitle}</p>`:''}</div><div class="row">${actions}</div></div>`; },
+  titlebar(title='我的照片图库') {
+    return `<div class="titlebar windows-titlebar"><span>${title==='我的照片图库'?'Lap':title}</span><span class="spacer"></span><span class="win-controls" aria-hidden="true"><i>−</i><i>□</i><i>×</i></span></div>`;
+  },
+  statusbar(text) { return `<div class="statusbar">${icon('info',12)}<span>${text}</span><span class="right">设计示例 · 不调用模型，不修改真实图库</span></div>`; },
+  rail(active='understand') {
+    return `<div class="icon-rail">${[['home','首页','workspace'],['gallery','图库','workspace'],['folder','文件夹','workspace'],['search','搜索','search'],['tag','标签','viewer'],['person','人物','workspace'],['text','文字识别','workspace'],['box','对象','workspace'],['understand','媒体理解（新增）','workspace']].map(([i,label,to])=>`<button class="rail-item ${active===i?'active':''}" data-nav="${to}" aria-label="${label}" title="${label}">${icon(i)}</button>`).join('')}<div class="spacer"></div><button class="rail-item" data-nav="models" aria-label="打开独立设置窗口" title="打开独立设置窗口">${icon('settings')}</button></div>`;
+  },
+  sidebar(active='workspace') {
+    const search=active==='search';
+    const panel=search?`<div class="sidebar-panel-heading">搜索 <span class="dim">···</span></div><div class="sidebar-search-modes"><button class="button quiet" data-action="existing-search">文本</button><button class="button quiet" data-action="existing-search">组合</button><button class="button selected">自然语言</button></div><div class="sidebar-query"><textarea id="natural-query" class="input" aria-label="自然语言查询">${UI.escape(App.state.searchQuery)}</textarea>${UI.button('搜索','run-search','primary','search')}</div><div class="sidebar-label">搜索历史</div><div class="side-item active">湖边木屋 · 2025</div><div class="side-item">雪山日落</div><div class="side-item">海边散步</div>`:`<div class="sidebar-panel-heading">媒体理解 <span class="dim">···</span></div>${[['全部媒体','1,286'],['待分析','620'],['待建向量','196'],['可检索','448'],['失败','22']].map(([label,count],i)=>`<button class="side-item nav-side ${i===0?'active':''}" data-action="index-status">${icon(i===0?'gallery':'folder',14)}${label}<span class="number">${count}</span></button>`).join('')}<div class="side-separator"></div>${UI.button('分析当前图库','library-batch','quiet','understand')}<div style="height:10px"></div>${UI.button('查看任务','task','quiet','history')}`;
+    const library=`<div class="sidebar-panel-heading">图库</div>${[['首页',''],['全部媒体','1,286'],['收藏','46'],['媒体类型',''],['评分',''],['隐藏媒体','8'],['最近删除','0']].map(([label,count],i)=>`<div class="side-item ${i===1?'active':''}">${icon(i===0?'home':'gallery',14)}${label}<span class="number">${count}</span></div>`).join('')}`;
+    return `<aside class="sidebar"><div class="library-picker">我的照片图库 ${icon('down',12)}</div>${active==='library'?library:panel}<div class="side-bottom"><p class="helper">当前图库 · 1,286 项<br>${search?'基于已建立的内容索引':'分析与检索数据保存在当前图库'}</p></div></aside>`;
+  },
+  settingsNav(active) {
+    return `<aside class="settings-root-nav" aria-label="设置分类">${['通用','网络','布局','查看器','RAW','AI 模型','高级','快捷键','关于'].map(label=>`<button class="${label==='AI 模型'?'active':''}" ${label==='AI 模型'?'data-nav="models"':'data-action="existing-tab"'}>${label}</button>`).join('')}</aside>`;
+  },
+  settingsWindow(content,{baseline=false,footer='',title='',notes=[]}={}) {
+    return `<div class="settings-presentation"><section><div class="window-measure">${baseline?'当前布局复核 · 源码重建':'建议方案 · 同一独立设置窗口'}<span>600 × 620 · 100%</span></div><div class="app-window settings-window"><div class="titlebar windows-titlebar"><span>设置</span><span class="spacer"></span><span class="win-controls" aria-hidden="true"><i>×</i></span></div><div class="settings-body">${UI.settingsNav()}<main class="settings-content"><div class="settings-scroll">${content}</div>${footer?`<div class="settings-actions">${footer}</div>`:''}</main></div></div><div class="window-measure bottom">${baseline?'按 Settings.vue / AiModelSettings.vue 模板重建；非运行截图':'新增能力仅扩展 AI 模型页，左侧导航与窗口尺寸沿用当前代码'}</div></section><aside class="design-notes"><span class="design-note-label">设计说明 · 不属于产品界面</span><h1>${title}</h1>${notes.map(([heading,body])=>`<div><h3>${heading}</h3><p>${body}</p></div>`).join('')}<div class="source-note"><b>已核对当前源码</b><p>Home.vue → clickSettings()<br>Settings.vue → 左导航／滚动内容区<br>AiModelSettings.vue → 任务／选择／配置／目录<br>TitleBar.vue → 40px 标题栏</p></div><div class="row wrap">${UI.button(baseline?'查看修订稿':'对照现有布局',baseline?'models':'baseline','quiet','back')}${UI.button('默认用途','routing','quiet','settings')}</div></aside></div>`;
+  },
+  batchModal(content,options={}) {
+    const background=`${UI.heading('全部媒体','已选择 36 项 · 32 张图片，4 段视频')}<div class="v2-library-body"><div class="index-grid">${Array.from({length:9},(_,i)=>catalogMediaCard(i)).join('')}</div></div>`;
+    return UI.shell(background,{...options,active:'library',modal:`<div class="context-modal"><section class="batch-modal" role="dialog" aria-label="媒体理解与资料填充">${content}</section></div>`});
+  },
+  shell(content, {kind='library',active='workspace',title='',status='',modal=''}={}) {
+    if(kind==='settings') return UI.settingsWindow(content,{title:'沿用独立设置窗口'});
+    const body=kind==='blueprint'?`<main class="v2-main">${content}</main>`:kind==='viewer'?content:`${UI.rail(active==='search'?'search':active==='library'?'gallery':'understand')}${UI.sidebar(active)}<main class="content v2-content">${content}</main>`;
+    return `<div class="app-window">${UI.titlebar(title||'我的照片图库')}<div class="app-body">${body}</div>${modal}${UI.statusbar(status||'全流程设计预览')}</div>`;
+  },
+  roleLine(label,role,cap,help='') {
+    return `<div class="route-row"><div><strong>${label}</strong>${help?`<p>${help}</p>`:''}</div><select class="select" data-role="${role}" aria-label="${label}">${UI.options(cap,App.state.roles[role])}</select></div>`;
+  },
+  sourceChip(label,action='evidence') { return `<button class="source-chip" data-action="${action}">${icon('folder',11)}${label}</button>`; },
+};
+const ASSETS='../home/assets/';
+const PHOTO_LIST=[{image:'hero.jpg',name:'山湖与木屋',file:'DSC_1048.jpg'},{image:'coast.jpg',name:'海岸漫步',file:'DSC_1062.jpg'},{image:'forest.jpg',name:'林间小路',file:'DSC_1071.jpg'},{image:'mountain.jpg',name:'云间山峰',file:'DSC_1090.jpg'}];

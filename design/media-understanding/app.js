@@ -1,36 +1,148 @@
-const ICONS={gallery:'<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',folder:'<path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9H3z"/>',search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',tag:'<path d="M3 4h8l10 10-7 7L3 10z"/><circle cx="7" cy="8" r="1"/>',person:'<circle cx="12" cy="7" r="4"/><path d="M4 21v-3a8 8 0 0 1 16 0v3"/>',location:'<path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/>',text:'<path d="M4 5h16M12 5v15M8 20h8"/>',box:'<path d="m3 7 9-4 9 4-9 4zM3 7v10l9 4 9-4V7M12 11v10"/>',understand:'<path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3"/><path d="m8 12 3 3 5-6"/>',settings:'<path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',chevron:'<path d="m9 5 7 7-7 7"/>',down:'<path d="m6 9 6 6 6-6"/>',close:'<path d="m5 5 14 14M19 5 5 19"/>',shield:'<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6z"/><path d="m8 12 3 3 5-6"/>',download:'<path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5"/>',check:'<path d="m5 12 4 4 10-10"/>',plus:'<path d="M12 4v16M4 12h16"/>',refresh:'<path d="M20 8a8 8 0 1 0 0 9M20 3v6h-6"/>',play:'<path d="m8 5 11 7-11 7z"/>',pause:'<path d="M8 5v14M16 5v14"/>',arrow:'<path d="M4 12h16m-6-6 6 6-6 6"/>',back:'<path d="M20 12H4m6-6-6 6 6 6"/>',more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',star:'<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',edit:'<path d="m14 5 5 5M4 20l5-1 12-12-5-5L4 14z"/>',video:'<rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-4v12l-5-4"/>',image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',language:'<path d="M3 5h12M9 3v2m-4 3c1 4 4 7 8 9M13 5c-1 6-5 10-9 12m11 4 4-11 4 11m-6-4h4"/>',stop:'<rect x="6" y="6" width="12" height="12" rx="1"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.2"/>',history:'<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6M12 7v5l3 2"/>',zoom:'<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6M10 7v6"/>',chat:'<path d="M21 11a8 8 0 0 1-8 8H7l-4 3V6a3 3 0 0 1 3-3h7a8 8 0 0 1 8 8z"/>',cloud:'<path d="M6 18a5 5 0 1 1 1-10 7 7 0 0 1 13 3 4 4 0 0 1-1 7z"/>',grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'};
-const icon=(name,size='')=>`<svg viewBox="0 0 24 24" aria-hidden="true"${size?` style="width:${size}px;height:${size}px"`:''}>${ICONS[name]||ICONS.understand}</svg>`;
-const btn=(label,kind='',i='',action='')=>`<button class="button ${kind}"${action?` data-action="${action}"`:''}>${i?icon(i):''}${label}</button>`;
-const pill=(label,kind='',i='')=>`<span class="pill ${kind}">${i?icon(i):''}${label}</span>`;
-const assets='../home/assets/';
-const photos=[{src:'hero.jpg',name:'山湖与木屋',file:'DSC_1048.jpg'},{src:'coast.jpg',name:'海岸漫步',file:'DSC_1062.jpg'},{src:'forest.jpg',name:'林间小路',file:'DSC_1071.jpg'},{src:'mountain.jpg',name:'云间山峰',file:'DSC_1090.jpg'}];
-const views=[['models','模型管理'],['viewer','图片理解'],['video','视频理解'],['batch','批量填充'],['workspace','全库工作区']];
-const parameters=new URLSearchParams(location.search);
-const screen=parameters.get('screen')||'models';
-const scopeKey=parameters.get('scope')||'selected';
-const scopeDetails={selected:{name:'选中的 36 项',count:36,detail:'32 张图片 · 4 段视频',reuse:12,pending:24,titles:28,descriptions:30},filtered:{name:'当前筛选结果',count:214,detail:'190 张图片 · 24 段视频',reuse:86,pending:128,titles:42,descriptions:150},library:{name:'当前图库全部可见媒体',count:1286,detail:'1,192 张图片 · 94 段视频',reuse:402,pending:884,titles:86,descriptions:912}};
-const scope=scopeDetails[scopeKey]||scopeDetails.selected;
-const timeLabel=seconds=>`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
-document.getElementById('review-nav').innerHTML=views.map(([key,label])=>`<a href="?screen=${key}" class="${key===screen?'active':''}" ${key===screen?'aria-current="page"':''}>${label}</a>`).join('');
-function rail(active='gallery'){return `<div class="icon-rail">${['gallery','folder','search','tag','person','location','understand'].map(n=>`<button class="rail-item ${active===n?'active':''}" aria-label="${n}" data-action="${n==='understand'?'workspace':'preview'}">${icon(n)}</button>`).join('')}<div class="spacer"></div><button class="rail-item ${active==='settings'?'active':''}" aria-label="设置" data-action="models">${icon('settings')}</button></div>`}
-function titlebar(title='我的照片图库'){return `<div class="titlebar"><div class="window-dots"><i></i><i></i><i></i></div><span>${title}</span>${icon('down',12)}<span class="window-title">Lap</span><span class="safety">${icon('shield')}仅本机处理</span></div>`}
-function statusbar(text='当前图库 · 图片与视频'){return `<div class="statusbar">${icon('folder')}<span>${text}</span><span class="right">${icon('info')}设计预览，所有任务与分析结果均为示例</span></div>`}
-function sidebar(active='all'){return `<aside class="sidebar"><div class="sidebar-label">我的图库</div>${[['home','首页','','home'],['gallery','全部媒体','1,286','all'],['clock','往年今日','','today'],['star','收藏','46','favorite'],['folder','文件夹','','folders']].map(([i,t,n,k])=>`<div class="side-item ${active===k?'active':''}">${icon(i)}${t}<span class="number">${n}</span></div>`).join('')}<div class="side-separator"></div><div class="sidebar-label">发现与整理</div>${[['person','人物','','people'],['location','地点','','places'],['box','对象','','objects'],['text','图片文字','','ocr'],['understand','媒体理解','新','understanding']].map(([i,t,n,k])=>`<div class="side-item ${active===k?'active':''}">${icon(i)}${t}<span class="number">${n}</span></div>`).join('')}<div class="side-separator"></div><div class="sidebar-label">智能相册</div><div class="side-item">${icon('folder')}旅行精选<span class="number">128</span></div><div class="side-item">${icon('folder')}待补标题<span class="number">86</span></div><div class="side-bottom"><div class="side-mini">${icon('shield',12)} 本机模型可离线运行<br><span class="dim">媒体理解与语言生成独立配置</span></div></div></aside>`}
-function models(){return `<div class="app-window">${titlebar('Lap 设置')}<div class="app-body">${rail('settings')}<aside class="settings-nav"><h2>设置</h2>${[['settings','常规'],['grid','照片网格'],['image','图片查看'],['understand','AI 模型'],['cloud','网络'],['folder','存储与高级']].map(([i,t])=>`<div class="side-item ${t==='AI 模型'?'active':''}">${icon(i)}${t}</div>`).join('')}<div class="side-bottom"><div class="side-mini">统一管理模型<br><span class="dim">下载、选择与参数配置</span></div></div></aside><main class="settings-main"><div class="between"><div><h1>AI 模型</h1><p class="subtext">按能力选择模型，同一个模型可用于图片与视频理解。</p></div>${btn('添加模型','quiet','plus','preview')}</div><div class="settings-tabs">${[['语义搜索',''],['人脸识别',''],['文字识别',''],['对象识别',''],['媒体理解','VLM'],['语言生成','LLM']].map(([t,s])=>`<button class="${t==='媒体理解'?'active':''}" data-action="${t==='媒体理解'?'noop':'category'}">${t}${s?`<span class="tag-label">${s}</span>`:''}</button>`).join('')}</div><div class="settings-split"><div class="model-area"><div class="between"><h3>媒体理解模型 <span class="muted small">4</span></h3><div class="segmented"><button class="active" data-action="model-filter">全部</button><button data-action="model-filter">本地</button><button data-action="model-filter">线上</button></div></div><article class="model-card active" data-model="Mage-VL"><div class="model-symbol">${icon('understand')}</div><div class="model-copy"><div class="model-top"><span class="model-name">Mage-VL</span>${pill('本地','local')}${pill('已启用','brand')}</div><p class="model-desc">视觉语言模型 · 画面描述、视频理解与内容问答</p><div class="model-caps">${pill('图片','','image')}${pill('视频','','video')}${pill('时间定位','','clock')}</div></div><div class="model-action">${icon('check',18)}</div></article><article class="model-card" data-model="Qwen3-VL"><div class="model-symbol">Q</div><div class="model-copy"><div class="model-top"><span class="model-name">Qwen3-VL</span>${pill('本地','local')}</div><p class="model-desc">通用视觉语言模型 · 图片、视频与结构化理解</p><div class="model-caps">${pill('图片','','image')}${pill('视频','','video')}</div></div><div class="model-action">${btn('下载','small','download','download')}</div></article><article class="model-card" data-model="InternVL"><div class="model-symbol">IV</div><div class="model-copy"><div class="model-top"><span class="model-name">InternVL</span>${pill('本地','local')}</div><p class="model-desc">视觉语言模型 · 可在适配后提供媒体理解能力</p><div class="between" style="margin-top:11px"><div class="progress" style="width:72%"><span style="width:55%"></span></div><span class="small muted">下载中 55%</span></div></div><div class="model-action">${btn('停止','small','','stop-download')}</div></article><article class="model-card"><div class="model-symbol">${icon('cloud')}</div><div class="model-copy"><div class="model-top"><span class="model-name">自定义视觉服务</span>${pill('线上','warn')}</div><p class="model-desc">填写服务地址、协议与模型 ID，验证后启用。</p><div class="model-caps">${pill('待配置','','settings')}</div></div><div class="model-action">${btn('配置','small','','preview')}</div></article><div class="note">${icon('info')}<span>媒体理解负责看图、看视频。自然语言查询和文本润色可在“语言生成”中单独选择模型。</span></div></div><aside class="model-detail"><div class="between"><h3>Mage-VL 配置</h3>${pill('已就绪','ok')}</div><div class="field"><label class="field-label" for="run-device">执行设备</label><select id="run-device" class="select"><option>自动选择（优先 GPU）</option><option>CPU</option></select><span class="helper">设备信息与实际运行状态在测试后显示。</span></div><div><div class="detail-section-title">默认用于</div><div class="default-row"><span>图片理解</span><button class="switch" aria-label="用作图片理解默认模型" aria-pressed="true" data-action="switch"></button></div><div class="default-row"><span>视频理解</span><button class="switch" aria-label="用作视频理解默认模型" aria-pressed="true" data-action="switch"></button></div></div><div><div class="detail-section-title">分析偏好</div><div class="field"><label class="field-label" for="output-language">输出语言</label><select id="output-language" class="select"><option>简体中文</option><option>English</option></select></div></div><div class="field"><label class="field-label" for="video-quality">视频分析方案</label><select id="video-quality" class="select"><option>均衡 · 覆盖主要场景</option><option>细致 · 更多画面与细节</option></select></div><div><div class="detail-section-title">本地资源</div><div class="resource-line"><span>模型与处理配置</span><span class="success">已安装</span></div><div class="resource-line"><span>资源完整性</span><span class="success">已校验</span></div></div><div class="note">${icon('shield')}<span>当前策略：仅本机<br>不会自动切换到线上模型。</span></div><div class="row">${btn('测试模型','quiet','','test-model')}${btn('保存配置','primary','','save-settings')}</div></aside></div><div class="settings-bottom"><span class="helper">模型条目和状态为设计示例，实际能力以适配与测试为准。</span><button class="text-button" data-action="preview">管理本地模型文件夹 ${icon('chevron',11)}</button></div></main></div>${statusbar('设置 / AI 模型 / 媒体理解')}</div>`}
-function filmstrip(){return `<div class="filmstrip">${[photos[1],photos[2],photos[0],photos[3],photos[1],photos[2]].map((p,i)=>`<img src="${assets+p.src}" alt="${p.name}" class="${i===2?'active':''}">`).join('')}</div>`}
-function viewer(isVideo=false){return `<div class="app-window">${titlebar()}<div class="viewer-toolbar">${btn('返回图库','quiet','back','workspace')}<span class="file-label">${isVideo?'mountain-lake.mp4':'DSC_1048.jpg'}</span>${pill(isVideo?'视频':'图片','',''+(isVideo?'video':'image'))}<div class="spacer"></div>${['star','zoom','more'].map(i=>`<button class="icon-button" aria-label="${i}" data-action="preview">${icon(i)}</button>`).join('')}${btn('理解','selected','understand','noop')}${btn('信息','quiet','info','info-tab')}</div><div class="viewer-layout"><div class="media-stage"><div class="photo-frame"><img src="${assets}hero.jpg" alt="群山、湖泊与木屋的示例媒体"><div class="floating-label">${isVideo?'示例视频画面 · 00:28':'2025 年旅行 / 山湖与森林'}</div>${isVideo?`<button class="video-play" aria-label="播放示例" data-action="play">${icon('play')}</button>`:''}</div>${isVideo?`<div class="video-controls"><div class="video-track"><div class="video-markers"></div></div><div class="video-control-row"><button class="icon-button" aria-label="播放" data-action="play">${icon('play')}</button><span class="mono" id="play-time">00:28 / 01:32</span><div class="spacer"></div><span>分析范围</span>${pill('00:24 – 01:00','brand')}${icon('more')}</div></div><div class="storyboard">${[0,1,2,3,4,5,6,7].map((n)=>`<div><img src="${assets}hero.jpg" style="object-position:${n*14}% ${35+n*7}%;${n>3?'transform:scale(1.16)':''}" alt="视频示例画面"><small>${timeLabel(n*12)}</small></div>`).join('')}</div>`:`<div class="stage-caption"><span>DSC_1048.jpg</span><span>照片原件</span><span>100%</span></div>${filmstrip()}`}</div><aside class="understanding-panel"><div class="panel-tabs"><button data-action="info-tab">信息</button><button class="active" data-action="noop">理解</button><div class="spacer"></div><button class="icon-button" aria-label="更多" data-action="preview">${icon('more')}</button></div><div class="panel-content"><div class="between"><h3>${isVideo?'视频理解':'图片理解'}</h3>${pill('已分析','ok')}</div><div class="analysis-source">${icon('understand',13)}<span>Mage-VL</span><span>·</span><span>本机</span><button class="text-button" data-action="reanalyze">重新分析</button></div>${isVideo?videoPanel():imagePanel()}<div class="note">${icon('info')}<span>${isVideo?'当前分析仅覆盖画面；事件时间可点击跳转。此处为设计示意。':'分析结果已单独保存。采用后才写入标题或说明，不修改原始文件。'}</span></div></div><div class="question-box"><div class="prompt">${icon('chat',14)}<input aria-label="询问当前媒体" placeholder="${isVideo?'问问这个片段里发生了什么…':'针对这张图片提问…'}"><button class="send" aria-label="发送问题" data-action="ask">${icon('arrow')}</button></div><div class="question-examples"><button data-action="ask">${isVideo?'这个片段的主要内容？':'画面里有哪些主体？'}</button><button data-action="ask">${isVideo?'概括镜头变化':'帮我写一句简短说明'}</button></div><div class="helper" style="margin-top:8px">仅针对当前${isVideo?'视频及选定范围':'图片'}回答，不会修改媒体资料。</div></div></aside></div>${statusbar(isVideo?'视频 / 选定片段 / 00:24 – 01:00':'当前图片 / 分析结果已保存')}</div>`}
-function imagePanel(){return `<div class="generated-field"><div class="generated-label"><span>标题建议</span><span class="small-label">尚未填入正式标题</span></div><div class="suggestion"><div class="suggestion-title" contenteditable="true" role="textbox" aria-label="标题建议">山湖与木屋</div><div class="actions">${btn('编辑','small quiet','edit','edit-title')}${btn('采用标题','small primary','','adopt-title')}</div></div></div><div class="generated-field"><div class="generated-label"><span>说明建议</span><button class="text-button" data-action="polish">润色</button></div><div class="suggestion"><p contenteditable="true" role="textbox" aria-label="说明建议">群山与森林环绕着平静的湖面，近处的木屋依水而建。云雾掠过山间，山体与天空倒映在水中。</p><div class="actions">${btn('采用说明','small','','adopt-description')}</div></div></div><div><div class="generated-label" style="margin-bottom:9px"><span>内容线索</span><span class="small-label">用于检索的分析记录</span></div><div class="row wrap" style="gap:6px">${['山峰','湖泊','森林','木屋','倒影'].map(t=>`<span class="tag">${t}</span>`).join('')}</div></div>`}
-function videoPanel(){return `<div class="scope-box"><div class="between"><span class="small muted">分析范围</span><button class="text-button" data-action="whole-video">改为整个视频</button></div><div class="scope-time"><input class="input mono" aria-label="开始时间" value="00:24"><span class="muted">至</span><input class="input mono" aria-label="结束时间" value="01:00">${icon('clock',14)}</div></div><div class="generated-field"><div class="generated-label"><span>片段摘要</span><button class="text-button" data-action="adopt-description">填入说明</button></div><div class="suggestion"><p>这段画面展现山湖与湖畔木屋，主要内容包括湖面倒影、森林和远处山峰。</p></div></div><div><div class="generated-label"><span>事件与场景</span><span class="small-label">点击时间跳转</span></div><div class="event-list">${[['00:24','湖面与远山','画面包含湖面倒影和山体'],['00:38','湖畔木屋','木屋与近处岸边成为主要内容'],['00:52','森林与山峰','远处森林和山体细节']].map(([t,a,b])=>`<div class="event"><button class="event-time" data-action="seek" data-time="${t}">${t}</button><div><p>${a}</p><span>${b}</span></div></div>`).join('')}</div></div>`}
-function mediaGrid(count=12,selected=false){return `<div class="gallery-grid">${Array.from({length:count},(_,i)=>{const p=photos[i%4];const video=i===2||i===7;const done=i<5;return `<article class="media-card"><div class="cover"><img src="${assets+p.src}" alt="${p.name}" style="object-position:${i%2?'65%':'35%'} ${i%3?'45%':'60%'}">${selected?'<span class="selection-check checked">✓</span>':pill(i===5?'分析中':done?'已分析':i===8?'失败':'未分析',done?'ok':i===8?'error':'')}${video?'<span class="duration">'+(i===2?'01:32':'00:46')+'</span>':''}</div><div class="media-copy"><div class="media-name">${done?p.name:video?'mountain-lake.mp4':p.file}</div><div class="media-desc"><span>${done?'说明已保存':video?'视频':'图片'}${i===1?' · 标题已填':''}</span><span>${done?'Mage-VL':'2025 / 旅行'}</span></div></div></article>`}).join('')}</div>`}
-function workspace(forBatch=false){return `<div class="app-window">${titlebar()}<div class="app-body">${rail(forBatch?'gallery':'understand')}${sidebar(forBatch?'all':'understanding')}<main class="content"><div class="page-toolbar">${icon(forBatch?'gallery':'understand',17)}<h2>${forBatch?'全部媒体':'媒体理解'}</h2><div class="spacer"></div>${btn('模型设置','quiet','settings','models')}${btn(forBatch?'媒体理解':'分析当前图库','primary','understand',forBatch?'batch':'library-batch')}</div><div class="gallery-header"><div><h1>${forBatch?(scopeKey==='library'?'当前图库':'2025 年旅行'):'媒体理解记录'}</h1><p class="subtext">${forBatch?'选择照片与视频，生成标题和说明。':'图片与视频统一分析，保留来源、覆盖范围和处理记录。'}</p></div><div class="row">${pill('图片：Mage-VL','local','image')}${pill('视频：Mage-VL','local','video')}</div></div><div class="gallery-body">${forBatch?`<div class="selection-toolbar">${icon('check',15)}<strong>已选中 36 项</strong><span class="muted">32 张图片 · 4 段视频</span><div class="spacer"></div>${btn('媒体理解','small selected','understand','batch')}${btn('取消选择','small quiet','','preview')}</div>`:`<div class="running-task"><div class="task-glyph">${icon('understand')}</div><div class="task-main"><div class="between"><strong>正在分析旅行媒体并填充空白字段</strong><span class="small mono">18 / 36</span></div><div class="progress"><span></span></div><div class="task-details"><span>当前：DSC_1071.jpg</span><span>本机 · Mage-VL</span><span class="warning">1 项失败</span></div></div><div class="task-summary">已填标题 <b class="accent">14</b> 项<br>已填说明 <b class="accent">18</b> 项</div>${btn('停止任务','quiet','stop','stop-task')}</div><div class="filter-tabs">${[['全部','1,286'],['未分析','868'],['已分析','402'],['失败','16']].map(([t,n],i)=>`<button class="${i===0?'active':''}" data-action="status-filter">${t}<small>${n}</small></button>`).join('')}<div class="spacer"></div><button class="text-button" data-action="preview">仅看待填文字</button><div class="search-small">${icon('search')}搜索已分析内容</div></div>`}<div class="library-strip"><strong>${forBatch?'当前筛选结果':'全部媒体'}</strong><span>${forBatch?'已选择当前结果中的 36 项':'按加入时间排列 · '+icon('grid',12)}</span></div>${mediaGrid(forBatch?12:8,forBatch)}${!forBatch?`<div class="between" style="margin-top:17px"><span class="helper">未分析和失败的媒体不等于内容不存在。</span><div class="row">${btn('仅重试失败','small quiet','refresh','retry')}${btn('继续未完成','small','','continue')}</div></div>`:''}</div></main></div>${statusbar(forBatch?'当前筛选 / 已选中 36 项':'当前图库 / 1,286 项媒体')}${forBatch?batchDialog():''}</div>`}
-function batchDialog(){return `<div class="overlay"><section class="batch-dialog" role="dialog" aria-labelledby="batch-title"><header class="dialog-header"><div><h2 id="batch-title">媒体理解与文字填充</h2><p class="subtext">分析图片和视频，补齐可搜索的标题与说明。</p></div><button class="icon-button" aria-label="关闭" data-action="workspace">${icon('close')}</button></header><div class="dialog-body"><div class="dialog-form"><div class="form-section"><h3>处理范围</h3><div class="scope-choice"><div class="radio-row"><span class="radio-dot"></span><strong>${scope.name}</strong></div><span class="small muted">${scope.detail}</span></div><div class="between"><span class="helper">提交后固定范围；不包含隐藏与最近删除。</span><button class="text-button" data-action="change-scope">切换范围 ${icon('down',10)}</button></div></div><div class="form-section"><h3>本次执行</h3><div class="segmented" style="width:100%;display:flex"><button data-action="batch-mode" style="flex:1">仅建立分析记录</button><button class="active" data-action="batch-mode" style="flex:1">分析并填充文字</button></div><div class="form-choices"><label class="check-card checked"><span class="check"><input type="checkbox" checked><span><b>填充标题</b><small>${scope.titles} 项标题为空</small></span></span></label><label class="check-card checked"><span class="check"><input type="checkbox" checked><span><b>填充说明</b><small>${scope.descriptions} 项说明为空</small></span></span></label></div><label class="check"><input type="checkbox" checked><span><b>仅填空白，保留已有内容</b><small>保存前再次核对，跳过处理中被人工修改的字段。</small></span></label></div><div class="form-section"><h3>理解模型</h3><div class="model-assignment"><div class="model-symbol">${icon('understand')}</div><div><strong class="small">Mage-VL</strong><div class="helper">图片与视频 · 简体中文</div></div>${pill('本机','local','shield')}<button class="text-button" data-action="models">更换</button></div></div><div class="note">${icon('info')}<span>有效分析结果直接复用；缺失项才运行模型。标题和说明写入图库数据库，不修改原文件。</span></div></div><aside class="dialog-aside"><h3>任务预检</h3><div><div class="receipt-row"><span>处理媒体</span><b>${scope.count.toLocaleString('en-US')} 项</b></div><div class="receipt-row"><span>可复用分析</span><b>${scope.reuse} 项</b></div><div class="receipt-row"><span>需要新分析</span><b>${scope.pending} 项</b></div><div class="receipt-row"><span>不支持或无法读取</span><b class="success">0 项</b></div></div><div class="divider" style="margin:0"></div><div class="between"><h3>结果样例</h3><span class="small-label">示意</span></div><div class="sample-result"><img src="${assets}hero.jpg" alt="结果样例"><div><span class="small-label">标题</span><div><strong>山湖与木屋</strong></div><p>群山与森林环绕湖面，近处的木屋依水而建。</p></div></div><span class="helper">开始后可停止，已完成结果保留。</span></aside></div><footer class="dialog-footer"><span class="helper">${icon('shield',12)} 仅本机处理 · 不自动转发线上</span><div class="row">${btn('取消','quiet','','workspace')}${btn('先看样例','quiet','','sample')}${btn(`开始处理 ${scope.count.toLocaleString('en-US')} 项`,'primary','play','start-batch')}</div></footer></section></div>`}
-const captions={models:'<b>模型管理</b>：媒体理解以 VLM 独立成类，支持选择、下载、设备配置与默认用途。',viewer:'<b>查看图片</b>：右侧面板保留内容结果，标题和说明经采用后填入，问答限定当前媒体。',video:'<b>查看视频</b>：明确整段或片段范围，摘要与事件时间轴可直接关联播放位置。',batch:'<b>批量处理</b>：确认选中范围、填充字段和模型位置，默认仅填空白，开始前可查看样例。',workspace:'<b>全库工作区</b>：统一浏览分析状态、监督后台任务，支持当前图库批量处理与失败重试。'};
-const renders={models,viewer:()=>viewer(false),video:()=>viewer(true),batch:()=>workspace(true),workspace:()=>workspace(false)};
-document.getElementById('app').innerHTML=(renders[screen]||models)();
-document.getElementById('screen-caption').innerHTML=captions[screen]||captions.models;
-document.title=`Lap · ${views.find(([key])=>key===screen)?.[1]||'媒体理解'}设计预览`;
-document.body.dataset.screen=screen;
-document.body.dataset.ready='true';
+const VIEWS={...ConfigViews,...LibraryViews,...MediaViews,...FlowViews};
 let toastTimer;
-function toast(message){const el=document.getElementById('toast');el.textContent=message;el.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('visible'),2600)}
-document.addEventListener('click',event=>{const target=event.target.closest('[data-action]');if(!target)return;const action=target.dataset.action;if(action==='library-batch'){location.search='?screen=batch&scope=library';return}if(action==='change-scope'){const order=['selected','filtered','library'];location.search=`?screen=batch&scope=${order[(order.indexOf(scopeKey)+1)%order.length]}`;return}if(['models','workspace','batch','viewer','video'].includes(action)){location.search=`?screen=${action}`;return}if(action==='noop')return;if(action==='adopt-title'||action==='adopt-description'){target.textContent='已采用';target.classList.add('success-button');toast('预览：已采用建议；不会修改真实图库。');return}if(action==='edit-title'){document.querySelector('.suggestion-title')?.focus();return}if(action==='switch'){const value=target.getAttribute('aria-pressed')!=='true';target.setAttribute('aria-pressed',String(value));target.style.opacity=value?'1':'.35';return}if(['model-filter','status-filter','batch-mode'].includes(action)){target.parentElement.querySelectorAll('button').forEach(button=>button.classList.remove('active'));target.classList.add('active');return}if(action==='seek'){const t=document.getElementById('play-time');if(t)t.textContent=`${target.dataset.time} / 01:32`;toast(`预览：跳转至 ${target.dataset.time}`);return}if(action==='start-batch'){location.search='?screen=workspace';return}if(action==='stop-task'){target.innerHTML=icon('play')+'继续任务';target.dataset.action='continue';toast('预览：任务已停止，已完成结果保留。');return}if(action==='ask'){toast('问答仅为交互示意，此预览未调用任何模型。');return}if(action==='download'){target.textContent='等待下载';target.disabled=true;toast('下载为示意，不会连接网络或安装模型。');return}const messages={'test-model':'预览：这里显示真实图文契约测试、设备与错误信息。','save-settings':'预览：配置已保存；没有修改 Lap 的实际设置。','stop-download':'预览：停止资源下载。','polish':'预览：可委托已配置的语言模型润色已有说明。','reanalyze':'预览：重新分析前确认范围和模型，结果单独保存。','whole-video':'预览：将分析范围改为整个视频。','sample':'当前侧栏展示一项结果样例。','retry':'预览：只重新提交失败项。','continue':'预览：继续尚未完成的媒体。','info-tab':'预览：信息与理解共用右侧面板。','category':'其他识别类别保持现有模型管理方式。','play':'视频为静态设计示例，未加载真实视频。','preview':'这是设计预览，未连接真实业务。'};toast(messages[action]||'这是设计预览，未连接真实业务。')});
+let messageSerial=10;
+function toast(text){const box=document.getElementById('toast');box.textContent=text;box.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.classList.remove('visible'),3000);}
+function currentScreenIndex(){return SCREENS.findIndex(s=>s.id===App.screen&&(s.id!=='batch'||(s.query||'')===(App.state.scope==='library'?'scope=library':'')));}
+function seedQA(){
+  App.state.qaMessages=[
+    {id:'u1',role:'user',text:'概括这张图片。'},
+    {id:'a1',role:'assistant',basis:'indexed',text:'已有分析记录描述了山峰、森林、湖泊和近处木屋，水面可以看到倒影。',ref:'分析记录 A1048'},
+    {id:'u2',role:'user',text:'右侧尖顶建筑是什么？'},
+    {id:'a2',role:'assistant',basis:'visual',text:'已有记录不足以确认，我只复核了当前图片。右侧林间可见一座带尖顶的建筑，外观可能是小教堂，但实际用途无法仅凭画面确定。',ref:'当前原图 · 局部画面'},
+  ];
+  App.state.qaInspected=true;App.state.qaSeeded=true;
+}
+function render(){
+  document.body.dataset.ready='false';
+  if(App.screen==='qa'&&!App.state.qaSeeded)seedQA();
+  const descriptor=SCREENS[currentScreenIndex()]||SCREENS.find(s=>s.id===App.screen)||SCREENS[0];
+  document.getElementById('app').innerHTML=(VIEWS[App.screen]||VIEWS.models)();
+  document.getElementById('screen-caption').innerHTML=`<b>${descriptor.title}</b>：${descriptor.caption}`;
+  document.getElementById('screen-select').innerHTML=SCREENS.map((s,i)=>`<option value="${i}" ${s===descriptor?'selected':''}>${String(i+1).padStart(2,'0')} / ${SCREENS.length}　${s.group} · ${s.title}</option>`).join('');
+  document.title=`Lap · ${descriptor.title} · 全流程设计`;
+  document.body.dataset.screen=App.screen;document.body.dataset.ready='true';
+  document.querySelectorAll('.detail-marker').forEach(marker=>{
+    const frame=marker.parentElement,img=frame.querySelector('img');
+    const place=()=>{const w=frame.clientWidth,h=frame.clientHeight,k=Math.min(w/img.naturalWidth,h/img.naturalHeight),iw=img.naturalWidth*k,ih=img.naturalHeight*k;Object.assign(marker.style,{left:((w-iw)/2+iw*.78)+'px',top:((h-ih)/2+ih*.58)+'px',width:(iw*.12)+'px',height:(ih*.17)+'px'});};
+    if(img.complete&&img.naturalWidth)place();else img.addEventListener('load',place,{once:true});
+  });
+  if(App.screen==='qa')requestAnimationFrame(()=>{const h=document.getElementById('qa-history');if(h)h.scrollTop=h.scrollHeight;});
+}
+function navigate(screen,params={}){
+  if(!VIEWS[screen])return;
+  App.screen=screen;
+  if(screen==='batch'&&params.scope)App.state.scope=params.scope;
+  const q=new URLSearchParams({screen,...params});
+  history.pushState(null,'','?'+q.toString());App.params=q;render();
+}
+function loadLocation(){
+  const q=new URLSearchParams(location.search);App.screen=VIEWS[q.get('screen')]?q.get('screen'):'models';
+  App.params=q;if(App.screen==='batch')App.state.scope=SCOPES[q.get('scope')]?q.get('scope'):'selected';
+  render();
+}
+function appendQuestion(text){
+  const question=String(text||'').trim();if(!question){toast('请输入针对当前图片的问题。');return;}
+  App.state.qaSeeded=true;App.state.qaMessages.push({id:'u'+(++messageSerial),role:'user',text:question});
+  if(/尖顶|门牌|写着|建筑用途|什么字/.test(question)){
+    App.state.qaPending=true;
+    App.state.qaMessages.push({id:'a'+(++messageSerial),role:'assistant',basis:'insufficient',text:'已有分析只记录了自然景物和木屋，没有足够证据回答这个细节。可以只复核当前图片，或保留为无法确定。',ref:'分析记录 A1048 · 未覆盖该细节'});
+  }else{
+    App.state.qaMessages.push({id:'a'+(++messageSerial),role:'assistant',basis:'indexed',text:'根据已保存记录，画面包含山峰、森林、湖泊和湖畔木屋，湖面有山体与天空的倒影。回答仅依据当前图片的分析记录。',ref:'分析记录 A1048'});
+  }
+  render();
+}
+function inspectCurrent(){
+  App.state.qaInspected=true;App.state.qaPending=false;App.state.inspectionCount=(App.state.inspectionCount||0)+1;
+  App.state.qaMessages.push({id:'a'+(++messageSerial),role:'assistant',basis:'visual',text:'复核仅针对当前图片。右侧林间可见带尖顶的建筑，外观可能是小教堂，但具体用途仍无法仅凭图片确定。没有读取其它媒体，也没有修改标题、说明或标签。',ref:'当前原图 · 局部画面'});
+  render();
+}
+function startJob(){
+  App.state.createdJobs++;App.state.jobScope=App.state.scope;App.state.jobStopped=false;
+  App.state.job={scope:App.state.scope,roles:{...App.state.roles},indexEnabled:App.state.indexEnabled,fields:{...App.state.fields},existingTagsOnly:App.state.existingTagsOnly};
+  navigate('task');
+}
+function runSearch(){
+  const field=document.getElementById('natural-query');App.state.searchQuery=field?.value.trim()||App.state.searchQuery;
+  App.state.searchRan=true;navigate('search');toast('这是检索流程示意，没有运行真实 Embedding 或媒体分析。');
+}
+document.addEventListener('click',event=>{
+  const task=event.target.closest('[data-task]');if(task){App.state.task=task.dataset.task;render();return;}
+  const cap=event.target.closest('[data-filter]');if(cap){App.state.filter=cap.dataset.filter;render();return;}
+  const indexFilter=event.target.closest('[data-index-filter]');if(indexFilter){indexFilter.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));indexFilter.classList.add('active');toast('示例：筛选分析与索引状态。');return;}
+  const seek=event.target.closest('[data-seek]');if(seek){App.state.videoTime=seek.dataset.seek;render();return;}
+  const tag=event.target.closest('[data-tag]');if(tag){const value=tag.dataset.tag;const set=new Set(App.state.rejectedTags||[]);set.has(value)?set.delete(value):set.add(value);App.state.rejectedTags=[...set];render();return;}
+  const target=event.target.closest('[data-action]');
+  if(!target){const nav=event.target.closest('[data-nav]');if(nav)navigate(nav.dataset.nav);return;}
+  const action=target.dataset.action;
+  if(VIEWS[action]){navigate(action);return;}
+  if(action==='library-batch'){navigate('batch',{scope:'library'});return;}
+  if(action==='add-model'){navigate('catalog');return;}
+  if(action==='gallery'){location.href='gallery.html';return;}
+  if(action==='previous-screen'||action==='next-screen'){let i=currentScreenIndex();i=(i+(action==='next-screen'?1:-1)+SCREENS.length)%SCREENS.length;const s=SCREENS[i];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
+  if(action==='prepare-local'){App.state.localReady=true;render();toast('模拟资源准备完成；没有下载或安装真实运行环境。');return;}
+  if(action==='probe-local'){toast('模拟检测入口：加载能力、设备条件与实际推理分别报告。');return;}
+  if(action==='test-api'){App.state.apiTested=true;render();document.getElementById('api-status')?.scrollIntoView({block:'nearest'});toast('模拟保存并测试完成；没有保存真实配置或发送请求。');return;}
+  if(action==='save-api'){toast('已模拟保存参数；保存不自动验证、启用或切换用途。');return;}
+  if(action==='save-routes'){toast('示例用途绑定已保留；已提交任务仍使用原快照。');return;}
+  if(action==='start-index-job'){startJob();return;}
+  if(action==='toggle-job'){App.state.jobStopped=!App.state.jobStopped;render();toast(App.state.jobStopped?'任务停止示意：已完成结果保留。':'继续未完成任务示意。');return;}
+  if(action==='retry-vector'){App.state.vectorRetried=true;render();toast('只重试向量阶段，复用已有分析记录。');return;}
+  if(action==='adopt-title'){
+    const text=document.getElementById('title-proposal')?.textContent.trim()||'';
+    if(!text||[...text].length>256||/[\r\n\x00-\x1f]/.test(text)){toast('标题应为 1–256 个字符，不能包含换行或控制字符。');return;}
+    App.state.title=text;render();toast('已采用示例标题；没有修改真实图库。');return;
+  }
+  if(action==='adopt-description'){App.state.description=document.getElementById('description-proposal')?.textContent.trim()||'';render();toast('已采用示例说明。');return;}
+  if(action==='adopt-tags'){
+    const rejected=new Set(App.state.rejectedTags||[]);
+    App.state.tags=[...new Set([...App.state.tags,...['湖泊','山峰','森林','木屋'].filter(t=>!rejected.has(t))])];
+    render();toast('已采用未拒绝的示例标签，保留原有人工标签。');return;
+  }
+  if(action==='adopt-answer'){
+    const id=target.closest('[data-msg]')?.dataset.msg;const message=App.state.qaMessages.find(m=>m.id===id);
+    if(message&&message.basis!=='insufficient'){App.state.description=message.text;render();toast('明确采用后才写入示例说明。');}return;
+  }
+  if(action==='clear-qa'){App.state.qaMessages=[];App.state.qaSeeded=true;App.state.qaInspected=false;App.state.qaPending=false;render();return;}
+  if(action==='ask-summary'){appendQuestion('概括这张图片。');return;}
+  if(action==='ask-detail'){appendQuestion('右侧尖顶建筑是什么？');return;}
+  if(action==='ask-photo'){appendQuestion(document.getElementById('photo-question')?.value);return;}
+  if(action==='inspect-current'){inspectCurrent();return;}
+  if(action==='run-search'){runSearch();return;}
+  const messages={
+    'baseline-control':'当前布局对照，控件与值均为源码重建示意。',
+    'existing-tab':'现有设置分类保持原入口；预览仅演示 AI 模型部分。',
+    'existing-search':'保留现有文本与组合搜索，本预览演示新增自然语言模式。',
+    'test-config':'模拟保存并测试：先保留配置，再测试实际部署的输入与输出能力。',
+    'evidence':'证据示例：来源图片 #1048、当前源版本、分析方案与生成部署。',
+    'list-api-models':'模型列表为示意；服务无列表接口时允许手填模型 ID。',
+    'preview-sample':'样例：标题“山湖与木屋”；说明与标签从同一次有效分析中生成。',
+    'polish-description':'示例：把已有说明交给语言生成模型，不重新读取原图。',
+    'reanalyze-current':'仅重新分析当前图片；生成新分析版本，不自动覆盖正式资料。',
+    'media-info':'信息页沿用现有文件、EXIF、标题和人工标签编辑功能。',
+    'demo-video':'视频使用现有照片作静态画面示意，不包含真实视频播放。',
+    'inspect-video':'只复核 00:24–01:00 片段。真实实现按已验证的传输方式读取或发送媒体。',
+    'ask-video':'示例：从当前范围内片段记录获取证据，信息不足时再局部复核。',
+    'edit-filters':'复用现有组合筛选编辑生成的条件；模型不直接执行任意 SQL。',
+  };
+  toast(messages[action]||'设计交互示例，未连接真实业务。');
+});
+document.addEventListener('change',event=>{
+  const el=event.target;
+  if(el.id==='configured-model'){navigate(el.value==='mage-local'?'local':el.value==='vision-lan'||el.value==='cloud-text'?'api':'models');return;}
+  if(el.id==='screen-select'){const s=SCREENS[Number(el.value)];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
+  if(el.id==='local-model'){App.state.localModel=el.value;App.state.localEngine=el.value==='mage'?'python':'onnx';App.state.localReady=false;render();return;}
+  if(el.name==='engine'){App.state.localEngine=el.value;render();return;}
+  if(el.dataset.role){App.state.roles[el.dataset.role]=el.value;render();return;}
+  if(el.id==='scope-select'){App.state.scope=el.value;navigate('batch',{scope:el.value});return;}
+  if(el.id==='index-enabled'){App.state.indexEnabled=el.checked;render();return;}
+  if(el.dataset.fillField){App.state.fields[el.dataset.fillField]=el.checked;render();return;}
+  if(el.id==='existing-tags-only'){App.state.existingTagsOnly=el.checked;return;}
+});
+document.addEventListener('keydown',event=>{
+  if(event.key!=='Enter')return;
+  if(event.target.id==='photo-question'){event.preventDefault();appendQuestion(event.target.value);}
+  if(event.target.id==='natural-query'){event.preventDefault();runSearch();}
+});
+addEventListener('popstate',loadLocation);
+window.LapDesign={screens:SCREENS,get screen(){return App.screen;},get state(){return JSON.parse(JSON.stringify(App.state));},navigate};
+loadLocation();

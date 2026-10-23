@@ -5,110 +5,474 @@
     "height": 1000
   },
   "result": "passed",
+  "artifacts": [
+    "overview.png",
+    "settings-comparison.png",
+    "current-settings-window.png",
+    "proposed-settings-window.png"
+  ],
+  "galleryCards": 16,
   "pages": [
     {
-      "screen": "models",
-      "name": "01-model-management.png",
-      "scope": null,
-      "brokenImages": [],
-      "horizontalOverflow": false,
+      "id": "baseline",
+      "title": "当前设置布局复核",
+      "file": "00-current-settings.png",
+      "group": "现状对照",
+      "caption": "按当前源码重建：独立 600×620 设置窗口、原左侧分类与单列 AI 表单；不是原生运行截图。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "existing 600x620 settings window and navigation",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 600,
+        "height": 620,
+        "settings": true
+      },
       "controls": [
         {
-          "label": "测试模型",
+          "label": "图文语义检索",
           "visible": true
         },
         {
-          "label": "保存配置",
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
           "visible": true
         }
-      ],
-      "exceptions": []
+      ]
     },
     {
-      "screen": "viewer",
-      "name": "02-image-viewer.png",
-      "scope": null,
-      "brokenImages": [],
-      "horizontalOverflow": false,
+      "id": "models",
+      "title": "AI 模型任务与配置",
+      "file": "01-model-management.png",
+      "group": "模型与部署",
+      "caption": "在原独立设置窗口中增加用途按钮，保留模型选择、配置、测试和下方目录。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "existing 600x620 settings window and navigation",
+        "new purpose filters configured deployments",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 600,
+        "height": 620,
+        "settings": true
+      },
       "controls": [
         {
-          "label": "发送问题",
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        },
+        {
+          "label": "语言生成",
+          "visible": true
+        },
+        {
+          "label": "Embedding",
           "visible": true
         }
-      ],
-      "exceptions": []
+      ]
     },
     {
-      "screen": "video",
-      "name": "03-video-viewer.png",
-      "scope": null,
-      "brokenImages": [],
-      "horizontalOverflow": false,
+      "id": "local",
+      "title": "本机运行与下载",
+      "file": "07-local-runtime.png",
+      "group": "模型与部署",
+      "caption": "分别准备运行环境与模型包，本机可用性不等同于模型是否受支持。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "existing 600x620 settings window and navigation",
+        "model-scoped runtime choices",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 600,
+        "height": 620,
+        "settings": true
+      },
       "controls": [
         {
-          "label": "发送问题",
+          "label": "准备环境并下载",
+          "visible": true
+        },
+        {
+          "label": "保存并测试",
           "visible": true
         }
-      ],
-      "exceptions": []
+      ]
     },
     {
-      "screen": "batch",
-      "name": "04-batch-fill.png",
-      "scope": "selected",
-      "brokenImages": [],
-      "horizontalOverflow": false,
+      "id": "api",
+      "title": "API 部署配置",
+      "file": "08-api-connection.png",
+      "group": "模型与部署",
+      "caption": "本机、内网和外部 API 使用明确的连接配置，能力按部署分别验证。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "existing 600x620 settings window and navigation",
+        "save without activation; separate simulated deployment test",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 600,
+        "height": 620,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "保存参数",
+          "visible": true
+        },
+        {
+          "label": "保存并测试",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "routing",
+      "title": "默认用途与路由",
+      "file": "09-task-routing.png",
+      "group": "模型与部署",
+      "caption": "同一部署可以承担多个用途，理解、生成、Embedding 各有明确默认绑定。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "existing 600x620 settings window and navigation",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 600,
+        "height": 620,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "保存默认用途",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "catalog",
+      "title": "同页模型目录与添加",
+      "file": "14-model-catalog.png",
+      "group": "模型与部署",
+      "caption": "沿用 AI 模型页下方的目录、下载和导入区域；此图展示滚动到目录的状态。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "existing 600x620 settings window and navigation",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 600,
+        "height": 620,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "添加本机模型",
+          "visible": true
+        },
+        {
+          "label": "添加 API",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "title": "内容索引工作区",
+      "file": "05-library-workspace.png",
+      "group": "分析与检索",
+      "caption": "分析完成不等于向量就绪；未建立内容索引的媒体不被当作内容不存在。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": [
+        {
+          "label": "默认用途",
+          "visible": true
+        },
+        {
+          "label": "分析当前图库",
+          "visible": true
+        },
+        {
+          "label": "查看任务",
+          "visible": true
+        },
+        {
+          "label": "停止",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "selection",
+      "title": "现有多选面板中的入口",
+      "file": "15-selection-entry.png",
+      "group": "分析与检索",
+      "caption": "沿用 SelectionPanel 的分组操作，在整理区增加媒体理解，打开共享的批量处理对话框。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": [
+        {
+          "label": "分析当前图库",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "batch",
+      "title": "选中媒体建立索引",
+      "file": "04-batch-fill.png",
+      "group": "分析与检索",
+      "caption": "固定范围、分析方案与部署，建立索引并按需填充标题、说明和标签。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "scope and deployment snapshot",
+        "optional vectors and formal writes stay skipped",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
       "controls": [
         {
           "label": "取消",
           "visible": true
         },
         {
-          "label": "先看样例",
+          "label": "查看样例",
           "visible": true
         },
         {
           "label": "开始处理 36 项",
           "visible": true
         }
-      ],
-      "exceptions": []
+      ]
     },
     {
-      "screen": "workspace",
-      "name": "05-library-workspace.png",
-      "scope": null,
-      "brokenImages": [],
-      "horizontalOverflow": false,
-      "controls": [
-        {
-          "label": "停止任务",
-          "visible": true
-        }
+      "id": "batch",
+      "title": "当前图库建立索引",
+      "file": "06-library-batch.png",
+      "group": "分析与检索",
+      "query": "scope=library",
+      "caption": "全库指当前图库全部可见媒体，范围、复用量与写入规则在提交前明确。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "scope and deployment snapshot",
+        "optional vectors and formal writes stay skipped",
+        "no script errors or external requests"
       ],
-      "exceptions": []
-    },
-    {
-      "screen": "batch",
-      "name": "06-library-batch.png",
-      "scope": "library",
-      "brokenImages": [],
-      "horizontalOverflow": false,
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
       "controls": [
         {
           "label": "取消",
           "visible": true
         },
         {
-          "label": "先看样例",
+          "label": "查看样例",
           "visible": true
         },
         {
           "label": "开始处理 1,286 项",
           "visible": true
         }
+      ]
+    },
+    {
+      "id": "viewer",
+      "title": "图片分析与资料采用",
+      "file": "02-image-viewer.png",
+      "group": "查看与问答",
+      "caption": "分析记录、正式资料与标签建议分开保存，采用操作才更新用户资料。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "explicit adoption and rejected-tag protection",
+        "no script errors or external requests"
       ],
-      "exceptions": []
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": []
+    },
+    {
+      "id": "qa",
+      "title": "图片问答闭环",
+      "file": "10-image-qa.png",
+      "group": "查看与问答",
+      "caption": "先取当前媒体证据，缺少细节时只复核当前图片，回答不自动写入资料。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "indexed answer → insufficient evidence → bounded inspection; no implicit writes",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": [
+        {
+          "label": "发送",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "video",
+      "title": "视频片段问答",
+      "file": "03-video-viewer.png",
+      "group": "查看与问答",
+      "caption": "从片段索引召回证据，回答引用原片时间；跳转片段不冒充逐帧事件检测。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "source-time jump",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": [
+        {
+          "label": "发送",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "search",
+      "title": "自然语言搜索",
+      "file": "11-natural-search.png",
+      "group": "分析与检索",
+      "caption": "条件解析、兼容向量编码、范围内召回与融合检索，不逐项重新运行媒体分析。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "search does not create analysis jobs",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": [
+        {
+          "label": "索引覆盖",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "task",
+      "title": "任务进度与部分失败",
+      "file": "12-task-progress.png",
+      "group": "分析与检索",
+      "caption": "分析、向量和资料写入分别计数；失败阶段重试，复用已经完成的有效产物。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": [
+        {
+          "label": "返回工作区",
+          "visible": true
+        },
+        {
+          "label": "停止任务",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "flow",
+      "title": "开发流程与数据边界",
+      "file": "13-flow-guide.png",
+      "group": "开发蓝图",
+      "caption": "离线索引、自然语言搜索和单媒体问答三条链路，共享部署与来源校验。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": [
+        {
+          "label": "查看界面目录",
+          "visible": true
+        }
+      ]
     }
   ]
 }
