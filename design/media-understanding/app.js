@@ -2,7 +2,12 @@ const VIEWS={...ServiceViews,...LibraryViews,...MediaViews,...FlowViews,...Nativ
 let toastTimer;
 let messageSerial=10;
 function toast(text){const box=document.getElementById('toast');box.textContent=text;box.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.classList.remove('visible'),3000);}
-function currentScreenIndex(){return SCREENS.findIndex(s=>s.id===App.screen&&(s.id!=='batch'||(s.query||'')===(App.state.scope==='library'?'scope=library':''))&&(s.id!=='understand'||(s.query||'')===(App.params.get('size')==='compact'?'size=compact':'')));}
+function currentScreenIndex(){
+  const candidates=SCREENS.map((screen,index)=>({screen,index})).filter(item=>item.screen.id===App.screen);
+  if(candidates.length===1)return candidates[0].index;
+  const keys=new Set(candidates.flatMap(item=>[...new URLSearchParams(item.screen.query||'').keys()]));
+  return candidates.find(item=>[...keys].every(key=>new URLSearchParams(item.screen.query||'').get(key)===(key==='scope'?(App.state.scope==='library'?'library':null):App.params.get(key))))?.index??-1;
+}
 function seedQA(){
   App.state.qaMessages=[
     {id:'u1',role:'user',text:'概括这张图片。'},
@@ -41,13 +46,20 @@ function navigate(screen,params={}){
   if(!VIEWS[screen])return;
   App.screen=screen;
   if(screen==='batch'&&params.scope)App.state.scope=params.scope;
-  const q=new URLSearchParams({screen,...(App.params.get('size')?{size:App.params.get('size')}:{}),...params});
+  const q=new URLSearchParams({screen,...(App.params.get('size')?{size:App.params.get('size')}:{}),...(App.params.get('scenario')?{scenario:App.params.get('scenario')}:{}),...params});
   history.pushState(null,'','?'+q.toString());App.params=q;render();
 }
 function loadLocation(){
   const q=new URLSearchParams(location.search);App.screen=VIEWS[q.get('screen')]?q.get('screen'):'models';
   App.params=q;if(App.screen==='batch')App.state.scope=SCOPES[q.get('scope')]?q.get('scope'):'selected';
   if(PROVIDERS.some(p=>p.id===q.get('provider')))App.state.providerId=q.get('provider');
+  if(q.get('scenario')==='generation-only'){
+    App.state.roles.textEmbed='';App.state.indexEnabled=false;App.state.indexBuilt=false;
+    App.state.searchRan=false;App.state.providerOverrides['service-3']={enabled:false};
+    const m=UI.model('embed-text-api');m.status='untested';m.state='待配置／检测';
+  }
+  if(App.screen==='embedding'){App.state.editingModelId='embed-text-api';App.state.providerId='service-3';}
+  if(App.screen==='verification')App.state.chainVerified=true;
   if(App.screen==='understand')App.state.task='media';
   render();
 }
@@ -68,14 +80,16 @@ function inspectCurrent(){
   render();
 }
 function startJob(){
-  const roles=['image','video',...(App.state.indexEnabled?['textEmbed']:[])];
-  if(roles.some(role=>!modelReady(UI.model(App.state.roles[role])))){toast('所选服务已停用或模型能力待验证，请到默认模型检查。');return;}
+  const roles=['image',...(scopeData().videos?['video']:[]),...(App.state.indexEnabled?['textEmbed']:[])];
+  if(roles.some(role=>!roleReady(role))){toast('所选服务已停用或模型能力待验证，请到默认模型检查。');return;}
   if(scopeData().videos&&!UI.model(App.state.roles.video).caps.includes('video_frames')){toast('当前媒体理解模型未提供视频采样帧能力，请修改本次范围或模型。');return;}
   App.state.createdJobs++;App.state.jobScope=App.state.scope;App.state.jobStopped=false;
   App.state.job={scope:App.state.scope,roles:{...App.state.roles},providers:PROVIDERS.map(p=>({...service(p.id)})),indexEnabled:App.state.indexEnabled,fields:{...App.state.fields},existingTagsOnly:App.state.existingTagsOnly};
+  if(App.state.indexEnabled)App.state.indexBuilt=true;
   navigate('task');
 }
 function runSearch(){
+  if(!roleReady('textEmbed','embed_text')||!App.state.indexBuilt){toast('请先配置文本 Embedding 并建立内容索引；媒体理解与资料填充仍可使用。');return;}
   const field=document.getElementById('natural-query');App.state.searchQuery=field?.value.trim()||App.state.searchQuery;
   App.state.searchRan=true;navigate('search');toast('这是检索流程示意，没有运行真实 Embedding 或媒体分析。');
 }
@@ -94,10 +108,13 @@ function handleClick(event){
   if(action==='rename-service'){App.state.renamingService=true;render();return;}
   if(action==='toggle-api-key'){const field=target.ownerDocument.getElementById('service-api-key');field.type=field.type==='password'?'text':'password';target.setAttribute('aria-label',field.type==='password'?'显示 API 密钥':'隐藏 API 密钥');return;}
   if(action==='remove-provider-model'){toast('移除模型入口示意；实际操作前检查默认用途和任务引用。');return;}
+  if(action==='setup-embedding'){App.state.providerId='service-3';navigate('api');return;}
+  if(action==='use-embedding'){const m=UI.model(App.state.editingModelId);if(!m.caps.includes('embed_text')||!modelReady(m)){toast('请先启用服务并检测文档／查询向量。');return;}App.state.roles.textEmbed=m.id;App.state.indexEnabled=true;navigate('understand');return;}
+  if(action==='verify-chain'){if(!roleReady('image','image')||!roleReady('text','text')||!roleReady('textEmbed','embed_text')){toast('请先完成所需模型配置与能力检测。');return;}App.state.chainVerified=true;render();toast('已模拟验证图文、结构化分析、入库／查询向量、持久化召回和证据问答；未请求真实服务。');return;}
   if(action==='remote-guide'){window.open('../../scripts/ai-server/README.md','_blank');return;}
   if(action==='sync-models'){toast('模拟同步当前服务模型；不改变默认模型，未发送真实网络请求。');return;}
   if(action==='add-provider-model'){toast('示例：可手填服务端模型 ID；不支持列举模型的服务也可配置。');return;}
-  if(action==='check-model'){const m=UI.model(App.state.editingModelId);if(m.caps.includes('embed_multimodal')){toast('多模态 Embedding 接口尚未接入，当前保持待验证。');return;}m.status='ready';m.state='示例已验证';App.state.verifiedModels[m.id]=true;render();toast('模拟能力检测通过；没有调用真实模型。');return;}
+  if(action==='check-model'){const m=UI.model(App.state.editingModelId);if(m.caps.includes('embed_multimodal')){toast('多模态 Embedding 接口尚未接入，当前保持待验证。');return;}if(m.caps.includes('embed_text')&&(!m.embedding||!Number.isInteger(m.embedding.dimensions)||m.embedding.dimensions<1||m.embedding.dimensions>8192)){toast('请补全向量接口与维度配置。');return;}m.status='ready';m.state='示例已验证';App.state.verifiedModels[m.id]=true;render();toast('模拟能力检测通过；没有调用真实模型。');return;}
   if(action==='save-model'){toast('模型属性保存示意；连接信息仍继承所属服务。');return;}
   if(VIEWS[action]){navigate(action);return;}
   if(action==='library-batch'){navigate('batch',{scope:'library'});return;}
@@ -152,13 +169,14 @@ function handleClick(event){
 document.addEventListener('click',handleClick);
 function handleChange(event){
   const el=event.target;
+  if(el.dataset.embeddingField){const m=UI.model(App.state.editingModelId),key=el.dataset.embeddingField;m.embedding||={format:'openai-text',dimensions:1024,documentEncoding:'plain-text',queryInstruction:''};m.embedding[key]=key==='dimensions'?Number(el.value):el.value;m.status='untested';m.state='编码方案待验证';delete App.state.verifiedModels[m.id];App.state.chainVerified=false;render();return;}
   if(el.hasAttribute('data-ai-model')){App.state.nativeEditingByTask={...App.state.nativeEditingByTask,[App.state.task]:el.value};App.state.editingModelId=el.value;render();return;}
-  if(el.dataset.providerEnabled){const id=el.dataset.providerEnabled;App.state.providerOverrides[id]={...App.state.providerOverrides[id],enabled:el.checked};render();return;}
-  if(el.dataset.modelField||el.dataset.modelCap){const m=UI.model(App.state.editingModelId);if(el.dataset.modelField)m[el.dataset.modelField]=el.value;else{const caps=new Set(m.caps);el.checked?caps.add(el.dataset.modelCap):caps.delete(el.dataset.modelCap);m.caps=[...caps];}if(el.dataset.modelCap||el.dataset.modelField==='remoteId'){m.status='untested';m.state='待验证';delete App.state.verifiedModels[m.id];}render();return;}
-  if(el.dataset.serviceField){const id=App.state.providerId,key=el.dataset.serviceField;App.state.providerOverrides[id]={...App.state.providerOverrides[id],[key]:el.value};if(key==='name')App.state.renamingService=false;if(key==='baseUrl'){App.state.apiTested=false;App.state.dirtyProviders=[...new Set([...App.state.dirtyProviders,id])];MODELS.filter(m=>m.providerId===id).forEach(m=>delete App.state.verifiedModels[m.id]);}render();return;}
+  if(el.dataset.providerEnabled){App.state.chainVerified=false;const id=el.dataset.providerEnabled;App.state.providerOverrides[id]={...App.state.providerOverrides[id],enabled:el.checked};render();return;}
+  if(el.dataset.modelField||el.dataset.modelCap){const m=UI.model(App.state.editingModelId);if(el.dataset.modelField)m[el.dataset.modelField]=el.value;else{const caps=new Set(m.caps);el.checked?caps.add(el.dataset.modelCap):caps.delete(el.dataset.modelCap);m.caps=[...caps];}if(el.dataset.modelCap||el.dataset.modelField==='remoteId'){App.state.chainVerified=false;m.status='untested';m.state='待验证';delete App.state.verifiedModels[m.id];}render();return;}
+  if(el.dataset.serviceField){const id=App.state.providerId,key=el.dataset.serviceField;App.state.providerOverrides[id]={...App.state.providerOverrides[id],[key]:el.value};if(key==='name')App.state.renamingService=false;if(key==='baseUrl'){App.state.chainVerified=false;App.state.apiTested=false;App.state.dirtyProviders=[...new Set([...App.state.dirtyProviders,id])];MODELS.filter(m=>m.providerId===id).forEach(m=>delete App.state.verifiedModels[m.id]);}render();return;}
   if(el.id==='compact-provider'){App.state.providerId=el.value;App.state.apiTested=false;App.state.renamingService=false;navigate('api');return;}
   if(el.id==='screen-select'){const s=SCREENS[Number(el.value)];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
-  if(el.dataset.role){App.state.roles[el.dataset.role]=el.value;if(el.dataset.role==='image')App.state.roles.video=el.value;render();return;}
+  if(el.dataset.role){const role=el.dataset.role;if(role==='text'){App.state.followMediaForText=el.value==='@media';App.state.roles.text=App.state.followMediaForText?App.state.roles.image:el.value;}else App.state.roles[role]=el.value;if(role==='image'){App.state.roles.video=el.value;if(App.state.followMediaForText)App.state.roles.text=el.value;}App.state.chainVerified=false;render();return;}
   if(el.id==='scope-select'){App.state.scope=el.value;navigate('batch',{scope:el.value});return;}
   if(el.id==='index-enabled'){App.state.indexEnabled=el.checked;render();return;}
   if(el.dataset.fillField){App.state.fields[el.dataset.fillField]=el.checked;render();return;}

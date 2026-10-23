@@ -25,7 +25,8 @@ export async function prepareNative(){
   const files=(await readdir(assets)).filter(name=>name.endsWith('.css'));
   const css=(await Promise.all(files.map(name=>readFile(path.join(assets,name),'utf8')))).join('\n');
   const names={settings:'views/Settings.vue',ai:'components/AiModelSettings.vue',cuda:'components/CudaRuntimeSettings.vue',title:'components/TitleBar.vue'};
-  const source={css,templates:{},locale:JSON.parse(await readFile(path.join(repo,'src-vite/src/locales/zh-CN.json'),'utf8'))};
+  const source={css,templates:{},locale:JSON.parse(await readFile(path.join(repo,'src-vite/src/locales/zh-CN.json'),'utf8')),
+    deploymentProfiles:JSON.parse(await readFile(path.join(repo,'scripts/ai-server/profiles.json'),'utf8'))};
   for(const [key,name] of Object.entries(names))source.templates[key]=extractTemplate(await readFile(path.join(repo,'src-vite/src',name),'utf8'));
   source.hash=createHash('sha256').update(JSON.stringify(source)).digest('hex');
   await writeFile(path.join(here,'native-source.generated.js'),'// Generated from current frontend source; intentionally gitignored.\nwindow.LapNativeSource='+JSON.stringify(source)+';\n');

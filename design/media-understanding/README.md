@@ -4,7 +4,9 @@
 
 AI 模型默认仍打开原图文语义检索与 CLIP 配置。原四项任务保持原位，**只追加一个媒体理解标签页**。参考用户本轮 Cherry Studio 附图，上方采用左侧服务列表＋右侧所选服务详情：搜索、添加／命名、启用、密钥与检测、API 地址、分组模型及能力图标；下方分别选择媒体理解、语言生成、Embedding 默认模型。所有服务是同一类型，名称由用户定义，不设自建／团队分类。首版只接 API，Mage／Qwen 本机运行延后。600×620 最小窗口将服务列表替换为选择器，仍沿用原设置外壳。
 
-先看 [媒体理解原位扩展](17-media-model.png) 与 [现状／原位扩展对照](settings-comparison.png)，再打开 [全部设计图](gallery.html)。PNG 仅导出应用窗口，设计说明单独位于 [NOTES.md](NOTES.md)。交互原型使用当前前端依赖及生成的样式，先运行下方渲染命令，再打开 `index.html`，无需启动 Lap 或模型服务。
+先看 [完整配置](17-media-model.png)、[Embedding 设置](21-embedding-contract.png)、[业务链路验证](22-workflow-verification.png)，再对比 [仅部署生成模型](20-generation-only.png) 与 [仅理解和填充](23-analysis-without-embedding.png)。[全部设计图](gallery.html) 可直接打开；PNG 不包含说明栏，理由单独位于 [NOTES.md](NOTES.md)。交互原型需先运行下方渲染命令，再打开 `index.html`，无需启动 Lap 或模型服务。
+
+本轮将脚本与设计绑定到同一份 `scripts/ai-server/profiles.json`：Mage :8000 或 Qwen :8001 承担理解与语言生成，Qwen3-Embedding :8002 承担分析文字和查询的向量编码。不要求两个生成模型同时部署。原型里的端口、model ID、维度、查询指令来自该文件，仍均为模拟能力状态。
 
 - [BASELINE.md](BASELINE.md)：当前源码布局、证据和组件对应关系。
 - [SPEC.md](SPEC.md)：业务场景、模型抽象、索引与问答闭环、数据边界、开发顺序及验收条件。
@@ -22,6 +24,10 @@ AI 模型默认仍打开原图文语义检索与 CLIP 配置。原四项任务�
 | 媒体理解：多个服务、模型、三个默认选择 | [17](17-media-model.png) |
 | 切换服务及查看不同模型能力 | [08](08-api-connection.png) |
 | 模型 ID、显示分组、能力标记与参数 | [16](16-model-properties.png) |
+| 文本向量设置与查询编码 | [21](21-embedding-contract.png) |
+| 模型到业务的分阶段验证 | [22](22-workflow-verification.png) |
+| 只有 Mage／Qwen 生成服务时的配置 | [20](20-generation-only.png) |
+| 未配 Embedding 时仍可理解与填充 | [23](23-analysis-without-embedding.png) |
 | 同一页面的最小窗口适配 | [19](19-media-compact.png) |
 | 理解与内容索引工作区 | [05](05-library-workspace.png) |
 | 现有多选面板中的入口 | [15](15-selection-entry.png) |
@@ -37,11 +43,13 @@ AI 模型默认仍打开原图文语义检索与 CLIP 配置。原四项任务�
 
 ## 可演示的交互
 
-- 顶部评审导航切换全部 16 个视图；产品设置只新增媒体理解一个标签页，页内完成服务、模型及默认选择。
+- 顶部评审导航切换全部 20 个视图；产品设置只新增媒体理解一个标签页，页内完成服务、模型及默认选择。
 - 左侧搜索与选择服务；右侧配置名称、地址与密钥、检测连接，按分组显示模型及能力图标；最小窗口通过选择器切换服务。
 - 模型配置 ID、显示名、展示分组、能力和参数；分组不决定能力，连接检测不能代替能力检测。
 - 仅使用 OpenAI Chat Completions 与文本 Embeddings；界面不再提供协议选择、本机生成引擎和资源下载。
 - 默认用途可复用同一部署；任务创建后保留当时的配置快照。
+- 语言生成默认跟随媒体理解；缺少 Embedding 时禁止向量步骤，不阻止分析和资料填充。
+- 补配向量服务、检测与绑定、创建索引任务、再进入语义检索的流程可演示；协议链路真实探测见服务器工具。
 - 选中、筛选、当前图库三个处理范围；生成向量和填充标题、说明、标签可分别选择。
 - 采用标题／说明、拒绝标签、采用其余标签；操作仅改变原型内存状态。
 - 图片提问 → 既有证据不足 → 仅复核当前图片 → 回答引用证据；不自动写正式资料。
@@ -64,7 +72,7 @@ AI 模型默认仍打开原图文语义检索与 CLIP 配置。原四项任务�
 node design/media-understanding/render.mjs
 ```
 
-脚本先将当前前端构建到临时目录，提取真实 CSS 和四个组件模板，写入被 Git 忽略的 `native-source.generated.js`。模板中的后端状态与处理器由安全的样例替代，不加载真实组件脚本、不调用 Tauri。生成文件不提交；源模板和生产 CSS 保持原样。
+脚本先将当前前端构建到临时目录，提取真实 CSS 和四个组件模板，并读取部署 profiles，写入被 Git 忽略的 `native-source.generated.js`。模板中的后端状态与处理器由安全的样例替代，不加载真实组件脚本、不调用 Tauri。生成文件不提交；静态图库单独使用 `screens.js`，不依赖前端环境。
 
 可用 `LAP_DESIGN_BROWSER` 指定浏览器。主设置图按用户截图为 **1437×833 浅色窗口**，另外验证 **600×620**；其他主窗口图为 1536×850。保留当前原生滚动条。评审导航、右侧说明和页脚不进入 PNG。结果与样式来源哈希见 [render-check.json](render-check.json)。
 

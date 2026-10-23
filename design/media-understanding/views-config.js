@@ -4,4 +4,7 @@ function taskButtons(){
   return `<div class="flex flex-wrap gap-2" aria-label="AI 任务">${TASKS.map(([id,label])=>`<button class="btn btn-sm ${id===App.state.task?'btn-primary':'btn-ghost'}" data-task="${id}">${label}</button>`).join('')}</div>`;
 }
 function configCard(title,body){return `<section class="setting-card"><h3>${title}</h3>${body}</section>`;}
-function compactRole(label,role,cap,help=''){return `<div class="compact-role"><label for="route-${role}">${label}</label><select id="route-${role}" class="select" data-role="${role}">${UI.options(cap,App.state.roles[role])}</select>${help?`<p class="helper">${help}</p>`:''}</div>`;}
+function compactRole(label,role,cap,help=''){
+  const follow=role==='text'?`<option value="@media" ${App.state.followMediaForText?'selected':''} ${roleReady('image','text')?'':'disabled'}>与媒体理解相同</option>`:'';
+  return `<div class="compact-role"><label for="route-${role}">${label}</label><select id="route-${role}" class="select" data-role="${role}">${follow}${UI.options(cap,role==='text'&&App.state.followMediaForText?'@media':App.state.roles[role])}</select>${help?`<p class="helper">${help}</p>`:''}</div>`;
+}

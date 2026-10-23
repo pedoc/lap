@@ -83,7 +83,9 @@ def request_json(url, protocol, key, body=None, timeout=180, anthropic_version="
             return json.loads(raw)
     except urllib.error.HTTPError as exc:
         # Never echo provider bodies: they can contain prompts, signed URLs, or credentials.
-        raise ValueError(f"HTTP {exc.code}：服务拒绝请求；检查认证、模型 ID、协议与服务端日志") from None
+        code = exc.code
+        exc.close()
+        raise ValueError(f"HTTP {code}：服务拒绝请求；检查认证、模型 ID、协议与服务端日志") from None
     except urllib.error.URLError:
         raise ValueError("连接失败：检查服务是否就绪、SSH 隧道、地址和 TLS 证书") from None
 

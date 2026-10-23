@@ -5,7 +5,7 @@
     "height": 1000
   },
   "nativeSource": {
-    "hash": "79e7b7ea3bdc5b5f2efda45374cb02367a3680fa312b0d384e3bf89b178ded1b",
+    "hash": "de4b59a5b698c688b81bb68fb30e001248baf3181a9d04c33cfa10dbdb5f8940",
     "templates": [
       "views/Settings.vue",
       "components/AiModelSettings.vue",
@@ -24,7 +24,7 @@
     "proposed-settings-window.png",
     "NOTES.md"
   ],
-  "galleryCards": 16,
+  "galleryCards": 20,
   "pages": [
     {
       "id": "baseline",
@@ -135,11 +135,11 @@
     },
     {
       "id": "api",
-      "title": "切换模型服务",
+      "title": "文本向量服务",
       "file": "08-api-connection.png",
       "group": "模型与服务",
-      "query": "provider=service-2",
-      "caption": "服务统一为可自定义名称的同类对象；切换只编辑当前服务，模型行显示能力图标。",
+      "query": "provider=service-3",
+      "caption": "生成与向量服务独立部署，地址和模型 ID 直接来自部署脚本；服务不按部署位置分类。",
       "result": "passed",
       "checks": [
         "layout",
@@ -190,6 +190,137 @@
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
         "deployment-neutral; only one additional task tab",
         "display grouping does not change capabilities; capability changes update candidates",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "embedding",
+      "title": "文本 Embedding 编码契约",
+      "file": "21-embedding-contract.png",
+      "group": "模型与服务",
+      "caption": "标准文本向量接口、1024 维、正文编码与查询指令，对应实际部署配置。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "deployment-neutral; only one additional task tab",
+        "embedding format, dimensions, alias and query instruction match deploy profiles",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "verification",
+      "title": "验证业务链路",
+      "file": "22-workflow-verification.png",
+      "group": "模型与服务",
+      "caption": "按图文输入、结构化分析、入库／查询向量、持久化召回和证据问答逐段验证。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "deployment-neutral; only one additional task tab",
+        "all API-to-business stages represented; validation does not create library jobs",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "understand",
+      "title": "仅部署生成模型",
+      "file": "20-generation-only.png",
+      "group": "模型与服务",
+      "query": "scenario=generation-only",
+      "caption": "Mage／Qwen-VL 可以支持理解、问答和资料建议；缺少 Embedding 时不承诺描述向量检索。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "deployment-neutral; only one additional task tab",
+        "generation-only → configure/test embeddings → bind → batch indexing → searchable records",
+        "neutral service list and detail; search or compact picker; grouped models with capability icons; three capability-filtered defaults",
         "no script errors or external requests"
       ],
       "window": {
@@ -394,6 +525,41 @@
       ]
     },
     {
+      "id": "batch",
+      "title": "仅理解与填充资料",
+      "file": "23-analysis-without-embedding.png",
+      "group": "分析与检索",
+      "query": "scenario=generation-only",
+      "caption": "未配置向量服务时，仍可执行媒体分析及显式资料填充；生成向量选项明确不可用。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "scope and deployment snapshot",
+        "optional vectors and formal writes stay skipped",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1536,
+        "height": 850,
+        "settings": false
+      },
+      "controls": [
+        {
+          "label": "取消",
+          "visible": true
+        },
+        {
+          "label": "查看样例",
+          "visible": true
+        },
+        {
+          "label": "开始处理 36 项",
+          "visible": true
+        }
+      ]
+    },
+    {
       "id": "viewer",
       "title": "图片分析与资料采用",
       "file": "02-image-viewer.png",
@@ -534,6 +700,10 @@
         "settings": false
       },
       "controls": [
+        {
+          "label": "验证业务链路",
+          "visible": true
+        },
         {
           "label": "查看界面目录",
           "visible": true

@@ -117,10 +117,13 @@ def serve_command(python, profile, model, host, port, context, memory):
         return [str(python), "-c", wrapper, "--model-path", model, "--served-model-name", profile["servedModel"],
                 "--host", host, "--port", str(port), "--context-length", str(context),
                 "--max-running-requests", "1", "--mem-fraction-static", str(memory), "--trust-remote-code"]
-    return [str(python), "-m", "vllm.entrypoints.openai.api_server", "--model", model,
+    command = [str(python), "-m", "vllm.entrypoints.openai.api_server", "--model", model,
             "--served-model-name", profile["servedModel"], "--host", host, "--port", str(port),
-            "--max-model-len", str(context), "--max-num-seqs", "1", "--gpu-memory-utilization", str(memory),
-            "--limit-mm-per-prompt", json.dumps({"image": 8, "video": 0}), "--enforce-eager"]
+            "--max-model-len", str(context), "--max-num-seqs", "1", "--gpu-memory-utilization", str(memory), "--enforce-eager"]
+    if profile.get("task") == "embedding":
+        return command + ["--runner", "pooling", "--convert", "embed",
+                          "--override-pooler-config", json.dumps(profile["pooling"])]
+    return command + ["--limit-mm-per-prompt", json.dumps({"image": 8, "video": 0})]
 
 
 def load_or_create_key(path):
@@ -141,10 +144,12 @@ def serve(args, profile):
     folder, python, key_file = paths(args.root, args.profile)
     port = args.port or profile["port"]
     model = str(args.model_path.resolve()) if args.model_path else profile["model"]
-    command = serve_command(python, profile, model, args.host, port, args.context, args.memory)
+    memory = args.memory if args.memory is not None else profile.get("defaultMemory", 0.8)
+    command = serve_command(python, profile, model, args.host, port, args.context, memory)
     if args.dry_run:
         print(json.dumps({"command": command, "keyFile": str(key_file), "modelRevision": profile["modelRevision"],
-                          "protocol": "OpenAI Chat Completions", "baseUrl": f"http://127.0.0.1:{port}/v1"}, ensure_ascii=False, indent=2))
+                          "protocol": "OpenAI Embeddings" if profile.get("task") == "embedding" else "OpenAI Chat Completions",
+                          "servedModel": profile["servedModel"], "baseUrl": f"http://127.0.0.1:{port}/v1"}, ensure_ascii=False, indent=2))
         return
     doctor(profile)
     if not python.is_file():
@@ -171,11 +176,11 @@ def serve(args, profile):
         if result.returncode:
             raise ValueError("模型下载失败。检查服务器访问 Hugging Face 的网络或使用 --model-path 指向已下载目录；不会输出可能含凭据的下载日志")
         model = result.stdout.strip().splitlines()[-1]
-        command = serve_command(python, profile, model, args.host, port, args.context, args.memory)
+        command = serve_command(python, profile, model, args.host, port, args.context, memory)
     key = load_or_create_key(key_file)
     env["LAP_AI_API_KEY" if profile["engine"] == "sglang" else "VLLM_API_KEY"] = key
     print(f"模型：{profile['servedModel']}；API Key 文件：{key_file}（不在日志显示内容）", flush=True)
-    print(f"目标 API：http://127.0.0.1:{port}/v1；启动完成后用 probe.py 做真实图片测试", flush=True)
+    print(f"目标 API：http://127.0.0.1:{port}/v1；启动后按 README 验证该模型能力及完整业务链路", flush=True)
     # Remain in the foreground; Ctrl+C and terminal process ownership stay explicit.
     run(command, env=env)
 
@@ -184,15 +189,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("doctor", "install", "serve"))
     parser.add_argument("profile", choices=tuple(CATALOG["profiles"]))
-    parser.add_argument("--root", type=Path, default=Path.home() / "autodl-tmp" / "lap-ai")
+    parser.add_argument("--root", type=Path, default=Path.home() / "lap-ai")
     parser.add_argument("--dry-run", action="store_true", help="只显示安装或启动计划，不安装、不下载、不生成密钥")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int)
     parser.add_argument("--context", type=int, default=8192)
-    parser.add_argument("--memory", type=float, default=0.8)
+    parser.add_argument("--memory", type=float, help="显存使用比例；生成模型默认 0.8，文本向量模型默认 0.15")
     parser.add_argument("--model-path", type=Path)
     args = parser.parse_args()
-    if args.context < 1024 or not 0 < args.memory < 1 or args.port is not None and not 1 <= args.port <= 65535:
+    if args.context < 1024 or args.memory is not None and not 0 < args.memory < 1 or args.port is not None and not 1 <= args.port <= 65535:
         parser.error("context 至少 1024；memory 在 0 与 1 之间；port 在 1–65535 之间")
     args.root = args.root.expanduser().resolve()
     profile = CATALOG["profiles"][args.profile]

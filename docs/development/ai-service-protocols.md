@@ -89,13 +89,15 @@ flowchart LR
   S --> Q[Qwen vLLM worker]
 ```
 
-图中的 worker 是可选服务目标，不表示单个进程同时托管两个模型。默认脚本给出两个独立端口；确需一个基础地址提供多个模型时，再使用模型路由网关。初次接入无需另外写一层 Mage → OpenAI 转换服务。
+图中的 worker 是可选服务目标，不表示单个进程同时托管两个模型。脚本给出 Mage 8000、Qwen 8001 二选一的生成服务，另增加文本 Embedding 8002；确需同一基础地址多模型时再使用网关。完整图片／视频理解、描述向量、查询和证据问答的 API 契约由 `pipeline_probe.py` 验证；不需要另写 Mage → OpenAI 转换服务。
 
 默认回环监听＋SSH 端口转发，Lap 使用本机地址但执行位置仍标为远程 GPU。通过平台 HTTP 转发时，按实际 TLS 和认证规则配置；不能把本机路径当成远端可访问的图片路径。
 
 本机仅发送处理后的媒体与文字并消费结果，不下载服务器权重，也不安装服务端 Python／CUDA。离线理解、向量索引、单媒体问答和正式资料写入的边界仍按 [开发蓝图](../../design/media-understanding/SPEC.md) 执行。
 
 部署工具、完整步骤与验证范围见 [scripts/ai-server](../../scripts/ai-server/README.md)。
+
+文本向量固定使用 `Qwen3-Embedding-0.6B` revision `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`，服务别名 `qwen3-embedding-0.6b`，1024 维。vLLM 0.11.0 使用 pooling runner、embed convert、LAST pooling 与归一化。正文不加指令；查询按 profile 的 instruction 编码。端口、别名、revision 和编码数据由脚本与设计共用 profiles 文件，不将该组合描述为原媒体直接多模态向量服务。
 
 ## 官方来源
 
@@ -115,3 +117,6 @@ flowchart LR
 - [Anthropic 2026-10-21 版本迁移](https://platform.claude.com/docs/en/api/migration-2026-10-21)
 - [DeepSeek 兼容 OpenAI 的调用说明](https://api-docs.deepseek.com/)
 - [Qwen3-VL-Embedding 官方仓库](https://github.com/QwenLM/Qwen3-VL-Embedding)
+- [Qwen3-Embedding 固定版本模型卡](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B/blob/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3/README.md)
+- [vLLM 0.11.0 embedding 客户端](https://github.com/vllm-project/vllm/blob/v0.11.0/examples/online_serving/pooling/openai_embedding_client.py)
+- [vLLM 0.11.0 pooling 配置](https://github.com/vllm-project/vllm/blob/v0.11.0/vllm/config/pooler.py)

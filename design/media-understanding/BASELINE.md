@@ -29,6 +29,8 @@
 
 渲染入口为 `prepare-native.mjs` 与 `native-frame.js`，复用 Settings、TitleBar、AiModelSettings、CudaRuntimeSettings 模板。新增媒体理解表单在设计夹具中使用实际组件样式与原设置外壳；生产文件未修改。
 
+部署样例由 `scripts/ai-server/profiles.json` 读取：Mage 或 Qwen 生成服务＋文本 Embedding 服务。新增 20／23 展示缺少向量能力时仍可理解和填充，21 展示向量编码设置，22 展示逐段验证。语言生成默认跟随媒体理解；这些是新设计，不代表现有模型运行时已实现。
+
 当前后端并不是通用生成式模型系统：配置按模型 ID 保存，每任务一个全局选择；远程适配器目前是 Jina embedding 协议。新增部署、多能力和生成式 API 都属于后续开发，见 [SPEC.md](SPEC.md)。
 
 ## 其他入口
