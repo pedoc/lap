@@ -1,8 +1,10 @@
 # Lap AI 媒体理解设计预览
 
-本版参考 Cherry Studio 改为“模型服务 → 服务内模型 → 默认模型”，同时以当前 Lap 界面为基础。设置保持独立 **600×620** 窗口、原左侧分类和右侧滚动内容区；业务入口沿用文件信息、多选面板、对话框和搜索面板。
+本版按用户提供的 **1437×833 浅色设置截图**修订。设置图直接使用当前 `Settings.vue`、`AiModelSettings.vue`、`CudaRuntimeSettings.vue`、`TitleBar.vue` 的模板及当前前端构建出的 CSS；组件脚本和 Tauri 调用由样例状态代替。
 
-先看 [现状与修订并排对照](settings-comparison.png)，再打开 [全部设计图](gallery.html) 或 [交互原型](index.html?screen=models)。直接用浏览器打开即可，无需启动 Lap。PNG 仅导出应用窗口，设计理由与交互解释集中在 [单独设计说明](NOTES.md)，不嵌入图中。
+AI 模型默认仍打开原图文语义检索与 CLIP 配置。原四项任务保持原位，只追加媒体理解、语言生成、Embedding；模型服务与默认模型从任务栏右侧进入。参考 Cherry Studio 的共享配置组织，不替换 Lap 的原页面导航。600×620 作为最小窗口另外验证。
+
+先看 [媒体理解原位扩展](17-media-model.png) 与 [现状／原位扩展对照](settings-comparison.png)，再打开 [全部设计图](gallery.html)。PNG 仅导出应用窗口，设计说明单独位于 [NOTES.md](NOTES.md)。交互原型使用当前前端依赖及生成的样式，先运行下方渲染命令，再打开 `index.html`，无需启动 Lap 或模型服务。
 
 - [BASELINE.md](BASELINE.md)：当前源码布局、证据和组件对应关系。
 - [SPEC.md](SPEC.md)：业务场景、模型抽象、索引与问答闭环、数据边界、开发顺序及验收条件。
@@ -16,12 +18,15 @@
 | 界面 | 文件 |
 | --- | --- |
 | 当前设置布局复核（源码重建） | [00](00-current-settings.png) |
-| 模型服务列表 | [01](01-model-management.png) |
+| AI 模型默认入口原位扩展 | [01](01-model-management.png) |
+| 媒体理解使用原选择器与表单 | [17](17-media-model.png) |
+| 任务栏进入模型服务管理 | [18](18-model-services.png) |
 | 本地模型与资源下载入口 | [07](07-local-runtime.png) |
 | 服务连接与协议 | [08](08-api-connection.png) |
 | 默认模型绑定 | [09](09-task-routing.png) |
 | 服务下的模型列表 | [14](14-model-catalog.png) |
 | 模型 ID、能力与接口 | [16](16-model-properties.png) |
+| 同一页面的最小窗口适配 | [19](19-media-compact.png) |
 | 理解与内容索引工作区 | [05](05-library-workspace.png) |
 | 现有多选面板中的入口 | [15](15-selection-entry.png) |
 | 选中媒体批量处理对话框 | [04](04-batch-fill.png) |
@@ -36,7 +41,7 @@
 
 ## 可演示的交互
 
-- 顶部导航切换全部 17 个视图；设置原分类固定，AI 页内提供模型服务、默认模型、本地模型。
+- 顶部导航切换全部 20 个视图；设置保留原分类与任务按钮，在原模型选择器中配置新用途。
 - 服务列表进入连接与模型；模型页不重复密钥；协议切换预览实际请求路径，连接检测不能代替模型能力验证。
 - 本机 Mage／Qwen 示例包按包过滤引擎，模拟资源准备；API 保存与测试分别演示。
 - 默认用途可复用同一部署；任务创建后保留当时的配置快照。
@@ -56,15 +61,17 @@
 
 ## 渲染与检查
 
-使用 Node 22+ 与已安装的 Edge／Chrome，无额外 npm 依赖：
+使用 Node 22+、已安装的 Edge／Chrome，以及 `src-vite` 已安装的前端依赖。首次先在 `src-vite` 运行 `pnpm install`，然后：
 
 ```powershell
 node design/media-understanding/render.mjs
 ```
 
-可用 `LAP_DESIGN_BROWSER` 指定浏览器可执行文件。脚本以独立临时配置启动无界面浏览器，在 1600×1000 检查视口中导出窗口本身：设置为 600×620，主窗口为 1536×850。评审导航、右侧说明和页脚不进入单页 PNG；总览按原比例排布。设计说明另写入 `NOTES.md`，结果见 [render-check.json](render-check.json)。
+脚本先将当前前端构建到临时目录，提取真实 CSS 和四个组件模板，写入被 Git 忽略的 `native-source.generated.js`。模板中的后端状态与处理器由安全的样例替代，不加载真实组件脚本、不调用 Tauri。生成文件不提交；源模板和生产 CSS 保持原样。
 
-检查包括：脚本异常、图片加载、横向溢出、主要操作裁切、600×620 设置尺寸与分类顺序、用途切换、资源选项、显式采用、标签拒绝、问答范围、视频时间跳转、搜索不创建分析任务、任务配置快照。它不代表真实 Tauri 界面、数据库、模型或设备的验收。
+可用 `LAP_DESIGN_BROWSER` 指定浏览器。主设置图按用户截图为 **1437×833 浅色窗口**，另外验证 **600×620**；其他主窗口图为 1536×850。保留当前原生滚动条。评审导航、右侧说明和页脚不进入 PNG。结果与样式来源哈希见 [render-check.json](render-check.json)。
+
+检查包括：脚本异常、图片加载、横向溢出、原设置分类顺序、两种窗口尺寸、原 CLIP 默认入口、用途切换、资源选项、显式采用、标签拒绝、问答范围、视频时间跳转、搜索不创建分析任务、任务配置快照。它不代表真实 Tauri 后端、数据库、模型或设备验收。
 
 ## 素材与范围
 

@@ -4,7 +4,7 @@ function taskButtons(baseline=false){
   return `<div class="settings-task-buttons" aria-label="AI 任务">${TASKS.slice(0,baseline?4:7).map(([id,label])=>`<button class="button ${id===(baseline?'semantic':App.state.task)?'primary':'quiet'}" ${baseline?'data-action="baseline-control"':`data-task="${id}"`}>${label}</button>`).join('')}</div>`;
 }
 function configIntro(){return serviceTabs('local');}
-function configBack(label){return `<div class="settings-subhead"><button class="text-button" data-nav="models">‹ 返回模型服务</button><span>${label}</span></div>`;}
+function configBack(label){const local=App.screen==='local';return `<div class="settings-subhead"><button class="text-button" data-nav="${local?'models':'services'}">‹ 返回${local?'AI 模型':'模型服务'}</button><span>${label}</span></div>`;}
 function configCard(title,body){return `<section class="setting-card"><h3>${title}</h3>${body}</section>`;}
 function compactRole(label,role,cap,help=''){return `<div class="compact-role"><label for="route-${role}">${label}</label><select id="route-${role}" class="select" data-role="${role}">${UI.options(cap,App.state.roles[role])}</select>${help?`<p class="helper">${help}</p>`:''}</div>`;}
 const ConfigViews={

@@ -1,8 +1,11 @@
-/* finesse · product · preserve Settings.vue 600x620 shell · system CJK · compact forms */
+/* finesse · product · preserve Settings.vue shell at 1437x833 and 600x620 · system CJK · existing forms */
 .windows-titlebar{height:40px;padding:0 0 0 8px;border-bottom:0;font-size:16px}
 .win-controls{display:flex;height:40px;align-items:center}
 .win-controls i{display:grid;place-items:center;height:40px;width:48px;font-style:normal;font-size:18px;color:var(--ink-3)}
 .settings-presentation{max-width:600px;height:850px;margin:0 auto;display:flex;align-items:center;justify-content:center}
+.settings-presentation:has(.native-host){max-width:none}
+.settings-window.native-host.app-window{max-width:none;flex:none;border:0;border-radius:0;box-shadow:none;background:transparent}
+.native-host>iframe{display:block;border:0;width:100%;height:100%}
 .settings-window.app-window{width:600px;height:620px;margin:0;border-radius:8px;background:var(--bg);box-shadow:0 18px 48px var(--shadow)}
 .settings-body{display:flex;flex:1;min-height:0;overflow:hidden}
 .settings-root-nav{width:160px;flex:none;margin:4px;padding:8px;background:rgba(37,45,55,.30);border-radius:8px;overflow-y:auto}

@@ -4,6 +4,16 @@
     "width": 1600,
     "height": 1000
   },
+  "nativeSource": {
+    "hash": "79e7b7ea3bdc5b5f2efda45374cb02367a3680fa312b0d384e3bf89b178ded1b",
+    "templates": [
+      "views/Settings.vue",
+      "components/AiModelSettings.vue",
+      "components/CudaRuntimeSettings.vue",
+      "components/TitleBar.vue"
+    ],
+    "cssFiles": 12
+  },
   "export": "application-window-only",
   "explanations": "NOTES.md",
   "result": "passed",
@@ -14,19 +24,279 @@
     "proposed-settings-window.png",
     "NOTES.md"
   ],
-  "galleryCards": 17,
+  "galleryCards": 20,
   "pages": [
     {
       "id": "baseline",
       "title": "当前设置布局复核",
       "file": "00-current-settings.png",
       "group": "现状对照",
-      "caption": "按当前源码重建：独立 600×620 设置窗口、原左侧分类与单列 AI 表单；不是原生运行截图。",
+      "caption": "复用当前 Vue 模板与前端样式，在 1437×833 浅色窗口复核截图中的布局；数据为样例。",
       "result": "passed",
       "checks": [
         "layout",
         "window-only export; explanations stored separately",
-        "existing 600x620 settings window and navigation",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": []
+    },
+    {
+      "id": "models",
+      "title": "AI 模型原位扩展",
+      "file": "01-model-management.png",
+      "group": "模型与部署",
+      "caption": "默认仍为 CLIP，原四类任务保持原位；新增用途与模型服务管理入口无感融入。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "original CLIP task preserved; additional purpose uses the same native selector",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        },
+        {
+          "label": "语言生成",
+          "visible": true
+        },
+        {
+          "label": "Embedding",
+          "visible": true
+        },
+        {
+          "label": "模型服务",
+          "visible": true
+        },
+        {
+          "label": "默认模型",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "understand",
+      "title": "媒体理解模型配置",
+      "file": "17-media-model.png",
+      "group": "模型与部署",
+      "caption": "沿用同一个模型选择器和参数表单，媒体理解追加到原任务栏，连接继承模型服务。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": [
+        {
+          "label": "图文语义检索",
+          "visible": true
+        },
+        {
+          "label": "人脸识别",
+          "visible": true
+        },
+        {
+          "label": "文字识别",
+          "visible": true
+        },
+        {
+          "label": "对象检测",
+          "visible": true
+        },
+        {
+          "label": "媒体理解",
+          "visible": true
+        },
+        {
+          "label": "语言生成",
+          "visible": true
+        },
+        {
+          "label": "Embedding",
+          "visible": true
+        },
+        {
+          "label": "模型服务",
+          "visible": true
+        },
+        {
+          "label": "默认模型",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "services",
+      "title": "模型服务管理",
+      "file": "18-model-services.png",
+      "group": "模型与部署",
+      "caption": "从原任务栏右侧进入共享服务管理，不替换 AI 模型默认入口。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "secondary service management; model does not duplicate credentials",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": []
+    },
+    {
+      "id": "local",
+      "title": "本机运行与下载",
+      "file": "07-local-runtime.png",
+      "group": "模型与部署",
+      "caption": "分别准备运行环境与模型包，本机可用性不等同于模型是否受支持。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "model-scoped runtime choices",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": []
+    },
+    {
+      "id": "api",
+      "title": "服务连接与协议",
+      "file": "08-api-connection.png",
+      "group": "模型与部署",
+      "caption": "服务统一管理协议、地址与密钥；Chat Completions、Responses、Messages 各用相应适配器。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "save without activation; separate simulated deployment test",
+        "protocol changes invalidate model receipt; connection test cannot restore it",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": []
+    },
+    {
+      "id": "routing",
+      "title": "默认模型",
+      "file": "09-task-routing.png",
+      "group": "模型与部署",
+      "caption": "媒体理解、语言生成、Embedding 只引用服务中的模型，不重复连接配置。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": []
+    },
+    {
+      "id": "catalog",
+      "title": "服务下的模型列表",
+      "file": "14-model-catalog.png",
+      "group": "模型与部署",
+      "caption": "同步模型或手填 ID，能力图标、可用状态与模型参数分别管理。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": []
+    },
+    {
+      "id": "model",
+      "title": "模型能力与接口",
+      "file": "16-model-properties.png",
+      "group": "模型与部署",
+      "caption": "模型设置只管理 ID、能力和覆盖参数；连接信息继承服务，不再按业务重复填写。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 1437x833 screenshot layout",
+        "no script errors or external requests"
+      ],
+      "window": {
+        "width": 1437,
+        "height": 833,
+        "settings": true
+      },
+      "controls": []
+    },
+    {
+      "id": "understand",
+      "title": "媒体理解最小窗口适配",
+      "file": "19-media-compact.png",
+      "group": "窗口适配",
+      "query": "size=compact",
+      "caption": "同一组件与 CSS 在 600×620 最小窗口自然换行和滚动，不另建紧凑版页面。",
+      "result": "passed",
+      "checks": [
+        "layout",
+        "window-only export; explanations stored separately",
+        "current Vue settings shell and production CSS; 600x620 compact layout",
         "no script errors or external requests"
       ],
       "window": {
@@ -50,153 +320,25 @@
         {
           "label": "对象检测",
           "visible": true
-        }
-      ]
-    },
-    {
-      "id": "models",
-      "title": "模型服务",
-      "file": "01-model-management.png",
-      "group": "模型与部署",
-      "caption": "参考 Cherry Studio：先管理服务，再管理该服务的模型；地址与密钥只配置一次。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "existing 600x620 settings window and navigation",
-        "provider → model; connection fields are not duplicated",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 600,
-        "height": 620,
-        "settings": true
-      },
-      "controls": []
-    },
-    {
-      "id": "local",
-      "title": "本机运行与下载",
-      "file": "07-local-runtime.png",
-      "group": "模型与部署",
-      "caption": "分别准备运行环境与模型包，本机可用性不等同于模型是否受支持。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "existing 600x620 settings window and navigation",
-        "model-scoped runtime choices",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 600,
-        "height": 620,
-        "settings": true
-      },
-      "controls": []
-    },
-    {
-      "id": "api",
-      "title": "服务连接与协议",
-      "file": "08-api-connection.png",
-      "group": "模型与部署",
-      "caption": "服务统一管理协议、地址与密钥；Chat Completions、Responses、Messages 各用相应适配器。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "existing 600x620 settings window and navigation",
-        "save without activation; separate simulated deployment test",
-        "protocol changes invalidate model receipt; connection test cannot restore it",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 600,
-        "height": 620,
-        "settings": true
-      },
-      "controls": [
+        },
         {
-          "label": "保存",
+          "label": "媒体理解",
           "visible": true
         },
         {
-          "label": "保存并检测",
+          "label": "语言生成",
           "visible": true
-        }
-      ]
-    },
-    {
-      "id": "routing",
-      "title": "默认模型",
-      "file": "09-task-routing.png",
-      "group": "模型与部署",
-      "caption": "媒体理解、语言生成、Embedding 只引用服务中的模型，不重复连接配置。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "existing 600x620 settings window and navigation",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 600,
-        "height": 620,
-        "settings": true
-      },
-      "controls": [
+        },
         {
-          "label": "保存默认模型",
+          "label": "Embedding",
           "visible": true
-        }
-      ]
-    },
-    {
-      "id": "catalog",
-      "title": "服务下的模型列表",
-      "file": "14-model-catalog.png",
-      "group": "模型与部署",
-      "caption": "同步模型或手填 ID，能力图标、可用状态与模型参数分别管理。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "existing 600x620 settings window and navigation",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 600,
-        "height": 620,
-        "settings": true
-      },
-      "controls": [
+        },
         {
-          "label": "服务连接设置",
+          "label": "模型服务",
           "visible": true
-        }
-      ]
-    },
-    {
-      "id": "model",
-      "title": "模型能力与接口",
-      "file": "16-model-properties.png",
-      "group": "模型与部署",
-      "caption": "模型设置只管理 ID、能力和覆盖参数；连接信息继承服务，不再按业务重复填写。",
-      "result": "passed",
-      "checks": [
-        "layout",
-        "window-only export; explanations stored separately",
-        "existing 600x620 settings window and navigation",
-        "no script errors or external requests"
-      ],
-      "window": {
-        "width": 600,
-        "height": 620,
-        "settings": true
-      },
-      "controls": [
+        },
         {
-          "label": "保存模型",
+          "label": "默认模型",
           "visible": true
         }
       ]

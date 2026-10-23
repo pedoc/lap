@@ -1,8 +1,8 @@
-const VIEWS={...ConfigViews,...ServiceViews,...LibraryViews,...MediaViews,...FlowViews};
+const VIEWS={...ConfigViews,...ServiceViews,...LibraryViews,...MediaViews,...FlowViews,...NativeSettingsViews};
 let toastTimer;
 let messageSerial=10;
 function toast(text){const box=document.getElementById('toast');box.textContent=text;box.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.classList.remove('visible'),3000);}
-function currentScreenIndex(){return SCREENS.findIndex(s=>s.id===App.screen&&(s.id!=='batch'||(s.query||'')===(App.state.scope==='library'?'scope=library':'')));}
+function currentScreenIndex(){return SCREENS.findIndex(s=>s.id===App.screen&&(s.id!=='batch'||(s.query||'')===(App.state.scope==='library'?'scope=library':''))&&(s.id!=='understand'||(s.query||'')===(App.params.get('size')==='compact'?'size=compact':'')));}
 function seedQA(){
   App.state.qaMessages=[
     {id:'u1',role:'user',text:'概括这张图片。'},
@@ -15,13 +15,21 @@ function seedQA(){
 function render(){
   document.body.dataset.ready='false';
   App.currentDesignNotes=null;
+  App.currentNativeTask=null;App.currentNativeView=null;
   if(App.screen==='qa'&&!App.state.qaSeeded)seedQA();
   const descriptor=SCREENS[currentScreenIndex()]||SCREENS.find(s=>s.id===App.screen)||SCREENS[0];
   document.getElementById('app').innerHTML=(VIEWS[App.screen]||VIEWS.models)();
   document.getElementById('screen-caption').innerHTML=`<b>${descriptor.title}</b>：${descriptor.caption}`;
   document.getElementById('screen-select').innerHTML=SCREENS.map((s,i)=>`<option value="${i}" ${s===descriptor?'selected':''}>${String(i+1).padStart(2,'0')} / ${SCREENS.length}　${s.group} · ${s.title}</option>`).join('');
   document.title=`Lap · ${descriptor.title} · 全流程设计`;
-  document.body.dataset.screen=App.screen;document.body.dataset.ready='true';
+  document.body.dataset.screen=App.screen;
+  const nativeFrame=document.getElementById('native-settings-frame');
+  if(nativeFrame){
+    const source=window.LapNativeSource;
+    if(!source)throw new Error('请先运行 node design/media-understanding/prepare-native.mjs，生成当前前端样式。');
+    const css=source.css.replace(/<\/style/gi,'<\\/style');
+    nativeFrame.srcdoc=`<!doctype html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><style>${css}</style><link rel="stylesheet" href="native-frame.css"></head><body><div id="native-root"></div><script src="../../src-vite/node_modules/vue/dist/vue.global.prod.js"><\/script><script src="native-frame.js"><\/script></body></html>`;
+  }else document.body.dataset.ready='true';
   document.querySelectorAll('.detail-marker').forEach(marker=>{
     const frame=marker.parentElement,img=frame.querySelector('img');
     const place=()=>{const w=frame.clientWidth,h=frame.clientHeight,k=Math.min(w/img.naturalWidth,h/img.naturalHeight),iw=img.naturalWidth*k,ih=img.naturalHeight*k;Object.assign(marker.style,{left:((w-iw)/2+iw*.78)+'px',top:((h-ih)/2+ih*.58)+'px',width:(iw*.12)+'px',height:(ih*.17)+'px'});};
@@ -33,12 +41,13 @@ function navigate(screen,params={}){
   if(!VIEWS[screen])return;
   App.screen=screen;
   if(screen==='batch'&&params.scope)App.state.scope=params.scope;
-  const q=new URLSearchParams({screen,...params});
+  const q=new URLSearchParams({screen,...(App.params.get('size')?{size:App.params.get('size')}:{}),...params});
   history.pushState(null,'','?'+q.toString());App.params=q;render();
 }
 function loadLocation(){
   const q=new URLSearchParams(location.search);App.screen=VIEWS[q.get('screen')]?q.get('screen'):'models';
   App.params=q;if(App.screen==='batch')App.state.scope=SCOPES[q.get('scope')]?q.get('scope'):'selected';
+  if(App.screen==='understand')App.state.task='media';
   render();
 }
 function appendQuestion(text){
@@ -68,7 +77,7 @@ function runSearch(){
   const field=document.getElementById('natural-query');App.state.searchQuery=field?.value.trim()||App.state.searchQuery;
   App.state.searchRan=true;navigate('search');toast('这是检索流程示意，没有运行真实 Embedding 或媒体分析。');
 }
-document.addEventListener('click',event=>{
+function handleClick(event){
   const provider=event.target.closest('[data-provider]');if(provider){App.state.providerId=provider.dataset.provider;App.state.apiTested=false;navigate('api');return;}
   const modelSettings=event.target.closest('[data-model-settings]');if(modelSettings){App.state.editingModelId=modelSettings.dataset.modelSettings;App.state.providerId=UI.model(App.state.editingModelId).providerId;navigate('model');return;}
   const task=event.target.closest('[data-task]');if(task){App.state.task=task.dataset.task;render();return;}
@@ -137,9 +146,11 @@ document.addEventListener('click',event=>{
     'edit-filters':'复用现有组合筛选编辑生成的条件；模型不直接执行任意 SQL。',
   };
   toast(messages[action]||'设计交互示例，未连接真实业务。');
-});
-document.addEventListener('change',event=>{
+}
+document.addEventListener('click',handleClick);
+function handleChange(event){
   const el=event.target;
+  if(el.hasAttribute('data-ai-model')){App.state.nativeEditingByTask={...App.state.nativeEditingByTask,[App.state.task]:el.value};App.state.editingModelId=el.value;render();return;}
   if(el.dataset.serviceField){const id=App.state.providerId,key=el.dataset.serviceField;App.state.providerOverrides[id]={...App.state.providerOverrides[id],[key]:key==='enabled'?el.checked:el.value};if(key==='protocol'||key==='baseUrl'){App.state.apiTested=false;App.state.dirtyProviders=[...new Set([...App.state.dirtyProviders,id])];MODELS.filter(m=>m.providerId===id).forEach(m=>delete App.state.verifiedModels[m.id]);}render();return;}
   if(el.id==='configured-model'){navigate(el.value==='mage-local'?'local':el.value==='vision-lan'||el.value==='cloud-text'?'api':'models');return;}
   if(el.id==='screen-select'){const s=SCREENS[Number(el.value)];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
@@ -150,12 +161,14 @@ document.addEventListener('change',event=>{
   if(el.id==='index-enabled'){App.state.indexEnabled=el.checked;render();return;}
   if(el.dataset.fillField){App.state.fields[el.dataset.fillField]=el.checked;render();return;}
   if(el.id==='existing-tags-only'){App.state.existingTagsOnly=el.checked;return;}
-});
-document.addEventListener('keydown',event=>{
+}
+document.addEventListener('change',handleChange);
+function handleKeydown(event){
   if(event.key!=='Enter')return;
   if(event.target.id==='photo-question'){event.preventDefault();appendQuestion(event.target.value);}
   if(event.target.id==='natural-query'){event.preventDefault();runSearch();}
-});
+}
+document.addEventListener('keydown',handleKeydown);
 addEventListener('popstate',loadLocation);
-window.LapDesign={screens:SCREENS,get screen(){return App.screen;},get state(){return JSON.parse(JSON.stringify(App.state));},get designNotes(){return App.currentDesignNotes?JSON.parse(JSON.stringify(App.currentDesignNotes)):null;},navigate};
+window.LapDesign={screens:SCREENS,get screen(){return App.screen;},get state(){return JSON.parse(JSON.stringify(App.state));},get designNotes(){return App.currentDesignNotes?JSON.parse(JSON.stringify(App.currentDesignNotes)):null;},get nativeView(){return App.currentNativeView;},get nativeDocument(){return document.getElementById('native-settings-frame')?.contentDocument||null;},query(selector){return this.nativeDocument?.querySelector(selector)||document.querySelector(selector);},nativeEvent(type,event){({click:handleClick,change:handleChange,keydown:handleKeydown})[type]?.(event);},nativeReady(frame){if(frame===document.getElementById('native-settings-frame'))document.body.dataset.ready='true';},nativeAction(action,value){if(action==='test-model'){App.state.verifiedModels[App.state.editingModelId]=true;toast('模拟模型能力检测，不调用真实模型。');}else toast(value||'现有功能入口保持原位。');},navigate};
 loadLocation();

@@ -8,6 +8,7 @@ target/
 skills/
 .DS_Store
 .env
+/design/media-understanding/native-source.generated.js
 dev.sh
 build.sh
 set_db_version.py
