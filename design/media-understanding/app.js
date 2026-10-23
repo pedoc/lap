@@ -47,6 +47,7 @@ function navigate(screen,params={}){
 function loadLocation(){
   const q=new URLSearchParams(location.search);App.screen=VIEWS[q.get('screen')]?q.get('screen'):'models';
   App.params=q;if(App.screen==='batch')App.state.scope=SCOPES[q.get('scope')]?q.get('scope'):'selected';
+  if(PROVIDERS.some(p=>p.id===q.get('provider')))App.state.providerId=q.get('provider');
   if(App.screen==='understand')App.state.task='media';
   render();
 }
@@ -79,7 +80,7 @@ function runSearch(){
   App.state.searchRan=true;navigate('search');toast('这是检索流程示意，没有运行真实 Embedding 或媒体分析。');
 }
 function handleClick(event){
-  const provider=event.target.closest('[data-provider]');if(provider){App.state.providerId=provider.dataset.provider;App.state.apiTested=false;navigate('api');return;}
+  const provider=event.target.closest('[data-provider]');if(provider){App.state.providerId=provider.dataset.provider;App.state.apiTested=false;App.state.renamingService=false;navigate('api');return;}
   const modelSettings=event.target.closest('[data-model-settings]');if(modelSettings){App.state.editingModelId=modelSettings.dataset.modelSettings;App.state.providerId=UI.model(App.state.editingModelId).providerId;navigate('model');return;}
   const task=event.target.closest('[data-task]');if(task){App.state.task=task.dataset.task;navigate(App.state.task==='media'?'understand':'models');return;}
   const cap=event.target.closest('[data-filter]');if(cap){App.state.filter=cap.dataset.filter;render();return;}
@@ -89,7 +90,10 @@ function handleClick(event){
   const target=event.target.closest('[data-action]');
   if(!target){const nav=event.target.closest('[data-nav]');if(nav)navigate(nav.dataset.nav);return;}
   const action=target.dataset.action;
-  if(action==='add-service'){const id='custom-'+(PROVIDERS.length+1);PROVIDERS.push({id,name:'自定义服务',baseUrl:'https://api.example.com/v1',enabled:false});App.state.providerId=id;App.state.apiTested=false;navigate('api');return;}
+  if(action==='add-service'){const id='custom-'+(PROVIDERS.length+1);PROVIDERS.push({id,name:'新服务',baseUrl:'https://api.example.com/v1',enabled:false});App.state.providerId=id;App.state.apiTested=false;App.state.providerSearch='';App.state.renamingService=true;navigate('api');return;}
+  if(action==='rename-service'){App.state.renamingService=true;render();return;}
+  if(action==='toggle-api-key'){const field=target.ownerDocument.getElementById('service-api-key');field.type=field.type==='password'?'text':'password';target.setAttribute('aria-label',field.type==='password'?'显示 API 密钥':'隐藏 API 密钥');return;}
+  if(action==='remove-provider-model'){toast('移除模型入口示意；实际操作前检查默认用途和任务引用。');return;}
   if(action==='remote-guide'){window.open('../../scripts/ai-server/README.md','_blank');return;}
   if(action==='sync-models'){toast('模拟同步当前服务模型；不改变默认模型，未发送真实网络请求。');return;}
   if(action==='add-provider-model'){toast('示例：可手填服务端模型 ID；不支持列举模型的服务也可配置。');return;}
@@ -150,8 +154,9 @@ function handleChange(event){
   const el=event.target;
   if(el.hasAttribute('data-ai-model')){App.state.nativeEditingByTask={...App.state.nativeEditingByTask,[App.state.task]:el.value};App.state.editingModelId=el.value;render();return;}
   if(el.dataset.providerEnabled){const id=el.dataset.providerEnabled;App.state.providerOverrides[id]={...App.state.providerOverrides[id],enabled:el.checked};render();return;}
-  if(el.dataset.modelField||el.dataset.modelCap){const m=UI.model(App.state.editingModelId);if(el.dataset.modelField)m[el.dataset.modelField]=el.value;else{const caps=new Set(m.caps);el.checked?caps.add(el.dataset.modelCap):caps.delete(el.dataset.modelCap);m.caps=[...caps];}m.status='untested';m.state='待验证';delete App.state.verifiedModels[m.id];render();return;}
-  if(el.dataset.serviceField){const id=App.state.providerId,key=el.dataset.serviceField;App.state.providerOverrides[id]={...App.state.providerOverrides[id],[key]:el.value};if(key==='baseUrl'){App.state.apiTested=false;App.state.dirtyProviders=[...new Set([...App.state.dirtyProviders,id])];MODELS.filter(m=>m.providerId===id).forEach(m=>delete App.state.verifiedModels[m.id]);}render();return;}
+  if(el.dataset.modelField||el.dataset.modelCap){const m=UI.model(App.state.editingModelId);if(el.dataset.modelField)m[el.dataset.modelField]=el.value;else{const caps=new Set(m.caps);el.checked?caps.add(el.dataset.modelCap):caps.delete(el.dataset.modelCap);m.caps=[...caps];}if(el.dataset.modelCap||el.dataset.modelField==='remoteId'){m.status='untested';m.state='待验证';delete App.state.verifiedModels[m.id];}render();return;}
+  if(el.dataset.serviceField){const id=App.state.providerId,key=el.dataset.serviceField;App.state.providerOverrides[id]={...App.state.providerOverrides[id],[key]:el.value};if(key==='name')App.state.renamingService=false;if(key==='baseUrl'){App.state.apiTested=false;App.state.dirtyProviders=[...new Set([...App.state.dirtyProviders,id])];MODELS.filter(m=>m.providerId===id).forEach(m=>delete App.state.verifiedModels[m.id]);}render();return;}
+  if(el.id==='compact-provider'){App.state.providerId=el.value;App.state.apiTested=false;App.state.renamingService=false;navigate('api');return;}
   if(el.id==='screen-select'){const s=SCREENS[Number(el.value)];navigate(s.id,Object.fromEntries(new URLSearchParams(s.query||'')));return;}
   if(el.dataset.role){App.state.roles[el.dataset.role]=el.value;if(el.dataset.role==='image')App.state.roles.video=el.value;render();return;}
   if(el.id==='scope-select'){App.state.scope=el.value;navigate('batch',{scope:el.value});return;}
@@ -160,6 +165,14 @@ function handleChange(event){
   if(el.id==='existing-tags-only'){App.state.existingTagsOnly=el.checked;return;}
 }
 document.addEventListener('change',handleChange);
+function handleInput(event){
+  if(event.target.id!=='provider-search')return;
+  App.state.providerSearch=event.target.value;
+  const doc=event.target.ownerDocument,query=App.state.providerSearch.trim().toLowerCase();
+  const rows=Array.from(doc.querySelectorAll('[data-provider]'));rows.forEach(row=>{row.hidden=!row.dataset.providerName.toLowerCase().includes(query);});
+  doc.getElementById('provider-search-empty').hidden=rows.some(row=>!row.hidden);
+}
+document.addEventListener('input',handleInput);
 function handleKeydown(event){
   if(event.key!=='Enter')return;
   if(event.target.id==='photo-question'){event.preventDefault();appendQuestion(event.target.value);}
@@ -167,5 +180,5 @@ function handleKeydown(event){
 }
 document.addEventListener('keydown',handleKeydown);
 addEventListener('popstate',loadLocation);
-window.LapDesign={screens:SCREENS,get screen(){return App.screen;},get state(){return JSON.parse(JSON.stringify(App.state));},get designNotes(){return App.currentDesignNotes?JSON.parse(JSON.stringify(App.currentDesignNotes)):null;},get nativeView(){return App.currentNativeView;},get nativeDocument(){return document.getElementById('native-settings-frame')?.contentDocument||null;},query(selector){return this.nativeDocument?.querySelector(selector)||document.querySelector(selector);},nativeEvent(type,event){({click:handleClick,change:handleChange,keydown:handleKeydown})[type]?.(event);},nativeReady(frame){if(frame===document.getElementById('native-settings-frame'))document.body.dataset.ready='true';},nativeAction(action,value){if(action==='test-model'){App.state.verifiedModels[App.state.editingModelId]=true;toast('模拟模型能力检测，不调用真实模型。');}else toast(value||'现有功能入口保持原位。');},navigate};
+window.LapDesign={screens:SCREENS,get screen(){return App.screen;},get state(){return JSON.parse(JSON.stringify(App.state));},get designNotes(){return App.currentDesignNotes?JSON.parse(JSON.stringify(App.currentDesignNotes)):null;},get nativeView(){return App.currentNativeView;},get nativeDocument(){return document.getElementById('native-settings-frame')?.contentDocument||null;},query(selector){return this.nativeDocument?.querySelector(selector)||document.querySelector(selector);},nativeEvent(type,event){({click:handleClick,change:handleChange,input:handleInput,keydown:handleKeydown})[type]?.(event);},nativeReady(frame){if(frame===document.getElementById('native-settings-frame'))document.body.dataset.ready='true';},nativeAction(action,value){if(action==='test-model'){App.state.verifiedModels[App.state.editingModelId]=true;toast('模拟模型能力检测，不调用真实模型。');}else toast(value||'现有功能入口保持原位。');},navigate};
 loadLocation();

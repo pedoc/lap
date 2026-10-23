@@ -22,9 +22,9 @@
 修订稿仅扩展这个区域，参考 Cherry Studio 调整配置组织：
 
 - 默认入口、原四项任务、CLIP 模型选择与配置保持原位；任务栏只追加媒体理解。
-- 媒体理解页上方管理多个 OpenAI 兼容服务的地址、凭据和模型；模型可标记多项能力。
+- 媒体理解页上方按附图使用左侧可搜索的服务列表与右侧所选服务详情；所有服务同类，名称可编辑，不分自建或团队。
 - 同页下方分别选择媒体理解、语言生成、Embedding 默认模型，不再拆成三个标签页。
-- `17-media-model.png` 展示整页；`08-api-connection.png` 展示同页展开连接；`16-model-properties.png` 展示能力详情。本机生成模型与多协议选择不在本期界面出现。
+- `17-media-model.png` 展示整页；`08-api-connection.png` 展示切换后的另一个服务；`16-model-properties.png` 展示分组与能力设置。模型列表以分组和能力图标呈现，窄窗口使用服务选择器。本机生成模型与多协议选择不在本期界面出现。
 - 保存与测试按钮保留在原表单中，随内容滚动，不新增固定底栏。保存参数、测试、启用继续保持不同含义。
 
 渲染入口为 `prepare-native.mjs` 与 `native-frame.js`，复用 Settings、TitleBar、AiModelSettings、CudaRuntimeSettings 模板。新增媒体理解表单在设计夹具中使用实际组件样式与原设置外壳；生产文件未修改。

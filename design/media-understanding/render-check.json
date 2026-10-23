@@ -95,14 +95,14 @@
       "title": "媒体理解统一配置",
       "file": "17-media-model.png",
       "group": "模型与服务",
-      "caption": "同一页管理多个 OpenAI 兼容服务及其模型，下方分别选择媒体理解、语言生成和 Embedding 默认模型。",
+      "caption": "参考附图：左侧搜索和选择服务，右侧配置密钥、地址与分组模型，下方保留三个默认模型选择。",
       "result": "passed",
       "checks": [
         "layout",
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
         "deployment-neutral; only one additional task tab",
-        "multiple services and models; three capability-filtered defaults; multimodal embeddings stay unverified; shared media default",
+        "neutral service list and detail; search or compact picker; grouped models with capability icons; three capability-filtered defaults",
         "no script errors or external requests"
       ],
       "window": {
@@ -135,17 +135,18 @@
     },
     {
       "id": "api",
-      "title": "服务连接配置",
+      "title": "切换模型服务",
       "file": "08-api-connection.png",
       "group": "模型与服务",
-      "caption": "在媒体理解页展开服务连接，只填写名称、基础地址和密钥；不绑定部署平台。",
+      "query": "provider=service-2",
+      "caption": "服务统一为可自定义名称的同类对象；切换只编辑当前服务，模型行显示能力图标。",
       "result": "passed",
       "checks": [
         "layout",
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
         "deployment-neutral; only one additional task tab",
-        "OpenAI only; endpoint changes invalidate model receipts; connection detection cannot restore them; model inherits credentials",
+        "endpoint changes invalidate only this service; connection detection does not restore model capabilities; model inherits credentials",
         "no script errors or external requests"
       ],
       "window": {
@@ -188,7 +189,7 @@
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 1437x833 screenshot layout",
         "deployment-neutral; only one additional task tab",
-        "capability changes update default-model candidates",
+        "display grouping does not change capabilities; capability changes update candidates",
         "no script errors or external requests"
       ],
       "window": {
@@ -232,7 +233,7 @@
         "window-only export; explanations stored separately",
         "current Vue settings shell and production CSS; 600x620 compact layout",
         "deployment-neutral; only one additional task tab",
-        "multiple services and models; three capability-filtered defaults; multimodal embeddings stay unverified; shared media default",
+        "neutral service list and detail; search or compact picker; grouped models with capability icons; three capability-filtered defaults",
         "no script errors or external requests"
       ],
       "window": {

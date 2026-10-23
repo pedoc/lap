@@ -1,8 +1,8 @@
 const SCREENS = [
   {id:'baseline',title:'当前设置布局复核',file:'00-current-settings.png',group:'现状对照',caption:'复用当前 Vue 模板与前端样式，在 1437×833 浅色窗口复核截图中的布局；数据为样例。'},
   {id:'models',title:'AI 模型原位扩展',file:'01-model-management.png',group:'模型与服务',caption:'默认仍为 CLIP，原四项任务保留，只追加一个媒体理解标签页。'},
-  {id:'understand',title:'媒体理解统一配置',file:'17-media-model.png',group:'模型与服务',caption:'同一页管理多个 OpenAI 兼容服务及其模型，下方分别选择媒体理解、语言生成和 Embedding 默认模型。'},
-  {id:'api',title:'服务连接配置',file:'08-api-connection.png',group:'模型与服务',caption:'在媒体理解页展开服务连接，只填写名称、基础地址和密钥；不绑定部署平台。'},
+  {id:'understand',title:'媒体理解统一配置',file:'17-media-model.png',group:'模型与服务',caption:'参考附图：左侧搜索和选择服务，右侧配置密钥、地址与分组模型，下方保留三个默认模型选择。'},
+  {id:'api',title:'切换模型服务',file:'08-api-connection.png',group:'模型与服务',query:'provider=service-2',caption:'服务统一为可自定义名称的同类对象；切换只编辑当前服务，模型行显示能力图标。'},
   {id:'model',title:'模型能力标记',file:'16-model-properties.png',group:'模型与服务',caption:'模型归属服务；标记图片、视频、文本生成和向量能力，用于筛选默认模型。'},
   {id:'understand',title:'媒体理解最小窗口适配',file:'19-media-compact.png',group:'窗口适配',query:'size=compact',caption:'同一组件与 CSS 在 600×620 最小窗口自然换行和滚动，不另建紧凑版页面。'},
   {id:'workspace',title:'内容索引工作区',file:'05-library-workspace.png',group:'分析与检索',caption:'分析完成不等于向量就绪；未建立内容索引的媒体不被当作内容不存在。'},
@@ -17,15 +17,15 @@ const SCREENS = [
   {id:'flow',title:'开发流程与数据边界',file:'13-flow-guide.png',group:'开发蓝图',caption:'离线索引、自然语言搜索和单媒体问答三条链路，共享部署与来源校验。'},
 ];
 const PROVIDERS = [
-  {id:'vision-server',name:'自建模型服务',baseUrl:'https://models.example.com/v1',enabled:true},
-  {id:'workspace-server',name:'团队模型服务',baseUrl:'https://ai.example.net/v1',enabled:true},
+  {id:'service-1',name:'模型服务 1',baseUrl:'https://models.example.com/v1',enabled:true},
+  {id:'service-2',name:'模型服务 2',baseUrl:'https://ai.example.net/v1',enabled:true},
 ];
 const MODELS = [
-  {id:'vision-lan',providerId:'vision-server',remoteId:'mage-vl',name:'Mage-VL',mode:'API',status:'ready',state:'示例已验证',caps:['text','image','video_frames','json']},
-  {id:'qwen-api',providerId:'vision-server',remoteId:'qwen3-vl-4b-instruct',name:'Qwen3-VL-4B',mode:'API',status:'ready',state:'示例已验证',caps:['text','image','video_frames','json']},
-  {id:'cloud-text',providerId:'workspace-server',remoteId:'text-model',name:'语言模型',mode:'API',status:'ready',state:'示例已验证',caps:['text','json']},
-  {id:'embed-text-api',providerId:'workspace-server',remoteId:'qwen3-embedding-0.6b',name:'Qwen3-Embedding',mode:'API',status:'ready',state:'示例已验证',caps:['embed_text']},
-  {id:'embed-multimodal-api',providerId:'workspace-server',remoteId:'qwen3-vl-embedding',name:'Qwen3-VL-Embedding',mode:'API',status:'untested',state:'多模态接口待验证',caps:['embed_text','embed_multimodal']},
+  {id:'vision-lan',providerId:'service-1',group:'Mage',remoteId:'mage-vl',name:'Mage-VL',mode:'API',status:'ready',state:'示例已验证',caps:['text','image','video_frames','json']},
+  {id:'qwen-api',providerId:'service-1',group:'Qwen',remoteId:'qwen3-vl-4b-instruct',name:'Qwen3-VL-4B',mode:'API',status:'ready',state:'示例已验证',caps:['text','image','video_frames','json']},
+  {id:'cloud-text',providerId:'service-2',group:'通用',remoteId:'text-model',name:'语言模型',mode:'API',status:'ready',state:'示例已验证',caps:['text','json']},
+  {id:'embed-text-api',providerId:'service-2',group:'Qwen',remoteId:'qwen3-embedding-0.6b',name:'Qwen3-Embedding',mode:'API',status:'ready',state:'示例已验证',caps:['embed_text']},
+  {id:'embed-multimodal-api',providerId:'service-2',group:'Qwen',remoteId:'qwen3-vl-embedding',name:'Qwen3-VL-Embedding',mode:'API',status:'untested',state:'多模态接口待验证',caps:['embed_text','embed_multimodal']},
   {id:'clip-local',name:'现有 CLIP',family:'CLIP 图文检索',mode:'本机',location:'本机',status:'ready',state:'既有索引',caps:['clip_query','embed_image'],note:'可继续检索既有索引，与新索引分别管理版本。'},
   {id:'ocr-local',name:'现有文字识别',family:'OCR 识别模型',mode:'本机',location:'本机',status:'ready',state:'既有能力',caps:['ocr'],note:'保留专用识别契约及人工修订。'},
 ];
@@ -39,7 +39,7 @@ const App = {
   screen:'models',params:new URLSearchParams(location.search),
   state:{
     roles:{text:'vision-lan',image:'vision-lan',video:'vision-lan',textEmbed:'embed-text-api'},
-    filter:'all',task:'semantic',providerId:'vision-server',providerOverrides:{},dirtyProviders:[],verifiedModels:{},editingModelId:'vision-lan',apiTested:false,scope:'selected',
+    filter:'all',task:'semantic',providerId:'service-1',providerSearch:'',providerOverrides:{},dirtyProviders:[],verifiedModels:{},editingModelId:'vision-lan',apiTested:false,scope:'selected',
     fields:{title:true,description:true,tags:true},indexEnabled:true,existingTagsOnly:true,
     title:'',description:'',tags:['旅行'],qaMessages:[],qaInspected:false,qaPending:false,
     searchQuery:'找出 2025 年四星以上有湖边木屋的照片和视频',searchRan:true,

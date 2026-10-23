@@ -70,6 +70,7 @@
   app.mount('#native-root');
   document.addEventListener('click',event=>design.nativeEvent('click',event));
   document.addEventListener('change',event=>design.nativeEvent('change',event));
+  document.addEventListener('input',event=>design.nativeEvent('input',event));
   document.addEventListener('keydown',event=>design.nativeEvent('keydown',event));
   await V.nextTick();await document.fonts.ready;
   document.documentElement.dataset.ready='true';
