@@ -1,5 +1,13 @@
 {
   "media_ai": {
+    "choose_models": "Choose models to add",
+    "choose_models_hint": "Only checked models will be added. Remove configured models from their rows.",
+    "filter_models": "Search models",
+    "already_added": "Added",
+    "add_selected": "Add selected ({count})",
+    "no_models_match": "No matching models",
+    "models_added": "Added {count} models. Save to apply.",
+    "model_removed": "Model removed. Save to apply.",
     "clear_key": "Clear stored key",
     "cancel_request": "Cancel request",
     "title": "Media understanding",

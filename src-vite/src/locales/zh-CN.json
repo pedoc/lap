@@ -1,5 +1,13 @@
 {
   "media_ai": {
+    "choose_models": "选择要添加的模型",
+    "choose_models_hint": "仅添加勾选的模型。已添加的模型可在配置列表中移除。",
+    "filter_models": "搜索模型",
+    "already_added": "已添加",
+    "add_selected": "添加选中（{count}）",
+    "no_models_match": "没有匹配的模型",
+    "models_added": "已添加 {count} 个模型，保存后生效。",
+    "model_removed": "模型已移除，保存后生效。",
     "clear_key": "清除已保存密钥",
     "cancel_request": "取消请求",
     "title": "媒体理解",

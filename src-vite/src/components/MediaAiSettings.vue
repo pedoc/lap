@@ -44,30 +44,46 @@
             <label class="flex gap-2 items-start"><input v-model="provider.allowBackground" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || !provider.allowMedia" />{{ t('media_ai.allow_background') }}</label>
             <div class="flex flex-wrap gap-2"><button class="btn btn-xs" :disabled="busy" @click="syncModels">{{ t('media_ai.sync_models') }}</button><button class="btn btn-xs" :disabled="busy" @click="addModel()">＋ {{ t('media_ai.add_model') }}</button></div>
             <p v-if="!providerModels.length" class="opacity-60">{{ t('media_ai.manual_model_hint') }}</p>
-            <details v-for="m in providerModels" :key="m.id" class="border border-base-content/10 rounded-box p-2" :open="m.id === expandedModel">
-              <summary class="cursor-pointer break-all"><strong>{{ m.name || m.remoteId || t('media_ai.new_model') }}</strong><span v-if="m.group" class="opacity-60"> · {{ m.group }}</span><span v-for="cap in m.capabilities" :key="cap" class="badge badge-xs ml-1">{{ t('media_ai.cap_' + cap) }}</span></summary>
+            <div v-for="m in providerModels" :key="m.id" class="relative" :data-media-ai-model="m.id">
+            <details class="border border-base-content/10 rounded-box p-2" :open="m.id === expandedModel">
+              <summary class="cursor-pointer break-all pr-8"><strong>{{ m.name || m.remoteId || t('media_ai.new_model') }}</strong><span v-if="m.group" class="opacity-60"> · {{ m.group }}</span><span v-for="cap in m.capabilities" :key="cap" class="badge badge-xs ml-1">{{ t('media_ai.cap_' + cap) }}</span></summary>
               <div class="pt-2 space-y-2">
                 <label class="block">Model ID<input v-model="m.remoteId" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="256" /></label>
                 <label class="block">{{ t('media_ai.display_name') }}<input v-model="m.name" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="160" /></label>
                 <label class="block">{{ t('media_ai.group') }}<input v-model="m.group" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="120" /></label>
                 <div v-for="cap in capabilities" :key="cap" class="flex items-center gap-2"><label class="flex items-center gap-2 flex-1"><input v-model="m.capabilities" type="checkbox" class="checkbox checkbox-xs" :value="cap" :disabled="busy" />{{ t('media_ai.cap_' + cap) }}</label><span class="opacity-50">{{ t(!dirty && m.tested[cap] ? 'media_ai.tested' : 'media_ai.untested') }}</span><button class="btn btn-xs" :disabled="busy || !m.capabilities.includes(cap)" @click="testModel(m, cap)">{{ t('media_ai.detect') }}</button></div>
                 <details><summary class="opacity-60 cursor-pointer">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2"><label class="block">{{ t('media_ai.revision') }}<input v-model="m.revision" class="input input-bordered input-xs w-full mt-1" /></label><label class="block">{{ t('media_ai.output_tokens') }}<input v-model.number="m.maxOutputTokens" type="number" min="64" max="8192" class="input input-bordered input-xs w-full mt-1" /></label><label v-if="m.capabilities.includes('embed_text')" class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label></div></details>
-                <button class="btn btn-xs btn-ghost text-error" :disabled="busy" @click="removeModel(m.id)">{{ t('media_ai.delete_model') }}</button>
               </div>
             </details>
+            <button type="button" class="btn btn-xs btn-square btn-ghost text-error absolute top-1.5 right-1.5" :disabled="busy" :aria-label="t('media_ai.delete_model') + ': ' + (m.name || m.remoteId)" :title="t('media_ai.delete_model')" data-remove-media-ai-model @click.stop="removeModel(m.id)"><IconTrash class="w-3.5 h-3.5" aria-hidden="true" /></button>
+            </div>
             <button class="btn btn-xs btn-ghost text-error" :disabled="busy" @click="removeProvider">{{ t('media_ai.delete_service') }}</button>
           </div>
           <div v-else class="p-3 opacity-60">{{ t('media_ai.empty_services') }}</div>
         </div>
         <div class="rounded-box border border-base-content/10 p-3 space-y-3">
           <h3 class="font-semibold text-sm">{{ t('media_ai.default_roles') }}</h3>
-          <div v-for="role in roles" :key="role" class="space-y-1"><label :for="'media-ai-role-' + role">{{ t('media_ai.role_' + role) }}</label><div class="flex gap-2"><select :id="'media-ai-role-' + role" v-model="draft.roles[role]" class="select select-bordered select-sm flex-1 min-w-0" :disabled="busy"><option :value="null">{{ t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured') }}</option><option v-for="m in eligibleModels(saved!, role)" :key="m.id" :value="m.id">{{ modelLabel(m) }}</option></select><button v-if="role === 'embedding'" class="btn btn-sm" :disabled="busy" @click="openWizard">{{ t('media_ai.configure') }}</button></div></div>
+          <div v-for="role in roles" :key="role" class="space-y-1"><label :for="'media-ai-role-' + role">{{ t('media_ai.role_' + role) }}</label><div class="flex gap-2"><select :id="'media-ai-role-' + role" v-model="draft.roles[role]" class="select select-bordered select-sm flex-1 min-w-0" :disabled="busy"><option :value="null">{{ t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured') }}</option><option v-for="m in defaultModels(role)" :key="m.id" :value="m.id">{{ modelLabel(m) }}</option></select><button v-if="role === 'embedding'" class="btn btn-sm" :disabled="busy" @click="openWizard">{{ t('media_ai.configure') }}</button></div></div>
           <p class="opacity-60">{{ t('media_ai.defaults_hint') }}</p>
         </div>
         <div class="flex gap-2 items-center"><button class="btn btn-sm btn-primary" :disabled="busy || !dirty" @click="save">{{ t('media_ai.save') }}</button><button class="btn btn-sm" :disabled="busy" @click="reload">{{ t('media_ai.reload') }}</button><span v-if="dirty" class="text-warning">{{ t('media_ai.unsaved') }}</span></div>
       </template>
     </template>
     </fieldset>
+    <ModalDialog v-if="modelPicker" :title="t('media_ai.choose_models')" :width="440" @cancel="modelPicker = null">
+      <div class="space-y-3 text-xs" role="dialog" :aria-label="t('media_ai.choose_models')" aria-modal="true" data-media-ai-model-picker @keydown.esc.stop="modelPicker = null" @keydown.stop>
+        <p class="opacity-60">{{ t('media_ai.choose_models_hint') }}</p>
+        <input v-model="modelPicker.filter" class="input input-bordered input-sm w-full" :placeholder="t('media_ai.filter_models')" :aria-label="t('media_ai.filter_models')" />
+        <div class="max-h-[40vh] overflow-y-auto rounded-box border border-base-content/10 divide-y divide-base-content/10">
+          <label v-for="id in pickerModels" :key="id" class="flex items-start gap-2 p-2 cursor-pointer">
+            <input v-model="modelPicker.selection" class="checkbox checkbox-xs mt-0.5 shrink-0" type="checkbox" :value="id" :disabled="pickerConfigured.has(id)" />
+            <span class="break-all min-w-0 flex-1">{{ id }}</span><span v-if="pickerConfigured.has(id)" class="opacity-50 shrink-0">{{ t('media_ai.already_added') }}</span>
+          </label>
+          <p v-if="!pickerModels.length" class="p-3 opacity-60">{{ t('media_ai.no_models_match') }}</p>
+        </div>
+        <div class="flex justify-end gap-2"><button class="btn btn-sm" @click="modelPicker = null">{{ t('msgbox.cancel') }}</button><button class="btn btn-sm btn-primary" :disabled="!pickerNewCount" @click="addPickerModels">{{ t('media_ai.add_selected', { count: pickerNewCount }) }}</button></div>
+      </div>
+    </ModalDialog>
   </section>
 </template>
 <script setup lang="ts">
@@ -76,20 +92,27 @@ import { useI18n } from 'vue-i18n';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import ModalDialog from './ModalDialog.vue';
+import { IconTrash } from '@/common/icons';
 import { eligibleModels, newMediaModel, newProvider, QWEN_MEDIA_QUERY, type MediaCapability, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
 const { t } = useI18n();
 const draft = ref<MediaConfiguration | null>(null), baseline = ref('null'), keys = ref<Record<string, string>>({}), storedKeys = ref<string[]>([]);
 const saved = ref<MediaConfiguration | null>(null);
 const selected = ref(''), filter = ref(''), expandedModel = ref(''), busy = ref(false), loading = ref(false), error = ref(''), message = ref('');
 const wizard = ref<any>(null);
+const modelPicker = ref<{ providerId: string; ids: string[]; selection: string[]; filter: string } | null>(null);
 const roles = ['media', 'text', 'embedding'] as const;
 const capabilities: MediaCapability[] = ['text', 'image', 'video_frames', 'json', 'embed_text'];
 const provider = computed(() => draft.value?.providers.find(p => p.id === selected.value));
 const filteredProviders = computed(() => draft.value?.providers.filter(p => p.name.toLowerCase().includes(filter.value.toLowerCase())) || []);
 const providerModels = computed(() => (draft.value?.models.filter(m => m.providerId === selected.value) || []).sort((a, b) => a.group.localeCompare(b.group)));
+const pickerConfigured = computed(() => new Set(draft.value?.models.filter(m => m.providerId === modelPicker.value?.providerId).map(m => m.remoteId)));
+const pickerModels = computed(() => modelPicker.value?.ids.filter(id => id.toLowerCase().includes(modelPicker.value!.filter.toLowerCase())) || []);
+const pickerNewCount = computed(() => modelPicker.value?.selection.filter(id => !pickerConfigured.value.has(id)).length || 0);
 const dirty = computed(() => !!wizard.value || JSON.stringify(draft.value) !== baseline.value || Object.keys(keys.value).length > 0);
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const modelLabel = (m: MediaModel) => `${draft.value?.providers.find(p => p.id === m.providerId)?.name} / ${m.name}`;
+function defaultModels(role: typeof roles[number]) { return saved.value ? eligibleModels(saved.value, role).filter(m => draft.value?.models.some(current => current.id === m.id)) : []; }
 const keyPlaceholder = (id: string) => t(storedKeys.value.includes(id) ? 'media_ai.key_saved' : 'media_ai.key_optional');
 let disposed = false, off: (() => void) | undefined;
 function receive(view: any) { if (disposed) return; draft.value = view.configuration; saved.value = clone(view.configuration); storedKeys.value = view.keysStored; keys.value = {}; baseline.value = JSON.stringify(draft.value); if (!provider.value) selected.value = draft.value?.providers[0]?.id || ''; }
@@ -106,9 +129,20 @@ async function save() { await action(async () => { await persist(); message.valu
 async function reload() { if (await confirmDiscard()) { wizard.value = null; await load(); } }
 function addProvider() { const p = newProvider(); draft.value!.providers.push(p); selected.value = p.id; }
 function addModel(remoteId = '') { const m = newMediaModel(selected.value); m.remoteId = remoteId; m.name = remoteId; draft.value!.models.push(m); expandedModel.value = m.id; }
-function removeModel(id: string) { draft.value!.models = draft.value!.models.filter(m => m.id !== id); roles.forEach(role => { if (draft.value!.roles[role] === id) draft.value!.roles[role] = null; }); }
+function removeModel(id: string) { if (busy.value) return; draft.value!.models = draft.value!.models.filter(m => m.id !== id); roles.forEach(role => { if (draft.value!.roles[role] === id) draft.value!.roles[role] = null; }); if (expandedModel.value === id) expandedModel.value = ''; message.value = t('media_ai.model_removed'); }
 async function removeProvider() { if (!provider.value || !await ask(t('media_ai.delete_confirm'), { kind: 'warning' })) return; const id = provider.value.id; providerModels.value.forEach(m => removeModel(m.id)); draft.value!.providers = draft.value!.providers.filter(p => p.id !== id); delete keys.value[id]; selected.value = draft.value!.providers[0]?.id || ''; }
-async function syncModels() { await action(async () => { const ids = await invoke<string[]>('media_ai_list_models', { provider: clone(provider.value), apiKey: keys.value[selected.value] ?? null }); for (const id of ids) if (!providerModels.value.some(m => m.remoteId === id)) { const m = newMediaModel(selected.value); m.remoteId = id; m.name = id; m.capabilities = []; draft.value!.models.push(m); } message.value = t('media_ai.models_loaded', { count: ids.length }); }); }
+async function syncModels() { await action(async () => { const target = provider.value; if (!target) return; const ids = await invoke<string[]>('media_ai_list_models', { provider: clone(target), apiKey: keys.value[target.id] ?? null }); if (disposed) return; modelPicker.value = { providerId: target.id, ids, selection: draft.value!.models.filter(m => m.providerId === target.id).map(m => m.remoteId), filter: '' }; }); }
+function addPickerModels() {
+  const picker = modelPicker.value;
+  if (busy.value || !picker || !draft.value?.providers.some(p => p.id === picker.providerId)) return;
+  let count = 0;
+  for (const id of picker.selection) {
+    if (!picker.ids.includes(id) || pickerConfigured.value.has(id)) continue;
+    const m = newMediaModel(picker.providerId); m.remoteId = id; m.name = id; m.capabilities = [];
+    draft.value.models.push(m); count++;
+  }
+  modelPicker.value = null; message.value = t('media_ai.models_added', { count });
+}
 async function testModel(m: MediaModel, capability: MediaCapability) { await action(async () => { const id = m.id; await persist(); receive(await invoke('media_ai_test_model', { modelId: id, capability })); message.value = t('media_ai.test_success'); }); }
 async function openWizard() {
   if (!await confirmDiscard()) return; await load(); if (!draft.value) return;
