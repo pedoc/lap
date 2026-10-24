@@ -52,7 +52,7 @@
                 <label class="block">{{ t('media_ai.display_name') }}<input v-model="m.name" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="160" /></label>
                 <label class="block">{{ t('media_ai.group') }}<input v-model="m.group" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="120" /></label>
                 <div v-for="cap in capabilities" :key="cap" class="flex items-center gap-2"><label class="flex items-center gap-2 flex-1"><input v-model="m.capabilities" type="checkbox" class="checkbox checkbox-xs" :value="cap" :disabled="busy" />{{ t('media_ai.cap_' + cap) }}</label><span class="opacity-50">{{ t(!dirty && m.tested[cap] ? 'media_ai.tested' : 'media_ai.untested') }}</span><button class="btn btn-xs" :disabled="busy || !m.capabilities.includes(cap)" @click="testModel(m, cap)">{{ t('media_ai.detect') }}</button></div>
-                <details><summary class="opacity-60 cursor-pointer">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2"><label class="block">{{ t('media_ai.revision') }}<input v-model="m.revision" class="input input-bordered input-xs w-full mt-1" /></label><label class="block">{{ t('media_ai.output_tokens') }}<input v-model.number="m.maxOutputTokens" type="number" min="64" max="8192" class="input input-bordered input-xs w-full mt-1" /></label><label v-if="m.capabilities.includes('embed_text')" class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label></div></details>
+                <details><summary class="opacity-60 cursor-pointer">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2"><label class="block">{{ t('media_ai.revision') }}<input v-model="m.revision" class="input input-bordered input-xs w-full mt-1" /></label><label class="block">{{ t('media_ai.output_tokens') }}<input :value="m.maxOutputTokens ?? ''" @input="setOutputTokens(m, $event)" type="number" min="1" step="1" :placeholder="t('media_ai.server_default')" :aria-invalid="!!outputTokenError(m.maxOutputTokens)" class="input input-bordered input-xs w-full mt-1" /></label><p class="opacity-60">{{ t('media_ai.output_tokens_hint') }}</p><p v-if="outputTokenError(m.maxOutputTokens)" role="alert" class="text-error">{{ t('media_ai.' + outputTokenError(m.maxOutputTokens), { model: m.name || m.remoteId }) }}</p><label v-if="m.capabilities.includes('embed_text')" class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label></div></details>
               </div>
             </details>
             <button type="button" class="btn btn-xs btn-square btn-ghost text-error absolute top-1.5 right-1.5" :disabled="busy" :aria-label="t('media_ai.delete_model') + ': ' + (m.name || m.remoteId)" :title="t('media_ai.delete_model')" data-remove-media-ai-model @click.stop="removeModel(m.id)"><IconTrash class="w-3.5 h-3.5" aria-hidden="true" /></button>
@@ -94,7 +94,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ModalDialog from './ModalDialog.vue';
 import { IconTrash } from '@/common/icons';
-import { eligibleModels, newMediaModel, newProvider, QWEN_MEDIA_QUERY, type MediaCapability, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
+import { eligibleModels, newMediaModel, newProvider, outputTokenError, QWEN_MEDIA_QUERY, type MediaCapability, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
 const { t } = useI18n();
 const draft = ref<MediaConfiguration | null>(null), baseline = ref('null'), keys = ref<Record<string, string>>({}), storedKeys = ref<string[]>([]);
 const saved = ref<MediaConfiguration | null>(null);
@@ -121,6 +121,10 @@ async function confirmDiscard() { if (busy.value) return false; return !dirty.va
 async function action(work: () => Promise<void>) { if (busy.value) return; busy.value = true; error.value = ''; message.value = ''; try { await work(); } catch (e) { error.value = String(e); } finally { busy.value = false; } }
 async function persist() {
   if (!draft.value) return;
+  for (const m of draft.value.models) {
+    const error = outputTokenError(m.maxOutputTokens);
+    if (error) throw new Error(t('media_ai.' + error, { model: m.name || m.remoteId }));
+  }
   draft.value.providers.forEach(p => { if (!p.allowMedia) p.allowBackground = false; });
   draft.value.models.forEach(m => { if (!m.name.trim()) m.name = m.remoteId; });
   receive(await invoke('media_ai_save_configuration', { configuration: clone(draft.value), keys: clone(keys.value) }));
@@ -129,6 +133,10 @@ async function save() { await action(async () => { await persist(); message.valu
 async function reload() { if (await confirmDiscard()) { wizard.value = null; await load(); } }
 function addProvider() { const p = newProvider(); draft.value!.providers.push(p); selected.value = p.id; }
 function addModel(remoteId = '') { const m = newMediaModel(selected.value); m.remoteId = remoteId; m.name = remoteId; draft.value!.models.push(m); expandedModel.value = m.id; }
+function setOutputTokens(model: MediaModel, event: Event) {
+  const input = event.target as HTMLInputElement;
+  model.maxOutputTokens = input.validity.badInput ? NaN : input.value === '' ? null : input.valueAsNumber;
+}
 function removeModel(id: string) { if (busy.value) return; draft.value!.models = draft.value!.models.filter(m => m.id !== id); roles.forEach(role => { if (draft.value!.roles[role] === id) draft.value!.roles[role] = null; }); if (expandedModel.value === id) expandedModel.value = ''; message.value = t('media_ai.model_removed'); }
 async function removeProvider() { if (!provider.value || !await ask(t('media_ai.delete_confirm'), { kind: 'warning' })) return; const id = provider.value.id; providerModels.value.forEach(m => removeModel(m.id)); draft.value!.providers = draft.value!.providers.filter(p => p.id !== id); delete keys.value[id]; selected.value = draft.value!.providers[0]?.id || ''; }
 async function syncModels() { await action(async () => { const target = provider.value; if (!target) return; const ids = await invoke<string[]>('media_ai_list_models', { provider: clone(target), apiKey: keys.value[target.id] ?? null }); if (disposed) return; modelPicker.value = { providerId: target.id, ids, selection: draft.value!.models.filter(m => m.providerId === target.id).map(m => m.remoteId), filter: '' }; }); }

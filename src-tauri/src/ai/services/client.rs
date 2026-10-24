@@ -68,17 +68,21 @@ pub async fn chat_with_key(
     parts: Vec<ContentPart>,
     key: Option<String>,
 ) -> Result<String, String> {
+    let mut options = ChatOptions::default();
+    if let Some(limit) = model.model.max_output_tokens {
+        options = options.with_max_tokens(limit);
+    }
     let response = sdk(&model.provider, key)?
         .exec_chat(
             &model.model.remote_id,
             ChatRequest::new(vec![ChatMessage::user(parts)]).with_store(false),
-            Some(&ChatOptions::default().with_max_tokens(model.model.max_output_tokens)),
+            Some(&options),
         )
         .await
         .map_err(error)?;
     let text = response.first_text().ok_or("模型没有返回文字")?.trim();
-    if text.is_empty() || text.len() > 64 * 1024 {
-        return Err("模型返回内容为空或过长".into());
+    if text.is_empty() {
+        return Err("模型返回内容为空".into());
     }
     Ok(text.to_owned())
 }

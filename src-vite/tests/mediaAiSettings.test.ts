@@ -31,7 +31,7 @@ function harness() {
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,selected,expandedModel,busy,dirty,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,selected,expandedModel,busy,dirty,error,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,setOutputTokens,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls };
 }
@@ -79,6 +79,25 @@ test('removed models remain removed after save, reload and fetching the catalog 
   assert.deepEqual(Array.from(h.api.draft.value.models, (m: any) => m.remoteId), ['optional-a']);
 });
 
+test('the output control saves 384000 and clearing it sends null instead of an empty string', async () => {
+  const h=harness();
+  h.api.setOutputTokens(h.api.draft.value.models[0],{target:{value:'384000',valueAsNumber:384000,validity:{badInput:false}}});
+  await h.api.save();await h.api.load();
+  assert.equal(h.api.draft.value.models[0].maxOutputTokens,384000);
+  h.api.setOutputTokens(h.api.draft.value.models[0],{target:{value:'',valueAsNumber:NaN,validity:{badInput:false}}});
+  await h.api.save();await h.api.load();
+  assert.equal(h.api.draft.value.models[0].maxOutputTokens,null);
+  const saved=h.calls.filter(([name])=>name==='media_ai_save_configuration').at(-1)!;
+  assert.equal(saved[1].configuration.models[0].maxOutputTokens,null);
+});
+
+test('invalid output budgets show a field-specific error before calling the backend', async () => {
+  const h=harness();h.api.draft.value.models[0].maxOutputTokens=0;
+  await h.api.save();
+  assert.match(h.api.error.value,/output_tokens_invalid/);
+  assert.equal(h.calls.some(([name])=>name==='media_ai_save_configuration'),false);
+});
+
 test('the real template exposes a removal button outside each collapsed model details', async () => {
   const h = harness(), imports: any = {};
   const { descriptor } = parse(source);
@@ -94,4 +113,6 @@ test('the real template exposes a removal button outside each collapsed model de
   assert.match(html, /data-media-ai-model="kept"/);
   assert.match(html, /<\/details>\s*<button[^>]*aria-label="media_ai.delete_model[^>]*data-remove-media-ai-model/);
   assert.doesNotMatch(html, /<details[^>]*\sopen(?:[\s>])/);
+  assert.match(html,/type="number" min="1" step="1"/);
+  assert.doesNotMatch(html,/max="8192"/);
 });

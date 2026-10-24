@@ -69,7 +69,7 @@ pub struct Model {
     pub group: String,
     pub revision: String,
     pub capabilities: BTreeSet<Capability>,
-    pub max_output_tokens: u32,
+    pub max_output_tokens: Option<u32>,
     pub embedding: EmbeddingOptions,
     pub tested: BTreeMap<Capability, String>,
 }
@@ -83,7 +83,7 @@ impl Default for Model {
             group: String::new(),
             revision: String::new(),
             capabilities: BTreeSet::new(),
-            max_output_tokens: 1024,
+            max_output_tokens: None,
             embedding: EmbeddingOptions::default(),
             tested: BTreeMap::new(),
         }
@@ -228,10 +228,15 @@ impl Configuration {
             self.provider(&m.provider_id)?;
             short_text(&m.remote_id, 256, "服务端 Model ID")?;
             short_text(&m.name, 160, "模型显示名称")?;
+            if m.max_output_tokens == Some(0) {
+                return Err(format!(
+                    "模型「{}」的最大输出 Token 必须为正整数，或留空使用服务端默认值。",
+                    m.name
+                ));
+            }
             if m.group.chars().count() > 120
                 || m.revision.chars().count() > 256
                 || m.embedding.query_instruction.chars().count() > 2000
-                || !(64..=8192).contains(&m.max_output_tokens)
                 || m.embedding
                     .dimensions
                     .is_some_and(|d| !(1..=8192).contains(&d))
@@ -383,6 +388,50 @@ pub fn key(provider: &Provider) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn output_budgets_are_optional_positive_api_integers_not_model_capacity_caps() {
+        let mut config = Configuration {
+            providers: vec![Provider {
+                id: "p".into(),
+                name: "Service".into(),
+                base_url: "http://127.0.0.1:8000/v1/".into(),
+                ..Default::default()
+            }],
+            models: vec![Model {
+                id: "m".into(),
+                provider_id: "p".into(),
+                remote_id: "model".into(),
+                name: "Model".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+        for limit in [1, 8192, 384_000, 1_048_576, u32::MAX] {
+            config.models[0].max_output_tokens = Some(limit);
+            assert!(config.validate().is_ok(), "budget {limit} must be accepted");
+        }
+        config.models[0].max_output_tokens = Some(0);
+        assert!(config.validate().unwrap_err().contains("最大输出 Token"));
+    }
+    #[test]
+    fn legacy_numeric_output_budgets_and_server_default_round_trip() {
+        let legacy: Model =
+            serde_json::from_value(serde_json::json!({"maxOutputTokens":384000})).unwrap();
+        assert_eq!(legacy.max_output_tokens, Some(384000));
+        assert_eq!(
+            serde_json::to_value(&legacy).unwrap()["maxOutputTokens"],
+            384000
+        );
+        for input in [
+            serde_json::json!({}),
+            serde_json::json!({"maxOutputTokens":null}),
+        ] {
+            let model: Model = serde_json::from_value(input).unwrap();
+            assert_eq!(model.max_output_tokens, None);
+            assert!(serde_json::to_value(model).unwrap()["maxOutputTokens"].is_null());
+        }
+    }
     #[test]
     fn bases_preserve_gateway_prefix_and_reject_credentials() {
         assert_eq!(

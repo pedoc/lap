@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { eligibleModels, rankedMediaHits, newProvider, newMediaModel, type MediaConfiguration, type MediaHit } from '../src/common/mediaAi.ts';
+import { eligibleModels, rankedMediaHits, newProvider, newMediaModel, outputTokenError, type MediaConfiguration, type MediaHit } from '../src/common/mediaAi.ts';
 
 test('default roles require the specific tested capability and an enabled permitted service', () => {
   const p = newProvider(); p.allowMedia = true;
@@ -24,4 +24,10 @@ test('a video appears once at its best segment rank without mutating source evid
   assert.deepEqual(ranked.map(h => h.fileId), [1, 3, 2]);
   assert.equal(ranked[0].start, 120);
   assert.equal(input.length, 4); assert.equal(input[0].fileId, 2);
+});
+
+test('output budgets accept large API limits and a server default without an 8192 cap', () => {
+  for (const value of [null, undefined, 1, 8192, 384000, 1048576, 0xFFFFFFFF]) assert.equal(outputTokenError(value), null);
+  for (const value of [0, -1, 1.5, NaN, Infinity, '384000']) assert.equal(outputTokenError(value), 'output_tokens_invalid');
+  assert.equal(outputTokenError(0x100000000), 'output_tokens_range');
 });

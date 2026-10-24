@@ -204,3 +204,38 @@ async fn embedding_probe_redetects_dimensions_after_a_model_change() {
     assert!(model.tested(Capability::EmbedText));
     worker.join().unwrap();
 }
+
+#[tokio::test]
+async fn large_output_budget_is_sent_and_answers_over_64k_are_retained() {
+    let answer = "长回答".repeat(30_000);
+    let (base, worker) = fixture(vec![(200, completion(&answer))]);
+    let mut model = at(base, "gpt-6-fixture");
+    model.model.max_output_tokens = Some(384_000);
+    let response = client::chat_with_key(
+        &model,
+        vec![ContentPart::from_text("Return the fixture answer")],
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response, answer);
+    let seen = worker.join().unwrap();
+    assert_eq!(seen[0]["max_completion_tokens"], 384000);
+    assert!(seen[0].get("max_tokens").is_none());
+}
+
+#[tokio::test]
+async fn server_default_omits_both_output_token_parameters() {
+    let (base, worker) = fixture(vec![(200, completion("ok"))]);
+    let mut model = at(base, "custom-proxy-alias");
+    model.model.max_output_tokens = None;
+    assert_eq!(
+        client::chat_with_key(&model, vec![ContentPart::from_text("Reply briefly")], None)
+            .await
+            .unwrap(),
+        "ok"
+    );
+    let seen = worker.join().unwrap();
+    assert!(seen[0].get("max_tokens").is_none());
+    assert!(seen[0].get("max_completion_tokens").is_none());
+}

@@ -8,7 +8,7 @@ export interface MediaProvider {
 }
 export interface MediaModel {
   id: string; providerId: string; remoteId: string; name: string; group: string; revision: string;
-  capabilities: MediaCapability[]; maxOutputTokens: number;
+  capabilities: MediaCapability[]; maxOutputTokens: number | null;
   embedding: { dimensions: number | null; queryInstruction: string };
   tested: Partial<Record<MediaCapability, string>>;
 }
@@ -28,6 +28,12 @@ export const newMediaModel = (providerId: string): MediaModel => ({
   capabilities: ['text', 'image'], maxOutputTokens: 2048,
   embedding: { dimensions: null, queryInstruction: '' }, tested: {},
 });
+export function outputTokenError(value: unknown) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return 'output_tokens_invalid';
+  if (value > 0xFFFFFFFF) return 'output_tokens_range';
+  return null;
+}
 export function eligibleModels(configuration: MediaConfiguration, role: 'media' | 'text' | 'embedding') {
   const cap: MediaCapability = role === 'media' ? 'image' : role === 'text' ? 'text' : 'embed_text';
   return configuration.models.filter(m => ((m.capabilities.includes(cap) && !!m.tested[cap])
