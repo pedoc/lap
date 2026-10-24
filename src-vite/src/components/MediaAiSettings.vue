@@ -51,7 +51,8 @@
                 <label class="block">Model ID<input v-model="m.remoteId" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="256" /></label>
                 <label class="block">{{ t('media_ai.display_name') }}<input v-model="m.name" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="160" /></label>
                 <label class="block">{{ t('media_ai.group') }}<input v-model="m.group" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="120" /></label>
-                <div v-for="cap in capabilities" :key="cap" class="flex items-center gap-2"><label class="flex items-center gap-2 flex-1"><input v-model="m.capabilities" type="checkbox" class="checkbox checkbox-xs" :value="cap" :disabled="busy" />{{ t('media_ai.cap_' + cap) }}</label><span class="opacity-50">{{ t(!dirty && m.tested[cap] ? 'media_ai.tested' : 'media_ai.untested') }}</span><button class="btn btn-xs" :disabled="busy || !m.capabilities.includes(cap)" @click="testModel(m, cap)">{{ t('media_ai.detect') }}</button></div>
+                <p class="opacity-60">{{ t('media_ai.capabilities_hint') }}</p>
+                <div v-for="cap in capabilities" :key="cap" class="flex items-center gap-2"><label class="flex items-center gap-2 flex-1"><input v-model="m.capabilities" type="checkbox" class="checkbox checkbox-xs" :value="cap" :disabled="busy" @change="clearUnsupportedRoles" />{{ t('media_ai.cap_' + cap) }}</label><span class="opacity-50">{{ t(!dirty && m.tested[cap] ? 'media_ai.tested' : 'media_ai.untested') }}</span><button class="btn btn-xs" :disabled="busy || !m.capabilities.includes(cap)" @click="testModel(m, cap)">{{ t('media_ai.detect') }}</button></div>
                 <details><summary class="opacity-60 cursor-pointer">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2"><label class="block">{{ t('media_ai.revision') }}<input v-model="m.revision" class="input input-bordered input-xs w-full mt-1" /></label><label class="block">{{ t('media_ai.output_tokens') }}<input :value="m.maxOutputTokens ?? ''" @input="setOutputTokens(m, $event)" type="number" min="1" step="1" :placeholder="t('media_ai.server_default')" :aria-invalid="!!outputTokenError(m.maxOutputTokens)" class="input input-bordered input-xs w-full mt-1" /></label><p class="opacity-60">{{ t('media_ai.output_tokens_hint') }}</p><p v-if="outputTokenError(m.maxOutputTokens)" role="alert" class="text-error">{{ t('media_ai.' + outputTokenError(m.maxOutputTokens), { model: m.name || m.remoteId }) }}</p><label v-if="m.capabilities.includes('embed_text')" class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label></div></details>
               </div>
             </details>
@@ -63,7 +64,7 @@
         </div>
         <div class="rounded-box border border-base-content/10 p-3 space-y-3">
           <h3 class="font-semibold text-sm">{{ t('media_ai.default_roles') }}</h3>
-          <div v-for="role in roles" :key="role" class="space-y-1"><label :for="'media-ai-role-' + role">{{ t('media_ai.role_' + role) }}</label><div class="flex gap-2"><select :id="'media-ai-role-' + role" v-model="draft.roles[role]" class="select select-bordered select-sm flex-1 min-w-0" :disabled="busy"><option :value="null">{{ t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured') }}</option><option v-for="m in defaultModels(role)" :key="m.id" :value="m.id">{{ modelLabel(m) }}</option></select><button v-if="role === 'embedding'" class="btn btn-sm" :disabled="busy" @click="openWizard">{{ t('media_ai.configure') }}</button></div></div>
+          <div v-for="role in roles" :key="role" class="space-y-1"><label :for="'media-ai-role-' + role">{{ t('media_ai.role_' + role) }}</label><div class="flex gap-2"><select :id="'media-ai-role-' + role" v-model="draft.roles[role]" class="select select-bordered select-sm flex-1 min-w-0" :disabled="busy"><option :value="null">{{ t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured') }}</option><option v-for="m in defaultModels(role)" :key="m.id" :value="m.id">{{ modelLabel(m) }} · {{ t('media_ai.' + defaultModelStatus(m, role)) }}</option></select><button v-if="role === 'embedding'" class="btn btn-sm" :disabled="busy" @click="openWizard">{{ t('media_ai.configure') }}</button></div></div>
           <p class="opacity-60">{{ t('media_ai.defaults_hint') }}</p>
         </div>
         <div class="flex gap-2 items-center"><button class="btn btn-sm btn-primary" :disabled="busy || !dirty" @click="save">{{ t('media_ai.save') }}</button><button class="btn btn-sm" :disabled="busy" @click="reload">{{ t('media_ai.reload') }}</button><span v-if="dirty" class="text-warning">{{ t('media_ai.unsaved') }}</span></div>
@@ -111,8 +112,23 @@ const pickerModels = computed(() => modelPicker.value?.ids.filter(id => id.toLow
 const pickerNewCount = computed(() => modelPicker.value?.selection.filter(id => !pickerConfigured.value.has(id)).length || 0);
 const dirty = computed(() => !!wizard.value || JSON.stringify(draft.value) !== baseline.value || Object.keys(keys.value).length > 0);
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
-const modelLabel = (m: MediaModel) => `${draft.value?.providers.find(p => p.id === m.providerId)?.name} / ${m.name}`;
-function defaultModels(role: typeof roles[number]) { return saved.value ? eligibleModels(saved.value, role).filter(m => draft.value?.models.some(current => current.id === m.id)) : []; }
+const modelLabel = (m: MediaModel) => `${draft.value?.providers.find(p => p.id === m.providerId)?.name} / ${m.name || m.remoteId || t('media_ai.new_model')}`;
+function defaultModels(role: typeof roles[number]) {
+  const cap: MediaCapability = role === 'media' ? 'image' : role === 'text' ? 'text' : 'embed_text';
+  return draft.value?.models.filter(m => (m.capabilities.includes(cap) || (role === 'media' && m.capabilities.includes('video_frames')))
+    && draft.value!.providers.some(p => p.id === m.providerId)) || [];
+}
+function defaultModelStatus(m: MediaModel, role: typeof roles[number]) {
+  const p = draft.value?.providers.find(p => p.id === m.providerId);
+  if (!p?.enabled) return 'off';
+  if (!p.allowMedia) return 'transfer_required';
+  if (dirty.value) return 'unsaved';
+  return saved.value && eligibleModels(saved.value, role).some(current => current.id === m.id) ? 'tested' : 'untested';
+}
+function clearUnsupportedRoles() {
+  if (!draft.value) return;
+  for (const role of roles) if (draft.value.roles[role] && !defaultModels(role).some(m => m.id === draft.value!.roles[role])) draft.value.roles[role] = null;
+}
 const keyPlaceholder = (id: string) => t(storedKeys.value.includes(id) ? 'media_ai.key_saved' : 'media_ai.key_optional');
 let disposed = false, off: (() => void) | undefined;
 function receive(view: any) { if (disposed) return; draft.value = view.configuration; saved.value = clone(view.configuration); storedKeys.value = view.keysStored; keys.value = {}; baseline.value = JSON.stringify(draft.value); if (!provider.value) selected.value = draft.value?.providers[0]?.id || ''; }

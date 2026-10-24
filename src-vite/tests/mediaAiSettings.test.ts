@@ -26,12 +26,13 @@ function harness() {
       calls.push([name, args]);
       if (name === 'media_ai_list_models') return ['kept', 'optional-a', 'optional-b'];
       if (name === 'media_ai_save_configuration') stored = { configuration: JSON.parse(JSON.stringify(args.configuration)), keysStored: [] };
+      if (name === 'media_ai_test_model') stored.configuration.models.find(m => m.id === args.modelId)!.tested[args.capability as mediaAi.MediaCapability] = 'verified';
       return JSON.parse(JSON.stringify(stored));
     },
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,selected,expandedModel,busy,dirty,error,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,setOutputTokens,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,selected,expandedModel,busy,dirty,error,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,defaultModelStatus,clearUnsupportedRoles,testModel,setOutputTokens,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls };
 }
@@ -79,6 +80,50 @@ test('removed models remain removed after save, reload and fetching the catalog 
   assert.deepEqual(Array.from(h.api.draft.value.models, (m: any) => m.remoteId), ['optional-a']);
 });
 
+test('draft capabilities immediately list untested defaults independently for all three purposes', async () => {
+  const h = harness();
+  const model = (id: string, capabilities: mediaAi.MediaCapability[]) => ({ ...mediaAi.newMediaModel('provider'), id, name: id, remoteId: id, capabilities });
+  h.api.draft.value.models.push(model('gpt-6.1-sol', ['image', 'video_frames', 'text', 'json', 'embed_text']), model('text-only', ['text']), model('embedding-only', ['embed_text']));
+  assert.deepEqual(Array.from(h.api.defaultModels('media'), (m: any) => m.id), ['kept', 'gpt-6.1-sol']);
+  assert.deepEqual(Array.from(h.api.defaultModels('text'), (m: any) => m.id), ['kept', 'gpt-6.1-sol', 'text-only']);
+  assert.deepEqual(Array.from(h.api.defaultModels('embedding'), (m: any) => m.id), ['kept', 'gpt-6.1-sol', 'embedding-only']);
+  assert.equal(h.api.saved.value.models.length, 1, 'candidates come from the draft, not the saved snapshot');
+  h.api.draft.value.roles = { media: 'gpt-6.1-sol', text: 'text-only', embedding: 'embedding-only' };
+  await h.api.save(); await h.api.load();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.draft.value.roles)), { media: 'gpt-6.1-sol', text: 'text-only', embedding: 'embedding-only' });
+  await h.api.testModel(h.api.draft.value.models.find((m: any) => m.id === 'gpt-6.1-sol'), 'image');
+  assert.equal(h.api.error.value, '');
+  assert.equal(h.api.draft.value.roles.media, 'gpt-6.1-sol');
+  assert.equal(h.api.draft.value.roles.text, 'text-only');
+  assert.equal(h.api.defaultModelStatus(h.api.draft.value.models[1], 'media'), 'tested');
+  assert.equal(h.api.defaultModelStatus(h.api.draft.value.models[2], 'text'), 'untested');
+  assert.deepEqual(h.calls.slice(-2).map(([name]) => name), ['media_ai_save_configuration', 'media_ai_test_model']);
+});
+
+test('untested, disabled and unpermitted candidates remain visible with their status', async () => {
+  const h = harness(), view = fixture(); view.configuration.models[0].tested = {};
+  h.api.receive(view);
+  const model = h.api.draft.value.models[0], provider = h.api.draft.value.providers[0];
+  assert.equal(h.api.defaultModelStatus(model, 'media'), 'untested');
+  model.name = 'edited';
+  assert.equal(h.api.defaultModelStatus(model, 'media'), 'unsaved');
+  provider.enabled = false;
+  assert.equal(h.api.defaultModelStatus(model, 'media'), 'off');
+  provider.enabled = true; provider.allowMedia = false;
+  assert.equal(h.api.defaultModelStatus(model, 'media'), 'transfer_required');
+  for (const role of ['media', 'text', 'embedding']) assert.equal(h.api.defaultModels(role).length, 1);
+});
+
+test('removing a declared capability clears only defaults that no longer support their purpose', () => {
+  const h = harness(), model = h.api.draft.value.models[0];
+  model.capabilities = ['video_frames', 'text']; h.api.clearUnsupportedRoles();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.draft.value.roles)), { media: 'kept', text: 'kept', embedding: null });
+  model.capabilities = ['text']; h.api.clearUnsupportedRoles();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.draft.value.roles)), { media: null, text: 'kept', embedding: null });
+  model.capabilities = []; h.api.clearUnsupportedRoles();
+  assert.equal(h.api.draft.value.roles.text, null);
+});
+
 test('the output control saves 384000 and clearing it sends null instead of an empty string', async () => {
   const h=harness();
   h.api.setOutputTokens(h.api.draft.value.models[0],{target:{value:'384000',valueAsNumber:384000,validity:{badInput:false}}});
@@ -115,4 +160,9 @@ test('the real template exposes a removal button outside each collapsed model de
   assert.doesNotMatch(html, /<details[^>]*\sopen(?:[\s>])/);
   assert.match(html,/type="number" min="1" step="1"/);
   assert.doesNotMatch(html,/max="8192"/);
+  for (const role of ['media', 'text', 'embedding']) {
+    const options = html.match(new RegExp(`<select[^>]*id="media-ai-role-${role}"[^>]*>([\\s\\S]*?)<\\/select>`))![1];
+    assert.match(options, /value="kept"/);
+    assert.match(options, /media_ai.untested|media_ai.unsaved/);
+  }
 });

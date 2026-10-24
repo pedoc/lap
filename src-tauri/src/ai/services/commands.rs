@@ -32,6 +32,35 @@ pub fn media_ai_configuration() -> Result<View, String> {
     view()
 }
 
+fn validate_roles(config: &Configuration) -> Result<(), String> {
+    for (role, id, capabilities) in [
+        (
+            "媒体理解",
+            &config.roles.media,
+            &[Capability::Image, Capability::VideoFrames][..],
+        ),
+        ("文本生成", &config.roles.text, &[Capability::Text][..]),
+        (
+            "Embedding",
+            &config.roles.embedding,
+            &[Capability::EmbedText][..],
+        ),
+    ] {
+        if let Some(id) = id {
+            let model = config.model(id)?;
+            if !capabilities
+                .iter()
+                .any(|cap| model.capabilities.contains(cap))
+            {
+                return Err(format!(
+                    "{role}默认模型未声明相应能力，请重新选择或清除此用途。"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn save(
     mut next: Configuration,
     keys: BTreeMap<String, String>,
@@ -92,36 +121,8 @@ fn save(
         }
         next.models[i] = resolved.model;
     }
-    for (role, before, after, cap) in [
-        (
-            "media",
-            &previous.roles.media,
-            &next.roles.media,
-            Capability::Image,
-        ),
-        (
-            "text",
-            &previous.roles.text,
-            &next.roles.text,
-            Capability::Text,
-        ),
-        (
-            "embedding",
-            &previous.roles.embedding,
-            &next.roles.embedding,
-            Capability::EmbedText,
-        ),
-    ] {
-        if before != after && after.is_some() {
-            let model = next.role(role)?;
-            let cap = if role == "media" && !model.tested(Capability::Image) {
-                Capability::VideoFrames
-            } else {
-                cap
-            };
-            model.require(cap, false)?;
-        }
-    }
+    // Defaults may be selected before detection; runtime checks still require verified capabilities.
+    validate_roles(&next)?;
     for p in &next.providers {
         if let Some(key) = keys.get(&p.id).filter(|key| !key.trim().is_empty()) {
             let entry = config::credential(p)?;
@@ -374,4 +375,98 @@ pub async fn media_ai_save_embedding(
     let result = save(config, keys, Some(model))?;
     let _ = app.emit("media-ai-configuration-changed", ());
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::services::config::{Model, Roles};
+
+    fn configuration() -> Configuration {
+        Configuration {
+            providers: vec![Provider {
+                id: "provider".into(),
+                name: "Service".into(),
+                base_url: "http://127.0.0.1:8000/v1/".into(),
+                enabled: true,
+                allow_media: true,
+                ..Default::default()
+            }],
+            models: vec![Model {
+                id: "model".into(),
+                provider_id: "provider".into(),
+                name: "Model".into(),
+                remote_id: "remote-model".into(),
+                capabilities: [Capability::Image, Capability::Text, Capability::EmbedText]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            }],
+            roles: Roles {
+                media: Some("model".into()),
+                text: Some("model".into()),
+                embedding: Some("model".into()),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn defaults_can_be_selected_before_detection_but_runtime_still_requires_it() {
+        let config = configuration();
+        config.validate().unwrap();
+        validate_roles(&config).unwrap();
+        for (role, capability) in [
+            ("media", Capability::Image),
+            ("text", Capability::Text),
+            ("embedding", Capability::EmbedText),
+        ] {
+            let model = config.role(role).unwrap();
+            assert!(model.model.tested.is_empty());
+            assert!(model.require(capability, false).is_err());
+        }
+    }
+
+    #[test]
+    fn bound_roles_reject_removed_capabilities_until_cleared() {
+        for capability in [Capability::Image, Capability::Text, Capability::EmbedText] {
+            let mut config = configuration();
+            config.models[0].capabilities.remove(&capability);
+            assert!(validate_roles(&config).is_err());
+            match capability {
+                Capability::Image => config.roles.media = None,
+                Capability::Text => config.roles.text = None,
+                Capability::EmbedText => config.roles.embedding = None,
+                _ => unreachable!(),
+            }
+            validate_roles(&config).unwrap();
+        }
+
+        let mut config = configuration();
+        config.models[0].capabilities.remove(&Capability::Image);
+        config.models[0]
+            .capabilities
+            .insert(Capability::VideoFrames);
+        validate_roles(&config).unwrap();
+        config.roles.media = Some("missing-model".into());
+        assert!(validate_roles(&config).is_err());
+    }
+
+    #[test]
+    fn disabling_a_bound_provider_is_saved_but_runtime_keeps_transmission_guards() {
+        for revoke_consent in [false, true] {
+            let mut config = configuration();
+            if revoke_consent {
+                config.providers[0].allow_media = false;
+            } else {
+                config.providers[0].enabled = false;
+            }
+            validate_roles(&config).unwrap();
+            let mut model = config.role("text").unwrap();
+            let contract = model.contract();
+            model.model.tested.insert(Capability::Text, contract);
+            assert!(model.tested(Capability::Text));
+            assert!(model.require(Capability::Text, false).is_err());
+        }
+    }
 }

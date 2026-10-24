@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { eligibleModels, rankedMediaHits, newProvider, newMediaModel, outputTokenError, type MediaConfiguration, type MediaHit } from '../src/common/mediaAi.ts';
 
-test('default roles require the specific tested capability and an enabled permitted service', () => {
+test('runtime model choices require the specific tested capability and an enabled permitted service', () => {
   const p = newProvider(); p.allowMedia = true;
   const m = newMediaModel(p.id); m.name = 'multi'; m.remoteId = 'multi'; m.capabilities.push('embed_text'); m.tested.image = 'receipt';
   const c: MediaConfiguration = { version: 1, revision: 0, providers: [p], models: [m], roles: { media: null, text: null, embedding: null } };
