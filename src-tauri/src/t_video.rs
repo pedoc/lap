@@ -183,37 +183,60 @@ pub(crate) async fn media_ai_frame(path: &str, seconds: f64) -> Result<Vec<u8>, 
     if !seconds.is_finite() || seconds < 0.0 {
         return Err("视频采样时间无效".into());
     }
-    let mut command = ffmpeg_command();
-    command
-        .kill_on_drop(true)
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-ss"])
-        .arg(format!("{seconds:.3}"))
-        .args([
-            "-i",
-            path,
-            "-frames:v",
-            "1",
-            "-vf",
-            "scale=1280:1280:force_original_aspect_ratio=decrease",
-            "-q:v",
-            "5",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "pipe:1",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped());
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
-        .await
-        .map_err(|_| "视频采样超时")?
-        .map_err(|_| "无法启动 FFmpeg，请检查媒体运行环境")?;
-    if !output.status.success() || output.stdout.is_empty() || output.stdout.len() > 4 * 1024 * 1024 {
-        return Err("无法采样此视频片段".into());
+    let mut accurate = true;
+    loop {
+        let mut command = ffmpeg_command();
+        command
+            .kill_on_drop(true)
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin"]);
+        // Keep a sparse tail frame within the requested second; never return an earlier seek keyframe.
+        if !accurate {
+            command.arg("-noaccurate_seek");
+        }
+        let filter = if accurate {
+            "scale=1280:1280:force_original_aspect_ratio=decrease".to_string()
+        } else {
+            format!(
+                "select='gte(t,{:.6})',scale=1280:1280:force_original_aspect_ratio=decrease",
+                seconds.floor() - seconds
+            )
+        };
+        command
+            .arg("-ss")
+            .arg(format!("{seconds:.3}"))
+            .args([
+                "-i",
+                path,
+                "-frames:v",
+                "1",
+                "-vf",
+                filter.as_str(),
+                "-q:v",
+                "5",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "pipe:1",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped());
+        let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+            .await
+            .map_err(|_| "视频采样超时")?
+            .map_err(|_| "无法启动 FFmpeg，请检查媒体运行环境")?;
+        if !output.status.success() || output.stdout.len() > 4 * 1024 * 1024 {
+            return Err("无法采样此视频片段".into());
+        }
+        if !output.stdout.is_empty() {
+            return Ok(output.stdout);
+        }
+        if !accurate || seconds == 0.0 {
+            return Err("无法采样此视频片段".into());
+        }
+        accurate = false;
     }
-    Ok(output.stdout)
 }
 
 fn debug_stderr() -> std::process::Stdio {

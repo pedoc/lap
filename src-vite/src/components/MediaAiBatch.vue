@@ -10,12 +10,15 @@
         <p v-for="notice in preflight.notices" :key="notice" class="text-xs text-warning">{{ notice }}</p>
         <div class="grid gap-2 text-xs">
           <label class="flex gap-2"><input v-model="options.indexOnly" class="checkbox checkbox-xs" type="checkbox" :disabled="busy" />{{ t('media_ai.index_only') }}</label>
-          <label class="flex gap-2"><input v-model="options.index" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || options.indexOnly || !preflight.embeddingReady" />{{ t('media_ai.also_index') }}</label>
-          <label class="flex gap-2"><input v-model="options.force" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || options.indexOnly" />{{ t('media_ai.force') }}</label>
-          <label class="flex gap-2"><input v-model="options.adopt.title" class="checkbox checkbox-xs" type="checkbox" :disabled="busy" />{{ t('media_ai.fill_title') }}</label>
-          <label class="flex gap-2"><input v-model="options.adopt.description" class="checkbox checkbox-xs" type="checkbox" :disabled="busy" />{{ t('media_ai.fill_description') }}</label>
-          <label class="flex gap-2"><input v-model="options.adopt.tags" class="checkbox checkbox-xs" type="checkbox" :disabled="busy" />{{ t('media_ai.append_tags') }}</label>
-          <label v-if="options.adopt.tags" class="flex gap-2"><input v-model="options.adopt.createTags" class="checkbox checkbox-xs" type="checkbox" :disabled="busy" />{{ t('media_ai.create_tags') }}</label>
+          <label class="flex gap-2"><input v-model="options.visualOnly" class="checkbox checkbox-xs" type="checkbox" :disabled="busy" />{{ t('media_ai.visual_index_only') }}</label>
+          <label class="flex gap-2"><input v-model="options.index" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || onlyIndexes || !preflight.embeddingReady" />{{ t('media_ai.also_index') }}</label>
+          <label class="flex gap-2"><input v-model="options.visualIndex" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || onlyIndexes || !preflight.visualEmbeddingReady" />{{ t('media_ai.also_visual_index') }}</label>
+          <p class="opacity-60">{{ t('media_ai.visual_index_hint', { count: preflight.visualIndexed }) }}</p>
+          <label class="flex gap-2"><input v-model="options.force" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || onlyIndexes" />{{ t('media_ai.force') }}</label>
+          <label class="flex gap-2"><input v-model="options.adopt.title" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || onlyIndexes" />{{ t('media_ai.fill_title') }}</label>
+          <label class="flex gap-2"><input v-model="options.adopt.description" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || onlyIndexes" />{{ t('media_ai.fill_description') }}</label>
+          <label class="flex gap-2"><input v-model="options.adopt.tags" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || onlyIndexes" />{{ t('media_ai.append_tags') }}</label>
+          <label v-if="options.adopt.tags" class="flex gap-2"><input v-model="options.adopt.createTags" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || onlyIndexes" />{{ t('media_ai.create_tags') }}</label>
         </div>
         <div class="flex gap-2"><button class="btn btn-sm btn-primary" :disabled="!canSubmit" @click="submit">{{ t('media_ai.submit') }}</button><button class="btn btn-sm" :disabled="busy" @click="openMediaAiSettings">{{ t('media_ai.configure') }}</button></div>
       </template>
@@ -43,9 +46,12 @@ import { libConfig } from '@/common/config';
 import { mediaAiBatch, openMediaAiSettings } from '@/common/mediaAi';
 const { t } = useI18n();
 const preflight = ref<any>(null), jobs = ref<any[]>([]), error = ref(''), busy = ref(false), loading = ref(false);
-const options = ref({ indexOnly: false, index: false, force: false, adopt: { title: false, description: false, tags: false, createTags: false, onlyEmpty: true } });
+const options = ref({ indexOnly: false, index: false, visualOnly: false, visualIndex: false, force: false, adopt: { title: false, description: false, tags: false, createTags: false, onlyEmpty: true } });
 const anyRunning = computed(() => jobs.value.some(j => j.state === 'running'));
-const canSubmit = computed(() => !busy.value && !anyRunning.value && preflight.value?.total > 0 && (options.value.indexOnly ? preflight.value.embeddingReady && preflight.value.analyzed > 0 : preflight.value.mediaReady));
+const onlyIndexes = computed(() => options.value.indexOnly || options.value.visualOnly);
+const canSubmit = computed(() => !busy.value && !anyRunning.value && preflight.value?.total > 0 && (onlyIndexes.value
+  ? (!options.value.indexOnly || preflight.value.embeddingReady && preflight.value.analyzed > 0) && (!options.value.visualOnly || preflight.value.visualEmbeddingReady)
+  : preflight.value.mediaReady && (!options.value.index || preflight.value.embeddingReady) && (!options.value.visualIndex || preflight.value.visualEmbeddingReady)));
 let timer: ReturnType<typeof setInterval> | undefined, generation = 0;
 async function refresh(full = false) {
   const epoch = generation, libraryId = mediaAiBatch.libraryId;
@@ -57,7 +63,12 @@ async function refresh(full = false) {
   } catch (e) { if (epoch === generation) error.value = String(e); }
 }
 async function action(fn: () => Promise<unknown>) { if (busy.value) return; busy.value = true; error.value = ''; try { await fn(); await refresh(true); } catch (e) { error.value = String(e); } finally { busy.value = false; } }
-async function submit() { if (!canSubmit.value) return; await action(() => invoke('media_ai_start_job', { libraryId: mediaAiBatch.libraryId, fileIds: mediaAiBatch.fileIds, options: { ...options.value, force: options.value.indexOnly ? false : options.value.force } })); }
+async function submit() {
+  if (!canSubmit.value) return;
+  const next = { ...options.value, index: options.value.indexOnly || !onlyIndexes.value && options.value.index, visualIndex: !onlyIndexes.value && options.value.visualIndex, force: !onlyIndexes.value && options.value.force,
+    adopt: onlyIndexes.value ? { title: false, description: false, tags: false, createTags: false, onlyEmpty: true } : { ...options.value.adopt } };
+  await action(() => invoke('media_ai_start_job', { libraryId: mediaAiBatch.libraryId, fileIds: mediaAiBatch.fileIds, options: next }));
+}
 async function pause(jobId: string) { await action(() => invoke('media_ai_pause_job', { jobId })); }
 async function resume(jobId: string, retryFailed: boolean) { await action(() => invoke('media_ai_resume_job', { libraryId: mediaAiBatch.libraryId, jobId, retryFailed })); }
 watch(() => [mediaAiBatch.open, mediaAiBatch.libraryId, mediaAiBatch.fileIds], async () => {

@@ -9,11 +9,13 @@
       <div v-if="wizard" class="rounded-box border border-primary/30 p-3 space-y-3" data-embedding-wizard>
         <div class="flex items-center justify-between gap-2"><h3 class="font-semibold text-sm">{{ t('media_ai.configure_embedding') }}</h3><button class="btn btn-xs btn-ghost" :disabled="busy" @click="closeWizard">{{ t('media_ai.back') }}</button></div>
         <div class="space-y-3 min-h-24 max-h-[calc(100vh-23rem)] overflow-y-auto pr-1" data-embedding-fields>
-        <label class="block">{{ t('media_ai.service') }}<select class="select select-bordered select-sm w-full mt-1" :value="wizard.providerChoice" :disabled="busy" @change="chooseWizardProvider(($event.target as HTMLSelectElement).value)"><option value="new">{{ t('media_ai.new_service') }}</option><option v-for="p in draft.providers" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
+        <label class="block">{{ t('media_ai.service') }}<select class="select select-bordered select-sm w-full mt-1" :value="wizard.providerChoice" :disabled="busy" @change="chooseWizardProvider(($event.target as HTMLSelectElement).value)"><option value="new">{{ t('media_ai.new_service') }}</option><option v-for="p in draft.providers.filter(p => p.kind === 'embedding')" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
+        <label class="block">{{ t('media_ai.embedding_protocol') }}<select v-model="wizard.provider.embeddingProtocol" class="select select-bordered select-sm w-full mt-1" :disabled="busy" @change="applyEmbeddingProtocol(wizard.provider, [wizard.model])"><option value="openai_text">{{ t('media_ai.protocol_openai_text') }}</option><option value="vllm_multimodal">{{ t('media_ai.protocol_vllm_multimodal') }}</option></select></label>
+        <p class="opacity-60">{{ t(wizard.provider.embeddingProtocol === 'vllm_multimodal' ? 'media_ai.multimodal_protocol_hint' : 'media_ai.embedding_hint') }}</p>
         <label class="block">{{ t('media_ai.base_url') }}<input v-model="wizard.provider.baseUrl" class="input input-bordered input-sm w-full mt-1" placeholder="https://host/v1" :disabled="busy" autocomplete="off" /></label>
         <label class="block">API Key<input v-model="wizard.key" type="password" class="input input-bordered input-sm w-full mt-1" autocomplete="new-password" :placeholder="keyPlaceholder(wizard.provider.id)" :disabled="busy" /></label>
-        <label class="block">Model ID<input v-model="wizard.model.remoteId" class="input input-bordered input-sm w-full mt-1" placeholder="qwen3-embedding-0.6b" :disabled="busy" maxlength="256" /></label>
-        <label class="block">{{ t('media_ai.query_preset') }}<select class="select select-bordered select-sm w-full mt-1" :disabled="busy" :value="wizard.model.embedding.queryInstruction === QWEN_MEDIA_QUERY ? 'qwen' : 'plain'" @change="wizard.model.embedding.queryInstruction = ($event.target as HTMLSelectElement).value === 'qwen' ? QWEN_MEDIA_QUERY : ''"><option value="plain">{{ t('media_ai.query_plain') }}</option><option value="qwen">Qwen3 Embedding</option></select></label>
+        <label class="block">Model ID<input v-model="wizard.model.remoteId" class="input input-bordered input-sm w-full mt-1" :placeholder="wizard.provider.embeddingProtocol === 'vllm_multimodal' ? 'qwen3-vl-embedding-2b' : 'qwen3-embedding-0.6b'" :disabled="busy" maxlength="256" /></label>
+        <label class="block">{{ t('media_ai.query_preset') }}<select class="select select-bordered select-sm w-full mt-1" :disabled="busy" :value="wizard.model.embedding.queryInstruction === queryPresetInstruction(wizard.provider) ? 'qwen' : 'plain'" @change="wizard.model.embedding.queryInstruction = ($event.target as HTMLSelectElement).value === 'qwen' ? queryPresetInstruction(wizard.provider) : ''"><option value="plain">{{ t('media_ai.query_plain') }}</option><option value="qwen">{{ wizard.provider.embeddingProtocol === 'vllm_multimodal' ? 'Qwen3-VL Embedding' : 'Qwen3 Embedding' }}</option></select></label>
         <label class="flex gap-2 items-start"><input v-model="wizard.provider.allowMedia" class="checkbox checkbox-xs" type="checkbox" :disabled="busy" />{{ t('media_ai.allow_transfer') }}</label>
         <label class="flex gap-2 items-start"><input v-model="wizard.provider.allowBackground" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || !wizard.provider.allowMedia" />{{ t('media_ai.allow_background') }}</label>
         <details><summary class="cursor-pointer opacity-70">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2">
@@ -22,13 +24,12 @@
           <label class="block">{{ t('media_ai.revision') }}<input v-model="wizard.model.revision" class="input input-bordered input-sm w-full mt-1" /></label>
           <textarea v-model="wizard.model.embedding.queryInstruction" class="textarea textarea-bordered w-full" rows="2" :placeholder="t('media_ai.query_instruction')"></textarea>
         </div></details>
-        <p class="opacity-60">{{ t('media_ai.embedding_hint') }}</p>
         <p v-if="wizard.dimension" class="text-success">{{ t('media_ai.dimensions', { count: wizard.dimension }) }}</p>
         </div>
         <div class="flex flex-wrap gap-2"><button class="btn btn-sm" :disabled="busy || !wizard.provider.allowMedia" @click="detectEmbedding">{{ t('media_ai.detect') }}</button><button class="btn btn-sm btn-primary" :disabled="busy || !wizard.provider.allowMedia" @click="saveEmbedding">{{ t('media_ai.save_default_embedding') }}</button></div>
       </div>
       <template v-else>
-        <button class="btn btn-sm" :disabled="busy" data-embedding-shortcut @click="openWizard">{{ t('media_ai.configure_embedding') }}</button>
+        <div class="flex flex-wrap items-center gap-2"><div class="join" role="group" :aria-label="t('media_ai.service_type')"><button type="button" class="btn btn-sm join-item" :class="serviceKind === 'llm' ? 'btn-active' : ''" :aria-pressed="serviceKind === 'llm'" :disabled="busy" @click="selectServiceKind('llm')">{{ t('media_ai.llm_services') }}</button><button type="button" class="btn btn-sm join-item" :class="serviceKind === 'embedding' ? 'btn-active' : ''" :aria-pressed="serviceKind === 'embedding'" :disabled="busy" @click="selectServiceKind('embedding')">{{ t('media_ai.embedding_services') }}</button></div><button v-if="serviceKind === 'embedding'" class="btn btn-sm" :disabled="busy" data-embedding-shortcut @click="openWizard()">{{ t('media_ai.configure_embedding') }}</button></div>
         <div class="flex gap-3 items-start rounded-box border border-base-content/10 p-2">
           <aside class="w-28 shrink-0 space-y-2">
             <input v-model="filter" class="input input-bordered input-xs w-full" :placeholder="t('media_ai.filter_service')" :aria-label="t('media_ai.filter_service')" />
@@ -37,6 +38,7 @@
           </aside>
           <div v-if="provider" class="min-w-0 flex-1 space-y-3 max-h-80 overflow-y-auto pr-1">
             <div class="flex gap-2 items-center"><input v-model="provider.name" class="input input-bordered input-sm w-full min-w-0" :placeholder="t('media_ai.service_name')" :disabled="busy" maxlength="120" /><input v-model="provider.enabled" class="toggle toggle-sm toggle-primary" type="checkbox" :aria-label="t('media_ai.enabled')" :disabled="busy" /></div>
+            <template v-if="provider.kind === 'embedding'"><label class="block">{{ t('media_ai.embedding_protocol') }}<select v-model="provider.embeddingProtocol" class="select select-bordered select-sm w-full mt-1" :disabled="busy" @change="applyEmbeddingProtocol(provider, providerModels)"><option value="openai_text">{{ t('media_ai.protocol_openai_text') }}</option><option value="vllm_multimodal">{{ t('media_ai.protocol_vllm_multimodal') }}</option></select></label><p class="opacity-60">{{ t(provider.embeddingProtocol === 'vllm_multimodal' ? 'media_ai.multimodal_protocol_hint' : 'media_ai.embedding_hint') }}</p></template>
             <label class="block">{{ t('media_ai.base_url') }}<input v-model="provider.baseUrl" class="input input-bordered input-sm w-full mt-1" placeholder="https://host/v1" :disabled="busy" /></label>
             <label class="block">API Key<input v-model="keys[provider.id]" type="password" autocomplete="new-password" class="input input-bordered input-sm w-full mt-1" :placeholder="keyPlaceholder(provider.id)" :disabled="busy" /></label>
             <button v-if="storedKeys.includes(provider.id)" class="btn btn-xs btn-ghost" :disabled="busy" @click="keys[provider.id] = ''">{{ t('media_ai.clear_key') }}</button>
@@ -51,9 +53,9 @@
                 <label class="block">Model ID<input v-model="m.remoteId" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="256" /></label>
                 <label class="block">{{ t('media_ai.display_name') }}<input v-model="m.name" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="160" /></label>
                 <label class="block">{{ t('media_ai.group') }}<input v-model="m.group" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="120" /></label>
-                <p class="opacity-60">{{ t('media_ai.capabilities_hint') }}</p>
-                <div v-for="cap in capabilities" :key="cap" class="flex items-center gap-2"><label class="flex items-center gap-2 flex-1"><input v-model="m.capabilities" type="checkbox" class="checkbox checkbox-xs" :value="cap" :disabled="busy" @change="clearUnsupportedRoles" />{{ t('media_ai.cap_' + cap) }}</label><span class="opacity-50">{{ t(!dirty && m.tested[cap] ? 'media_ai.tested' : 'media_ai.untested') }}</span><button class="btn btn-xs" :disabled="busy || !m.capabilities.includes(cap)" @click="testModel(m, cap)">{{ t('media_ai.detect') }}</button></div>
-                <details><summary class="opacity-60 cursor-pointer">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2"><label class="block">{{ t('media_ai.revision') }}<input v-model="m.revision" class="input input-bordered input-xs w-full mt-1" /></label><label class="block">{{ t('media_ai.output_tokens') }}<input :value="m.maxOutputTokens ?? ''" @input="setOutputTokens(m, $event)" type="number" min="1" step="1" :placeholder="t('media_ai.server_default')" :aria-invalid="!!outputTokenError(m.maxOutputTokens)" class="input input-bordered input-xs w-full mt-1" /></label><p class="opacity-60">{{ t('media_ai.output_tokens_hint') }}</p><p v-if="outputTokenError(m.maxOutputTokens)" role="alert" class="text-error">{{ t('media_ai.' + outputTokenError(m.maxOutputTokens), { model: m.name || m.remoteId }) }}</p><label v-if="m.capabilities.includes('embed_text')" class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label></div></details>
+                <p class="opacity-60">{{ t(provider.kind === 'embedding' ? 'media_ai.embedding_capabilities_hint' : 'media_ai.capabilities_hint') }}</p>
+                <div v-for="cap in capabilities" :key="cap" class="flex items-center gap-2"><label class="flex items-center gap-2 flex-1"><input v-if="provider.kind === 'llm'" v-model="m.capabilities" type="checkbox" class="checkbox checkbox-xs" :value="cap" :disabled="busy" @change="clearUnsupportedRoles" />{{ t('media_ai.cap_' + cap) }}</label><span class="opacity-50">{{ t(!dirty && m.tested[cap] ? 'media_ai.tested' : 'media_ai.untested') }}</span><button class="btn btn-xs" :disabled="busy || !m.capabilities.includes(cap)" @click="testModel(m, cap)">{{ t('media_ai.detect') }}</button></div>
+                <details><summary class="opacity-60 cursor-pointer">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2"><label class="block">{{ t('media_ai.revision') }}<input v-model="m.revision" class="input input-bordered input-xs w-full mt-1" /></label><template v-if="provider.kind === 'llm'"><label class="block">{{ t('media_ai.output_tokens') }}<input :value="m.maxOutputTokens ?? ''" @input="setOutputTokens(m, $event)" type="number" min="1" step="1" :placeholder="t('media_ai.server_default')" :aria-invalid="!!outputTokenError(m.maxOutputTokens)" class="input input-bordered input-xs w-full mt-1" /></label><p class="opacity-60">{{ t('media_ai.output_tokens_hint') }}</p><p v-if="outputTokenError(m.maxOutputTokens)" role="alert" class="text-error">{{ t('media_ai.' + outputTokenError(m.maxOutputTokens), { model: m.name || m.remoteId }) }}</p></template><label v-if="provider.kind === 'embedding'" class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label></div></details>
               </div>
             </details>
             <button type="button" class="btn btn-xs btn-square btn-ghost text-error absolute top-1.5 right-1.5" :disabled="busy" :aria-label="t('media_ai.delete_model') + ': ' + (m.name || m.remoteId)" :title="t('media_ai.delete_model')" data-remove-media-ai-model @click.stop="removeModel(m.id)"><IconTrash class="w-3.5 h-3.5" aria-hidden="true" /></button>
@@ -64,7 +66,7 @@
         </div>
         <div class="rounded-box border border-base-content/10 p-3 space-y-3">
           <h3 class="font-semibold text-sm">{{ t('media_ai.default_roles') }}</h3>
-          <div v-for="role in roles" :key="role" class="space-y-1"><label :for="'media-ai-role-' + role">{{ t('media_ai.role_' + role) }}</label><div class="flex gap-2"><select :id="'media-ai-role-' + role" v-model="draft.roles[role]" class="select select-bordered select-sm flex-1 min-w-0" :disabled="busy"><option :value="null">{{ t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured') }}</option><option v-for="m in defaultModels(role)" :key="m.id" :value="m.id">{{ modelLabel(m) }} · {{ t('media_ai.' + defaultModelStatus(m, role)) }}</option></select><button v-if="role === 'embedding'" class="btn btn-sm" :disabled="busy" @click="openWizard">{{ t('media_ai.configure') }}</button></div></div>
+          <div v-for="role in roles" :key="role" class="space-y-1"><label :for="'media-ai-role-' + role">{{ t('media_ai.role_' + role) }}</label><div class="flex gap-2"><select :id="'media-ai-role-' + role" v-model="draft.roles[role]" class="select select-bordered select-sm flex-1 min-w-0" :disabled="busy"><option :value="null">{{ t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured') }}</option><option v-for="m in defaultModels(role)" :key="m.id" :value="m.id">{{ modelLabel(m) }} · {{ t('media_ai.' + defaultModelStatus(m, role)) }}</option></select><button v-if="role === 'embedding' || role === 'multimodalEmbedding'" class="btn btn-sm" :disabled="busy" @click="openWizard(role)">{{ t('media_ai.configure') }}</button></div></div>
           <p class="opacity-60">{{ t('media_ai.defaults_hint') }}</p>
         </div>
         <div class="flex gap-2 items-center"><button class="btn btn-sm btn-primary" :disabled="busy || !dirty" @click="save">{{ t('media_ai.save') }}</button><button class="btn btn-sm" :disabled="busy" @click="reload">{{ t('media_ai.reload') }}</button><span v-if="dirty" class="text-warning">{{ t('media_ai.unsaved') }}</span></div>
@@ -95,17 +97,18 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ModalDialog from './ModalDialog.vue';
 import { IconTrash } from '@/common/icons';
-import { eligibleModels, newMediaModel, newProvider, outputTokenError, QWEN_MEDIA_QUERY, type MediaCapability, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
+import { eligibleModels, modelsForRole, newMediaModel, newProvider, outputTokenError, QWEN_MEDIA_QUERY, QWEN_VISUAL_QUERY, type MediaCapability, type MediaConfiguration, type MediaModel, type MediaProvider, type MediaServiceKind } from '@/common/mediaAi';
 const { t } = useI18n();
 const draft = ref<MediaConfiguration | null>(null), baseline = ref('null'), keys = ref<Record<string, string>>({}), storedKeys = ref<string[]>([]);
 const saved = ref<MediaConfiguration | null>(null);
 const selected = ref(''), filter = ref(''), expandedModel = ref(''), busy = ref(false), loading = ref(false), error = ref(''), message = ref('');
+const serviceKind = ref<MediaServiceKind>('llm');
 const wizard = ref<any>(null);
 const modelPicker = ref<{ providerId: string; ids: string[]; selection: string[]; filter: string } | null>(null);
-const roles = ['media', 'text', 'embedding'] as const;
-const capabilities: MediaCapability[] = ['text', 'image', 'video_frames', 'json', 'embed_text'];
-const provider = computed(() => draft.value?.providers.find(p => p.id === selected.value));
-const filteredProviders = computed(() => draft.value?.providers.filter(p => p.name.toLowerCase().includes(filter.value.toLowerCase())) || []);
+const roles = ['media', 'text', 'embedding', 'multimodalEmbedding'] as const;
+const provider = computed(() => draft.value?.providers.find(p => p.id === selected.value && p.kind === serviceKind.value));
+const capabilities = computed<MediaCapability[]>(() => provider.value?.kind === 'embedding' ? embeddingCapabilities(provider.value) : ['text', 'image', 'video_frames', 'json']);
+const filteredProviders = computed(() => draft.value?.providers.filter(p => p.kind === serviceKind.value && p.name.toLowerCase().includes(filter.value.toLowerCase())) || []);
 const providerModels = computed(() => (draft.value?.models.filter(m => m.providerId === selected.value) || []).sort((a, b) => a.group.localeCompare(b.group)));
 const pickerConfigured = computed(() => new Set(draft.value?.models.filter(m => m.providerId === modelPicker.value?.providerId).map(m => m.remoteId)));
 const pickerModels = computed(() => modelPicker.value?.ids.filter(id => id.toLowerCase().includes(modelPicker.value!.filter.toLowerCase())) || []);
@@ -114,9 +117,7 @@ const dirty = computed(() => !!wizard.value || JSON.stringify(draft.value) !== b
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const modelLabel = (m: MediaModel) => `${draft.value?.providers.find(p => p.id === m.providerId)?.name} / ${m.name || m.remoteId || t('media_ai.new_model')}`;
 function defaultModels(role: typeof roles[number]) {
-  const cap: MediaCapability = role === 'media' ? 'image' : role === 'text' ? 'text' : 'embed_text';
-  return draft.value?.models.filter(m => (m.capabilities.includes(cap) || (role === 'media' && m.capabilities.includes('video_frames')))
-    && draft.value!.providers.some(p => p.id === m.providerId)) || [];
+  return draft.value ? modelsForRole(draft.value, role) : [];
 }
 function defaultModelStatus(m: MediaModel, role: typeof roles[number]) {
   const p = draft.value?.providers.find(p => p.id === m.providerId);
@@ -131,7 +132,11 @@ function clearUnsupportedRoles() {
 }
 const keyPlaceholder = (id: string) => t(storedKeys.value.includes(id) ? 'media_ai.key_saved' : 'media_ai.key_optional');
 let disposed = false, off: (() => void) | undefined;
-function receive(view: any) { if (disposed) return; draft.value = view.configuration; saved.value = clone(view.configuration); storedKeys.value = view.keysStored; keys.value = {}; baseline.value = JSON.stringify(draft.value); if (!provider.value) selected.value = draft.value?.providers[0]?.id || ''; }
+function receive(view: any) { if (disposed) return; draft.value = view.configuration; saved.value = clone(view.configuration); storedKeys.value = view.keysStored; keys.value = {}; baseline.value = JSON.stringify(draft.value); if (!provider.value) selected.value = draft.value?.providers.find(p => p.kind === serviceKind.value)?.id || ''; }
+function selectServiceKind(kind: MediaServiceKind) { serviceKind.value = kind; selected.value = draft.value?.providers.find(p => p.kind === kind)?.id || ''; filter.value = ''; }
+function embeddingCapabilities(p: MediaProvider): MediaCapability[] { return p.embeddingProtocol === 'vllm_multimodal' ? ['embed_text', 'embed_multimodal'] : ['embed_text']; }
+function queryPresetInstruction(p: MediaProvider) { return p.embeddingProtocol === 'vllm_multimodal' ? QWEN_VISUAL_QUERY : QWEN_MEDIA_QUERY; }
+function applyEmbeddingProtocol(p: MediaProvider, models: MediaModel[]) { for (const m of models) { m.capabilities = embeddingCapabilities(p); m.embedding.dimensions = null; m.tested = {}; } clearUnsupportedRoles(); }
 async function load() { loading.value = true; try { receive(await invoke('media_ai_configuration')); } catch (e) { error.value = String(e); } finally { loading.value = false; } }
 async function confirmDiscard() { if (busy.value) return false; return !dirty.value || ask(t('media_ai.discard'), { kind: 'warning' }); }
 async function action(work: () => Promise<void>) { if (busy.value) return; busy.value = true; error.value = ''; message.value = ''; try { await work(); } catch (e) { error.value = String(e); } finally { busy.value = false; } }
@@ -147,8 +152,8 @@ async function persist() {
 }
 async function save() { await action(async () => { await persist(); message.value = t('media_ai.saved'); }); }
 async function reload() { if (await confirmDiscard()) { wizard.value = null; await load(); } }
-function addProvider() { const p = newProvider(); draft.value!.providers.push(p); selected.value = p.id; }
-function addModel(remoteId = '') { const m = newMediaModel(selected.value); m.remoteId = remoteId; m.name = remoteId; draft.value!.models.push(m); expandedModel.value = m.id; }
+function addProvider() { const p = newProvider(serviceKind.value); draft.value!.providers.push(p); selected.value = p.id; }
+function addModel(remoteId = '') { const m = newMediaModel(selected.value); m.remoteId = remoteId; m.name = remoteId; if (provider.value?.kind === 'embedding') { m.capabilities = embeddingCapabilities(provider.value); m.maxOutputTokens = null; } draft.value!.models.push(m); expandedModel.value = m.id; }
 function setOutputTokens(model: MediaModel, event: Event) {
   const input = event.target as HTMLInputElement;
   model.maxOutputTokens = input.validity.badInput ? NaN : input.value === '' ? null : input.valueAsNumber;
@@ -162,25 +167,26 @@ function addPickerModels() {
   let count = 0;
   for (const id of picker.selection) {
     if (!picker.ids.includes(id) || pickerConfigured.value.has(id)) continue;
-    const m = newMediaModel(picker.providerId); m.remoteId = id; m.name = id; m.capabilities = [];
+    const m = newMediaModel(picker.providerId); m.remoteId = id; m.name = id; const target = draft.value.providers.find(p => p.id === picker.providerId)!; m.capabilities = target.kind === 'embedding' ? embeddingCapabilities(target) : []; if (target.kind === 'embedding') m.maxOutputTokens = null;
     draft.value.models.push(m); count++;
   }
   modelPicker.value = null; message.value = t('media_ai.models_added', { count });
 }
 async function testModel(m: MediaModel, capability: MediaCapability) { await action(async () => { const id = m.id; await persist(); receive(await invoke('media_ai_test_model', { modelId: id, capability })); message.value = t('media_ai.test_success'); }); }
-async function openWizard() {
+async function openWizard(role: 'embedding' | 'multimodalEmbedding' = 'embedding') {
   if (!await confirmDiscard()) return; await load(); if (!draft.value) return;
-  const existing = draft.value.models.find(m => m.id === draft.value!.roles.embedding);
-  const p = existing ? clone(draft.value.providers.find(p => p.id === existing.providerId)!) : newProvider();
+  const existing = draft.value.models.find(m => m.id === draft.value!.roles[role]);
+  const p = existing ? clone(draft.value.providers.find(p => p.id === existing.providerId)!) : newProvider('embedding');
   if (!existing) p.name = 'Embedding';
+  if (!existing && role === 'multimodalEmbedding') p.embeddingProtocol = 'vllm_multimodal';
   const m = existing ? clone(existing) : newMediaModel(p.id);
-  if (!existing) { m.capabilities = ['embed_text']; m.remoteId = 'qwen3-embedding-0.6b'; m.name = m.remoteId; m.embedding.queryInstruction = QWEN_MEDIA_QUERY; }
+  if (!existing) { m.capabilities = embeddingCapabilities(p); m.maxOutputTokens = null; m.remoteId = role === 'multimodalEmbedding' ? 'qwen3-vl-embedding-2b' : 'qwen3-embedding-0.6b'; m.name = m.remoteId; m.embedding.queryInstruction = queryPresetInstruction(p); }
   wizard.value = { providerChoice: existing ? p.id : 'new', provider: p, model: m, key: '', dimension: null };
 }
-function chooseWizardProvider(id: string) { const p = id === 'new' ? newProvider() : clone(draft.value!.providers.find(p => p.id === id)!); if (id === 'new') p.name = 'Embedding'; wizard.value.providerChoice = id; wizard.value.provider = p; wizard.value.model.providerId = p.id; wizard.value.key = ''; wizard.value.dimension = null; }
+function chooseWizardProvider(id: string) { const p = id === 'new' ? newProvider('embedding') : clone(draft.value!.providers.find(p => p.id === id && p.kind === 'embedding')!); if (id === 'new') p.name = 'Embedding'; wizard.value.providerChoice = id; wizard.value.provider = p; wizard.value.model.providerId = p.id; applyEmbeddingProtocol(p, [wizard.value.model]); wizard.value.key = ''; wizard.value.dimension = null; }
 function wizardRequest() { const w = wizard.value; const p = clone(w.provider); if (!p.allowMedia) p.allowBackground = false; const m = clone(w.model) as MediaModel; m.providerId = p.id; m.name = m.name.trim() || m.remoteId; m.embedding.dimensions = null; return { model: { provider: p, model: m }, apiKey: w.key || null }; }
-async function detectEmbedding() { await action(async () => { const result: any = await invoke('media_ai_probe_draft', { ...wizardRequest(), capability: 'embed_text' }); wizard.value.dimension = result.dimensions; message.value = t('media_ai.test_success'); }); }
-async function saveEmbedding() { await action(async () => { receive(await invoke('media_ai_save_embedding', { revision: draft.value!.revision, ...wizardRequest() })); wizard.value = null; message.value = t('media_ai.saved'); }); }
+async function detectEmbedding() { await action(async () => { const result: any = await invoke('media_ai_probe_draft', { ...wizardRequest(), capability: wizard.value.provider.embeddingProtocol === 'vllm_multimodal' ? 'embed_multimodal' : 'embed_text' }); wizard.value.dimension = result.dimensions; message.value = t('media_ai.test_success'); }); }
+async function saveEmbedding() { await action(async () => { const id = wizard.value.provider.id; receive(await invoke('media_ai_save_embedding', { revision: draft.value!.revision, ...wizardRequest() })); wizard.value = null; serviceKind.value = 'embedding'; selected.value = id; message.value = t('media_ai.saved'); }); }
 async function closeWizard() { if (await confirmDiscard()) wizard.value = null; }
 watch(() => provider.value?.allowMedia, value => { if (value === false && provider.value) provider.value.allowBackground = false; });
 watch(() => wizard.value ? JSON.stringify([wizard.value.provider, wizard.value.model, wizard.value.key]) : '', () => {

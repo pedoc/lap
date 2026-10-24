@@ -3,7 +3,8 @@
     <div class="flex gap-1 items-center"><button class="font-bold flex-1 text-left text-base-content/50" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? '▾' : '▸' }} {{ t('media_ai.title') }}</button><button class="btn btn-xs btn-ghost" @click="openMediaAiSettings">{{ t('media_ai.configure') }}</button></div>
     <div v-if="expanded" class="space-y-3">
       <p v-if="error" role="alert" class="text-error break-words whitespace-pre-wrap">{{ error }}</p>
-      <div class="flex gap-1 flex-wrap"><button class="btn btn-xs" :disabled="busy || running" @click="analyze">{{ t(view?.analyses?.length ? 'media_ai.reanalyze' : 'media_ai.understand') }}</button><button class="btn btn-xs" :disabled="busy || running || !view?.analyses?.length" @click="index">{{ t('media_ai.index') }}</button><button class="btn btn-xs btn-ghost" @click="openMediaAiBatch(libConfig._libraryId, [Number(file.id)])">{{ t('media_ai.jobs') }}</button></div>
+      <div class="flex gap-1 flex-wrap"><button class="btn btn-xs" :disabled="busy || running" @click="analyze">{{ t(view?.analyses?.length ? 'media_ai.reanalyze' : 'media_ai.understand') }}</button><button class="btn btn-xs" :disabled="busy || running || !view?.analyses?.length" @click="index">{{ t('media_ai.index') }}</button><button class="btn btn-xs" :disabled="busy || running || !view?.visualEmbeddingReady" @click="indexVisual">{{ t(view?.visualIndexed ? 'media_ai.visual_reindex' : 'media_ai.visual_index') }}</button><button class="btn btn-xs btn-ghost" @click="openMediaAiBatch(libConfig._libraryId, [Number(file.id)])">{{ t('media_ai.jobs') }}</button></div>
+      <p v-if="view?.visualVectors?.length" class="text-[10px] opacity-50">{{ t('media_ai.visual_vectors', { count: view.visualVectors.length }) }}<span v-for="v in view.visualVectors" :key="v.id"><button v-if="Number(file.file_type) === 2" class="link ml-1" @click="emit('seek', v.start)">{{ mediaTime(v.start) }}–{{ mediaTime(v.end) }}</button></span></p>
       <p v-if="running" role="status" class="opacity-60">{{ t('media_ai.state_running') }}</p>
       <p v-if="!view?.analyses?.length" class="opacity-60">{{ t('media_ai.no_analysis') }}</p>
       <template v-else-if="analysis">
@@ -53,10 +54,10 @@ async function action(fn: (libraryId: string, fileId: number) => Promise<void>) 
   catch (e) { if (!disposed && epoch === generation) error.value = String(e); }
   finally { if (epoch === generation) busy.value = false; }
 }
-async function start(indexOnly: boolean) {
-  await action(async (libraryId, fileId) => { await invoke('media_ai_start_job', { libraryId, fileIds: [fileId], options: { indexOnly, index: indexOnly, force: !indexOnly && !!view.value?.analyses?.length } }); running.value = true; });
+async function start(mode: 'analysis' | 'text' | 'media') {
+  await action(async (libraryId, fileId) => { await invoke('media_ai_start_job', { libraryId, fileIds: [fileId], options: { indexOnly: mode === 'text', index: mode === 'text', visualOnly: mode === 'media', visualIndex: false, force: mode === 'analysis' && !!view.value?.analyses?.length } }); running.value = true; });
 }
-const analyze = () => start(false), index = () => start(true);
+const analyze = () => start('analysis'), index = () => start('text'), indexVisual = () => start('media');
 async function adopt(field: string) {
   if (!await pendingChanges.confirm('media-title')) return;
   const source = structuredClone(JSON.parse(JSON.stringify(view.value.source))), analysisId = analysis.value.id, epoch = generation;

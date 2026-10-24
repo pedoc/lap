@@ -17,7 +17,8 @@
     <StructuredSearchPanel v-if="structuredSearch.active" class="overflow-y-auto flex-1" />
     <div v-if="mediaAiSearch.active" class="px-2 pb-2 space-y-2 text-xs">
       <p class="opacity-60">{{ $t('media_ai.search_hint') }}</p>
-      <select v-model="mediaAiSearch.modelId" class="select select-bordered select-xs w-full" :aria-label="$t('media_ai.role_embedding')"><option value="">{{ $t('media_ai.default_embedding') }}</option><option v-for="m in embeddingModels" :key="m.id" :value="m.id">{{ m.name }} · {{ m.embedding.dimensions }}D</option></select>
+      <select v-model="mediaAiSearch.source" class="select select-bordered select-xs w-full" :aria-label="$t('media_ai.search_source')"><option value="analysis">{{ $t('media_ai.search_source_analysis') }}</option><option value="media">{{ $t('media_ai.search_source_media') }}</option></select>
+      <select v-model="mediaAiSearch.modelId" class="select select-bordered select-xs w-full" :aria-label="$t(mediaAiSearch.source === 'media' ? 'media_ai.role_multimodalEmbedding' : 'media_ai.role_embedding')"><option value="">{{ $t('media_ai.default_embedding') }}</option><option v-for="m in embeddingModels" :key="m.id" :value="m.id">{{ m.name }} · {{ m.embedding.dimensions }}D</option></select>
       <select v-model="mediaAiSearch.albumId" class="select select-bordered select-xs w-full" :aria-label="$t('media_ai.scope')"><option :value="null">{{ $t('media_ai.all_albums') }}</option><option v-for="album in mediaAlbums" :key="album.id" :value="Number(album.id)">{{ album.name }}</option></select>
       <p v-if="mediaAiSearch.error" class="text-error whitespace-pre-wrap break-words" role="alert">{{ mediaAiSearch.error }}</p>
       <p class="opacity-60">{{ $t('media_ai.search_index_hint') }}</p>
@@ -120,13 +121,15 @@ import { structuredSearch, openStructuredSearch } from '@/common/structuredSearc
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { getAllAlbums } from '@/common/api';
-import { mediaAiSearch, openMediaAiSettings, openMediaAiBatch, eligibleModels, mediaTime, type MediaModel, type MediaHit } from '@/common/mediaAi';
-const embeddingModels = ref<MediaModel[]>([]), mediaAlbums = ref<any[]>([]);
+import { mediaAiSearch, openMediaAiSettings, openMediaAiBatch, eligibleModels, mediaTime, type MediaConfiguration, type MediaHit } from '@/common/mediaAi';
+const mediaConfiguration = ref<MediaConfiguration | null>(null), mediaAlbums = ref<any[]>([]);
+const embeddingModels = computed(() => mediaConfiguration.value ? eligibleModels(mediaConfiguration.value, mediaAiSearch.source === 'media' ? 'multimodalEmbedding' : 'embedding') : []);
 async function selectNaturalSearch() {
   structuredSearch.active = false;
   mediaAiSearch.libraryId = libConfig._libraryId; mediaAiSearch.active = true;
-  try { const view: any = await invoke('media_ai_configuration'); embeddingModels.value = eligibleModels(view.configuration, 'embedding'); mediaAlbums.value = await getAllAlbums() || []; } catch (e) { mediaAiSearch.error = String(e); }
+  try { const view: any = await invoke('media_ai_configuration'); mediaConfiguration.value = view.configuration; mediaAlbums.value = await getAllAlbums() || []; } catch (e) { mediaAiSearch.error = String(e); }
 }
+watch(() => mediaAiSearch.source, () => { mediaAiSearch.modelId = ''; mediaAiSearch.hits = []; mediaAiSearch.error = ''; });
 function emitMediaHit(hit: MediaHit) { return emit('media-ai-open-hit', { libraryId: libConfig._libraryId, fileId: hit.fileId, seconds: hit.start }); }
 
 function selectStructuredSearch() {

@@ -2,6 +2,7 @@ use super::{
     client,
     config::{self, Capability, Resolved},
     store::{self, Adoption, Analysis, AnalysisText, MediaSource, sql_error},
+    visual,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use genai::chat::ContentPart;
@@ -25,6 +26,8 @@ static ADMISSION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub struct JobOptions {
     pub index_only: bool,
     pub index: bool,
+    pub visual_index: bool,
+    pub visual_only: bool,
     pub force: bool,
     pub adopt: Adoption,
 }
@@ -34,6 +37,8 @@ struct Snapshot {
     library: String,
     media: Option<Resolved>,
     embedding: Option<Resolved>,
+    #[serde(default)]
+    multimodal_embedding: Option<Resolved>,
     options: JobOptions,
     background: bool,
     #[serde(default)]
@@ -49,6 +54,8 @@ pub struct Preflight {
     pub analyzed: usize,
     pub media_ready: bool,
     pub embedding_ready: bool,
+    pub visual_embedding_ready: bool,
+    pub visual_indexed: usize,
     pub notices: Vec<String>,
 }
 fn ids_on(c: &rusqlite::Connection, ids: &Option<Vec<i64>>) -> Result<Vec<i64>, String> {
@@ -70,9 +77,25 @@ fn ids_on(c: &rusqlite::Connection, ids: &Option<Vec<i64>>) -> Result<Vec<i64>, 
     }
 }
 fn policy(model: &Resolved, cap: Capability, background: bool) -> Result<(), String> {
+    check_policy(&config::load()?, model, cap, background)
+}
+fn check_policy(
+    current: &config::Configuration,
+    model: &Resolved,
+    cap: Capability,
+    background: bool,
+) -> Result<(), String> {
     model.require(cap, background)?;
-    let current = config::load()?;
-    let p = current.provider(&model.provider.id)?;
+    let p = current
+        .providers
+        .iter()
+        .find(|p| {
+            p.identity() == model.provider.identity()
+                && p.supports(cap)
+                && (p.kind != config::ProviderKind::Embedding
+                    || p.embedding_protocol == model.provider.embedding_protocol)
+        })
+        .ok_or("服务已移除或接口类型已变化，请重新提交任务。")?;
     if !p.enabled || !p.allow_media || background && !p.allow_background {
         return Err("服务传输许可已撤销，任务已停止。".into());
     }
@@ -104,6 +127,8 @@ fn preflight(library_id: &str, file_ids: Option<Vec<i64>>) -> Result<Preflight, 
             analyzed: 0,
             media_ready: false,
             embedding_ready: false,
+            visual_embedding_ready: false,
+            visual_indexed: 0,
             notices: Vec::new(),
         };
         for id in ids {
@@ -118,6 +143,13 @@ fn preflight(library_id: &str, file_ids: Option<Vec<i64>>) -> Result<Preflight, 
                 }
                 if !store::analyses(c, &src)?.is_empty() {
                     out.analyzed += 1;
+                }
+                if let Ok(model) = config.role("multimodalEmbedding") {
+                    if model.multimodal_profile().is_ok()
+                        && visual::complete(&src, &visual::vectors(c, &src, &model)?)
+                    {
+                        out.visual_indexed += 1;
+                    }
                 }
             }
         }
@@ -140,6 +172,13 @@ fn preflight(library_id: &str, file_ids: Option<Vec<i64>>) -> Result<Preflight, 
         }) {
             Ok(_) => out.embedding_ready = true,
             Err(e) => out.notices.push(format!("Embedding：{e}")),
+        }
+        match config
+            .role("multimodalEmbedding")
+            .and_then(|m| m.require(Capability::EmbedMultimodal, background))
+        {
+            Ok(()) => out.visual_embedding_ready = true,
+            Err(e) => out.notices.push(format!("原画面 Embedding：{e}")),
         }
         Ok(out)
     })
@@ -230,6 +269,7 @@ fn prepare_job(
     file_ids: Option<Vec<i64>>,
     options: JobOptions,
 ) -> Result<String, String> {
+    validate_options(&options)?;
     let config = config::load()?;
     let job = uuid::Uuid::new_v4().to_string();
     store::db(&library_id, |c| {
@@ -238,7 +278,7 @@ fn prepare_job(
             return Err("当前范围没有可处理的媒体".into());
         }
         let background = ids.len() > 1 || file_ids.is_none();
-        let media = if options.index_only {
+        let media = if options.index_only || options.visual_only {
             None
         } else {
             Some(config.role("media")?)
@@ -251,6 +291,13 @@ fn prepare_job(
         if let Some(m) = &embedding {
             m.require(Capability::EmbedText, background)?;
         }
+        let multimodal_embedding = if options.visual_index || options.visual_only {
+            let model = config.role("multimodalEmbedding")?;
+            model.require(Capability::EmbedMultimodal, background)?;
+            Some(model)
+        } else {
+            None
+        };
         let tx = c
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(sql_error)?;
@@ -258,6 +305,7 @@ fn prepare_job(
             library: library_id.clone(),
             media,
             embedding,
+            multimodal_embedding,
             options,
             background,
             started_at: chrono::Utc::now().timestamp_millis(),
@@ -296,6 +344,14 @@ fn prepare_job(
         tx.commit().map_err(sql_error)
     })?;
     Ok(job)
+}
+fn validate_options(options: &JobOptions) -> Result<(), String> {
+    if options.visual_only
+        && (options.adopt.title || options.adopt.description || options.adopt.tags)
+    {
+        return Err("仅生成原画面向量时不能填充资料；请改用媒体理解任务。".into());
+    }
+    Ok(())
 }
 fn launch(app: tauri::AppHandle, library: String, job: String, retry: bool) -> Result<(), String> {
     let cancel = CancellationToken::new();
@@ -383,6 +439,9 @@ async fn run(
     })?;
     // Restored libraries can receive a new ID; resuming is explicit and each source is checked again.
     snapshot.library = library.into();
+    if let Some(model) = &mut snapshot.embedding {
+        config::normalize_legacy_embedding_snapshot(model);
+    }
     loop {
         if cancel.is_cancelled() {
             return Err("已暂停".into());
@@ -405,6 +464,9 @@ async fn run(
         }
         if let Some(model) = &snapshot.embedding {
             policy(model, Capability::EmbedText, snapshot.background)?;
+        }
+        if let Some(model) = &snapshot.multimodal_embedding {
+            policy(model, Capability::EmbedMultimodal, snapshot.background)?;
         }
         let result = tokio::select! {biased;_=cancel.cancelled()=>return Err("已暂停".into()),result=process(&snapshot,&source)=>result};
         let (state, message) = match result {
@@ -456,7 +518,10 @@ async fn parts(
     prompt: String,
 ) -> Result<Vec<ContentPart>, String> {
     src.verify()?;
-    let mut parts = vec![ContentPart::from_text(prompt)];
+    let mut parts = Vec::new();
+    if !prompt.is_empty() {
+        parts.push(ContentPart::from_text(prompt));
+    }
     if src.kind == 2 {
         for fraction in [0.1, 0.5, 0.9] {
             let time = start + (end - start) * fraction;
@@ -494,6 +559,20 @@ async fn parts(
 async fn process(snapshot: &Snapshot, src: &MediaSource) -> Result<(), String> {
     let _permit = CALLS.acquire().await.map_err(|_| "推理队列不可用")?;
     current(&snapshot.library, src)?;
+    let ranges = if snapshot.media.is_some() || snapshot.multimodal_embedding.is_some() {
+        src.verify()?;
+        if src.kind == 2 {
+            segments(if src.duration > 0 {
+                src.duration as f64
+            } else {
+                crate::t_video::get_video_duration(&src.path).await? as f64
+            })?
+        } else {
+            vec![(0, 0.0, 0.0)]
+        }
+    } else {
+        Vec::new()
+    };
     if let Some(model) = &snapshot.media {
         let cap = if src.kind == 2 {
             Capability::VideoFrames
@@ -502,16 +581,7 @@ async fn process(snapshot: &Snapshot, src: &MediaSource) -> Result<(), String> {
         };
         policy(model, cap, snapshot.background)?;
         src.verify()?;
-        let ranges = if src.kind == 2 {
-            segments(if src.duration > 0 {
-                src.duration as f64
-            } else {
-                crate::t_video::get_video_duration(&src.path).await? as f64
-            })?
-        } else {
-            vec![(0, 0.0, 0.0)]
-        };
-        for (segment, start, end) in ranges {
+        for (segment, start, end) in ranges.iter().copied() {
             let cached = store::db(&snapshot.library, |c| {
                 Ok(store::analyses(c, src)?.iter().any(|a| {
                     a.segment == segment
@@ -533,8 +603,34 @@ async fn process(snapshot: &Snapshot, src: &MediaSource) -> Result<(), String> {
             })?;
         }
     }
+    if let Some(model) = &snapshot.multimodal_embedding {
+        let duration = ranges.last().map_or(0.0, |(_, _, end)| *end);
+        for (segment, start, end) in ranges.iter().copied() {
+            let cached = store::db(&snapshot.library, |c| {
+                Ok(visual::vectors(c, src, model)?.iter().any(|v| {
+                    v.segment == segment
+                        && v.start == start
+                        && v.end == end
+                        && v.duration == duration
+                        && (!snapshot.options.force || v.created_at >= snapshot.started_at)
+                }))
+            })?;
+            if cached {
+                continue;
+            }
+            current(&snapshot.library, src)?;
+            policy(model, Capability::EmbedMultimodal, snapshot.background)?;
+            let input = parts(src, start, end, String::new()).await?;
+            current(&snapshot.library, src)?;
+            policy(model, Capability::EmbedMultimodal, snapshot.background)?;
+            let vector = client::embed_media(model, input).await?;
+            store::db(&snapshot.library, |c| {
+                visual::put_vector(c, src, model, segment, start, end, duration, vector)
+            })?;
+        }
+    }
     let analyses = store::db(&snapshot.library, |c| store::analyses(c, src))?;
-    if analyses.is_empty() {
+    if analyses.is_empty() && (snapshot.media.is_some() || snapshot.embedding.is_some()) {
         return Err("没有有效分析，请先执行媒体理解。".into());
     }
     if let Some(model) = &snapshot.embedding {
@@ -568,6 +664,9 @@ pub struct MediaView {
     pub source: MediaSource,
     pub analyses: Vec<Analysis>,
     pub answers: Vec<Answer>,
+    pub visual_embedding_ready: bool,
+    pub visual_indexed: bool,
+    pub visual_vectors: Vec<visual::VisualVector>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -589,9 +688,20 @@ pub struct Evidence {
 }
 #[tauri::command]
 pub fn media_ai_inspect(library_id: String, file_id: i64) -> Result<MediaView, String> {
+    let model = config::load()
+        .and_then(|c| c.role("multimodalEmbedding"))
+        .ok();
     store::db(&library_id, |c| {
         let source = store::source(c, file_id)?;
         let analyses = store::analyses(c, &source)?;
+        let visual_vectors = match model.as_ref().filter(|m| m.multimodal_profile().is_ok()) {
+            Some(model) => visual::vectors(c, &source, model)?,
+            None => Vec::new(),
+        };
+        let visual_indexed = visual::complete(&source, &visual_vectors);
+        let visual_embedding_ready = model
+            .as_ref()
+            .is_some_and(|m| m.require(Capability::EmbedMultimodal, false).is_ok());
         let rows=c.prepare("SELECT id,question,answer,evidence,created_at FROM media_ai_answers WHERE file_id=?1 AND stamp=?2 ORDER BY created_at DESC LIMIT 20").map_err(sql_error)?.query_map(params![file_id,source.stamp()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?))).map_err(sql_error)?.collect::<Result<Vec<_>,_>>().map_err(sql_error)?;
         let answers = rows
             .into_iter()
@@ -609,6 +719,9 @@ pub fn media_ai_inspect(library_id: String, file_id: i64) -> Result<MediaView, S
             source,
             analyses,
             answers,
+            visual_embedding_ready,
+            visual_indexed,
+            visual_vectors,
         })
     })
 }
@@ -671,37 +784,70 @@ pub async fn media_ai_search(
     file_type: Option<i64>,
     limit: Option<usize>,
     request_id: Option<String>,
+    source: Option<SearchSource>,
 ) -> Result<Vec<store::Hit>, String> {
     let request = super::requests::Request::new(request_id)?;
     config::short_text(&query, 2000, "检索内容")?;
     let config = config::load()?;
+    let visual = matches!(source.unwrap_or_default(), SearchSource::Media);
+    let capability = if visual {
+        Capability::EmbedMultimodal
+    } else {
+        Capability::EmbedText
+    };
     let model = if let Some(id) = model_id {
         config.resolve(&id)?
     } else {
-        config.role("embedding")?
+        config.role(if visual {
+            "multimodalEmbedding"
+        } else {
+            "embedding"
+        })?
     };
+    policy(&model, capability, false)?;
     store::db(&library_id, |c| {
+        let (table, profile) = if visual {
+            ("media_ai_visual_vectors", model.multimodal_profile()?)
+        } else {
+            ("media_ai_vectors", model.embedding_profile()?)
+        };
         let exists: bool = c
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM media_ai_vectors WHERE profile_id=?1)",
-                [model.embedding_profile()?],
+                &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE profile_id=?1)"),
+                [profile],
                 |r| r.get(0),
             )
             .map_err(sql_error)?;
         if !exists {
-            return Err("此 Embedding 配置尚无向量索引。请为已有分析补建向量，或选择原来的 Embedding 模型。".into());
+            return Err(if visual {
+                "此多模态 Embedding 配置尚无原画面索引，请先为媒体生成原画面向量。"
+            } else {
+                "此 Embedding 配置尚无向量索引。请为已有分析补建向量，或选择原来的 Embedding 模型。"
+            }
+            .into());
         }
         Ok(())
     })?;
-    policy(&model, Capability::EmbedText, false)?;
+    policy(&model, capability, false)?;
     let _permit = request
         .run(async { CALLS.acquire().await.map_err(|_| "检索队列不可用".into()) })
         .await?;
     store::db(&library_id, |_| Ok(()))?;
-    policy(&model, Capability::EmbedText, false)?;
-    let vector = request.run(client::embed(&model, query, true)).await?;
+    policy(&model, capability, false)?;
+    let vector = if visual {
+        request
+            .run(client::embed_multimodal_query(&model, query))
+            .await?
+    } else {
+        request.run(client::embed(&model, query, true)).await?
+    };
     store::db(&library_id, |c| {
-        store::search(
+        let search = if visual {
+            visual::search
+        } else {
+            store::search
+        };
+        search(
             c,
             &model,
             &vector,
@@ -710,6 +856,13 @@ pub async fn media_ai_search(
             file_type.unwrap_or(0).clamp(0, 7),
         )
     })
+}
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchSource {
+    #[default]
+    Analysis,
+    Media,
 }
 #[tauri::command]
 pub async fn media_ai_ask(
@@ -874,5 +1027,225 @@ mod tests {
         assert!(validate_citations("有人。[E1]", &evidence).is_ok());
         assert!(validate_citations("有人。[E1] 其他内容。[E99]", &evidence).is_err());
         assert!(validate_citations("无引用的回答", &evidence).is_err());
+    }
+
+    #[test]
+    fn old_jobs_keep_text_index_semantics_and_visual_only_cannot_adopt_metadata() {
+        let old: JobOptions =
+            serde_json::from_str(r#"{"indexOnly":true,"index":true,"force":false,"adopt":{}}"#)
+                .unwrap();
+        assert!(old.index_only);
+        assert!(!old.visual_only);
+        assert!(!old.visual_index);
+        let mut visual = JobOptions {
+            visual_only: true,
+            ..Default::default()
+        };
+        validate_options(&visual).unwrap();
+        visual.adopt.title = true;
+        assert!(validate_options(&visual).is_err());
+        assert!(serde_json::from_str::<SearchSource>("\"other\"").is_err());
+        assert!(matches!(
+            serde_json::from_str::<SearchSource>("\"media\"").unwrap(),
+            SearchSource::Media
+        ));
+    }
+
+    #[test]
+    fn migrated_task_policy_finds_the_matching_service_and_honors_current_revocation() {
+        let mut snapshot = store::tests::model("legacy-embedding");
+        snapshot.provider.allow_media = true;
+        snapshot.provider.allow_background = true;
+        snapshot.provider.credential_revision = "revision-1".into();
+        snapshot.model.capabilities.insert(Capability::EmbedText);
+        snapshot
+            .model
+            .tested
+            .insert(Capability::EmbedText, snapshot.contract());
+        config::normalize_legacy_embedding_snapshot(&mut snapshot);
+        let mut llm = snapshot.provider.clone();
+        llm.kind = config::ProviderKind::Llm;
+        let mut embedding = snapshot.provider.clone();
+        embedding.id = "new-ui-id".into();
+        embedding.identity_id = snapshot.provider.id.clone();
+        let mut current = config::Configuration {
+            providers: vec![llm, embedding],
+            ..Default::default()
+        };
+        check_policy(&current, &snapshot, Capability::EmbedText, true).unwrap();
+        current.providers[1].allow_media = false;
+        assert!(check_policy(&current, &snapshot, Capability::EmbedText, false).is_err());
+        current.providers[1].allow_media = true;
+        current.providers[1].credential_revision = "revision-2".into();
+        assert!(check_policy(&current, &snapshot, Capability::EmbedText, false).is_err());
+        current.providers[1].credential_revision = "revision-1".into();
+        current.providers[1].base_url = "http://127.0.0.1:9000/v1/".into();
+        assert!(check_policy(&current, &snapshot, Capability::EmbedText, false).is_err());
+        current.providers[1].base_url = snapshot.provider.base_url.clone();
+        current.providers[1].embedding_protocol = config::EmbeddingProtocol::VllmMultimodal;
+        assert!(check_policy(&current, &snapshot, Capability::EmbedText, false).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local FFmpeg; uses synthetic media and a loopback API, no GPU or paid service"]
+    async fn multimodal_real_media_roundtrip() {
+        use super::super::config::{EmbeddingProtocol, ProviderKind};
+        use serde_json::json;
+        let (mut c, dir) = store::tests::fixture();
+        let image_path = dir.path().join("photo-1.jpg");
+        image::RgbImage::from_pixel(48, 32, image::Rgb([40, 180, 80]))
+            .save(&image_path)
+            .unwrap();
+        let info = crate::t_utils::FileInfo::new(image_path.to_str().unwrap()).unwrap();
+        c.execute(
+            "UPDATE afiles SET size=?1,modified_at=?2 WHERE id=1",
+            params![info.file_size, info.modified],
+        )
+        .unwrap();
+        let video_path = dir.path().join("sample.mp4");
+        let mut command = tokio::process::Command::new("ffmpeg");
+        command
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=48x32:r=1:d=60",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=48x32:r=1:d=5",
+                "-filter_complex",
+                "[0:v][1:v]concat=n=2:v=1:a=0",
+                "-c:v",
+                "mpeg4",
+                "-g",
+                "999",
+                "-sc_threshold",
+                "1000000000",
+                "-y",
+            ])
+            .arg(&video_path);
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000);
+        let output = command
+            .output()
+            .await
+            .expect("FFmpeg is required for the explicit media acceptance test");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let image_hash = blake3::hash(&std::fs::read(&image_path).unwrap());
+        let video_hash = blake3::hash(&std::fs::read(&video_path).unwrap());
+        let reply = |v: Vec<f32>| (200, json!({"data":[{"index":0,"embedding":v}]}));
+        let (base, worker) = super::super::tests::fixture(vec![
+            reply(vec![1.0, 0.0]),
+            reply(vec![1.0, 0.0]),
+            reply(vec![0.0, 1.0]),
+            reply(vec![1.0, 0.0]),
+            reply(vec![1.0, 0.0]),
+        ]);
+        let mut model = store::tests::model("qwen3-vl-embedding-fixture");
+        model.provider.kind = ProviderKind::Embedding;
+        model.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
+        model.provider.base_url = base;
+        let src = store::source(&c, 1).unwrap();
+        let input = parts(&src, 0.0, 0.0, String::new()).await.unwrap();
+        let vector = client::embed_media_with_key(&model, input, None)
+            .await
+            .unwrap();
+        visual::put_vector(&mut c, &src, &model, 0, 0.0, 0.0, 0.0, vector).unwrap();
+        let query = client::embed_multimodal_query(&model, "绿色图片".into())
+            .await
+            .unwrap();
+        assert!(
+            (visual::search(&c, &model, &query, 10, None, 0).unwrap()[0].score - 1.0).abs() < 1e-6
+        );
+        assert!(store::analyses(&c, &src).unwrap().is_empty());
+        let info = crate::t_utils::FileInfo::new(video_path.to_str().unwrap()).unwrap();
+        c.execute("UPDATE afiles SET name='sample.mp4',file_type=2,duration=0,size=?1,modified_at=?2 WHERE id=1",params![info.file_size,info.modified]).unwrap();
+        let src = store::source(&c, 1).unwrap();
+        let duration = crate::t_video::get_video_duration(&src.path).await.unwrap();
+        assert_eq!(duration, 65);
+        for (segment, start, end) in segments(duration as f64).unwrap() {
+            let input = parts(&src, start, end, String::new()).await.unwrap();
+            let vector = client::embed_media_with_key(&model, input, None)
+                .await
+                .unwrap();
+            visual::put_vector(
+                &mut c,
+                &src,
+                &model,
+                segment,
+                start,
+                end,
+                duration as f64,
+                vector,
+            )
+            .unwrap();
+        }
+        let query = client::embed_multimodal_query(&model, "蓝色视频结尾".into())
+            .await
+            .unwrap();
+        let hits = visual::search(&c, &model, &query, 10, None, 0).unwrap();
+        assert_eq!(hits.len(), 2, "stale image source is excluded");
+        assert_eq!((hits[0].start, hits[0].end), (60.0, 65.0));
+        assert!(visual::complete(
+            &src,
+            &visual::vectors(&c, &src, &model).unwrap()
+        ));
+        let seen = worker.join().unwrap();
+        let images = |i: usize| {
+            seen[i]["messages"][1]["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["type"] == "image_url")
+                .count()
+        };
+        assert_eq!(images(0), 1);
+        assert_eq!(images(1), 0);
+        assert_eq!(images(2), 3);
+        assert_eq!(images(3), 3);
+        assert_eq!(images(4), 0);
+        for request in &seen {
+            assert_eq!(request["add_generation_prompt"], true);
+            assert!(request.get("input").is_none());
+        }
+        assert!(seen[3].to_string().contains("64.500"));
+        let last_image = seen[3]["messages"][1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|p| p["type"] == "image_url")
+            .unwrap()["image_url"]["url"]
+            .as_str()
+            .unwrap();
+        let bytes = STANDARD
+            .decode(last_image.strip_prefix("data:image/jpeg;base64,").unwrap())
+            .unwrap();
+        let pixel = image::load_from_memory(&bytes)
+            .unwrap()
+            .to_rgb8()
+            .get_pixel(0, 0)
+            .0;
+        assert!(
+            pixel[2] as i32 - pixel[0] as i32 > 100,
+            "tail sampling must stay in the blue 60–65s segment, not the red seek keyframe at 0s"
+        );
+        assert_eq!(
+            image_hash,
+            blake3::hash(&std::fs::read(image_path).unwrap())
+        );
+        assert_eq!(
+            video_hash,
+            blake3::hash(&std::fs::read(video_path).unwrap())
+        );
     }
 }

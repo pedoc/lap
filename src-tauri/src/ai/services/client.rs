@@ -1,5 +1,5 @@
-//! The SDK owns protocol encoding; callers own consent, source versions and persistence.
-use super::config::{self, Provider, Resolved};
+//! Callers own consent, source versions and persistence; protocol adapters encode requests.
+use super::config::{self, EmbeddingProtocol, Provider, ProviderKind, Resolved};
 use genai::{
     Client,
     adapter::AdapterKind,
@@ -7,6 +7,7 @@ use genai::{
     embed::EmbedOptions,
     resolver::{AuthData, Endpoint},
 };
+use serde_json::{Value, json};
 use std::time::Duration;
 
 pub fn http(provider: &Provider) -> Result<reqwest_ai::Client, String> {
@@ -68,6 +69,9 @@ pub async fn chat_with_key(
     parts: Vec<ContentPart>,
     key: Option<String>,
 ) -> Result<String, String> {
+    if model.provider.kind != ProviderKind::Llm {
+        return Err("此服务不是标准 LLM 服务".into());
+    }
     let mut options = ChatOptions::default();
     if let Some(limit) = model.model.max_output_tokens {
         options = options.with_max_tokens(limit);
@@ -90,6 +94,9 @@ pub async fn chat(model: &Resolved, parts: Vec<ContentPart>) -> Result<String, S
     chat_with_key(model, parts, config::key(&model.provider)?).await
 }
 pub fn query_text(model: &Resolved, text: &str) -> String {
+    if model.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+        return text.to_owned();
+    }
     if model.model.embedding.query_instruction.trim().is_empty() {
         text.to_owned()
     } else {
@@ -125,6 +132,9 @@ pub async fn embed_with_key(
     texts: Vec<String>,
     key: Option<String>,
 ) -> Result<Vec<Vec<f32>>, String> {
+    if model.provider.kind != ProviderKind::Embedding {
+        return Err("此服务不是 Embedding 服务".into());
+    }
     if texts.is_empty()
         || texts.len() > 32
         || texts.iter().any(|s| s.is_empty() || s.len() > 48 * 1024)
@@ -132,6 +142,21 @@ pub async fn embed_with_key(
         return Err("向量输入为空或超出限制".into());
     }
     let count = texts.len();
+    if model.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+        let mut result = Vec::with_capacity(count);
+        for text in texts {
+            result.push(
+                vllm_embedding(
+                    model,
+                    vec![ContentPart::from_text(text)],
+                    false,
+                    key.clone(),
+                )
+                .await?,
+            );
+        }
+        return Ok(result);
+    }
     let options = EmbedOptions::default().with_encoding_format("float");
     // Dimensions are detected and validated, not sent as an unsupported shortening parameter.
     let response = sdk(&model.provider, key)?
@@ -154,6 +179,15 @@ pub async fn embed_with_key(
         .collect()
 }
 pub async fn embed(model: &Resolved, text: String, query: bool) -> Result<Vec<f32>, String> {
+    if model.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+        return vllm_embedding(
+            model,
+            vec![ContentPart::from_text(text)],
+            query,
+            config::key(&model.provider)?,
+        )
+        .await;
+    }
     let text = if query {
         query_text(model, &text)
     } else {
@@ -163,6 +197,122 @@ pub async fn embed(model: &Resolved, text: String, query: bool) -> Result<Vec<f3
         .await?
         .pop()
         .ok_or_else(|| "缺少向量".into())
+}
+
+async fn vllm_embedding(
+    model: &Resolved,
+    parts: Vec<ContentPart>,
+    query: bool,
+    key: Option<String>,
+) -> Result<Vec<f32>, String> {
+    if model.provider.kind != ProviderKind::Embedding
+        || model.provider.embedding_protocol != EmbeddingProtocol::VllmMultimodal
+    {
+        return Err("此服务未配置 vLLM 多模态 Embedding 协议".into());
+    }
+    if parts.is_empty() || parts.len() > 16 {
+        return Err("Embedding 输入数量无效".into());
+    }
+    let mut content = Vec::new();
+    let mut images = 0;
+    for part in parts {
+        match part {
+            ContentPart::Text(text) if !text.is_empty() && text.len() <= 48 * 1024 => {
+                content.push(json!({"type":"text","text":text}))
+            }
+            ContentPart::Binary(binary)
+                if matches!(
+                    binary.content_type.as_str(),
+                    "image/jpeg" | "image/png" | "image/webp"
+                ) =>
+            {
+                let url = binary.into_url();
+                if !url.starts_with("data:image/")
+                    || !url.contains(";base64,")
+                    || url.len() > 4 * 1024 * 1024
+                {
+                    return Err("媒体 Embedding 只接受已处理的本地图像数据".into());
+                }
+                images += 1;
+                if images > 3 {
+                    return Err("每个媒体片段最多提供三张采样帧".into());
+                }
+                content.push(json!({"type":"image_url","image_url":{"url":url}}));
+            }
+            _ => return Err("Embedding 输入内容无效".into()),
+        }
+    }
+    let instruction = if query && !model.model.embedding.query_instruction.trim().is_empty() {
+        model.model.embedding.query_instruction.trim()
+    } else {
+        "Represent the user's input."
+    };
+    let body = json!({"model":model.model.remote_id,"encoding_format":"float","add_generation_prompt":true,"messages":[{"role":"system","content":[{"type":"text","text":instruction}]},{"role":"user","content":content}]});
+    let mut request = http(&model.provider)?
+        .post(format!(
+            "{}embeddings",
+            config::base_url(&model.provider.base_url)?
+        ))
+        .json(&body);
+    if let Some(key) = key.filter(|value| !value.is_empty()) {
+        request = request.bearer_auth(key);
+    }
+    let mut response = request
+        .send()
+        .await
+        .map_err(|_| "Embedding 调用失败，请检查网络、代理和超时")?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Embedding 服务返回 HTTP {}，请检查模型、协议和访问权限。",
+            response.status().as_u16()
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "无法读取 Embedding 响应")?
+    {
+        if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
+            return Err("Embedding 响应过大".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let body: Value = serde_json::from_slice(&bytes).map_err(|_| "Embedding 响应格式无效")?;
+    let items = body["data"].as_array().ok_or("Embedding 响应缺少 data")?;
+    if items.len() != 1 || items[0]["index"].as_u64() != Some(0) {
+        return Err("Embedding 返回数量或 index 无效".into());
+    }
+    let vector: Vec<f32> = serde_json::from_value(items[0]["embedding"].clone())
+        .map_err(|_| "Embedding 向量格式无效")?;
+    normalize(vector, model.model.embedding.dimensions)
+}
+
+pub async fn embed_media_with_key(
+    model: &Resolved,
+    images: Vec<ContentPart>,
+    key: Option<String>,
+) -> Result<Vec<f32>, String> {
+    if !images
+        .iter()
+        .any(|part| matches!(part, ContentPart::Binary(_)))
+    {
+        return Err("媒体 Embedding 缺少图像采样帧".into());
+    }
+    vllm_embedding(model, images, false, key).await
+}
+pub async fn embed_media(model: &Resolved, images: Vec<ContentPart>) -> Result<Vec<f32>, String> {
+    embed_media_with_key(model, images, config::key(&model.provider)?).await
+}
+pub async fn embed_multimodal_query_with_key(
+    model: &Resolved,
+    text: String,
+    key: Option<String>,
+) -> Result<Vec<f32>, String> {
+    vllm_embedding(model, vec![ContentPart::from_text(text)], true, key).await
+}
+pub async fn embed_multimodal_query(model: &Resolved, text: String) -> Result<Vec<f32>, String> {
+    embed_multimodal_query_with_key(model, text, config::key(&model.provider)?).await
 }
 
 #[cfg(test)]

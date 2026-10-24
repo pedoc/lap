@@ -5,6 +5,27 @@ use std::{
 };
 
 static IO: Mutex<()> = Mutex::new(());
+const LEGACY_CONFIG_BYTES: usize = 4 * 1024 * 1024;
+const CONFIG_BYTES: usize = 32 * 1024 * 1024;
+
+fn check_config_size(version: u32, size: usize) -> Result<(), String> {
+    if size
+        > if version == 1 {
+            LEGACY_CONFIG_BYTES
+        } else {
+            CONFIG_BYTES
+        }
+    {
+        return Err("模型服务配置过大".into());
+    }
+    Ok(())
+}
+
+fn encode_config(config: &Configuration) -> Result<String, String> {
+    let json = serde_json::to_string_pretty(config).map_err(|_| "无法序列化模型配置")?;
+    check_config_size(config.version, json.len())?;
+    Ok(json)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,10 +38,30 @@ pub enum Capability {
     EmbedMultimodal,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    #[default]
+    Llm,
+    Embedding,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingProtocol {
+    #[default]
+    OpenaiText,
+    VllmMultimodal,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Provider {
     pub id: String,
+    pub kind: ProviderKind,
+    pub embedding_protocol: EmbeddingProtocol,
+    /// Stable backend-owned namespace for credentials and existing vector spaces.
+    pub identity_id: String,
     pub name: String,
     pub base_url: String,
     pub enabled: bool,
@@ -33,6 +74,9 @@ impl Default for Provider {
     fn default() -> Self {
         Self {
             id: String::new(),
+            kind: ProviderKind::Llm,
+            embedding_protocol: EmbeddingProtocol::OpenaiText,
+            identity_id: String::new(),
             name: String::new(),
             base_url: String::new(),
             enabled: true,
@@ -41,6 +85,34 @@ impl Default for Provider {
             timeout_seconds: 120,
             credential_revision: String::new(),
         }
+    }
+}
+impl Provider {
+    pub fn identity(&self) -> &str {
+        if self.identity_id.is_empty() {
+            &self.id
+        } else {
+            &self.identity_id
+        }
+    }
+    pub fn supports(&self, capability: Capability) -> bool {
+        match self.kind {
+            ProviderKind::Llm => matches!(
+                capability,
+                Capability::Text | Capability::Image | Capability::VideoFrames | Capability::Json
+            ),
+            ProviderKind::Embedding => {
+                capability == Capability::EmbedText
+                    || capability == Capability::EmbedMultimodal
+                        && self.embedding_protocol == EmbeddingProtocol::VllmMultimodal
+            }
+        }
+    }
+    pub fn embedding_capabilities(&self) -> BTreeSet<Capability> {
+        [Capability::EmbedText, Capability::EmbedMultimodal]
+            .into_iter()
+            .filter(|cap| self.supports(*cap))
+            .collect()
     }
 }
 
@@ -97,6 +169,7 @@ pub struct Roles {
     /// None means reuse the media-understanding model.
     pub text: Option<String>,
     pub embedding: Option<String>,
+    pub multimodal_embedding: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,7 +184,7 @@ pub struct Configuration {
 impl Default for Configuration {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             revision: 0,
             providers: Vec::new(),
             models: Vec::new(),
@@ -200,19 +273,25 @@ impl Configuration {
             "media" => self.roles.media.as_ref(),
             "text" => self.roles.text.as_ref().or(self.roles.media.as_ref()),
             "embedding" => self.roles.embedding.as_ref(),
+            "multimodalEmbedding" | "multimodal_embedding" => {
+                self.roles.multimodal_embedding.as_ref()
+            }
             _ => return Err("未知的模型用途".into()),
         }
         .ok_or("尚未配置此用途的模型")?;
         self.resolve(id)
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 1 || self.providers.len() > 128 || self.models.len() > 2048 {
+        if self.version != 2 || self.providers.len() > 512 || self.models.len() > 8192 {
             return Err("模型配置版本或数量无效".into());
         }
         let mut ids = BTreeSet::new();
         for p in &self.providers {
             if !safe_id(&p.id) || !ids.insert(&p.id) {
                 return Err("服务 ID 无效或重复".into());
+            }
+            if !p.identity_id.is_empty() && !safe_id(&p.identity_id) {
+                return Err("服务身份无效".into());
             }
             short_text(&p.name, 120, "服务名称")?;
             base_url(&p.base_url)?;
@@ -225,7 +304,13 @@ impl Configuration {
             if !safe_id(&m.id) || !ids.insert(&m.id) {
                 return Err("模型 ID 无效或重复".into());
             }
-            self.provider(&m.provider_id)?;
+            let provider = self.provider(&m.provider_id)?;
+            if m.capabilities.iter().any(|cap| !provider.supports(*cap))
+                || provider.kind == ProviderKind::Embedding
+                    && m.capabilities != provider.embedding_capabilities()
+            {
+                return Err("模型能力与服务类型或 Embedding 协议不匹配".into());
+            }
             short_text(&m.remote_id, 256, "服务端 Model ID")?;
             short_text(&m.name, 160, "模型显示名称")?;
             if m.max_output_tokens == Some(0) {
@@ -244,9 +329,14 @@ impl Configuration {
                 return Err("模型参数超出允许范围".into());
             }
         }
-        for id in [&self.roles.media, &self.roles.text, &self.roles.embedding]
-            .into_iter()
-            .flatten()
+        for id in [
+            &self.roles.media,
+            &self.roles.text,
+            &self.roles.embedding,
+            &self.roles.multimodal_embedding,
+        ]
+        .into_iter()
+        .flatten()
         {
             self.model(id)?;
         }
@@ -263,7 +353,7 @@ pub struct Resolved {
 impl Resolved {
     pub fn analysis_profile(&self) -> Result<String, String> {
         let identity = serde_json::json!([
-            self.model.provider_id,
+            self.provider.identity(),
             base_url(&self.provider.base_url)?,
             self.model.remote_id,
             self.model.revision,
@@ -275,7 +365,7 @@ impl Resolved {
             .to_string())
     }
     pub fn contract(&self) -> String {
-        let identity = serde_json::json!([
+        let mut identity = serde_json::json!([
             self.provider.base_url,
             self.provider.credential_revision,
             self.model.remote_id,
@@ -284,6 +374,11 @@ impl Resolved {
             self.model.max_output_tokens,
             self.model.embedding
         ]);
+        if self.provider.kind == ProviderKind::Embedding
+            && self.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal
+        {
+            identity = serde_json::json!([identity, "vllm-multimodal-v1"]);
+        }
         blake3::hash(identity.to_string().as_bytes())
             .to_hex()
             .to_string()
@@ -301,7 +396,10 @@ impl Resolved {
         {
             return Err("服务未启用或尚未允许本次媒体／文字传输".into());
         }
-        if !self.model.capabilities.contains(&capability) || !self.tested(capability) {
+        if !self.provider.supports(capability)
+            || !self.model.capabilities.contains(&capability)
+            || !self.tested(capability)
+        {
             return Err("模型能力尚未标记或当前配置未经检测".into());
         }
         Ok(())
@@ -309,13 +407,17 @@ impl Resolved {
     pub fn embedding_profile(&self) -> Result<String, String> {
         let dimension = self.model.embedding.dimensions.ok_or("请先检测向量维度")?;
         let identity = (
-            &self.model.provider_id,
+            self.provider.identity(),
             base_url(&self.provider.base_url)?,
             &self.model.remote_id,
             &self.model.revision,
             dimension,
             &self.model.embedding.query_instruction,
-            "media-analysis-v1/plain-text/l2-cosine",
+            if self.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+                "media-analysis-v2/vllm-multimodal-text/l2-cosine"
+            } else {
+                "media-analysis-v1/plain-text/l2-cosine"
+            },
         );
         Ok(
             blake3::hash(&serde_json::to_vec(&identity).map_err(|_| "向量索引身份无效")?)
@@ -323,6 +425,184 @@ impl Resolved {
                 .to_string(),
         )
     }
+    pub fn multimodal_profile(&self) -> Result<String, String> {
+        if !self.provider.supports(Capability::EmbedMultimodal) {
+            return Err("此服务不支持原媒体 Embedding".into());
+        }
+        let dimension = self.model.embedding.dimensions.ok_or("请先检测向量维度")?;
+        let identity = (
+            self.provider.identity(),
+            base_url(&self.provider.base_url)?,
+            &self.model.remote_id,
+            &self.model.revision,
+            dimension,
+            &self.model.embedding.query_instruction,
+            "media-multimodal-v1/vllm-messages/1280px-60s-3frames/l2-cosine",
+        );
+        Ok(
+            blake3::hash(&serde_json::to_vec(&identity).map_err(|_| "向量索引身份无效")?)
+                .to_hex()
+                .to_string(),
+        )
+    }
+}
+
+pub fn normalize_legacy_embedding_snapshot(model: &mut Resolved) {
+    if model.provider.kind != ProviderKind::Llm
+        || !model.model.capabilities.contains(&Capability::EmbedText)
+    {
+        return;
+    }
+    let tested = model.tested(Capability::EmbedText);
+    model.provider.kind = ProviderKind::Embedding;
+    model.provider.embedding_protocol = EmbeddingProtocol::OpenaiText;
+    model.model.capabilities = model.provider.embedding_capabilities();
+    model.model.tested.clear();
+    if tested {
+        model
+            .model
+            .tested
+            .insert(Capability::EmbedText, model.contract());
+    }
+}
+
+pub fn migrate_legacy(mut config: Configuration) -> Result<Configuration, String> {
+    if config.version != 1 {
+        config.validate()?;
+        return Ok(config);
+    }
+    let previous = config.clone();
+    for model in &previous.models {
+        previous.provider(&model.provider_id)?;
+    }
+    config.providers.clear();
+    config.models.clear();
+    let mut routing = BTreeMap::<(String, u8), String>::new();
+    for provider in &previous.providers {
+        let models: Vec<_> = previous
+            .models
+            .iter()
+            .filter(|m| m.provider_id == provider.id)
+            .collect();
+        let groups: Vec<_> = [0u8, 1, 2]
+            .into_iter()
+            .filter(|group| {
+                models
+                    .iter()
+                    .any(|m| legacy_groups(m, &previous.roles).contains(group))
+                    || *group == 0 && models.is_empty()
+            })
+            .collect();
+        for (index, group) in groups.into_iter().enumerate() {
+            let mut next = provider.clone();
+            if index > 0 {
+                next.id = uuid::Uuid::new_v4().to_string();
+            }
+            next.identity_id = provider.id.clone();
+            next.kind = if group == 0 {
+                ProviderKind::Llm
+            } else {
+                ProviderKind::Embedding
+            };
+            next.embedding_protocol = if group == 2 {
+                EmbeddingProtocol::VllmMultimodal
+            } else {
+                EmbeddingProtocol::OpenaiText
+            };
+            if index > 0 {
+                next.name = format!(
+                    "{} · {}",
+                    provider.name,
+                    if group == 0 {
+                        "LLM"
+                    } else if group == 1 {
+                        "Embedding"
+                    } else {
+                        "多模态 Embedding"
+                    }
+                );
+            }
+            // Display names may already use the full permitted length.
+            next.name = next.name.chars().take(120).collect();
+            let new_provider_id = next.id.clone();
+            config.providers.push(next.clone());
+            for model in &models {
+                let model_groups = legacy_groups(model, &previous.roles);
+                if !model_groups.contains(&group) {
+                    continue;
+                }
+                let mut migrated = (*model).clone();
+                if model_groups.first() != Some(&group) {
+                    migrated.id = uuid::Uuid::new_v4().to_string();
+                }
+                migrated.provider_id = new_provider_id.clone();
+                migrated.capabilities = if group == 0 {
+                    model
+                        .capabilities
+                        .iter()
+                        .copied()
+                        .filter(|cap| next.supports(*cap))
+                        .collect()
+                } else {
+                    next.embedding_capabilities()
+                };
+                migrated.tested.clear();
+                let mut resolved = Resolved {
+                    provider: next.clone(),
+                    model: migrated,
+                };
+                if group != 2 {
+                    if let Ok(old) = previous.resolve(&model.id) {
+                        for cap in resolved.model.capabilities.clone() {
+                            if old.tested(cap) {
+                                resolved.model.tested.insert(cap, resolved.contract());
+                            }
+                        }
+                    }
+                }
+                routing.insert((model.id.clone(), group), resolved.model.id.clone());
+                config.models.push(resolved.model);
+            }
+        }
+    }
+    for (id, group) in [
+        (&mut config.roles.media, 0),
+        (&mut config.roles.text, 0),
+        (&mut config.roles.embedding, 1),
+        (&mut config.roles.multimodal_embedding, 2),
+    ] {
+        if let Some(old) = id.as_ref() {
+            *id = Some(
+                routing
+                    .get(&(old.clone(), group))
+                    .cloned()
+                    .ok_or("旧默认模型无法迁移")?,
+            );
+        }
+    }
+    config.version = 2;
+    config.revision = config.revision.checked_add(1).ok_or("模型配置版本溢出")?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn legacy_groups(model: &Model, roles: &Roles) -> Vec<u8> {
+    let text = model.capabilities.contains(&Capability::EmbedText)
+        || roles.embedding.as_ref() == Some(&model.id);
+    let multimodal = model.capabilities.contains(&Capability::EmbedMultimodal)
+        || roles.multimodal_embedding.as_ref() == Some(&model.id);
+    let llm = model.capabilities.iter().any(|cap| {
+        matches!(
+            cap,
+            Capability::Text | Capability::Image | Capability::VideoFrames | Capability::Json
+        )
+    }) || roles.media.as_ref() == Some(&model.id)
+        || roles.text.as_ref() == Some(&model.id)
+        || !text && !multimodal;
+    [(0, llm), (1, text), (2, multimodal)]
+        .into_iter()
+        .filter_map(|(group, present)| present.then_some(group))
+        .collect()
 }
 fn path() -> Result<std::path::PathBuf, String> {
     Ok(crate::t_config::get_app_data_dir()?.join("ai-services.json"))
@@ -333,12 +613,20 @@ fn load_unlocked() -> Result<Configuration, String> {
         return Ok(Configuration::default());
     }
     let data = std::fs::read(&path).map_err(|_| "无法读取模型服务配置")?;
-    if data.len() > 4 * 1024 * 1024 {
-        return Err("模型服务配置过大".into());
-    }
+    check_config_size(2, data.len())?;
     let config: Configuration =
         serde_json::from_slice(&data).map_err(|_| "模型服务配置损坏；请保留文件并从备份恢复")?;
-    config.validate()?;
+    check_config_size(config.version, data.len())?;
+    let legacy = config.version == 1;
+    let config = migrate_legacy(config)?;
+    if legacy {
+        let encoded = encode_config(&config)?;
+        let backup = path.with_extension("v1.backup.json");
+        if !backup.exists() {
+            std::fs::write(backup, &data).map_err(|_| "无法备份旧模型服务配置")?;
+        }
+        crate::t_config::write_atomic(&path, &encoded)?;
+    }
     Ok(config)
 }
 pub fn load() -> Result<Configuration, String> {
@@ -355,15 +643,12 @@ pub fn update<T>(
         return Err("模型配置已被其他窗口修改，请刷新后重试。".into());
     }
     let result = f(&mut config)?;
-    config.revision += 1;
+    config.revision = config.revision.checked_add(1).ok_or("模型配置版本溢出")?;
     config.validate()?;
     let path = path()?;
     std::fs::create_dir_all(path.parent().ok_or("配置目录无效")?)
         .map_err(|_| "无法创建配置目录")?;
-    crate::t_config::write_atomic(
-        &path,
-        &serde_json::to_string_pretty(&config).map_err(|_| "无法序列化模型配置")?,
-    )?;
+    crate::t_config::write_atomic(&path, &encode_config(&config)?)?;
     Ok(result)
 }
 pub fn credential(provider: &Provider) -> Result<keyring::Entry, String> {
@@ -371,7 +656,7 @@ pub fn credential(provider: &Provider) -> Result<keyring::Entry, String> {
         return Err("服务未保存密钥".into());
     }
     super::super::remote::credential(
-        &format!("provider-{}", provider.id),
+        &format!("provider-{}", provider.identity()),
         &provider.credential_revision,
     )
 }
@@ -388,6 +673,215 @@ pub fn key(provider: &Provider) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy_configuration() -> Configuration {
+        let mut config = Configuration {
+            version: 1,
+            revision: 7,
+            providers: vec![Provider {
+                id: "shared".into(),
+                name: "Mixed service".into(),
+                base_url: "http://127.0.0.1:8000/v1/".into(),
+                allow_media: true,
+                allow_background: true,
+                credential_revision: "saved-key".into(),
+                ..Default::default()
+            }],
+            models: vec![Model {
+                id: "mixed-model".into(),
+                provider_id: "shared".into(),
+                remote_id: "remote-model".into(),
+                name: "Mixed model".into(),
+                capabilities: [Capability::Image, Capability::Text, Capability::EmbedText]
+                    .into_iter()
+                    .collect(),
+                max_output_tokens: Some(384000),
+                embedding: EmbeddingOptions {
+                    dimensions: Some(2),
+                    query_instruction: "Find media".into(),
+                },
+                ..Default::default()
+            }],
+            roles: Roles {
+                media: Some("mixed-model".into()),
+                text: Some("mixed-model".into()),
+                embedding: Some("mixed-model".into()),
+                ..Default::default()
+            },
+        };
+        let model = config.resolve("mixed-model").unwrap();
+        let contract = model.contract();
+        config.models[0].tested = model
+            .model
+            .capabilities
+            .iter()
+            .map(|cap| (*cap, contract.clone()))
+            .collect();
+        config
+    }
+
+    #[test]
+    fn legacy_mixed_services_split_without_losing_credentials_profiles_or_verified_roles() {
+        let previous = legacy_configuration();
+        let old = previous.resolve("mixed-model").unwrap();
+        let config = migrate_legacy(previous).unwrap();
+        assert_eq!((config.version, config.revision), (2, 8));
+        assert_eq!((config.providers.len(), config.models.len()), (2, 2));
+        let media = config.role("media").unwrap();
+        let text = config.role("text").unwrap();
+        let embedding = config.role("embedding").unwrap();
+        assert_eq!(media.model.id, text.model.id);
+        assert_ne!(media.model.id, embedding.model.id);
+        assert_eq!(media.provider.kind, ProviderKind::Llm);
+        assert_eq!(embedding.provider.kind, ProviderKind::Embedding);
+        assert_eq!(embedding.provider.identity(), "shared");
+        assert_eq!(embedding.provider.credential_revision, "saved-key");
+        assert_eq!(
+            old.analysis_profile().unwrap(),
+            media.analysis_profile().unwrap()
+        );
+        assert_eq!(
+            old.embedding_profile().unwrap(),
+            embedding.embedding_profile().unwrap()
+        );
+        assert!(media.require(Capability::Image, true).is_ok());
+        assert!(text.require(Capability::Text, false).is_ok());
+        assert!(embedding.require(Capability::EmbedText, true).is_ok());
+        assert!(!media.model.capabilities.contains(&Capability::EmbedText));
+        let snapshot = serde_json::to_value(&config).unwrap();
+        let reloaded: Configuration = serde_json::from_value(snapshot.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(migrate_legacy(reloaded).unwrap()).unwrap(),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn legacy_embedding_snapshots_preserve_only_exact_verified_text_receipts() {
+        let config = legacy_configuration();
+        let mut snapshot = config.resolve("mixed-model").unwrap();
+        let profile = snapshot.embedding_profile().unwrap();
+        normalize_legacy_embedding_snapshot(&mut snapshot);
+        assert_eq!(snapshot.provider.kind, ProviderKind::Embedding);
+        assert_eq!(snapshot.provider.identity(), "shared");
+        assert_eq!(snapshot.embedding_profile().unwrap(), profile);
+        assert!(snapshot.require(Capability::EmbedText, true).is_ok());
+        assert_eq!(snapshot.model.tested.len(), 1);
+        let mut untrusted = config.resolve("mixed-model").unwrap();
+        untrusted
+            .model
+            .tested
+            .insert(Capability::EmbedText, "forged".into());
+        normalize_legacy_embedding_snapshot(&mut untrusted);
+        assert!(untrusted.model.tested.is_empty());
+        assert!(untrusted.require(Capability::EmbedText, false).is_err());
+    }
+
+    #[test]
+    fn embedding_protocols_have_separate_spaces_and_cannot_claim_llm_capabilities() {
+        let mut config = migrate_legacy(legacy_configuration()).unwrap();
+        let mut model = config.role("embedding").unwrap();
+        let old = model.embedding_profile().unwrap();
+        model.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
+        model.model.capabilities = model.provider.embedding_capabilities();
+        assert_ne!(model.embedding_profile().unwrap(), old);
+        assert_ne!(
+            model.embedding_profile().unwrap(),
+            model.multimodal_profile().unwrap()
+        );
+        assert!(!model.tested(Capability::EmbedText));
+        let profiles = (
+            model.embedding_profile().unwrap(),
+            model.multimodal_profile().unwrap(),
+        );
+        model.provider.id = "new-ui-id".into();
+        model.model.provider_id = "new-ui-id".into();
+        model.provider.credential_revision = "new-key".into();
+        assert_eq!(
+            profiles,
+            (
+                model.embedding_profile().unwrap(),
+                model.multimodal_profile().unwrap()
+            )
+        );
+        model.model.embedding.query_instruction = "Different query task".into();
+        assert_ne!(profiles.1, model.multimodal_profile().unwrap());
+        config.models[0].capabilities.insert(Capability::EmbedText);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_multimodal_declarations_keep_a_distinct_unverified_protocol_copy() {
+        let mut old = legacy_configuration();
+        old.models[0]
+            .capabilities
+            .insert(Capability::EmbedMultimodal);
+        let config = migrate_legacy(old).unwrap();
+        assert_eq!(config.providers.len(), 3);
+        let multimodal = config
+            .providers
+            .iter()
+            .find(|p| p.embedding_protocol == EmbeddingProtocol::VllmMultimodal)
+            .unwrap();
+        let model = config
+            .models
+            .iter()
+            .find(|m| m.provider_id == multimodal.id)
+            .unwrap();
+        assert_eq!(model.capabilities, multimodal.embedding_capabilities());
+        assert!(model.tested.is_empty());
+        assert_eq!(multimodal.identity(), "shared");
+        let mut broken = legacy_configuration();
+        broken.models[0].provider_id = "missing".into();
+        assert!(migrate_legacy(broken).is_err());
+    }
+
+    #[test]
+    fn migration_capacity_and_serialized_size_limits_cover_every_legacy_split() {
+        assert!(check_config_size(1, LEGACY_CONFIG_BYTES).is_ok());
+        assert!(check_config_size(1, LEGACY_CONFIG_BYTES + 1).is_err());
+        assert!(check_config_size(2, CONFIG_BYTES).is_ok());
+        assert!(check_config_size(2, CONFIG_BYTES + 1).is_err());
+        let mut legacy = Configuration {
+            version: 1,
+            ..Default::default()
+        };
+        for i in 0..128 {
+            legacy.providers.push(Provider {
+                id: format!("p-{i}"),
+                name: format!("Service {i}"),
+                base_url: "http://127.0.0.1:8000/v1/".into(),
+                ..Default::default()
+            });
+        }
+        for i in 0..2048 {
+            legacy.models.push(Model {
+                id: format!("m-{i}"),
+                provider_id: format!("p-{}", i % 128),
+                remote_id: format!("remote-{i}"),
+                name: format!("Model {i}"),
+                capabilities: [
+                    Capability::Text,
+                    Capability::Image,
+                    Capability::VideoFrames,
+                    Capability::Json,
+                    Capability::EmbedText,
+                    Capability::EmbedMultimodal,
+                ]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            });
+        }
+        let migrated = migrate_legacy(legacy).unwrap();
+        assert_eq!(
+            (migrated.providers.len(), migrated.models.len()),
+            (384, 6144)
+        );
+        let encoded = encode_config(&migrated).unwrap();
+        let reopened: Configuration = serde_json::from_str(&encoded).unwrap();
+        reopened.validate().unwrap();
+    }
     #[test]
     fn output_budgets_are_optional_positive_api_integers_not_model_capacity_caps() {
         let mut config = Configuration {

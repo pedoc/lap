@@ -121,8 +121,11 @@ def serve_command(python, profile, model, host, port, context, memory):
             "--served-model-name", profile["servedModel"], "--host", host, "--port", str(port),
             "--max-model-len", str(context), "--max-num-seqs", "1", "--gpu-memory-utilization", str(memory), "--enforce-eager"]
     if profile.get("task") == "embedding":
-        return command + ["--runner", "pooling", "--convert", "embed",
-                          "--override-pooler-config", json.dumps(profile["pooling"])]
+        command += ["--runner", "pooling", "--convert", "embed",
+                    profile.get("poolerFlag", "--override-pooler-config"), json.dumps(profile["pooling"])]
+        if profile.get("multimodalLimits"):
+            command += ["--limit-mm-per-prompt", json.dumps(profile["multimodalLimits"])]
+        return command
     return command + ["--limit-mm-per-prompt", json.dumps({"image": 8, "video": 0})]
 
 
@@ -148,7 +151,8 @@ def serve(args, profile):
     command = serve_command(python, profile, model, args.host, port, args.context, memory)
     if args.dry_run:
         print(json.dumps({"command": command, "keyFile": str(key_file), "modelRevision": profile["modelRevision"],
-                          "protocol": "OpenAI Embeddings" if profile.get("task") == "embedding" else "OpenAI Chat Completions",
+                          "protocol": "vLLM multimodal Embeddings (messages)" if profile.get("embeddingProtocol") == "vllm_multimodal" else
+                                      "OpenAI Embeddings" if profile.get("task") == "embedding" else "OpenAI Chat Completions",
                           "servedModel": profile["servedModel"], "baseUrl": f"http://127.0.0.1:{port}/v1"}, ensure_ascii=False, indent=2))
         return
     doctor(profile)

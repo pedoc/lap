@@ -1,7 +1,7 @@
 //! Real HTTP and SQLite contracts, deliberately without a GPU or paid service.
 use super::{
     client,
-    config::{Capability, Resolved},
+    config::{Capability, EmbeddingProtocol, ProviderKind, Resolved},
     store,
 };
 use genai::chat::ContentPart;
@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-fn fixture(replies: Vec<(u16, Value)>) -> (String, thread::JoinHandle<Vec<Value>>) {
+pub(super) fn fixture(replies: Vec<(u16, Value)>) -> (String, thread::JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}/gateway/v1/", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();
@@ -81,6 +81,10 @@ fn at(base: String, remote: &str) -> Resolved {
     m.provider.allow_media = true;
     m.provider.enabled = true;
     m.model.name = remote.into();
+    if remote.contains("embedding") {
+        m.provider.kind = ProviderKind::Embedding;
+        m.model.capabilities = m.provider.embedding_capabilities();
+    }
     m
 }
 #[tokio::test]
@@ -238,4 +242,143 @@ async fn server_default_omits_both_output_token_parameters() {
     let seen = worker.join().unwrap();
     assert!(seen[0].get("max_tokens").is_none());
     assert!(seen[0].get("max_completion_tokens").is_none());
+}
+
+#[tokio::test]
+async fn vllm_media_and_query_use_embedding_messages_and_grant_only_verified_receipts() {
+    let reply = json!({"data":[{"index":0,"embedding":[3.0,4.0]}]});
+    let (base, worker) = fixture(vec![
+        (200, reply.clone()),
+        (200, reply.clone()),
+        (200, reply),
+    ]);
+    let mut model = at(base, "vl-embedding");
+    model.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
+    model.model.capabilities = model.provider.embedding_capabilities();
+    model.model.embedding.query_instruction = "Retrieve the matching media.".into();
+    super::commands::probe(
+        &mut model,
+        Some("fixture-key".into()),
+        Capability::EmbedMultimodal,
+    )
+    .await
+    .unwrap();
+    assert_eq!(model.model.embedding.dimensions, Some(2));
+    assert!(model.tested(Capability::EmbedText));
+    assert!(model.tested(Capability::EmbedMultimodal));
+    assert!(model.require(Capability::EmbedMultimodal, false).is_ok());
+    assert!(model.require(Capability::Text, false).is_err());
+    let requests = worker.join().unwrap();
+    for request in &requests {
+        assert_eq!(request["encoding_format"], "float");
+        assert_eq!(request["add_generation_prompt"], true);
+        assert!(request.get("input").is_none());
+        assert!(request.get("max_tokens").is_none());
+    }
+    assert_eq!(
+        requests[0]["messages"][0]["content"][0]["text"],
+        "Represent the user's input."
+    );
+    assert_eq!(
+        requests[1]["messages"][0]["content"][0]["text"],
+        "Retrieve the matching media."
+    );
+    assert_eq!(
+        requests[1]["messages"][1]["content"][0]["text"],
+        "Find a person near water"
+    );
+    assert!(
+        requests[2]["messages"][1]["content"][0]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,")
+    );
+}
+
+#[tokio::test]
+async fn vllm_text_probe_tests_the_custom_query_system_without_openai_text_prefixes() {
+    let reply = json!({"data":[{"index":0,"embedding":[3.0,4.0]}]});
+    let (base, worker) = fixture(vec![(200, reply.clone()), (200, reply)]);
+    let mut model = at(base, "vl-embedding");
+    model.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
+    model.model.capabilities = model.provider.embedding_capabilities();
+    model.model.embedding.query_instruction = "Retrieve an original video frame.".into();
+    super::commands::probe(&mut model, None, Capability::EmbedText)
+        .await
+        .unwrap();
+    assert!(model.tested(Capability::EmbedText));
+    assert!(!model.tested(Capability::EmbedMultimodal));
+    let requests = worker.join().unwrap();
+    assert_eq!(
+        requests[0]["messages"][0]["content"][0]["text"],
+        "Represent the user's input."
+    );
+    assert_eq!(
+        requests[1]["messages"][0]["content"][0]["text"],
+        "Retrieve an original video frame."
+    );
+    assert_eq!(
+        requests[1]["messages"][1]["content"][0]["text"],
+        "Find a person near water"
+    );
+    assert!(requests[1].get("input").is_none());
+}
+
+#[tokio::test]
+async fn multimodal_adapter_preserves_frame_order_and_rejects_urls_and_invalid_vectors() {
+    let (base, worker) = fixture(vec![(
+        200,
+        json!({"data":[{"index":0,"embedding":[3.0,4.0]}]}),
+    )]);
+    let mut model = at(base, "vl-embedding");
+    model.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
+    model.model.capabilities = model.provider.embedding_capabilities();
+    let vector = client::embed_media_with_key(
+        &model,
+        vec![
+            ContentPart::from_text("Frame at 00:00"),
+            super::commands::probe_image().unwrap(),
+            ContentPart::from_text("Frame at 00:30"),
+            super::commands::probe_image().unwrap(),
+        ],
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(vector, vec![0.6, 0.8]);
+    let requests = worker.join().unwrap();
+    let content = &requests[0]["messages"][1]["content"];
+    assert_eq!(content[0]["text"], "Frame at 00:00");
+    assert_eq!(content[1]["type"], "image_url");
+    assert_eq!(content[2]["text"], "Frame at 00:30");
+    assert_eq!(content[3]["type"], "image_url");
+    let remote = ContentPart::Binary(genai::chat::Binary::from_url(
+        "image/jpeg",
+        "https://remote.invalid/private.jpg",
+        None,
+    ));
+    assert!(
+        client::embed_media_with_key(&model, vec![remote], None)
+            .await
+            .unwrap_err()
+            .contains("本地图像")
+    );
+    for body in [
+        json!({"data":[{"index":1,"embedding":[3.0,4.0]}]}),
+        json!({"data":[{"index":0,"embedding":[0.0,0.0]}]}),
+        json!({"data":[{"index":0,"embedding":[1.0]}]}),
+    ] {
+        let (base, worker) = fixture(vec![(200, body)]);
+        model.provider.base_url = base;
+        assert!(
+            client::embed_media_with_key(
+                &model,
+                vec![super::commands::probe_image().unwrap()],
+                None
+            )
+            .await
+            .is_err()
+        );
+        worker.join().unwrap();
+    }
 }

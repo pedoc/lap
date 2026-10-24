@@ -1,6 +1,8 @@
 use super::{
     client,
-    config::{self, Capability, Configuration, Provider, Resolved},
+    config::{
+        self, Capability, Configuration, EmbeddingProtocol, Provider, ProviderKind, Resolved,
+    },
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use genai::chat::ContentPart;
@@ -45,12 +47,17 @@ fn validate_roles(config: &Configuration) -> Result<(), String> {
             &config.roles.embedding,
             &[Capability::EmbedText][..],
         ),
+        (
+            "多模态 Embedding",
+            &config.roles.multimodal_embedding,
+            &[Capability::EmbedMultimodal][..],
+        ),
     ] {
         if let Some(id) = id {
-            let model = config.model(id)?;
+            let model = config.resolve(id)?;
             if !capabilities
                 .iter()
-                .any(|cap| model.capabilities.contains(cap))
+                .any(|cap| model.provider.supports(*cap) && model.model.capabilities.contains(cap))
             {
                 return Err(format!(
                     "{role}默认模型未声明相应能力，请重新选择或清除此用途。"
@@ -59,6 +66,28 @@ fn validate_roles(config: &Configuration) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn preserve_identity(provider: &mut Provider, previous: &Configuration) -> Result<(), String> {
+    let identity = previous
+        .providers
+        .iter()
+        .find(|old| old.id == provider.id)
+        .map(|old| old.identity())
+        .unwrap_or(&provider.id)
+        .to_owned();
+    if !provider.identity_id.is_empty() && provider.identity_id != identity {
+        return Err("服务身份不能由客户端更改".into());
+    }
+    provider.identity_id = identity;
+    Ok(())
+}
+
+fn credential_in_use(provider: &Provider, config: &Configuration) -> bool {
+    config.providers.iter().any(|current| {
+        current.identity() == provider.identity()
+            && current.credential_revision == provider.credential_revision
+    })
 }
 
 fn save(
@@ -72,6 +101,7 @@ fn save(
     }
     let mut new_credentials = Vec::new();
     for p in &mut next.providers {
+        preserve_identity(p, &previous)?;
         p.base_url = config::base_url(&p.base_url)?;
         if let Some(old) = previous.providers.iter().find(|old| old.id == p.id) {
             if config::base_url(&old.base_url)? != p.base_url
@@ -147,12 +177,7 @@ fn save(
         return Err(error);
     }
     for old in &previous.providers {
-        if !old.credential_revision.is_empty()
-            && !next
-                .providers
-                .iter()
-                .any(|p| p.id == old.id && p.credential_revision == old.credential_revision)
-        {
+        if !old.credential_revision.is_empty() && !credential_in_use(old, &next) {
             if let Ok(entry) = config::credential(old) {
                 let _ = entry.delete_credential();
             }
@@ -256,17 +281,39 @@ pub(super) async fn probe(
     if !model.provider.allow_media || !model.provider.enabled {
         return Err("请先启用服务并允许发送媒体／文字".into());
     }
-    if !model.model.capabilities.contains(&cap) {
+    if !model.provider.supports(cap) || !model.model.capabilities.contains(&cap) {
         return Err("请先勾选待检测能力".into());
     }
     if cap == Capability::EmbedMultimodal {
-        return Err("首版仅支持文本 Embedding".into());
-    }
-    if cap == Capability::EmbedText {
+        model.model.embedding.dimensions = None;
+        let document = client::embed_with_key(
+            model,
+            vec!["A person walking beside a lake.".into()],
+            key.clone(),
+        )
+        .await?;
+        let query = client::embed_multimodal_query_with_key(
+            model,
+            "Find a person near water".into(),
+            key.clone(),
+        )
+        .await?;
+        let image = client::embed_media_with_key(model, vec![probe_image()?], key).await?;
+        if document[0].len() != query.len() || image.len() != query.len() {
+            return Err("文本与媒体向量维度不一致".into());
+        }
+        model.model.embedding.dimensions = Some(image.len());
+    } else if cap == Capability::EmbedText {
         model.model.embedding.dimensions = None;
         let document = "A person walking beside a lake.".to_owned();
         let query = client::query_text(model, "Find a person near water");
-        let result = client::embed_with_key(model, vec![document, query], key).await?;
+        let result = if model.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+            let mut document = client::embed_with_key(model, vec![document], key.clone()).await?;
+            let query = client::embed_multimodal_query_with_key(model, query, key).await?;
+            vec![document.pop().ok_or("缺少正文向量")?, query]
+        } else {
+            client::embed_with_key(model, vec![document, query], key).await?
+        };
         if result[0].len() != result[1].len() {
             return Err("正文与查询向量维度不一致".into());
         }
@@ -296,6 +343,12 @@ pub(super) async fn probe(
     let contract = model.contract();
     model.model.tested.retain(|_, saved| saved == &contract);
     model.model.tested.insert(cap, contract);
+    if cap == Capability::EmbedMultimodal {
+        model
+            .model
+            .tested
+            .insert(Capability::EmbedText, model.contract());
+    }
     Ok(())
 }
 #[derive(Serialize)]
@@ -348,12 +401,20 @@ pub async fn media_ai_save_embedding(
     if config.revision != revision {
         return Err("配置已变化，请刷新".into());
     }
-    model.model.capabilities.insert(Capability::EmbedText);
+    if model.provider.kind != ProviderKind::Embedding {
+        return Err("请选择 Embedding 类型的服务".into());
+    }
+    model.model.capabilities = model.provider.embedding_capabilities();
     // Draft receipts are untrusted; only the embedding probe below grants new evidence.
     model.model.tested.clear();
     model.model.embedding.dimensions = None;
     let key = draft_key(&model.provider, api_key.clone())?;
-    probe(&mut model, key, Capability::EmbedText).await?;
+    let capability = if model.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+        Capability::EmbedMultimodal
+    } else {
+        Capability::EmbedText
+    };
+    probe(&mut model, key, capability).await?;
     if let Some(p) = config
         .providers
         .iter_mut()
@@ -368,7 +429,11 @@ pub async fn media_ai_save_embedding(
     } else {
         config.models.push(model.model.clone());
     }
-    config.roles.embedding = Some(model.model.id.clone());
+    if capability == Capability::EmbedMultimodal {
+        config.roles.multimodal_embedding = Some(model.model.id.clone());
+    } else {
+        config.roles.embedding = Some(model.model.id.clone());
+    }
     let keys = api_key
         .map(|key| BTreeMap::from([(model.provider.id.clone(), key)]))
         .unwrap_or_default();
@@ -384,28 +449,48 @@ mod tests {
 
     fn configuration() -> Configuration {
         Configuration {
-            providers: vec![Provider {
-                id: "provider".into(),
-                name: "Service".into(),
-                base_url: "http://127.0.0.1:8000/v1/".into(),
-                enabled: true,
-                allow_media: true,
-                ..Default::default()
-            }],
-            models: vec![Model {
-                id: "model".into(),
-                provider_id: "provider".into(),
-                name: "Model".into(),
-                remote_id: "remote-model".into(),
-                capabilities: [Capability::Image, Capability::Text, Capability::EmbedText]
-                    .into_iter()
-                    .collect(),
-                ..Default::default()
-            }],
+            providers: vec![
+                Provider {
+                    id: "provider".into(),
+                    name: "Service".into(),
+                    base_url: "http://127.0.0.1:8000/v1/".into(),
+                    enabled: true,
+                    allow_media: true,
+                    ..Default::default()
+                },
+                Provider {
+                    id: "embedding-provider".into(),
+                    name: "Embedding".into(),
+                    base_url: "http://127.0.0.1:8000/v1/".into(),
+                    kind: ProviderKind::Embedding,
+                    enabled: true,
+                    allow_media: true,
+                    ..Default::default()
+                },
+            ],
+            models: vec![
+                Model {
+                    id: "model".into(),
+                    provider_id: "provider".into(),
+                    name: "Model".into(),
+                    remote_id: "remote-model".into(),
+                    capabilities: [Capability::Image, Capability::Text].into_iter().collect(),
+                    ..Default::default()
+                },
+                Model {
+                    id: "embedding-model".into(),
+                    provider_id: "embedding-provider".into(),
+                    name: "Embedding".into(),
+                    remote_id: "embedding".into(),
+                    capabilities: [Capability::EmbedText].into_iter().collect(),
+                    ..Default::default()
+                },
+            ],
             roles: Roles {
                 media: Some("model".into()),
                 text: Some("model".into()),
-                embedding: Some("model".into()),
+                embedding: Some("embedding-model".into()),
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -429,7 +514,7 @@ mod tests {
 
     #[test]
     fn bound_roles_reject_removed_capabilities_until_cleared() {
-        for capability in [Capability::Image, Capability::Text, Capability::EmbedText] {
+        for capability in [Capability::Image, Capability::Text] {
             let mut config = configuration();
             config.models[0].capabilities.remove(&capability);
             assert!(validate_roles(&config).is_err());
@@ -468,5 +553,31 @@ mod tests {
             assert!(model.tested(Capability::Text));
             assert!(model.require(Capability::Text, false).is_err());
         }
+    }
+
+    #[test]
+    fn identities_cannot_be_forged_and_shared_credentials_are_referenced_by_namespace() {
+        let mut previous = configuration();
+        previous.providers[0].identity_id = "original".into();
+        previous.providers[0].credential_revision = "key-revision".into();
+        let mut existing = previous.providers[0].clone();
+        preserve_identity(&mut existing, &previous).unwrap();
+        let mut forged = existing.clone();
+        forged.identity_id = "someone-else".into();
+        assert!(preserve_identity(&mut forged, &previous).is_err());
+        forged.id = "new-provider".into();
+        forged.identity_id = "original".into();
+        assert!(preserve_identity(&mut forged, &previous).is_err());
+        forged.identity_id.clear();
+        preserve_identity(&mut forged, &previous).unwrap();
+        assert_eq!(forged.identity(), "new-provider");
+        let mut split = existing.clone();
+        split.id = "split-provider".into();
+        let next = Configuration {
+            providers: vec![split],
+            ..Default::default()
+        };
+        assert!(credential_in_use(&existing, &next));
+        assert!(!credential_in_use(&existing, &Configuration::default()));
     }
 }

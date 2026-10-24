@@ -6427,7 +6427,7 @@ watch(
     smartResultSignature(activeSmartAlbum.value), // Only active result-affecting changes reload photos; folders, names, and counters do not.
     isStructuredSearchView.value,
     libConfig.search.searchText,
-    config.main.sidebarIndex === SIDEBAR.SEARCH ? JSON.stringify([mediaAiSearch.active, mediaAiSearch.libraryId, mediaAiSearch.modelId, mediaAiSearch.albumId, mediaAiSearch.revision]) : null,
+    config.main.sidebarIndex === SIDEBAR.SEARCH ? JSON.stringify([mediaAiSearch.active, mediaAiSearch.libraryId, mediaAiSearch.source, mediaAiSearch.modelId, mediaAiSearch.albumId, mediaAiSearch.revision]) : null,
     config.main.sidebarIndex === SIDEBAR.OBJECTS ? JSON.stringify([libConfig.objects, config.settings.ai?.detectionProfile]) : null,
     config.main.sidebarIndex === SIDEBAR.OCR ? `${libConfig.ocr.state}\0${libConfig.ocr.text}` : null,
     [SIDEBAR.OCR, SIDEBAR.SEARCH].includes(config.main.sidebarIndex) ? config.settings.ai?.ocrProfile : null,
@@ -8156,7 +8156,7 @@ async function getMediaAiSearchFileList(query: string, requestId: number) {
   currentSearchFileIds.value = []; timelineData.value = []; imageSearchError.value = false;
   imageSearchLanguageUnsupported.value = false; isLoading.value = true; mediaAiSearch.error = '';
   try {
-    const hits = await invoke<MediaHit[]>('media_ai_search', { libraryId, query, modelId: mediaAiSearch.modelId || null, albumId: mediaAiSearch.albumId, fileType: Number(config.search.fileType || 0), limit: 100, requestId: aiRequestId });
+    const hits = await invoke<MediaHit[]>('media_ai_search', { libraryId, query, source: mediaAiSearch.source, modelId: mediaAiSearch.modelId || null, albumId: mediaAiSearch.albumId, fileType: Number(config.search.fileType || 0), limit: 100, requestId: aiRequestId });
     if (requestId !== currentContentRequestId || libraryId !== libConfig._libraryId) return;
     const ranked = rankedMediaHits(hits), rows = await getFilesByIds(ranked.map(hit => hit.fileId));
     if (requestId !== currentContentRequestId || libraryId !== libConfig._libraryId) return;

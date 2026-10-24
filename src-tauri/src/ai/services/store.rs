@@ -63,7 +63,8 @@ pub fn schema(c: &Connection) -> Result<(), String> {
         stamp TEXT NOT NULL,question TEXT NOT NULL,answer TEXT NOT NULL,evidence TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS media_ai_dismissals(file_id INTEGER NOT NULL REFERENCES afiles(id) ON DELETE CASCADE,
         stamp TEXT NOT NULL,field TEXT NOT NULL,PRIMARY KEY(file_id,stamp,field));")
-        .map_err(sql_error)
+        .map_err(sql_error)?;
+    super::visual::schema(c)
 }
 pub fn point_base() -> String {
     format!(
@@ -409,6 +410,14 @@ pub fn search(
             },
         )
         .map_err(sql_error)?;
+    rank_vectors(rows, query, limit)
+}
+
+pub(super) fn rank_vectors(
+    rows: impl Iterator<Item = rusqlite::Result<(Hit, Vec<u8>)>>,
+    query: &[f32],
+    limit: usize,
+) -> Result<Vec<Hit>, String> {
     let mut heap = BinaryHeap::new();
     let limit = limit.clamp(1, 200);
     for row in rows {

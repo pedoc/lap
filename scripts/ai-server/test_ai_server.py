@@ -27,6 +27,7 @@ class DeployTests(unittest.TestCase):
     def test_pins_are_distinct_and_complete(self):
         profiles = deploy.CATALOG["profiles"]
         self.assertNotEqual(profiles["mage"]["port"], profiles["qwen"]["port"])
+        self.assertEqual(len({p["port"] for p in profiles.values()}), len(profiles))
         for profile in profiles.values():
             self.assertRegex(profile["modelRevision"], r"^[0-9a-f]{40}$")
         self.assertIn("vllm==0.11.0", profiles["qwen"]["packages"])
@@ -112,6 +113,31 @@ class WireTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 probe.extract("embeddings", {"data": [{"embedding": vector}]})
 
+    def test_vllm_multimodal_uses_one_messages_embedding_for_text_image_or_timed_frames(self):
+        query = probe.build_payload("vllm-multimodal", "qwen-vl-embed", "湖边木屋", [], 64,
+                                    instruction="Retrieve images or text relevant to the user's query.")
+        self.assertEqual(query["messages"][0]["content"][0]["text"], "Retrieve images or text relevant to the user's query.")
+        self.assertEqual(query["messages"][1]["content"], [{"type": "text", "text": "湖边木屋"}])
+        self.assertTrue(query["add_generation_prompt"])
+        self.assertEqual(query["encoding_format"], "float")
+        self.assertNotIn("input", query)
+        self.assertNotIn("max_tokens", query)
+        image = probe.build_payload("vllm-multimodal", "qwen-vl-embed", "", [self.image], 64)
+        self.assertEqual(image["messages"][0]["content"][0]["text"], probe.MULTIMODAL_DOCUMENT_INSTRUCTION)
+        self.assertTrue(image["messages"][1]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,"))
+        video = probe.build_payload("vllm-multimodal", "qwen-vl-embed", "", [self.image, self.image], 64, [1.25, 3.5])
+        content = video["messages"][1]["content"]
+        self.assertEqual([part["type"] for part in content], ["text", "image_url", "text", "image_url"])
+        self.assertIn("1.250", content[0]["text"])
+        self.assertIn("3.500", content[2]["text"])
+        for times in ([1], [-1, 2], [2, 1], [1, float("nan")], [True, 2]):
+            with self.assertRaises(ValueError):
+                probe.build_payload("vllm-multimodal", "m", "", [self.image, self.image], 64, times)
+        for data in ([], [{"index": 1, "embedding": [1, 0]}], [{"index": 0, "embedding": [1, 0]}] * 2):
+            with self.assertRaises(ValueError):
+                probe.extract("vllm-multimodal", {"data": data})
+        self.assertIn("维度=2", probe.extract("vllm-multimodal", {"data": [{"index": 0, "embedding": [1, 0]}]}))
+
     def test_endpoint_normalizes_only_base_and_preserves_prefix(self):
         self.assertEqual(probe.endpoint("http://localhost:8000/openai/v1/", "models"), "http://localhost:8000/openai/v1/models")
         self.assertEqual(probe.endpoint("http://localhost:8000", "models"), "http://localhost:8000/v1/models")
@@ -146,7 +172,7 @@ class WireTests(unittest.TestCase):
                 data = {"/v1/chat/completions": {"choices": [{"message": {"content": "chat-ok"}}]},
                         "/v1/responses": {"output": [{"type": "message", "content": [{"type": "output_text", "text": "responses-ok"}]}]},
                         "/v1/messages": {"content": [{"type": "text", "text": "messages-ok"}]},
-                        "/v1/embeddings": {"data": [{"embedding": [.1, .2]}]}}[self.path]
+                        "/v1/embeddings": {"data": [{"index": 0, "embedding": [.1, .2]}]}}[self.path]
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(json.dumps(data).encode())
@@ -161,7 +187,10 @@ class WireTests(unittest.TestCase):
                 payload = probe.build_payload(protocol, "m", "q", [] if protocol == "embeddings" else [self.image], 64)
                 response = probe.request_json(base + "/" + route, protocol, "private-test-key", payload)
                 self.assertTrue(probe.extract(protocol, response))
-            self.assertEqual(len(received), 4)
+            self.assertEqual(len(received), 5)
+            self.assertEqual(received[-1][0], "/v1/embeddings")
+            self.assertIn("messages", received[-1][2])
+            self.assertNotIn("input", received[-1][2])
             self.assertEqual(received[2][1]["X-Api-Key"], "private-test-key")
             self.assertEqual(received[2][1]["Anthropic-Version"], "2026-10-21")
             with self.assertRaises(ValueError) as error:

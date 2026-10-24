@@ -6,11 +6,13 @@ import json
 import math
 import os
 from pathlib import Path
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 
-ROUTES = {"chat": "chat/completions", "responses": "responses", "messages": "messages", "embeddings": "embeddings"}
+ROUTES = {"chat": "chat/completions", "responses": "responses", "messages": "messages", "embeddings": "embeddings", "vllm-multimodal": "embeddings"}
+MULTIMODAL_DOCUMENT_INSTRUCTION = "Represent the user's input."
 
 
 def endpoint(base, route):
@@ -40,13 +42,31 @@ def image_data(path):
     return mime, base64.b64encode(data).decode("ascii")
 
 
-def build_payload(protocol, model, question, images, max_tokens):
+def build_payload(protocol, model, question, images, max_tokens, frame_seconds=None, instruction=None):
     if len(images) > 8:
         raise ValueError("通用采样帧测试最多 8 张，避免无界上传和上下文溢出")
     if protocol == "embeddings":
         if images:
             raise ValueError("OpenAI Embeddings 标准输入是文本／tokens；多模态向量需单独验证其扩展协议")
         return {"model": model, "input": question}
+    if protocol == "vllm-multimodal":
+        if frame_seconds is not None and (len(frame_seconds) != len(images) or not images
+                or any(not isinstance(t, (int, float)) or isinstance(t, bool) or not math.isfinite(t) or t < 0 for t in frame_seconds)
+                or any(a >= b for a, b in zip(frame_seconds, frame_seconds[1:]))):
+            raise ValueError("采样帧时间必须与图片一一对应，且为递增的非负有限秒数")
+        content = []
+        for index, path in enumerate(images):
+            if frame_seconds is not None:
+                content.append({"type": "text", "text": f"原视频采样时间 {frame_seconds[index]:.3f} 秒；这是采样帧，不代表整个片段。"})
+            mime, data = image_data(path)
+            content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}})
+        if question:
+            content.append({"type": "text", "text": question})
+        if not content:
+            raise ValueError("多模态 Embedding 需要文字、图片或视频采样帧")
+        return {"model": model, "messages": [
+            {"role": "system", "content": [{"type": "text", "text": instruction or MULTIMODAL_DOCUMENT_INSTRUCTION}]},
+            {"role": "user", "content": content}], "encoding_format": "float", "add_generation_prompt": True}
     content = []
     for index, path in enumerate(images):
         mime, data = image_data(path)
@@ -91,7 +111,9 @@ def request_json(url, protocol, key, body=None, timeout=180, anthropic_version="
 
 
 def extract(protocol, response):
-    if protocol == "embeddings":
+    if protocol in ("embeddings", "vllm-multimodal"):
+        if protocol == "vllm-multimodal" and (len(response["data"]) != 1 or response["data"][0].get("index") != 0):
+            raise ValueError("多模态 Embedding 必须返回一个 index=0 的稠密向量")
         vector = response["data"][0]["embedding"]
         if not vector or not all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in vector):
             raise ValueError("向量包含空值或非有限数值")
@@ -119,8 +141,12 @@ def main():
     secret = parser.add_mutually_exclusive_group(required=True)
     secret.add_argument("--key-file", type=Path)
     secret.add_argument("--key-env", help="读取指定环境变量，命令行不包含密钥值")
-    parser.add_argument("--image", type=Path, action="append", default=[])
-    parser.add_argument("--question", default="请简要描述画面；没有画面时只回复连接测试成功。")
+    media = parser.add_mutually_exclusive_group()
+    media.add_argument("--image", type=Path, action="append", default=[])
+    media.add_argument("--video", type=Path, help="仅 vllm-multimodal：采样原视频，编码为一个带时间的片段向量")
+    parser.add_argument("--frames", type=int, default=3)
+    parser.add_argument("--question", default=None)
+    parser.add_argument("--instruction", help="仅 vllm-multimodal：system 检索指令；不套用文本模型的 Instruct/Query 前缀")
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--list-only", action="store_true")
     args = parser.parse_args()
@@ -132,9 +158,17 @@ def main():
             response = request_json(endpoint(args.base_url, "models"), args.protocol, key, anthropic_version=args.anthropic_version)
             print(json.dumps([row["id"] for row in response["data"]], ensure_ascii=False, indent=2))
         else:
-            payload = build_payload(args.protocol, args.model, args.question, args.image, args.max_tokens)
-            response = request_json(endpoint(args.base_url, ROUTES[args.protocol]), args.protocol, key, payload, anthropic_version=args.anthropic_version)
-            answer = extract(args.protocol, response)
+            if (args.video or args.instruction) and args.protocol != "vllm-multimodal":
+                raise ValueError("video 和 instruction 参数仅用于 vllm-multimodal 扩展协议")
+            with tempfile.TemporaryDirectory(prefix="lap-embedding-probe-") as folder:
+                images, seconds = args.image, None
+                if args.video:
+                    from pipeline_probe import sample_video
+                    images, seconds = sample_video(args.video, args.frames, Path(folder))
+                question = args.question if args.question is not None else ("" if images and args.protocol == "vllm-multimodal" else "请简要描述画面；没有画面时只回复连接测试成功。")
+                payload = build_payload(args.protocol, args.model, question, images, args.max_tokens, seconds, args.instruction)
+                response = request_json(endpoint(args.base_url, ROUTES[args.protocol]), args.protocol, key, payload, anthropic_version=args.anthropic_version)
+                answer = extract(args.protocol, response)
             if not answer.strip():
                 raise ValueError("服务未返回可显示文本，可能仅返回推理信息或不兼容的响应")
             print(answer)

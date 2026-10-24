@@ -1,5 +1,5 @@
 {
-  "checkedOn": "2026-10-23",
+  "checkedOn": "2026-10-24",
   "python": "3.12",
   "profiles": {
     "mage": {
@@ -40,6 +40,27 @@
       "queryInstruction": "Retrieve media descriptions relevant to the search query.",
       "documentEncoding": "plain-text",
       "queryEncoding": "Instruct: {instruction}\nQuery:{query}"
+    },
+    "embedding-multimodal": {
+      "engine": "vllm",
+      "task": "embedding",
+      "embeddingProtocol": "vllm_multimodal",
+      "model": "Qwen/Qwen3-VL-Embedding-2B",
+      "modelRevision": "9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda",
+      "servedModel": "qwen3-vl-embedding-2b",
+      "port": 8003,
+      "minimumDriverCuda": "12.9",
+      "packages": ["vllm==0.14.0", "transformers==4.57.1", "huggingface-hub==0.36.0"],
+      "requiresRemoteCode": false,
+      "defaultMemory": 0.35,
+      "dimensions": 2048,
+      "pooling": {"pooling_type": "LAST", "normalize": true},
+      "poolerFlag": "--pooler-config",
+      "multimodalLimits": {"image": 8, "video": 0},
+      "documentInstruction": "Represent the user's input.",
+      "queryInstruction": "Retrieve images or text relevant to the user's query.",
+      "documentEncoding": "vllm-messages-v1/image-or-timestamped-frames",
+      "queryEncoding": "vllm-messages-v1/system-instruction"
     }
   }
 }

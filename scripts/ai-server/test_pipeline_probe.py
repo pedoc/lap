@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import deploy
 import pipeline_probe as pipeline
+import probe
 
 
 class EmbeddingDeploymentTests(unittest.TestCase):
@@ -31,6 +32,27 @@ class EmbeddingDeploymentTests(unittest.TestCase):
             self.assertEqual(plan["protocol"], "OpenAI Embeddings")
             self.assertEqual(plan["servedModel"], "qwen3-embedding-0.6b")
             self.assertEqual(plan["command"][plan["command"].index("--gpu-memory-utilization") + 1], "0.15")
+            self.assertFalse(args.root.exists())
+
+    def test_multimodal_profile_has_a_separate_pinned_vllm_messages_server(self):
+        profile = deploy.CATALOG["profiles"]["embedding-multimodal"]
+        self.assertEqual(profile["model"], "Qwen/Qwen3-VL-Embedding-2B")
+        self.assertEqual(profile["dimensions"], 2048)
+        self.assertEqual(profile["embeddingProtocol"], "vllm_multimodal")
+        self.assertIn("vllm==0.14.0", profile["packages"])
+        command = deploy.serve_command(Path("/env/python"), profile, "/weights", "127.0.0.1", 8003, 8192, .35)
+        self.assertEqual(command[command.index("--runner") + 1], "pooling")
+        self.assertIn("--pooler-config", command)
+        self.assertNotIn("--override-pooler-config", command)
+        self.assertEqual(json.loads(command[command.index("--limit-mm-per-prompt") + 1]), {"image": 8, "video": 0})
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(io.StringIO()) as output:
+            args = SimpleNamespace(root=Path(folder) / "not-created", profile="embedding-multimodal", port=None,
+                                   model_path=None, host="127.0.0.1", context=8192, memory=None, dry_run=True)
+            deploy.serve(args, profile)
+            plan = json.loads(output.getvalue())
+            self.assertEqual(plan["protocol"], "vLLM multimodal Embeddings (messages)")
+            self.assertEqual(plan["baseUrl"], "http://127.0.0.1:8003/v1")
+            self.assertEqual(plan["command"][plan["command"].index("--gpu-memory-utilization") + 1], "0.35")
             self.assertFalse(args.root.exists())
 
 
@@ -155,6 +177,12 @@ class PipelineTests(unittest.TestCase):
         request = self.received[0][2]["messages"][0]["content"]
         self.assertEqual(len([part for part in request if part["type"] == "image_url"]), 3)
         self.assertIn(str(seconds[1]), request[-1]["text"])
+        multimodal = probe.build_payload("vllm-multimodal", "qwen3-vl-embedding-2b", "", images, 64, seconds)
+        content = multimodal["messages"][1]["content"]
+        self.assertEqual(len([part for part in content if part["type"] == "image_url"]), 3)
+        self.assertIn(f"{seconds[1]:.3f}", content[2]["text"])
+        self.assertNotIn("input", multimodal)
+        self.assertEqual(hashlib.sha256(video.read_bytes()).hexdigest(), before)
 
 
 if __name__ == "__main__":
