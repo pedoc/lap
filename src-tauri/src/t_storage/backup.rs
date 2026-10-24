@@ -24,6 +24,7 @@ static SETTINGS_RESTORE_ERROR: Mutex<Option<String>> = Mutex::new(None);
 const CONFIG_FILES: &[&str] = &[
     "app-config.json",
     "ai-config.json",
+    "ai-services.json",
     "ocr-automation.json",
     "objects-automation.json",
     "private-lock.json",
@@ -611,6 +612,11 @@ fn validate_setting(name: &str, value: &Value) -> Result<(), String> {
             Ok(())
         }
         "ai-config.json" => crate::ai::settings::validate_backup(&source),
+        "ai-services.json" => {
+            serde_json::from_value::<crate::ai::services::config::Configuration>(value.clone())
+                .map_err(|e| e.to_string())?
+                .validate()
+        }
         "private-lock.json" => crate::t_private_lock::validate_backup(&source),
         "ocr-automation.json" => crate::ai::ocr_auto::validate(
             &serde_json::from_value(value.clone()).map_err(|e| e.to_string())?,

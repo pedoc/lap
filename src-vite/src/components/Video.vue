@@ -227,6 +227,15 @@ const playerOptions = computed(() => ({
 }));
 
 const getActivePlayer = () => players.value[activeVideo.value];
+const pendingMediaSeek = ref<{ path: string; seconds: number } | null>(null);
+function applyMediaSeek() {
+  const request = pendingMediaSeek.value, player = getActivePlayer();
+  if (!request || !player || request.path !== props.filePath) return;
+  const duration = Number(player.duration());
+  if (!Number.isFinite(duration) || duration <= 0) return;
+  player.currentTime(Math.min(request.seconds, Math.max(0, duration - 0.05)));
+  pendingMediaSeek.value = null;
+}
 
 let playbackDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 let loadingOverlayTimer: ReturnType<typeof setTimeout> | null = null;
@@ -539,6 +548,7 @@ const loadVideo = async (filePath: string) => {
     if (currentLoadId !== currentLoadingId) return;
     clearPlaybackDeadlineTimer();
     activeVideo.value = nextUpIndex;
+    applyMediaSeek();
     activeBackendRequestIds[nextUpIndex] = null;
     hasError.value = false;
     resetLoadingUi();
@@ -1080,6 +1090,11 @@ function applyViewportState(
 }
 
 defineExpose({
+  seekVideo: (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds < 0 || props.originalUnavailable) return;
+    pendingMediaSeek.value = { path: props.filePath, seconds };
+    if (!isLoading.value) applyMediaSeek();
+  },
   viewReady: computed(() => !props.originalUnavailable && !isLoading.value && !hasError.value && Number(players.value[activeVideo.value]?.readyState()) >= 2),
   zoomIn,
   zoomOut,

@@ -1,11 +1,13 @@
 <template>
   <div class="space-y-3">
-    <p class="text-xs opacity-60">{{ t('settings.ai_models.intro') }}</p>
-    <div class="flex gap-2">
-      <button v-for="kind in ['semantic', 'face', 'ocr', 'detection']" :key="kind" class="btn btn-sm" :class="task === kind ? 'btn-primary' : 'btn-ghost'" :disabled="busy" @click="changeTask(kind)">
-        {{ t(`settings.ai_models.${kind}`) }}
+    <p v-if="task !== 'media'" class="text-xs opacity-60">{{ t('settings.ai_models.intro') }}</p>
+    <div class="flex flex-wrap gap-2">
+      <button v-for="kind in ['semantic', 'face', 'ocr', 'detection', 'media']" :key="kind" class="btn btn-sm" :class="task === kind ? 'btn-primary' : 'btn-ghost'" :disabled="busy || mediaSettings?.busy" @click="changeTask(kind)">
+        {{ t(kind === 'media' ? 'media_ai.title' : `settings.ai_models.${kind}`) }}
       </button>
     </div>
+    <MediaAiSettings v-if="task === 'media'" ref="mediaSettings" />
+    <template v-else>
     <p v-if="task === 'detection'" class="text-xs opacity-70">{{ t('objects.model_hint') }}</p>
     <p v-if="task === 'ocr'" class="text-xs opacity-70">{{ t('ocr.quality_hint') }}</p>
     <label v-if="task === 'face'" class="flex gap-2 items-center text-sm">
@@ -124,12 +126,14 @@
         <div class="flex gap-2 mt-2"><button class="btn btn-sm" :disabled="busy" @click="template">{{ t('settings.ai_models.template') }}</button><button class="btn btn-sm" :disabled="busy || !manifest.trim()" @click="importModel">{{ t('settings.ai_models.import') }}</button></div>
       </details>
     </template>
+    </template>
   </div>
 </template>
 <script setup lang="ts">
 import { beginModelDownload, applyModelDownloadProgress, modelDownloadError, isModelDownloadCancelled, formatModelDownloadBytes, type ModelDownloadFeedback } from '@/common/aiModelDownloads';
 import OcrIndexPanel from './OcrIndexPanel.vue';
 import CudaRuntimeSettings from './CudaRuntimeSettings.vue';
+import MediaAiSettings from './MediaAiSettings.vue';
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -143,7 +147,8 @@ import { pendingChanges } from '@/common/pendingChanges';
 const { t } = useI18n();
 const toast = useToast();
 const requestedTask = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('aiTask') : null;
-const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task = ref(requestedTask && ['semantic', 'face', 'ocr', 'detection'].includes(requestedTask) ? requestedTask : 'semantic');
+const view = ref<any>(null), draft = ref<any>(null), editingId = ref(''), task = ref(requestedTask && ['semantic', 'face', 'ocr', 'detection', 'media'].includes(requestedTask) ? requestedTask : 'semantic');
+const mediaSettings = ref<InstanceType<typeof MediaAiSettings> | null>(null);
 const apiKey = ref(''), manifest = ref(''), error = ref(''), downloading = ref('');
 const downloadFeedback = ref<Record<string, ModelDownloadFeedback>>({});
 const activeDownload = computed(() => downloadFeedback.value[downloading.value]);
@@ -179,11 +184,12 @@ const copy = (value: any) => JSON.parse(JSON.stringify(value));
 const draftBaseline = ref('');
 const draftDirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== draftBaseline.value);
 async function confirmDiscard(includeManifest = true) {
+  if (task.value === 'media' && mediaSettings.value && !await mediaSettings.value.confirmDiscard()) return false;
   if (!draftDirty.value && !apiKey.value && (!includeManifest || !manifest.value.trim())) return true;
   return ask(t('settings.ai_models.discard_draft'), { kind: 'warning' });
 }
 async function changeTask(kind: string) {
-  if (busy.value || kind === task.value || !await confirmDiscard(false)) return;
+  if (busy.value || mediaSettings.value?.busy || kind === task.value || !await confirmDiscard(false)) return;
   task.value = kind;
 }
 
@@ -378,12 +384,12 @@ async function importModel() {
 watch(task, () => { choose(view.value?.selection[task.value]); });
 onMounted(async () => {
   unlisten.push(pendingChanges.register('model-settings', {
-    dirty: () => draftDirty.value || !!apiKey.value || !!manifest.value.trim(),
-    busy: () => writeBusy.value,
-    revision: () => JSON.stringify([editingId.value, draft.value, apiKey.value, manifest.value]),
+    dirty: () => !!mediaSettings.value?.dirty || draftDirty.value || !!apiKey.value || !!manifest.value.trim(),
+    busy: () => writeBusy.value || !!mediaSettings.value?.busy,
+    revision: () => JSON.stringify([editingId.value, draft.value, apiKey.value, manifest.value, mediaSettings.value?.revision]),
     confirm: () => confirmDiscard(),
   }));
-  const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr', 'detection'].includes(event.payload)) void changeTask(event.payload); });
+  const offTask = await listen<string>('ai-model-task-requested', event => { if (['semantic', 'face', 'ocr', 'detection', 'media'].includes(event.payload)) void changeTask(event.payload); });
   if (mounted) unlisten.push(offTask); else offTask();
   const progressListener = await listen('ai-model-download-progress', (event: any) => {
     receiveDownload(event.payload);

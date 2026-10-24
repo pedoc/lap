@@ -241,6 +241,23 @@ async fn main() {
             t_menu::handle_menu_event(app, event);
         })
         .invoke_handler(tauri::generate_handler![
+            ai::services::commands::media_ai_configuration,
+            ai::services::commands::media_ai_save_configuration,
+            ai::services::commands::media_ai_list_models,
+            ai::services::commands::media_ai_probe_draft,
+            ai::services::commands::media_ai_test_model,
+            ai::services::commands::media_ai_save_embedding,
+            ai::services::workflow::media_ai_preflight,
+            ai::services::workflow::media_ai_jobs,
+            ai::services::workflow::media_ai_start_job,
+            ai::services::workflow::media_ai_resume_job,
+            ai::services::workflow::media_ai_pause_job,
+            ai::services::workflow::media_ai_inspect,
+            ai::services::workflow::media_ai_adopt,
+            ai::services::workflow::media_ai_dismiss,
+            ai::services::workflow::media_ai_search,
+            ai::services::workflow::media_ai_ask,
+            ai::services::requests::media_ai_cancel_request,
             t_window_exit::get_pending_app_exit,
             t_window_exit::cancel_app_exit,
             t_window_exit::confirm_app_exit,

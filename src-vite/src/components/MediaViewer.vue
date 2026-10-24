@@ -690,6 +690,13 @@ const backgroundContextMenuRef = ref<any>(null);
 const containerRef = ref<HTMLElement | null>(null);
 const mediaAreaRef = ref<HTMLElement | null>(null);
 const mediaRef = ref<any>(null);
+const pendingMediaSeek = ref<{ path: string; seconds: number } | null>(null);
+watch([mediaRef, pendingMediaSeek, () => props.file?.file_path], () => {
+  const request = pendingMediaSeek.value;
+  if (!request) return;
+  if (request.path !== props.file?.file_path) { pendingMediaSeek.value = null; return; }
+  if (mediaRef.value?.seekVideo) { mediaRef.value.seekVideo(request.seconds); pendingMediaSeek.value = null; }
+}, { flush: 'post' });
 useMediaViewTracking(() => props.file,
   () => props.trackViews && !props.toolbarOnly && props.canInteract && props.isPlaybackActive && !props.isSlideShow,
   () => !!mediaRef.value?.viewReady);
@@ -1358,6 +1365,7 @@ const handleMessageFromImageViewer = (payload: { message: string }) => {
 };
 
 defineExpose({
+  seekVideo: (seconds: number) => { pendingMediaSeek.value = { path: props.file?.file_path || '', seconds }; },
   isFullScreen,
   exitPreviewFullScreen,
   zoomIn,

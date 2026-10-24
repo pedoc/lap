@@ -33,6 +33,7 @@ pub mod cuda_assets;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub mod cuda;
 pub mod settings;
+pub mod services;
 pub mod types;
 
 #[cfg(test)]

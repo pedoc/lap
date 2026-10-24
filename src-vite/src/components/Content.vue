@@ -527,6 +527,8 @@
             @unselect-file="unselectFileFromSelection"
             @more-action="action => action()"
             @more-action-menu="handleMoreActionMenu"
+            @media-ai="openMediaAiBatch(libConfig._libraryId, Array.from(selectedFileIds))"
+            @media-ai-all="openMediaAiBatch(libConfig._libraryId, null)"
           />
           <FileInfo
             v-else-if="renderedRightPanelContent === 'info'"
@@ -553,6 +555,7 @@
             @navigate-person="handleNavigatePerson"
             @ocr-focus="!showFilmstripLayout && (showQuickView = true)"
             @object-focus="!showFilmstripLayout && (showQuickView = true)"
+            @media-ai-seek="seekMediaAiVideo"
           />
         </div>
       </div>
@@ -875,6 +878,7 @@ import FileInfo from '@/components/FileInfo.vue';
 import Breadcrumb from '@/components/Breadcrumb.vue';
 import DedupPane from '@/components/DedupPane.vue';
 import SelectionPanel from '@/components/SelectionPanel.vue';
+import { mediaAiSearch, openMediaAiBatch, rankedMediaHits, type MediaHit } from '@/common/mediaAi';
 import FileConflictDialog from '@/components/FileConflictDialog.vue';
 import ScrollBar from '@/components/ScrollBar.vue';
 import SliderInput from '@/components/SliderInput.vue';
@@ -2152,6 +2156,12 @@ function getActivePreviewMediaRef() {
   if (showQuickView.value) return quickViewMediaRef.value;
   if (isFilmstripView.value) return filmStripMediaRef.value;
   return null;
+}
+
+async function seekMediaAiVideo(seconds: number) {
+  if (!isFilmstripView.value) showQuickView.value = true;
+  await nextTick();
+  getActivePreviewMediaRef()?.seekVideo?.(seconds);
 }
 
 function getCurrentPreviewImageSrc() {
@@ -6417,6 +6427,7 @@ watch(
     smartResultSignature(activeSmartAlbum.value), // Only active result-affecting changes reload photos; folders, names, and counters do not.
     isStructuredSearchView.value,
     libConfig.search.searchText,
+    config.main.sidebarIndex === SIDEBAR.SEARCH ? JSON.stringify([mediaAiSearch.active, mediaAiSearch.libraryId, mediaAiSearch.modelId, mediaAiSearch.albumId, mediaAiSearch.revision]) : null,
     config.main.sidebarIndex === SIDEBAR.OBJECTS ? JSON.stringify([libConfig.objects, config.settings.ai?.detectionProfile]) : null,
     config.main.sidebarIndex === SIDEBAR.OCR ? `${libConfig.ocr.state}\0${libConfig.ocr.text}` : null,
     [SIDEBAR.OCR, SIDEBAR.SEARCH].includes(config.main.sidebarIndex) ? config.settings.ai?.ocrProfile : null,
@@ -7946,6 +7957,9 @@ async function resolveObjectText(searchText: string): Promise<string[]> {
 }
 
 async function getUnifiedSearchFileList(searchText: string, requestId: number) {
+  if (mediaAiSearch.active && mediaAiSearch.libraryId === libConfig._libraryId) {
+    await getMediaAiSearchFileList(searchText, requestId); return;
+  }
   const textParams = {
     searchMetadata: true,
     searchFileType: config.search.fileType,
@@ -8127,6 +8141,40 @@ async function getUnifiedSearchFileList(searchText: string, requestId: number) {
       hasLoadedInitialResult.value = true;
       contentReady.value = true;
     }
+  }
+}
+
+let mediaAiSearchRequest = '';
+watch(() => [mediaAiSearch.active, libConfig._libraryId], () => {
+  if (mediaAiSearchRequest) void invoke('media_ai_cancel_request', { requestId: mediaAiSearchRequest });
+});
+async function getMediaAiSearchFileList(query: string, requestId: number) {
+  if (mediaAiSearchRequest) void invoke('media_ai_cancel_request', { requestId: mediaAiSearchRequest });
+  const aiRequestId = crypto.randomUUID(); mediaAiSearchRequest = aiRequestId;
+  const libraryId = libConfig._libraryId;
+  currentQuerySource.value = 'search'; currentSmartQueryParams.value = null; currentCollectionId.value = null;
+  currentSearchFileIds.value = []; timelineData.value = []; imageSearchError.value = false;
+  imageSearchLanguageUnsupported.value = false; isLoading.value = true; mediaAiSearch.error = '';
+  try {
+    const hits = await invoke<MediaHit[]>('media_ai_search', { libraryId, query, modelId: mediaAiSearch.modelId || null, albumId: mediaAiSearch.albumId, fileType: Number(config.search.fileType || 0), limit: 100, requestId: aiRequestId });
+    if (requestId !== currentContentRequestId || libraryId !== libConfig._libraryId) return;
+    const ranked = rankedMediaHits(hits), rows = await getFilesByIds(ranked.map(hit => hit.fileId));
+    if (requestId !== currentContentRequestId || libraryId !== libConfig._libraryId) return;
+    const byId = new Map((rows || []).map((file: any) => [Number(file.id), file]));
+    clearSelectionForFileListUpdate(); resetGroupingState();
+    fileList.value = preserveLoadedThumbnails(ranked.flatMap(hit => { const file: any = byId.get(hit.fileId); return file && passesAlbumFilters(file) ? [{ ...file, _mediaAiHit: hit }] : []; }));
+    mediaAiSearch.hits = hits; currentSearchFileIds.value = fileList.value.map(file => Number(file.id));
+    contentCountIsAuthoritative.value = true; totalFileCount.value = fileList.value.length;
+    totalFileSize.value = fileList.value.reduce((sum, file) => sum + Number(file.size || 0), 0);
+    markDedupSourceUpdated(requestId); restoreInitialSelectionIfNeeded(); openImageViewer(0, false, true);
+    lastVisibleRange = { start: -1, end: -1 }; visibleRangeSeqId++;
+  } catch (e) {
+    if (requestId !== currentContentRequestId || libraryId !== libConfig._libraryId) return;
+    mediaAiSearch.error = String(e); mediaAiSearch.hits = [];
+    clearSelectionForFileListUpdate(); clearContentRows(); totalFileCount.value = 0; totalFileSize.value = 0;
+  } finally {
+    if (mediaAiSearchRequest === aiRequestId) mediaAiSearchRequest = '';
+    if (requestId === currentContentRequestId) { isLoading.value = false; hasLoadedInitialResult.value = true; contentReady.value = true; }
   }
 }
 
@@ -11544,6 +11592,26 @@ useMediaTitleEvents(change => {
     for (const file of imageViewerSession.value.files) applyMediaTitleChange(file, libConfig._libraryId, change);
   }
 });
+const mediaAiStops: Array<() => void> = [];
+let mediaAiDisposed = false;
+onMounted(async () => {
+  const stopMeta = await listen<any>('media-ai-metadata-changed', event => {
+    if (event.payload.libraryId !== libConfig._libraryId) return;
+    for (const file of fileList.value) if (Number(file.id) === event.payload.fileId) { file.title = event.payload.title; file.comments = event.payload.comments; }
+  });
+  if (mediaAiDisposed) stopMeta(); else mediaAiStops.push(stopMeta);
+  const stopHit = await listen<any>('media-ai-open-hit', async event => {
+    if (event.payload.libraryId !== libConfig._libraryId) return;
+    checkUnsavedChanges(async () => {
+      if (event.payload.libraryId !== libConfig._libraryId) return;
+      const index = fileList.value.findIndex(file => Number(file.id) === event.payload.fileId);
+      if (index < 0) return;
+      selectedItemIndex.value = index; await seekMediaAiVideo(event.payload.seconds);
+    });
+  });
+  if (mediaAiDisposed) stopHit(); else mediaAiStops.push(stopHit);
+});
+onBeforeUnmount(() => { if (mediaAiSearchRequest) void invoke('media_ai_cancel_request', { requestId: mediaAiSearchRequest }); mediaAiDisposed = true; mediaAiStops.forEach(stop => stop()); });
 </script>
 
 <style scoped>

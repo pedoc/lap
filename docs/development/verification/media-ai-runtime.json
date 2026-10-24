@@ -1,0 +1,38 @@
+{
+  "verifiedAt": "2026-10-24",
+  "native": "passed",
+  "syntheticMedia": {
+    "images": 1,
+    "videos": 1,
+    "videoSeconds": 65
+  },
+  "checks": [
+    "embedding-draft-no-ghost-provider",
+    "embedding-no-chat-dependency",
+    "forged-capability-receipt-rejection",
+    "service-keyring-redaction",
+    "image-and-video-analysis",
+    "video-time-ranges",
+    "vector-index",
+    "natural-language-retrieval",
+    "cited-qa",
+    "explicit-metadata-adoption",
+    "manual-edit-conflict",
+    "failed-vector-resume-without-reanalysis",
+    "pause-and-resume",
+    "embedding-profile-isolation",
+    "real-settings-window-600x620",
+    "guided-embedding-form-visible-actions-and-save",
+    "queued-search-permission-recheck",
+    "concurrent-job-rejection-no-ghost",
+    "video-segment-question-scope",
+    "cross-library-read-rejection"
+  ],
+  "requests": {
+    "models": 0,
+    "chat": 13,
+    "embedding": 14,
+    "imageUrlMarkers": 26
+  },
+  "realModelInference": "not-tested"
+}

@@ -89,6 +89,10 @@
       </div>
 
       <!-- Organize -->
+      <div class="border-t border-base-content/5 px-1 py-3 space-y-2">
+        <span class="text-xs font-bold text-base-content/40">{{ $t('media_ai.title') }}</span>
+        <div class="flex gap-1 flex-wrap"><PanelActionButton :disabled="selectedCount === 0" @click="emit('mediaAi')">{{ $t('media_ai.batch_selected') }}</PanelActionButton><PanelActionButton @click="emit('mediaAiAll')">{{ $t('media_ai.batch_all') }}</PanelActionButton></div>
+      </div>
       <div class="border-t border-base-content/5 px-1 py-4 space-y-3">
         <div class="text-[10px] uppercase tracking-widest font-bold text-base-content/30">
           {{ $t('info_panel.organize') }}
@@ -255,6 +259,8 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
+  'mediaAi',
+  'mediaAiAll',
   'close',
   'selectAll',
   'selectNone',

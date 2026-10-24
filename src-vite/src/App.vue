@@ -6,6 +6,7 @@
     <router-view />
     <ToastContainer />
     <MediaJobPanel />
+    <MediaAiBatch />
     <FaceDiagnosticsDialog v-if="faceDiagnosticState.visible && faceDiagnosticState.report?.library_id === libConfig._libraryId" :report="faceDiagnosticState.report" @cancel="faceDiagnosticState.visible = false" />
   </template>
 </template>
@@ -23,11 +24,16 @@ import { isMac, setTheme, SCALE_VALUES } from '@/common/utils';
 import { matchesShortcut } from '@/common/shortcuts';
 import ToastContainer from '@/components/ToastContainer.vue';
 import MediaJobPanel from '@/components/MediaJobPanel.vue';
+import MediaAiBatch from '@/components/MediaAiBatch.vue';
 import FaceDiagnosticsDialog from '@/components/FaceDiagnosticsDialog.vue';
+import { mediaAiSearch } from '@/common/mediaAi';
 import { faceDiagnosticState } from '@/common/faceDiagnostics';
 
 useOcrActivity();
 const libConfig = useLibraryStore();
+watch(() => libConfig._libraryId, libraryId => {
+  Object.assign(mediaAiSearch, { active: false, libraryId, modelId: '', albumId: null, error: '', hits: [], revision: 0 });
+});
 const isReady = ref(false);
 const config = useConfigStore();
 const uiStore = useUIStore();

@@ -10,10 +10,20 @@
     </div>
 
     <div class="flex gap-1 px-2 pb-2" role="group" :aria-label="$t('structured_search.search_mode')">
-      <button type="button" class="btn btn-sm flex-1" :class="{ 'btn-active': !structuredSearch.active }" :aria-pressed="!structuredSearch.active" @click="structuredSearch.active = false">{{ $t('structured_search.text_search') }}</button>
+      <button type="button" class="btn btn-sm flex-1" :class="{ 'btn-active': !structuredSearch.active && !mediaAiSearch.active }" :aria-pressed="!structuredSearch.active && !mediaAiSearch.active" @click="structuredSearch.active = false; mediaAiSearch.active = false">{{ $t('structured_search.text_search') }}</button>
       <button type="button" class="btn btn-sm flex-1" :class="{ 'btn-active': structuredSearch.active }" :aria-pressed="structuredSearch.active" @click="selectStructuredSearch">{{ $t('structured_search.title') }}</button>
+      <button type="button" class="btn btn-sm flex-1" :class="{ 'btn-active': mediaAiSearch.active }" :aria-pressed="mediaAiSearch.active" @click="selectNaturalSearch">{{ $t('media_ai.natural_search') }}</button>
     </div>
     <StructuredSearchPanel v-if="structuredSearch.active" class="overflow-y-auto flex-1" />
+    <div v-if="mediaAiSearch.active" class="px-2 pb-2 space-y-2 text-xs">
+      <p class="opacity-60">{{ $t('media_ai.search_hint') }}</p>
+      <select v-model="mediaAiSearch.modelId" class="select select-bordered select-xs w-full" :aria-label="$t('media_ai.role_embedding')"><option value="">{{ $t('media_ai.default_embedding') }}</option><option v-for="m in embeddingModels" :key="m.id" :value="m.id">{{ m.name }} · {{ m.embedding.dimensions }}D</option></select>
+      <select v-model="mediaAiSearch.albumId" class="select select-bordered select-xs w-full" :aria-label="$t('media_ai.scope')"><option :value="null">{{ $t('media_ai.all_albums') }}</option><option v-for="album in mediaAlbums" :key="album.id" :value="Number(album.id)">{{ album.name }}</option></select>
+      <p v-if="mediaAiSearch.error" class="text-error whitespace-pre-wrap break-words" role="alert">{{ mediaAiSearch.error }}</p>
+      <p class="opacity-60">{{ $t('media_ai.search_index_hint') }}</p>
+      <div class="flex gap-1 flex-wrap"><button class="btn btn-xs" @click="openMediaAiSettings">{{ $t('media_ai.configure') }}</button><button class="btn btn-xs" @click="openMediaAiBatch(libConfig._libraryId, null)">{{ $t('media_ai.batch_all') }}</button></div>
+      <div v-if="mediaAiSearch.hits.some(h => h.end > 0)" class="max-h-28 overflow-y-auto space-y-1"><button v-for="hit in mediaAiSearch.hits.filter(h => h.end > 0).slice(0, 10)" :key="hit.analysisId" class="block text-left link" @click="emitMediaHit(hit)">{{ hit.title }} · {{ mediaTime(hit.start) }}–{{ mediaTime(hit.end) }}</button></div>
+    </div>
     <div v-if="!structuredSearch.active" class="mx-1 mb-2 px-1 shrink-0">
       <div
         :class="[
@@ -30,7 +40,7 @@
           ref="searchInputRef"
           type="text"
           v-model="searchQuery"
-          :placeholder="$t('search.image_search_placeholder')"
+          :placeholder="$t(mediaAiSearch.active ? 'media_ai.search_placeholder' : 'search.image_search_placeholder')"
           class="w-full min-w-0 bg-transparent border-none focus:ring-0 px-2 text-sm placeholder-base-content/30 focus:outline-none"
           maxlength="255"
           @focus="isSearchFocused = true"
@@ -107,8 +117,20 @@ import { IconMore, IconTrash, IconSearch, IconClose } from '@/common/icons';
 import ContextMenu from '@/components/ContextMenu.vue';
 import StructuredSearchPanel from './StructuredSearchPanel.vue';
 import { structuredSearch, openStructuredSearch } from '@/common/structuredSearch';
+import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
+import { getAllAlbums } from '@/common/api';
+import { mediaAiSearch, openMediaAiSettings, openMediaAiBatch, eligibleModels, mediaTime, type MediaModel, type MediaHit } from '@/common/mediaAi';
+const embeddingModels = ref<MediaModel[]>([]), mediaAlbums = ref<any[]>([]);
+async function selectNaturalSearch() {
+  structuredSearch.active = false;
+  mediaAiSearch.libraryId = libConfig._libraryId; mediaAiSearch.active = true;
+  try { const view: any = await invoke('media_ai_configuration'); embeddingModels.value = eligibleModels(view.configuration, 'embedding'); mediaAlbums.value = await getAllAlbums() || []; } catch (e) { mediaAiSearch.error = String(e); }
+}
+function emitMediaHit(hit: MediaHit) { return emit('media-ai-open-hit', { libraryId: libConfig._libraryId, fileId: hit.fileId, seconds: hit.start }); }
 
 function selectStructuredSearch() {
+  mediaAiSearch.active = false;
   structuredSearch.active = true;
   if (!structuredSearch.album) openStructuredSearch(libConfig._libraryId);
 }
@@ -221,6 +243,7 @@ function deleteHistoryItem(index: number) {
 function handleSearch() {
   if (searchQuery.value.trim().length === 0) return;
   structuredSearch.active = false;
+  if (mediaAiSearch.active) mediaAiSearch.revision++;
   
   const query = searchQuery.value.trim();
   const history = libConfig.search.searchHistory as any[];
