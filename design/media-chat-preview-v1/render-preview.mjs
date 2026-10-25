@@ -11,6 +11,9 @@ const screens = [
   { screen: 'chat', width: 1600, height: 1000, output: '01-chat.png' },
   { screen: 'attach', width: 1200, height: 900, output: '02-attach.png' },
   { screen: 'review', width: 1600, height: 1000, output: '03-review.png' },
+  { screen: 'entry', width: 1600, height: 1000, output: '04-entry.png' },
+  { screen: 'viewer', width: 1600, height: 1000, output: '05-viewer.png' },
+  { screen: 'models', width: 1600, height: 1000, output: '06-models.png' },
 ];
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 let browser;
