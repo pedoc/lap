@@ -75,6 +75,18 @@
                     <p class="opacity-60">{{ t('media_ai.output_tokens_hint') }}</p>
                     <p v-if="outputLimitExceeded(m)" role="status" class="text-warning" data-output-limit-warning>{{ t('media_ai.output_above_spec', { limit: formatTokenLimit(modelOutputLimit(m)) }) }}</p>
                     <p v-if="outputTokenError(m.maxOutputTokens)" role="alert" class="text-error">{{ t('media_ai.' + outputTokenError(m.maxOutputTokens), { model: m.name || m.remoteId }) }}</p>
+                    <div class="rounded-box border border-base-content/10 p-2 space-y-2" :data-model-reasoning="m.id">
+                      <p class="font-medium">{{ t('media_ai.reasoning_levels') }}</p>
+                      <p class="opacity-60">{{ t('media_ai.reasoning_levels_hint') }}</p>
+                      <div class="flex flex-wrap gap-2" role="group" :aria-label="t('media_ai.reasoning_levels')"><label v-for="level in REASONING_LEVELS" :key="level" class="flex items-center gap-1"><input type="checkbox" class="checkbox checkbox-xs" :checked="modelReasoning(m).levels.includes(level)" :disabled="busy" :data-reasoning-level="level" @change="setReasoningLevel(m, level, ($event.target as HTMLInputElement).checked)" />{{ level }}</label></div>
+                      <div v-if="customReasoningLevels(m).length" class="flex flex-wrap gap-1"><span v-for="level in customReasoningLevels(m)" :key="level" class="badge badge-ghost gap-1 h-auto py-1">{{ level }}<button type="button" :disabled="busy" :aria-label="t('media_ai.reasoning_remove_level', { level })" @click="setReasoningLevel(m, level, false)">×</button></span></div>
+                      <div class="flex gap-1"><input v-model="customReasoning[m.id]" class="input input-bordered input-xs min-w-0 flex-1" maxlength="64" :disabled="busy" :placeholder="t('media_ai.reasoning_custom_level')" :aria-label="t('media_ai.reasoning_custom_level')" :aria-invalid="!!customReasoningErrors[m.id]" @input="customReasoningErrors[m.id] = ''" @keydown.enter.stop.prevent="addCustomReasoningLevel(m)" /><button type="button" class="btn btn-xs" :disabled="busy || !customReasoning[m.id]?.trim()" @click="addCustomReasoningLevel(m)">{{ t('media_ai.reasoning_add_level') }}</button></div>
+                      <p v-if="customReasoningErrors[m.id]" role="alert" class="text-error">{{ t('media_ai.' + customReasoningErrors[m.id]) }}</p>
+                      <label class="block">{{ t('media_ai.reasoning_default') }}<select class="select select-bordered select-xs mt-1 w-full" :value="modelReasoning(m).defaultEffort ?? ''" :disabled="busy" :aria-label="t('media_ai.reasoning_default')" :aria-invalid="!!modelReasoningError(m.reasoning)" @change="setDefaultReasoning(m, ($event.target as HTMLSelectElement).value || null)"><option value="">{{ t('media_ai.reasoning_auto') }}</option><option v-for="level in modelReasoning(m).levels" :key="level" :value="level">{{ level }}</option></select></label>
+                      <div v-if="modelSpecification(m)?.reasoning" class="space-y-1"><div class="flex flex-wrap items-center gap-2"><button type="button" class="btn btn-xs" :disabled="busy" @click="usePublicReasoningLevels(m)">{{ t('media_ai.reasoning_use_public') }}</button><a :href="modelSpecification(m)!.reasoning!.source || modelSpecification(m)!.source" target="_blank" rel="noopener noreferrer" class="link link-hover">{{ t('media_ai.official_specification') }}</a></div><p v-if="modelSpecification(m)!.reasoning!.defaultEffort" class="opacity-60">{{ t('media_ai.reasoning_public_default', { level: modelSpecification(m)!.reasoning!.defaultEffort }) }}</p></div>
+                      <p v-else class="opacity-60">{{ t('media_ai.reasoning_unknown_hint') }}</p>
+                      <p v-if="modelReasoningError(m.reasoning)" role="alert" class="text-error">{{ t('media_ai.' + modelReasoningError(m.reasoning), { model: m.name || m.remoteId }) }}</p>
+                    </div>
                   </template>
                   <template v-if="embeddingModel(m) && EMBEDDING_PROTOCOLS[modelProtocol(m)].queryInstruction"><label class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><p v-if="!EMBEDDING_PROTOCOLS[modelProtocol(m)].queryPresets" class="opacity-60">{{ t(modelProtocol(m) === 'ark_multimodal' ? 'media_ai.ark_query_hint' : 'media_ai.native_query_hint') }}</p></template>
                   <label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label>
@@ -118,6 +130,7 @@ import ModalDialog from './ModalDialog.vue';
 import { IconTrash } from '@/common/icons';
 import { appendBuiltinServices, eligibleModels, hasWorkspacePlaceholder, isBuiltinService, isTextEmbeddingModel, modelsForRole, newMediaModel, newProvider, outputTokenError, BUILTIN_SERVICE_PRESETS, EMBEDDING_PROTOCOLS, QWEN_MEDIA_QUERY, QWEN_VISUAL_QUERY, type EmbeddingProtocol, type MediaCapability, type MediaConfiguration, type MediaModel, type MediaProvider, type MediaServiceKind } from '@/common/mediaAi';
 import { modelSpec, type TokenLimit } from '@/common/mediaModelSpecs';
+import { REASONING_LEVELS, normalizeModelReasoning, reasoningLevelError, modelReasoningError } from '@/common/mediaReasoning';
 const { t } = useI18n();
 const draft = ref<MediaConfiguration | null>(null), baseline = ref('null'), keys = ref<Record<string, string>>({}), storedKeys = ref<string[]>([]);
 const saved = ref<MediaConfiguration | null>(null);
@@ -125,6 +138,7 @@ const selected = ref(''), filter = ref(''), expandedModel = ref(''), busy = ref(
 const serviceKind = ref<MediaServiceKind>('llm');
 const preferredEmbeddingProtocol = ref<EmbeddingProtocol>('openai_text'), settingsRoot = ref<HTMLElement | null>(null);
 const modelPicker = ref<{ providerId: string; ids: string[]; selection: string[]; filter: string } | null>(null);
+const customReasoning = ref<Record<string, string>>({}), customReasoningErrors = ref<Record<string, string>>({});
 const serviceMinWidth = 180, serviceMaxWidth = 360, serviceEditorMinWidth = 320, serviceSplitterWidth = 8;
 const serviceWidthKey = 'lap.media-ai.service-list-width';
 const serviceLayoutRoot = ref<HTMLElement | null>(null), serviceContainerWidth = ref(0), preferredServiceWidth = ref(240), resizingService = ref(false);
@@ -229,7 +243,7 @@ function preferredProvider() {
   return candidates.find(p => !isBuiltinService(p) && p.enabled)?.id || candidates.find(p => p.enabled)?.id
     || candidates.find(p => saved.value?.providers.some(original => original.id === p.id))?.id || candidates[0]?.id || '';
 }
-function receive(view: any) { if (disposed) return; saved.value = clone(view.configuration); draft.value = clone(view.configuration); appendBuiltinServices(draft.value!, key => t('media_ai.' + key)); storedKeys.value = view.keysStored; keys.value = {}; baseline.value = JSON.stringify(draft.value); if (!provider.value) selected.value = preferredProvider(); }
+function receive(view: any) { if (disposed) return; saved.value = clone(view.configuration); draft.value = clone(view.configuration); appendBuiltinServices(draft.value!, key => t('media_ai.' + key)); storedKeys.value = view.keysStored; keys.value = {}; customReasoning.value = {}; customReasoningErrors.value = {}; baseline.value = JSON.stringify(draft.value); if (!provider.value) selected.value = preferredProvider(); }
 function selectServiceKind(kind: MediaServiceKind) { serviceKind.value = kind; selected.value = preferredProvider(); filter.value = ''; }
 function updateOpenaiEmbeddings(p: MediaProvider) {
   if (p.kind !== 'llm' || !draft.value) return;
@@ -245,6 +259,34 @@ function formatTokenLimit(value: TokenLimit | undefined) { return typeof value =
 function modelOutputLimit(m: MediaModel) { const limit = modelSpecification(m)?.outputTokens; return typeof limit === 'number' ? limit : null; }
 function useModelOutputLimit(m: MediaModel) { const limit = modelOutputLimit(m); if (!busy.value && limit !== null) m.maxOutputTokens = limit; }
 function outputLimitExceeded(m: MediaModel) { const limit = modelOutputLimit(m); return limit !== null && m.maxOutputTokens !== null && m.maxOutputTokens > limit; }
+function modelReasoning(m: MediaModel) { return normalizeModelReasoning(m.reasoning); }
+function customReasoningLevels(m: MediaModel) { return modelReasoning(m).levels.filter(level => !(REASONING_LEVELS as readonly string[]).includes(level)); }
+function setReasoningLevel(m: MediaModel, level: string, enabled: boolean) {
+  if (busy.value || embeddingModel(m) || reasoningLevelError(level)) return;
+  const current = modelReasoning(m);
+  if (current.levels.includes(level) === enabled) return;
+  const levels = enabled ? [...current.levels, level] : current.levels.filter(value => value !== level);
+  m.reasoning = normalizeModelReasoning({ levels, defaultEffort: current.defaultEffort });
+}
+function addCustomReasoningLevel(m: MediaModel) {
+  if (busy.value || embeddingModel(m)) return;
+  const level = customReasoning.value[m.id]?.trim() || '', error = reasoningLevelError(level);
+  customReasoningErrors.value[m.id] = error || '';
+  if (error) return;
+  setReasoningLevel(m, level, true); customReasoning.value[m.id] = '';
+}
+function setDefaultReasoning(m: MediaModel, level: string | null) {
+  if (busy.value || embeddingModel(m)) return;
+  const current = modelReasoning(m);
+  if (level !== null && !current.levels.includes(level)) return;
+  if (current.defaultEffort === level) return;
+  m.reasoning = { levels: current.levels, defaultEffort: level };
+}
+function usePublicReasoningLevels(m: MediaModel) {
+  if (busy.value || embeddingModel(m)) return;
+  const published = modelSpecification(m)?.reasoning;
+  if (published) m.reasoning = normalizeModelReasoning({ levels: [...published.levels], defaultEffort: modelReasoning(m).defaultEffort });
+}
 function canListModels(p: MediaProvider) { return BUILTIN_SERVICE_PRESETS.find(preset => preset.id === p.id)?.modelList !== false && (p.kind === 'llm' ? serviceKind.value === 'llm' : EMBEDDING_PROTOCOLS[p.embeddingProtocol].modelList); }
 function modelListHint(p: MediaProvider) { return p.kind === 'llm' && serviceKind.value === 'embedding' ? 'shared_model_id_hint' : BUILTIN_SERVICE_PRESETS.find(preset => preset.id === p.id)?.modelList === false ? 'builtin_model_id_hint' : 'native_model_id_hint'; }
 function queryPreset(m: MediaModel) {
@@ -258,7 +300,7 @@ function setQueryPreset(m: MediaModel, preset: string) {
   else if (EMBEDDING_PROTOCOLS[protocol].queryPresets && preset === 'qwen3') m.embedding.queryInstruction = QWEN_MEDIA_QUERY;
   else if (EMBEDDING_PROTOCOLS[protocol].queryPresets && preset === 'qwen3_vl') m.embedding.queryInstruction = QWEN_VISUAL_QUERY;
 }
-function applyEmbeddingProtocol(p: MediaProvider, models: MediaModel[]) { for (const m of models) { m.capabilities = embeddingCapabilities(p); m.embedding.dimensions = null; m.tested = {}; if (!EMBEDDING_PROTOCOLS[p.embeddingProtocol].queryInstruction) m.embedding.queryInstruction = ''; } clearUnsupportedRoles(); }
+function applyEmbeddingProtocol(p: MediaProvider, models: MediaModel[]) { for (const m of models) { m.capabilities = embeddingCapabilities(p); m.embedding.dimensions = null; m.tested = {}; delete m.reasoning; if (!EMBEDDING_PROTOCOLS[p.embeddingProtocol].queryInstruction) m.embedding.queryInstruction = ''; } clearUnsupportedRoles(); }
 async function load() { loading.value = true; try { receive(await invoke('media_ai_configuration')); } catch (e) { error.value = String(e); } finally { loading.value = false; } }
 async function confirmDiscard() { if (busy.value) return false; return !dirty.value || ask(t('media_ai.discard'), { kind: 'warning' }); }
 async function action(work: () => Promise<void>) { if (busy.value) return; busy.value = true; error.value = ''; message.value = ''; try { await work(); } catch (e) { error.value = String(e); } finally { busy.value = false; } }
@@ -267,6 +309,10 @@ async function persist() {
   for (const m of draft.value.models) {
     const error = outputTokenError(m.maxOutputTokens);
     if (error) throw new Error(t('media_ai.' + error, { model: m.name || m.remoteId }));
+    if (draft.value.providers.find(p => p.id === m.providerId)?.kind === 'embedding' || isTextEmbeddingModel(m)) { delete m.reasoning; continue; }
+    const reasoningError = modelReasoningError(m.reasoning);
+    if (reasoningError) throw new Error(t('media_ai.' + reasoningError, { model: m.name || m.remoteId }));
+    if (m.reasoning !== undefined && m.reasoning !== null) m.reasoning = normalizeModelReasoning(m.reasoning);
   }
   draft.value.providers.forEach(p => { if (!p.allowMedia) p.allowBackground = false; });
   draft.value.models.forEach(m => { if (!m.name.trim()) m.name = m.remoteId; });

@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use genai::{
     Client,
     adapter::AdapterKind,
-    chat::{ChatMessage, ChatOptions, ChatRequest, ContentPart},
+    chat::{ChatMessage, ChatOptions, ChatRequest, ContentPart, ReasoningEffort},
     embed::EmbedOptions,
     resolver::{AuthData, Endpoint},
 };
@@ -112,7 +112,24 @@ pub async fn chat_history_with_key(
     if model.provider.kind != ProviderKind::Llm || !model.model.is_generation() {
         return Err("此模型不是标准 LLM 生成模型".into());
     }
-    let mut options = ChatOptions::default();
+    // SDK 的 OpenAI 适配器不序列化 Budget；显式占位禁止从 Model ID 后缀猜档位并截断名称。
+    let mut options = ChatOptions::default().with_reasoning_effort(ReasoningEffort::Budget(0));
+    if let Some(effort) = model.model.reasoning.effort(None)? {
+        let standard = match effort.as_str() {
+            "none" => Some(ReasoningEffort::Zero),
+            "minimal" => Some(ReasoningEffort::Minimal),
+            "low" => Some(ReasoningEffort::Low),
+            "medium" => Some(ReasoningEffort::Medium),
+            "high" => Some(ReasoningEffort::High),
+            "xhigh" => Some(ReasoningEffort::XHigh),
+            "max" => Some(ReasoningEffort::Max),
+            _ => None,
+        };
+        options = match standard {
+            Some(effort) => options.with_reasoning_effort(effort),
+            None => options.with_extra_body(json!({ "reasoning_effort": effort })),
+        };
+    }
     if let Some(limit) = model.model.max_output_tokens {
         options = options.with_max_tokens(limit);
     }

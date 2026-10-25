@@ -198,6 +198,73 @@ impl Default for EmbeddingOptions {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningOptions {
+    pub levels: Vec<String>,
+    pub default_effort: Option<String>,
+}
+impl<'de> Deserialize<'de> for ReasoningOptions {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Default, Deserialize)]
+        #[serde(rename_all = "camelCase", default)]
+        struct Input {
+            levels: Vec<String>,
+            default_effort: Option<String>,
+        }
+        let input = Input::deserialize(deserializer)?;
+        let mut seen = BTreeSet::new();
+        Ok(Self {
+            levels: input
+                .levels
+                .into_iter()
+                .map(|level| level.trim().to_owned())
+                .filter(|level| !level.is_empty() && seen.insert(level.clone()))
+                .collect(),
+            default_effort: input
+                .default_effort
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+        })
+    }
+}
+impl ReasoningOptions {
+    pub fn is_empty(&self) -> bool {
+        self.levels.is_empty() && self.default_effort.is_none()
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self.levels.len() > 32
+            || self.levels.iter().any(|level| {
+                level.is_empty()
+                    || level.len() > 64
+                    || !level
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+            })
+            || self.levels.iter().collect::<BTreeSet<_>>().len() != self.levels.len()
+            || self
+                .default_effort
+                .as_ref()
+                .is_some_and(|effort| !self.levels.contains(effort))
+        {
+            return Err("思考档位最多 32 项，每项须为 1–64 个英文字母、数字、短横线或下划线，默认档位须在支持列表内。".into());
+        }
+        Ok(())
+    }
+    pub fn effort(&self, requested: Option<&str>) -> Result<Option<String>, String> {
+        self.validate()?;
+        let effort = match requested {
+            Some("") => None,
+            Some(value) => Some(value),
+            None => self.default_effort.as_deref(),
+        };
+        if effort.is_some_and(|value| !self.levels.iter().any(|level| level == value)) {
+            return Err("当前模型未声明此思考档位，请选择支持的档位或自动。".into());
+        }
+        Ok(effort.map(str::to_owned))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Model {
@@ -210,6 +277,8 @@ pub struct Model {
     pub capabilities: BTreeSet<Capability>,
     pub max_output_tokens: Option<u32>,
     pub embedding: EmbeddingOptions,
+    #[serde(default, skip_serializing_if = "ReasoningOptions::is_empty")]
+    pub reasoning: ReasoningOptions,
     pub tested: BTreeMap<Capability, String>,
 }
 impl Default for Model {
@@ -224,6 +293,7 @@ impl Default for Model {
             capabilities: BTreeSet::new(),
             max_output_tokens: None,
             embedding: EmbeddingOptions::default(),
+            reasoning: ReasoningOptions::default(),
             tested: BTreeMap::new(),
         }
     }
@@ -409,6 +479,11 @@ impl Configuration {
             if !valid_class {
                 return Err("模型能力与服务类型或 Embedding 协议不匹配".into());
             }
+            m.reasoning.validate()?;
+            if !m.reasoning.is_empty() && (provider.kind != ProviderKind::Llm || !m.is_generation())
+            {
+                return Err("思考档位只能配置在 LLM 生成模型上。".into());
+            }
             if provider.kind == ProviderKind::Embedding
                 && provider.embedding_protocol == EmbeddingProtocol::SiliconflowMultimodal
                 && !m.embedding.query_instruction.trim().is_empty()
@@ -471,7 +546,7 @@ impl Resolved {
         self.provider.supports_model(&self.model, capability)
     }
     pub fn analysis_profile(&self) -> Result<String, String> {
-        let identity = serde_json::json!([
+        let mut identity = serde_json::json!([
             self.provider.identity(),
             base_url(&self.provider.base_url)?,
             self.model.remote_id,
@@ -479,6 +554,9 @@ impl Resolved {
             self.model.max_output_tokens,
             "media-analysis-v1/1280px/60s-3frames"
         ]);
+        if !self.model.reasoning.is_empty() {
+            identity = serde_json::json!([identity, self.model.reasoning]);
+        }
         Ok(blake3::hash(identity.to_string().as_bytes())
             .to_hex()
             .to_string())
@@ -497,6 +575,9 @@ impl Resolved {
             if let Some(encoding) = self.provider.embedding_protocol.contract_encoding() {
                 identity = serde_json::json!([identity, encoding]);
             }
+        }
+        if !self.model.reasoning.is_empty() {
+            identity = serde_json::json!([identity, self.model.reasoning]);
         }
         blake3::hash(identity.to_string().as_bytes())
             .to_hex()
@@ -1239,6 +1320,125 @@ mod tests {
         let encoded = encode_config(&migrated).unwrap();
         let reopened: Configuration = serde_json::from_str(&encoded).unwrap();
         reopened.validate().unwrap();
+    }
+    #[test]
+    fn reasoning_options_preserve_exact_declared_values_and_distinguish_auto_from_none() {
+        let old: Model = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(old.reasoning, ReasoningOptions::default());
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("reasoning")
+                .is_none()
+        );
+        assert_eq!(old.reasoning.effort(None).unwrap(), None);
+        assert!(old.reasoning.effort(Some("high")).is_err());
+        let options: ReasoningOptions = serde_json::from_value(serde_json::json!({
+            "levels":[" high ","low","high","none","ultra","Custom_Mode", ""],"defaultEffort":" high "
+        })).unwrap();
+        assert_eq!(
+            options.levels,
+            ["high", "low", "none", "ultra", "Custom_Mode"]
+        );
+        assert_eq!(options.effort(None).unwrap().as_deref(), Some("high"));
+        assert_eq!(options.effort(Some("")).unwrap(), None);
+        for effort in ["none", "ultra", "Custom_Mode"] {
+            assert_eq!(
+                options.effort(Some(effort)).unwrap().as_deref(),
+                Some(effort)
+            );
+        }
+        for unsupported in ["medium", "HIGH", "custom_mode", " high "] {
+            assert!(options.effort(Some(unsupported)).is_err());
+        }
+        for levels in [
+            vec!["a".repeat(65)],
+            vec!["space here".into()],
+            vec!["思考".into()],
+            (0..33).map(|index| format!("custom{index}")).collect(),
+        ] {
+            assert!(
+                ReasoningOptions {
+                    levels,
+                    default_effort: None
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            ReasoningOptions {
+                levels: vec!["low".into()],
+                default_effort: Some("high".into())
+            }
+            .validate()
+            .is_err()
+        );
+        let mut config = migrate_legacy(legacy_configuration()).unwrap();
+        let index = config
+            .models
+            .iter()
+            .position(Model::is_text_embedding)
+            .unwrap();
+        config.models[index].reasoning = options;
+        assert!(config.validate().unwrap_err().contains("LLM"));
+    }
+    #[test]
+    fn reasoning_changes_generation_receipts_and_analysis_cache_but_preserves_empty_legacy_hashes()
+    {
+        let mut model = migrate_legacy(legacy_configuration())
+            .unwrap()
+            .role("media")
+            .unwrap();
+        let old_contract = serde_json::json!([
+            model.provider.base_url,
+            model.provider.credential_revision,
+            model.model.remote_id,
+            model.model.revision,
+            model.model.capabilities,
+            model.model.max_output_tokens,
+            model.model.embedding
+        ]);
+        let old_profile = serde_json::json!([
+            model.provider.identity(),
+            base_url(&model.provider.base_url).unwrap(),
+            model.model.remote_id,
+            model.model.revision,
+            model.model.max_output_tokens,
+            "media-analysis-v1/1280px/60s-3frames"
+        ]);
+        let before = (model.contract(), model.analysis_profile().unwrap());
+        assert_eq!(
+            before.0,
+            blake3::hash(old_contract.to_string().as_bytes())
+                .to_hex()
+                .to_string()
+        );
+        assert_eq!(
+            before.1,
+            blake3::hash(old_profile.to_string().as_bytes())
+                .to_hex()
+                .to_string()
+        );
+        model.model.reasoning = ReasoningOptions {
+            levels: vec!["low".into(), "high".into()],
+            default_effort: Some("low".into()),
+        };
+        let low = (model.contract(), model.analysis_profile().unwrap());
+        assert_ne!(before, low);
+        model
+            .model
+            .tested
+            .insert(Capability::Image, model.contract());
+        assert!(model.require(Capability::Image, false).is_ok());
+        model.model.reasoning.default_effort = Some("high".into());
+        assert_ne!(low, (model.contract(), model.analysis_profile().unwrap()));
+        assert!(model.require(Capability::Image, false).is_err());
+        model.model.reasoning = ReasoningOptions::default();
+        assert_eq!(
+            before,
+            (model.contract(), model.analysis_profile().unwrap())
+        );
     }
     #[test]
     fn output_budgets_are_optional_positive_api_integers_not_model_capacity_caps() {

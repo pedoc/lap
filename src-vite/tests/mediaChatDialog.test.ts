@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import { renderToString } from 'vue/server-renderer';
+import { createI18n } from 'vue-i18n';
 import * as Vue from 'vue';
 import * as ui from '../src/common/mediaChatUi.ts';
 
@@ -21,19 +22,22 @@ function configuration() {
   return { providers: [{ id: 'provider', name: 'Service', kind: 'llm', enabled: true, allowMedia: true }], models: [model('vision', ['text', 'image', 'video_frames', 'json']), model('text', ['text']), model('image', ['image']), model('embedding', ['embed_text'])], roles: { media: 'vision', text: 'text' } };
 }
 function deferred() { let resolve!: (value: any) => void; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
-function harness(overrides: any = {}) {
+function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
   const calls: any[] = [], mounts: any[] = [], unmounts: any[] = [], views = new Map<string, any>([['session-a', emptyView()]]), files = [file(7), file(8, { fileType: 2, duration: 120 }), file(9)];
+  const listeners = new Map<string, Set<any>>(), storage = new Map<string, string>();
   const mediaChat = Vue.reactive({ open: false, libraryId: 'library-a', fileIds: [] as number[], revision: 0 });
   const libConfig = Vue.reactive({ _libraryId: 'library-a' });
   const handlers: string[] = [], context: any = {
     ...Vue, ...ui, crypto, setTimeout, clearTimeout, setInterval, clearInterval,
     mediaChat, libConfig, closeMediaChat: () => { mediaChat.open = false; }, validMediaChatIds: (values: number[]) => [...new Set(values.filter(id => Number.isSafeInteger(id) && id > 0))],
-    useI18n: () => ({ t: (key: string) => key }),
+    useI18n: () => i18n || ({ t: (key: string) => key, te: () => false }),
     useUIStore: () => ({ pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const i = handlers.indexOf(id); if (i >= 0) handlers.splice(i, 1); }, isInputActive: (id: string) => handlers.at(-1) === id }),
     onMounted: (fn: any) => mounts.push(fn), onUnmounted: (fn: any) => unmounts.push(fn),
     getFileThumbById: async () => '', getTagsForFile: async () => [{ name: 'Existing' }], getThumbnailDataUrl: () => '', getThumbUrl: () => '', getDragPayload: async () => ({ filePaths: [] }), getExternalDropPaths: () => [], isWin: false, isMac: false,
     mediaTime: (value: number) => String(value), openMediaAiSettings() {}, openMediaAiBatch: (...args: any[]) => calls.push(['batch', args]), pendingChanges: { confirm: async () => true }, ask: async () => true,
-    window: { innerWidth: 1440, innerHeight: 900, addEventListener() {}, removeEventListener() {} }, localStorage: { getItem: () => null, setItem() {} },
+    IconFile: () => Vue.h('svg'), openMediaChatMedia: async (...args: any[]) => { calls.push(['open-media', args]); return true; },
+    window: { innerWidth: 1440, innerHeight: 900, addEventListener: (name: string, listener: any) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(listener); }, removeEventListener: (name: string, listener: any) => listeners.get(name)?.delete(listener) },
+    localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     invoke: async (name: string, args: any) => {
       calls.push([name, args === undefined ? undefined : clone(args)]);
       if (overrides[name]) return overrides[name](args);
@@ -50,8 +54,8 @@ function harness(overrides: any = {}) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,missingAnalysis,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame});`, context));
-  return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts,
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
   };
@@ -108,21 +112,130 @@ test('chat accepts declared image capability without a probe receipt while struc
   } finally { h.dispose(); }
 });
 
-test('chat filters models by declared generation capabilities and requires existing analyses for text-only media answers', async () => {
+test('new turns view attached media directly and use text capability only when no media is attached', async () => {
   const h = harness();
   try {
     await h.boot(); await h.api.attachIds([7, 8]); h.api.draft.value = 'Compare';
     assert.deepEqual(Array.from(h.api.readyModels.value, (model: any) => model.id), ['vision']);
     h.api.visual.value = false;
-    assert.deepEqual(Array.from(h.api.readyModels.value, (model: any) => model.id), ['vision', 'text']);
+    assert.deepEqual(Array.from(h.api.readyModels.value, (model: any) => model.id), ['vision']);
     h.api.selectedModelId.value = 'text'; h.api.attachments.value[1].hasAnalysis = false;
-    assert.equal(h.api.missingAnalysis.value, true);
     assert.equal(h.api.canSend.value, false);
-    h.api.attachments.value[1].hasAnalysis = true;
+    h.api.selectedModelId.value = 'vision';
+    assert.equal(h.api.canSend.value, true, 'Fresh visual media does not require old textual analysis');
+    h.api.attachments.value = [];
+    assert.deepEqual(Array.from(h.api.readyModels.value, (model: any) => model.id), ['vision', 'text']);
+    h.api.selectedModelId.value = 'text';
     assert.equal(h.api.canSend.value, true);
-    h.api.visual.value = true;
-    assert.equal(h.api.canSend.value, false, 'Switching mode must not silently substitute another model');
   } finally { h.dispose(); }
+});
+
+test('reasoning choices follow model metadata, preserve drafts and snapshot explicit defaults or automatic omission', async () => {
+  const h = harness({ media_chat_send: async () => emptyView() });
+  try {
+    await h.boot();
+    const vision = h.api.configuration.value.models.find((model: any) => model.id === 'vision');
+    vision.reasoning = { levels: ['none', 'low', 'high', 'ultra'], defaultEffort: 'low' };
+    assert.deepEqual(Array.from(h.api.reasoningLevels.value), ['none', 'low', 'high', 'ultra']);
+    h.api.reasoningEffort.value = 'ultra'; h.api.draft.value = 'Saved draft';
+    await h.api.newSession(); await h.api.selectSession('session-a');
+    assert.equal(h.api.reasoningEffort.value, 'ultra');
+    assert.equal(h.api.draft.value, 'Saved draft');
+    await h.api.send();
+    assert.equal(h.calls.filter(([name]) => name === 'media_chat_send').at(-1)[1].reasoningEffort, 'ultra');
+    h.api.reasoningEffort.value = ''; h.api.draft.value = 'Automatic'; await h.api.send();
+    assert.equal(h.calls.filter(([name]) => name === 'media_chat_send').at(-1)[1].reasoningEffort, '');
+    h.api.reasoningEffort.value = 'none'; h.api.draft.value = 'No reasoning'; await h.api.send();
+    assert.equal(h.calls.filter(([name]) => name === 'media_chat_send').at(-1)[1].reasoningEffort, 'none');
+    h.api.selectedModelId.value = 'text';
+    assert.equal(h.api.reasoningEffort.value, null, 'An unsupported explicit level must return to the new model default');
+    h.api.draft.value = 'Text default'; await h.api.send();
+    assert.equal(h.calls.filter(([name]) => name === 'media_chat_send').at(-1)[1].reasoningEffort, null);
+    assert.equal(h.calls.filter(([name]) => name === 'media_chat_send').at(-1)[1].visual, false);
+  } finally { h.dispose(); }
+});
+
+test('reasoning labels translate known levels and leave custom levels untouched without i18n missing warnings', () => {
+  const i18n = createI18n({ legacy: false, locale: 'en', fallbackLocale: false, messages: { en: { media_chat: { reasoning_level_low: 'Low' } } } });
+  const h = harness({}, { t: i18n.global.t, te: i18n.global.te });
+  const diagnostics: unknown[][] = [], warn = console.warn, error = console.error;
+  console.warn = (...args) => { diagnostics.push(args); }; console.error = (...args) => { diagnostics.push(args); };
+  try {
+    assert.equal(h.api.reasoningLabel('low'), 'Low');
+    assert.equal(h.api.reasoningLabel('custom-ultra'), 'custom-ultra');
+    assert.deepEqual(diagnostics, []);
+  } finally { console.warn = warn; console.error = error; h.dispose(); i18n.dispose(); }
+});
+
+test('media cards navigate on their primary action, respect cancelled navigation and keep reattachment separate', async () => {
+  const h = harness();
+  try {
+    await h.boot(); h.api.draft.value = 'Keep this draft';
+    h.context.openMediaChatMedia = async () => false;
+    await h.api.openFile(file(7));
+    assert.equal(h.mediaChat.open, true);
+    assert.equal(h.api.attachments.value.length, 0);
+    h.context.openMediaChatMedia = async (...args: any[]) => { h.calls.push(['open-media', args]); return true; };
+    await h.api.openFile({ ...reference(8), fileType: 2, start: 30, end: 60 });
+    assert.deepEqual(clone(h.calls.at(-1)), ['open-media', ['library-a', 8, 30]]);
+    assert.equal(h.mediaChat.open, false);
+    assert.equal(h.api.draft.value, 'Keep this draft');
+    assert.equal(h.api.attachments.value.length, 0);
+    await h.api.attachIds([7]);
+    assert.deepEqual(Array.from(h.api.attachments.value, (file: any) => file.fileId), [7]);
+  } finally { h.dispose(); }
+});
+
+test('the plus and slash action menu exposes existing operations without treating its Enter key as a chat send', async () => {
+  const h = harness();
+  try {
+    await h.boot(); h.api.draft.value = '/'; h.api.updateMention();
+    assert.equal(h.api.actionsOpen.value, true);
+    assert.deepEqual(Array.from(h.api.menuItems.value, (item: any) => item.id), ['attach', 'title', 'description', 'tags', 'tasks', 'all', 'configure']);
+    assert.equal(h.api.menuItems.value.find((item: any) => item.id === 'title').disabled, true);
+    await h.api.runMenuAction('attach');
+    assert.equal(h.api.draft.value, '');
+    assert.equal(h.api.pickerOpen.value, true);
+    h.api.toggleActions();
+    h.api.actionKeydown({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
+    assert.equal(h.api.actionsOpen.value, false);
+    assert.equal(h.calls.some(([name]) => name === 'media_chat_send'), false);
+    h.api.toggleActions(); await h.api.runMenuAction('all');
+    assert.deepEqual(clone(h.calls.at(-1)), ['batch', ['library-a', null, 'vision']]);
+  } finally { h.dispose(); }
+});
+
+test('edge gestures keep the opposite corner fixed, track one pointer and clear capture and listeners on cancel or viewport resize', () => {
+  const h = harness();
+  const captures = new Set<number>(), target = { closest: () => null, setPointerCapture: (id: number) => captures.add(id), hasPointerCapture: (id: number) => captures.has(id), releasePointerCapture: (id: number) => captures.delete(id) };
+  const event = (extra: any = {}) => ({ pointerId: 3, button: 0, isPrimary: true, clientX: 100, clientY: 100, target, currentTarget: target, preventDefault() {}, ...extra });
+  try {
+    h.api.frame.value = { x: 100, y: 100, width: 800, height: 500 };
+    h.api.beginFrameGesture(event(), 'resize', 'nw');
+    h.api.moveFrameGesture(event({ pointerId: 4, clientX: 150, clientY: 140 }));
+    assert.deepEqual(clone(h.api.frame.value), { x: 100, y: 100, width: 800, height: 500 });
+    h.api.moveFrameGesture(event({ clientX: 150, clientY: 140 }));
+    assert.deepEqual(clone(h.api.frame.value), { x: 150, y: 140, width: 750, height: 460 });
+    h.api.endFrameGesture(event({ pointerId: 4 }));
+    assert.equal(captures.size, 1);
+    h.api.endFrameGesture(event({ type: 'pointercancel' }));
+    assert.equal(captures.size, 0);
+    assert.equal([...h.listeners.values()].reduce((count, listeners) => count + listeners.size, 0), 0);
+    assert.deepEqual(JSON.parse(h.storage.get('lap.media-chat.window')!), { x: 150, y: 140, width: 750, height: 460 });
+    h.api.beginFrameGesture(event(), 'move'); h.api.fitFrame();
+    assert.equal(captures.size, 0);
+    assert.equal([...h.listeners.values()].reduce((count, listeners) => count + listeners.size, 0), 0);
+    h.api.resizeKeydown({ key: 'ArrowLeft', shiftKey: false, preventDefault() {} }, 'w');
+    assert.equal(h.api.frame.value.x, 142);
+    assert.equal(h.api.frame.value.x + h.api.frame.value.width, 900);
+    h.api.beginFrameGesture(event(), 'resize', 'e');
+    for (const listener of [...h.listeners.get('blur') || []]) listener({ type: 'blur' });
+    assert.equal(captures.size, 0);
+    assert.equal([...h.listeners.values()].reduce((count, listeners) => count + listeners.size, 0), 0);
+    h.api.beginFrameGesture(event(), 'move');
+  } finally { h.dispose(); }
+  assert.equal(captures.size, 0);
+  assert.equal([...h.listeners.values()].reduce((count, listeners) => count + listeners.size, 0), 0);
 });
 
 test('mentions add a real file ID, keyboard selection consumes Enter and ordinary text never invents reference IDs', async () => {
@@ -352,21 +465,35 @@ test('unmatched external files are never imported or represented as fabricated g
   } finally { h.dispose(); }
 });
 
-test('the actual dialog template provides a non-modal chat, model selector, mention controls and safe text output', async () => {
+test('the actual dialog renders composer model and reasoning controls, media cards, eight resize handles and a compact action menu', async () => {
   const h = harness(), imports: any = {};
-  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen });</script>')).descriptor, { id: 'media-chat-template', inlineTemplate: true }).content)
+  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen, view, attachments, configuration, selectedModelId, actionsOpen });</script>')).descriptor, { id: 'media-chat-template', inlineTemplate: true }).content)
     .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
   try {
     const ModalDialog = { props: ['width', 'height'], setup: (props: any, { slots }: any) => { const key = Vue.getCurrentInstance()!.vnode.key; return () => Vue.h('section', { 'data-preview-width': props.width, 'data-preview-height': props.height, 'data-preview-key': key }, slots.default?.()); } };
     const component = runInNewContext(`${code};component`, { ...h.context, ...imports, watch() {}, onMounted() {}, onUnmounted() {}, ModalDialog });
     const setup = component.setup;
-    component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => { state.previewOpen.value = true; context.expose(state); } });
+    component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
+      state.previewOpen.value = true; state.configuration.value = configuration(); state.configuration.value.models[0].reasoning = { levels: ['none', 'low', 'high'], defaultEffort: 'low' }; state.selectedModelId.value = 'vision'; state.actionsOpen.value = true;
+      state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: 'Answer', references: [reference(8)] });
+      context.expose(state);
+    } });
     const context: any = {}; await renderToString(Vue.createSSRApp(component), context);
     const html = context.teleports.body;
     assert.match(html, /aria-modal="false"/);
     assert.match(html, /data-media-chat-drop/);
     assert.match(html, /aria-label="media_chat.model"/);
+    assert.match(html, /data-chat-reasoning/);
+    assert.match(html, /value="none"/); assert.match(html, /value="low"/); assert.match(html, /value="high"/);
+    assert.match(html, /data-chat-attachment-card/); assert.match(html, /data-chat-reference-card/);
+    assert.match(html, /data-chat-actions-menu/);
+    assert.ok(html.indexOf('data-chat-composer-controls') > html.indexOf('<textarea'));
+    for (const edge of ui.CHAT_RESIZE_EDGES) assert.ok(html.includes(`data-chat-resize="${edge}"`), edge);
+    assert.doesNotMatch(html, /data-chat-media(?:\s|>)/);
+    const header = html.slice(0, html.indexOf('</header>'));
+    assert.doesNotMatch(header, /<select|media_chat\.session_media|media_chat\.configure/);
+    assert.doesNotMatch(source, /v-model="visual"|cursor-nwse-resize|>＠ /);
     assert.match(html, /maxlength="8000"/);
     assert.match(html, /media_chat\.scope_hint/);
     assert.match(html, /data-preview-width="860" data-preview-height="740" data-preview-key="1440:900"/);

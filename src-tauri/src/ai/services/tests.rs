@@ -606,6 +606,50 @@ async fn large_output_budget_is_sent_and_answers_over_64k_are_retained() {
 }
 
 #[tokio::test]
+async fn reasoning_wire_preserves_auto_none_custom_and_model_names_without_inferred_suffixes() {
+    let efforts = [
+        None,
+        Some("none"),
+        Some("minimal"),
+        Some("low"),
+        Some("medium"),
+        Some("high"),
+        Some("xhigh"),
+        Some("max"),
+        Some("ultra"),
+        Some("Custom_Mode"),
+        Some("zero"),
+    ];
+    let (base, worker) = fixture(vec![(200, completion("ok")); efforts.len()]);
+    let mut model = at(base, "custom-model-high");
+    model.model.reasoning.levels = efforts
+        .iter()
+        .flatten()
+        .map(|effort| (*effort).to_owned())
+        .collect();
+    for effort in efforts {
+        model.model.reasoning.default_effort = effort.map(str::to_owned);
+        assert_eq!(
+            client::chat_with_key(&model, vec![ContentPart::from_text("Reply briefly")], None)
+                .await
+                .unwrap(),
+            "ok"
+        );
+    }
+    let seen = worker.join().unwrap();
+    assert_eq!(seen.len(), efforts.len());
+    for (request, effort) in seen.iter().zip(efforts) {
+        assert_eq!(request["model"], "custom-model-high");
+        match effort {
+            None => assert!(request.get("reasoning_effort").is_none()),
+            Some(effort) => assert_eq!(request["reasoning_effort"], effort),
+        }
+        assert!(request.get("reasoning_budget").is_none());
+        assert!(request.get("thinking").is_none());
+    }
+}
+
+#[tokio::test]
 async fn server_default_omits_both_output_token_parameters() {
     let (base, worker) = fixture(vec![(200, completion("ok"))]);
     let mut model = at(base, "custom-proxy-alias");

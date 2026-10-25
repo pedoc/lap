@@ -8,6 +8,7 @@ import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import * as mediaAi from '../src/common/mediaAi.ts';
 import * as modelSpecs from '../src/common/mediaModelSpecs.ts';
+import * as reasoning from '../src/common/mediaReasoning.ts';
 
 const source = readFileSync(new URL('../src/components/MediaAiSettings.vue', import.meta.url), 'utf8');
 function fixture() {
@@ -20,7 +21,7 @@ function harness(includeCatalog = false) {
   let stored = fixture();
   const calls: Array<[string, any]> = [];
   const dialogs: string[] = [];
-  const context: any = { ...Vue, ...mediaAi, ...modelSpecs, crypto, defineExpose() {},
+  const context: any = { ...Vue, ...mediaAi, ...modelSpecs, ...reasoning, crypto, defineExpose() {},
     appendBuiltinServices: includeCatalog ? mediaAi.appendBuiltinServices : () => {},
     useI18n: () => ({ t: (key: string, values: any = {}) => `${key} ${Object.values(values).join(' ')}` }),
     onMounted() {}, onUnmounted() {}, watch() {}, ask: async (message: string) => { dialogs.push(message); return true; }, listen: async () => () => {},
@@ -39,7 +40,7 @@ function harness(includeCatalog = false) {
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,selectedPreset,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,modelSpecification,formatTokenLimit,modelOutputLimit,useModelOutputLimit,outputLimitExceeded,canListModels,modelListHint,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,selectedPreset,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,modelSpecification,formatTokenLimit,modelOutputLimit,useModelOutputLimit,outputLimitExceeded,customReasoning,customReasoningErrors,modelReasoning,customReasoningLevels,setReasoningLevel,addCustomReasoningLevel,setDefaultReasoning,usePublicReasoningLevels,canListModels,modelListHint,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls, dialogs };
 }
@@ -929,4 +930,140 @@ test('service layout discards invalid stored width and releases resize resources
   assert.deepEqual(h.released, [7]);
   assert.ok(h.observers.length > 0);
   assert.ok(h.observers.every(observer => observer.disconnected));
+});
+
+test('reading missing reasoning settings keeps legacy drafts clean and does not invent supported levels', () => {
+  const h = harness(), view = fixture();
+  delete view.configuration.models[0].reasoning;
+  h.api.receive(view);
+  const model = h.api.draft.value.models[0], before = JSON.stringify(h.api.draft.value);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.modelReasoning(model))), { levels: [], defaultEffort: null });
+  h.api.setDefaultReasoning(model, null);
+  assert.equal(Object.hasOwn(model, 'reasoning'), false);
+  assert.equal(JSON.stringify(h.api.draft.value), before);
+  assert.equal(h.api.dirty.value, false);
+  assert.deepEqual(h.calls, []);
+});
+
+test('reasoning levels support multiple explicit choices and removing a default returns to automatic', () => {
+  const h = harness(), model = h.api.draft.value.models[0], receipts = JSON.stringify(model.tested);
+  for (const level of ['none', 'low', 'high', 'ultra']) h.api.setReasoningLevel(model, level, true);
+  h.api.setDefaultReasoning(model, 'high');
+  h.api.setReasoningLevel(model, 'high', false);
+  assert.deepEqual(JSON.parse(JSON.stringify(model.reasoning)), { levels: ['none', 'low', 'ultra'], defaultEffort: null });
+  const before = JSON.stringify(model.reasoning);
+  h.api.setDefaultReasoning(model, 'max');
+  h.api.busy.value = true;
+  h.api.setReasoningLevel(model, 'max', true);
+  h.api.setDefaultReasoning(model, 'low');
+  assert.equal(JSON.stringify(model.reasoning), before);
+  assert.equal(JSON.stringify(model.tested), receipts, 'Receipt invalidation belongs to the backend contract');
+  assert.deepEqual(h.calls, []);
+});
+
+test('custom gateway reasoning values are trimmed, exact and validated without changing the draft on invalid input', () => {
+  const h = harness(), model = h.api.draft.value.models[0], before = JSON.stringify(model);
+  h.api.customReasoning.value[model.id] = 'bad value';
+  h.api.addCustomReasoningLevel(model);
+  assert.equal(h.api.customReasoningErrors.value[model.id], 'reasoning_level_invalid');
+  assert.equal(JSON.stringify(model), before);
+  for (const level of [' Gateway_fast-2 ', 'Gateway_fast-2', 'gateway_fast-2']) {
+    h.api.customReasoning.value[model.id] = level; h.api.addCustomReasoningLevel(model);
+  }
+  assert.deepEqual(Array.from(model.reasoning.levels), ['Gateway_fast-2', 'gateway_fast-2']);
+  assert.equal(h.api.customReasoning.value[model.id], '');
+  h.api.setDefaultReasoning(model, 'Gateway_fast-2');
+  assert.equal(model.reasoning.defaultEffort, 'Gateway_fast-2');
+  h.api.setReasoningLevel(model, 'Gateway_fast-2', false);
+  assert.equal(model.reasoning.defaultEffort, null);
+});
+
+test('public reasoning levels are adopted only explicitly for an exact model ID without applying the published default', () => {
+  const h = harness(), model = h.api.draft.value.models[0];
+  model.remoteId = 'gpt-6.1-sol';
+  const published = modelSpecs.modelSpec(model.remoteId)!.reasoning!;
+  assert.ok(published);
+  assert.equal(h.api.modelReasoning(model).levels.length, 0);
+  h.api.usePublicReasoningLevels(model);
+  assert.deepEqual(Array.from(model.reasoning.levels), [...published.levels]);
+  assert.equal(model.reasoning.defaultEffort, null);
+  assert.equal(model.reasoning.levels.includes('ultra'), false);
+  h.api.setDefaultReasoning(model, 'high'); h.api.usePublicReasoningLevels(model);
+  assert.equal(model.reasoning.defaultEffort, 'high');
+  h.api.setReasoningLevel(model, 'gateway_special', true); h.api.setDefaultReasoning(model, 'gateway_special'); h.api.usePublicReasoningLevels(model);
+  assert.equal(model.reasoning.defaultEffort, null);
+  model.remoteId = 'gpt-6.1-sol-custom-alias';
+  const before = JSON.stringify(model.reasoning);
+  h.api.usePublicReasoningLevels(model);
+  assert.equal(JSON.stringify(model.reasoning), before);
+  assert.deepEqual(h.calls, []);
+});
+
+test('saving reasoning canonicalizes the explicit settings and preserves budgets, receipts and automatic omission', async () => {
+  const h = harness(), model = h.api.draft.value.models[0];
+  model.maxOutputTokens = 384000;
+  model.reasoning = { levels: [' high ', 'high', 'Gateway_9'], defaultEffort: null };
+  const receipts = JSON.stringify(model.tested);
+  await h.api.save();
+  const saved = h.calls.find(([name]) => name === 'media_ai_save_configuration')![1].configuration.models[0];
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.reasoning)), { levels: ['high', 'Gateway_9'], defaultEffort: null });
+  assert.equal(saved.maxOutputTokens, 384000);
+  assert.equal(JSON.stringify(saved.tested), receipts);
+  assert.equal(h.api.dirty.value, false);
+  h.api.customReasoning.value[model.id] = 'unsaved-control';
+  h.api.receive(fixture());
+  assert.equal(Object.keys(h.api.customReasoning.value).length, 0);
+});
+
+test('an invalid reasoning default or identifier is rejected locally before saving configuration', async () => {
+  const h = harness(), model = h.api.draft.value.models[0];
+  model.reasoning = { levels: ['low'], defaultEffort: 'high' };
+  await h.api.save();
+  assert.match(h.api.error.value, /reasoning_default_invalid/);
+  assert.deepEqual(h.calls, []);
+  model.reasoning = { levels: ['contains space'], defaultEffort: null };
+  await h.api.save();
+  assert.match(h.api.error.value, /reasoning_invalid/);
+  assert.deepEqual(h.calls, []);
+});
+
+test('embedding models cannot acquire reasoning settings and legacy stray settings are removed when saving', async () => {
+  const h = harness();
+  h.api.addModel('embedding-example', true);
+  const model = h.api.draft.value.models.at(-1);
+  assert.equal(model.reasoning, undefined);
+  h.api.setReasoningLevel(model, 'high', true);
+  h.api.customReasoning.value[model.id] = 'gateway_high'; h.api.addCustomReasoningLevel(model);
+  h.api.setDefaultReasoning(model, 'high'); h.api.usePublicReasoningLevels(model);
+  assert.equal(model.reasoning, undefined);
+  model.reasoning = { levels: ['high'], defaultEffort: 'high' };
+  await h.api.save();
+  const saved = h.calls.find(([name]) => name === 'media_ai_save_configuration')![1].configuration.models.find((item: any) => item.id === model.id);
+  assert.equal(Object.hasOwn(saved, 'reasoning'), false);
+});
+
+test('advanced reasoning controls render supported choices and automatic default only for generation models', async () => {
+  const h = harness(), imports: any = {}, view = fixture();
+  view.configuration.models[0].remoteId = 'gpt-6.1-sol';
+  view.configuration.models[0].reasoning = { levels: ['low', 'high', 'Gateway_9'], defaultEffort: 'high' };
+  const vector = { ...mediaAi.newMediaModel('provider'), id: 'reasoning-vector', remoteId: 'vector', capabilities: ['embed_text' as mediaAi.MediaCapability] };
+  view.configuration.models.push(vector);
+  const { descriptor } = parse(source);
+  const compiled = stripTypeScriptTypes(compileScript(descriptor, { id: 'media-ai-reasoning', inlineTemplate: true }).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
+  let nulls = 0;
+  const initialized = compiled.replace("selected = ref('')", "selected = ref('provider')");
+  const component = runInNewContext(`${initialized}\n;component`, { ...h.context, ...imports,
+    ref: (value: any) => Vue.ref(value === null && nulls++ === 0 ? view.configuration : value),
+  });
+  const html = await renderToString(Vue.createSSRApp(component));
+  assert.match(html, /data-model-reasoning="kept"/);
+  assert.match(html, /data-reasoning-level="low"[^>]*checked|checked[^>]*data-reasoning-level="low"/);
+  assert.match(html, /data-reasoning-level="ultra"/);
+  assert.match(html, /media_ai.reasoning_auto/);
+  assert.match(html, /Gateway_9/);
+  assert.match(html, /media_ai.reasoning_use_public/);
+  assert.match(html, /media_ai.reasoning_public_default/);
+  assert.doesNotMatch(html, /data-model-reasoning="reasoning-vector"/);
 });

@@ -109,6 +109,8 @@ pub struct Message {
     pub content: String,
     pub model_id: String,
     pub model_name: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     pub visual: bool,
     pub references: Vec<Reference>,
     pub error: Option<String>,
@@ -138,6 +140,14 @@ pub struct Candidate {
 struct StoredMessage {
     message: Message,
     prompt: String,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelSnapshot {
+    #[serde(flatten)]
+    model: Resolved,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
 }
 struct History {
     messages: Vec<ChatMessage>,
@@ -231,16 +241,19 @@ fn summary_on(c: &Connection, library: &str, session: &str) -> Result<SessionSum
     Ok(summary)
 }
 fn messages_on(c: &Connection, session: &str) -> Result<Vec<StoredMessage>, String> {
-    let rows=c.prepare("SELECT id,role,status,content,model_id,model_name,visual,references_json,error,request_id,created_at,prompt FROM media_chat_messages WHERE session_id=?1 ORDER BY seq")
+    let rows=c.prepare("SELECT id,role,status,content,model_id,model_name,visual,references_json,error,request_id,created_at,prompt,model_snapshot FROM media_chat_messages WHERE session_id=?1 ORDER BY seq")
         .map_err(sql_error)?
         .query_map([session],|r|Ok((
-            Message{id:r.get(0)?,role:r.get(1)?,status:r.get(2)?,content:r.get(3)?,model_id:r.get(4)?,model_name:r.get(5)?,visual:r.get(6)?,references:Vec::new(),error:r.get(8)?,request_id:Some(r.get(9)?),created_at:r.get(10)?},
-            r.get::<_,String>(7)?,r.get::<_,String>(11)?,
+            Message{id:r.get(0)?,role:r.get(1)?,status:r.get(2)?,content:r.get(3)?,model_id:r.get(4)?,model_name:r.get(5)?,reasoning_effort:None,visual:r.get(6)?,references:Vec::new(),error:r.get(8)?,request_id:Some(r.get(9)?),created_at:r.get(10)?},
+            r.get::<_,String>(7)?,r.get::<_,String>(11)?,r.get::<_,String>(12)?,
         ))).map_err(sql_error)?.collect::<Result<Vec<_>,_>>().map_err(sql_error)?;
     rows.into_iter()
-        .map(|(mut message, references, prompt)| {
+        .map(|(mut message, references, prompt, snapshot)| {
             message.references =
                 serde_json::from_str(&references).map_err(|_| "会话媒体引用损坏")?;
+            message.reasoning_effort = serde_json::from_str::<ModelSnapshot>(&snapshot)
+                .map_err(|_| "会话模型快照损坏")?
+                .reasoning_effort;
             Ok(StoredMessage { message, prompt })
         })
         .collect()
@@ -460,6 +473,15 @@ fn check_model(
     }
     Ok(())
 }
+fn turn_model(
+    model: &Resolved,
+    requested: Option<&str>,
+) -> Result<(Resolved, Option<String>), String> {
+    let effort = model.model.reasoning.effort(requested)?;
+    let mut invocation = model.clone();
+    invocation.model.reasoning.default_effort = effort.clone();
+    Ok((invocation, effort))
+}
 async fn references(
     library: &str,
     input: &[ReferenceInput],
@@ -577,13 +599,18 @@ fn begin_on(
     model: &Resolved,
     references: &[Reference],
     visual: bool,
+    reasoning_effort: Option<&str>,
 ) -> Result<(), String> {
     let previous = summary_on(c, library, session)?;
     if previous.running_request_id.is_some() {
         return Err("此会话已有回答正在生成。".into());
     }
     let references_json = serde_json::to_string(references).map_err(|_| "会话引用无法编码")?;
-    let model_snapshot = serde_json::to_string(model).map_err(|_| "模型快照无法编码")?;
+    let model_snapshot = serde_json::to_string(&ModelSnapshot {
+        model: model.clone(),
+        reasoning_effort: reasoning_effort.map(str::to_owned),
+    })
+    .map_err(|_| "模型快照无法编码")?;
     let prompt = prompt(question, references, visual)?;
     let now = chrono::Utc::now().timestamp_millis();
     let model_name = format!(
@@ -719,6 +746,7 @@ pub async fn media_chat_send(
     library_id: String,
     session_id: String,
     model_id: Option<String>,
+    reasoning_effort: Option<String>,
     question: String,
     references: Vec<ReferenceInput>,
     visual: bool,
@@ -749,6 +777,7 @@ pub async fn media_chat_send(
         model_id.as_deref(),
         visual,
     )?;
+    let (call_model, reasoning_effort) = turn_model(&model, reasoning_effort.as_deref())?;
     let selected = request
         .run(self::references(&library_id, &references, visual))
         .await?;
@@ -784,6 +813,7 @@ pub async fn media_chat_send(
             &model,
             &selected,
             visual,
+            reasoning_effort.as_deref(),
         )
     })?;
     let answer = request
@@ -824,7 +854,7 @@ pub async fn media_chat_send(
             })?;
             check_model(&config::load()?, &model, &capabilities)?;
             messages.push(ChatMessage::user(input));
-            let call = client::chat_history(&model, messages);
+            let call = client::chat_history(&call_model, messages);
             tokio::pin!(call);
             let mut timer = tokio::time::interval(Duration::from_secs(1));
             let text = loop {
@@ -941,6 +971,7 @@ mod tests {
                 &model("first"),
                 &[],
                 false,
+                None,
             )
             .unwrap();
             let view = finish_on(
@@ -981,6 +1012,7 @@ mod tests {
             &model("test"),
             &[],
             false,
+            None,
         )
         .unwrap();
         recover(&c, "library-a").unwrap();
@@ -1000,6 +1032,110 @@ mod tests {
         assert_eq!(view.messages[1].status, "failed");
         assert!(view.messages[1].error.as_ref().unwrap().contains("中断"));
         assert!(view.session.running_request_id.is_none());
+    }
+    #[tokio::test]
+    async fn media_chat_reasoning_is_per_turn_persistent_and_backward_compatible() {
+        let requested = [None, Some(""), Some("low"), Some("none"), Some("ultra")];
+        let expected = [Some("high"), None, Some("low"), Some("none"), Some("ultra")];
+        let (base, worker) = super::super::tests::fixture(vec![
+            (200, completion("Natural answer"));
+            requested.len()
+        ]);
+        let mut selected = model("reasoning-chat");
+        selected.provider.base_url = base;
+        selected.model.reasoning = config::ReasoningOptions {
+            levels: vec!["low".into(), "high".into(), "none".into(), "ultra".into()],
+            default_effort: Some("high".into()),
+        };
+        let configuration = Configuration {
+            providers: vec![selected.provider.clone()],
+            models: vec![selected.model.clone()],
+            roles: config::Roles {
+                text: Some(selected.model.id.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let original = serde_json::to_value(&configuration).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reasoning.db");
+        let mut c = Connection::open(&path).unwrap();
+        schema(&c).unwrap();
+        let session = create_on(&c, "library-a", "Reasoning").unwrap().session.id;
+        for (index, (requested, expected)) in requested.into_iter().zip(expected).enumerate() {
+            let request = format!("reasoning-{index}");
+            let (invocation, actual) = turn_model(&selected, requested).unwrap();
+            assert_eq!(actual.as_deref(), expected);
+            check_model(&configuration, &selected, &[Capability::Text]).unwrap();
+            let mut history = history_on(&c, "library-a", &session, &request)
+                .unwrap()
+                .messages;
+            begin_on(
+                &mut c,
+                "library-a",
+                &session,
+                &request,
+                "Question",
+                &selected,
+                &[],
+                false,
+                actual.as_deref(),
+            )
+            .unwrap();
+            history.push(ChatMessage::user("Question"));
+            let answer = client::chat_history_with_key(
+                &invocation,
+                history,
+                Some("synthetic-reasoning-key".into()),
+            )
+            .await;
+            finish_on(&mut c, "library-a", &session, &request, &answer).unwrap();
+            let snapshot: String = c.query_row("SELECT model_snapshot FROM media_chat_messages WHERE request_id=?1 AND role='assistant'", [&request], |row| row.get(0)).unwrap();
+            let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+            assert_eq!(snapshot["reasoningEffort"], json!(expected));
+            assert_eq!(snapshot["model"]["reasoning"]["defaultEffort"], "high");
+        }
+        let seen = worker.join().unwrap();
+        for (request, expected) in seen.iter().zip(expected) {
+            match expected {
+                None => assert!(request.get("reasoning_effort").is_none()),
+                Some(effort) => assert_eq!(request["reasoning_effort"], effort),
+            }
+        }
+        assert_eq!(serde_json::to_value(&configuration).unwrap(), original);
+        drop(c);
+        let c = Connection::open(path).unwrap();
+        schema(&c).unwrap();
+        let view = view_on(&c, "library-a", &session).unwrap();
+        assert_eq!(view.messages.len(), expected.len() * 2);
+        for (pair, expected) in view.messages.chunks_exact(2).zip(expected) {
+            assert!(
+                pair.iter()
+                    .all(|message| message.reasoning_effort.as_deref() == expected)
+            );
+        }
+        let mut legacy = serde_json::to_value(&selected).unwrap();
+        legacy["model"].as_object_mut().unwrap().remove("reasoning");
+        c.execute(
+            "UPDATE media_chat_messages SET model_snapshot=?1 WHERE request_id='reasoning-0'",
+            [legacy.to_string()],
+        )
+        .unwrap();
+        let old = view_on(&c, "library-a", &session).unwrap();
+        assert!(
+            old.messages[..2]
+                .iter()
+                .all(|message| message.reasoning_effort.is_none())
+        );
+        assert_eq!(old.messages[4].reasoning_effort.as_deref(), Some("low"));
+        assert!(turn_model(&selected, Some("unsupported")).is_err());
+        assert_eq!(
+            view_on(&c, "library-a", &session).unwrap().messages.len(),
+            view.messages.len()
+        );
+        let mut changed = configuration.clone();
+        changed.models[0].reasoning.default_effort = Some("low".into());
+        assert!(check_model(&changed, &selected, &[Capability::Text]).is_err());
     }
     #[test]
     fn media_chat_candidates_match_full_paths_and_filter_unavailable_media() {
@@ -1065,6 +1201,7 @@ mod tests {
             &model("test"),
             &[reference.clone()],
             false,
+            None,
         )
         .unwrap();
         finish_on(
@@ -1149,6 +1286,7 @@ mod tests {
                 &selected,
                 &[],
                 false,
+                None,
             )
             .unwrap();
             history.push(ChatMessage::user(prompt(question, &[], false).unwrap()));
@@ -1258,6 +1396,7 @@ mod tests {
             &generator,
             &[],
             false,
+            None,
         )
         .unwrap();
         let failure = client::chat_history_with_key(
@@ -1282,6 +1421,7 @@ mod tests {
             &generator,
             &[],
             false,
+            None,
         )
         .unwrap();
         super::super::requests::media_ai_cancel_request(request_id.clone()).unwrap();
@@ -1388,6 +1528,7 @@ mod tests {
             &model("test"),
             &[],
             false,
+            None,
         )
         .unwrap();
         finish_on(

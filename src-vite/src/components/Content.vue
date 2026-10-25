@@ -6008,6 +6008,10 @@ onMounted( async() => {
       case 'navigate-info':
         await handleViewerInfoNavigation(event.payload as any);
         break;
+      case 'open-chat-media':
+        try { await handleChatMediaNavigation(event.payload as any); }
+        catch (error) { toast.error(String(error)); }
+        break;
       case 'update-file-meta':
         const targetFileId = Number((event.payload as any).fileId);
         const changes = (event.payload as any).changes || {};
@@ -11214,13 +11218,29 @@ async function openHomePhoto(request: { id: number; ids: number[]; libraryId: st
   await openImageViewer(index, true, false, { files: snapshot });
 }
 
+let chatMediaNavigation = 0;
+async function handleChatMediaNavigation(request: { libraryId: string; fileId: number; start?: number | null }) {
+  const libraryId = libConfig._libraryId;
+  if (request.libraryId !== libraryId || !Number.isSafeInteger(request.fileId) || request.fileId <= 0) return;
+  const navigation = ++chatMediaNavigation;
+  const isCurrent = () => navigation === chatMediaNavigation && libraryId === libConfig._libraryId;
+  const files = await invoke<any[]>('get_home_preview_files', { libraryId, fileIds: [request.fileId] });
+  if (!isCurrent()) return;
+  const file = files.find(item => Number(item.id) === request.fileId);
+  if (!file) throw new Error(t('media_chat.media_unavailable'));
+  const seek = Number(file.file_type) === 2 && typeof request.start === 'number' && Number.isFinite(request.start) && request.start >= 0 ? request.start : undefined;
+  await openImageViewer(0, true, false, { files: [file], showInfo: true, libraryId, seek, isCurrent });
+}
+
 // Open the image viewer window
 async function openImageViewer(
   index: number,
   newViewer = false,
   syncFromFileListChange = false,
-  options: { rightIndex?: number; forceSplitCount?: 2 | 4; files?: any[] } = {}
+  options: { rightIndex?: number; forceSplitCount?: 2 | 4; files?: any[]; showInfo?: boolean; libraryId?: string; seek?: number; isCurrent?: () => boolean } = {}
 ) {
+
+  if (options.libraryId && options.libraryId !== libConfig._libraryId || options.isCurrent?.() === false) return;
 
   const webViewLabel = 'imageviewer';
 
@@ -11287,13 +11307,16 @@ async function openImageViewer(
   
   // create a new window if it doesn't exist
   let imageWindow = await WebviewWindow.getByLabel(webViewLabel);
+  if (options.libraryId && options.libraryId !== libConfig._libraryId || options.isCurrent?.() === false) return;
   if (!imageWindow) {
     if (newViewer) {
       const forceSplitParam = compareSplitCount || 0;
       const compareModeParam = compareMode ? 1 : 0;
+      const proxyOptions = await startupWindowProxy();
+      if (options.libraryId && options.libraryId !== libConfig._libraryId || options.isCurrent?.() === false) return;
       imageWindow = new WebviewWindow(webViewLabel, {
-        ...await startupWindowProxy(),
-        url: `/image-viewer?fileId=${leftFileId}&fileIndex=${leftIndex}&fileCount=${fileCount}&rightFileId=${rightFileId}&rightFileIndex=${rightIndex}&forceSplitCount=${forceSplitParam}&compareFileCount=${compareMode ? fileCount : 0}&compareMode=${compareModeParam}&nextFilePath=${encodeURIComponent(leftNextFilePath)}&rightNextFilePath=${encodeURIComponent(rightNextFilePath)}&objectClassKey=${encodeURIComponent(viewerObjectClassKey)}`,
+        ...proxyOptions,
+        url: `/image-viewer?fileId=${leftFileId}&fileIndex=${leftIndex}&fileCount=${fileCount}&rightFileId=${rightFileId}&rightFileIndex=${rightIndex}&forceSplitCount=${forceSplitParam}&compareFileCount=${compareMode ? fileCount : 0}&compareMode=${compareModeParam}&nextFilePath=${encodeURIComponent(leftNextFilePath)}&rightNextFilePath=${encodeURIComponent(rightNextFilePath)}&objectClassKey=${encodeURIComponent(viewerObjectClassKey)}&showInfo=${options.showInfo ? 1 : 0}&sourceLibraryId=${encodeURIComponent(options.libraryId || '')}&seek=${options.seek ?? ''}`,
         title: 'Image Viewer',
         width: 1200,
         height: 800,
@@ -11329,6 +11352,9 @@ async function openImageViewer(
     isImageViewerWindowOpen.value = true;
     await imageWindow.emit('update-img', { 
       fileId: leftFileId, 
+      libraryId: options.libraryId,
+      showInfo: options.showInfo,
+      seek: options.seek,
       objectClassKey: viewerObjectClassKey,
       fileIndex: leftIndex,   // selected file index
       fileCount: fileCount, // total files length
@@ -11370,6 +11396,7 @@ async function openImageViewer(
 
     if(newViewer) {
       imageWindow.show();
+      if (options.showInfo) await imageWindow.setFocus();
     }
     videoRef.value?.pause();  // pause video playing in preview pane
   }

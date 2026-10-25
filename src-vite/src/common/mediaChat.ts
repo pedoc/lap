@@ -23,6 +23,7 @@ export interface ChatSession {
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; status: 'pending' | 'completed' | 'failed' | 'cancelled';
   content: string; modelId: string | null; modelName: string; visual: boolean;
+  reasoningEffort: string | null;
   references: ChatReference[]; error: string | null; requestId: string | null; createdAt: number;
 }
 export interface ChatSessionView { session: ChatSession; messages: ChatMessage[] }

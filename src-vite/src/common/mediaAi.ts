@@ -1,6 +1,7 @@
 import { nextTick, reactive } from 'vue';
 import { emit } from '@tauri-apps/api/event';
 import { closeMediaChat } from './mediaChat.ts';
+import type { ModelReasoning } from './mediaReasoning.ts';
 
 export type MediaCapability = 'text' | 'image' | 'video_frames' | 'json' | 'embed_text' | 'embed_multimodal';
 export type MediaServiceKind = 'llm' | 'embedding';
@@ -54,6 +55,7 @@ export interface MediaProvider {
 export interface MediaModel {
   id: string; providerId: string; remoteId: string; name: string; group: string; revision: string;
   capabilities: MediaCapability[]; maxOutputTokens: number | null;
+  reasoning?: ModelReasoning;
   embedding: { dimensions: number | null; queryInstruction: string };
   tested: Partial<Record<MediaCapability, string>>;
 }

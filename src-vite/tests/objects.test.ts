@@ -1421,7 +1421,7 @@ test('category context is scoped to the active object query and is wired through
 test('standalone viewer navigation keeps its originating category until another source explicitly replaces it', () => {
   const viewer = readFileSync(new URL('../src/views/ImageViewer.vue',import.meta.url),'utf8');
   const start = viewer.indexOf('function applyViewerImage('), end = viewer.indexOf('\nfunction receiveViewerImage(',start);
-  const category = Vue.ref(''), ctx: any = { ...Vue, objectBoxClassKey: category, allPanes: ['left','right','bottomLeft','bottomRight'], isCompareModeSession: Vue.ref(false), compareFileCount: Vue.ref(0), splitCount: Vue.ref(1), normalizeSplitCount: () => 0, clearSecondaryPanes(){}, isSyncViewport: Vue.ref(false), config: {imageViewer:{}}, fileCount: Vue.ref(0), fileId: Vue.ref(0), fileIndex: Vue.ref(0), nextFilePath: Vue.ref('') };
+  const category = Vue.ref(''), ctx: any = { ...Vue, objectBoxClassKey: category, allPanes: ['left','right','bottomLeft','bottomRight'], isCompareModeSession: Vue.ref(false), compareFileCount: Vue.ref(0), splitCount: Vue.ref(1), normalizeSplitCount: () => 0, clearSecondaryPanes(){}, isSyncViewport: Vue.ref(false), config: {imageViewer:{}}, fileCount: Vue.ref(0), fileId: Vue.ref(0), fileIndex: Vue.ref(0), nextFilePath: Vue.ref(''), pendingChatSeek: Vue.ref(null), showInfoPanel: Vue.ref(false) };
   const apply = runInNewContext(`${stripTypeScriptTypes(viewer.slice(start,end))};applyViewerImage`,ctx);
   apply({fileId:7,fileIndex:0,fileCount:5,objectClassKey:bicycle.key}); assert.equal(category.value,bicycle.key);
   apply({fileId:8,fileIndex:1,fileCount:5}); assert.equal(category.value,bicycle.key);

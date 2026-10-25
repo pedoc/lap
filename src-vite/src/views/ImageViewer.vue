@@ -245,7 +245,8 @@ import { faceSelectionIds } from '@/common/faceUi';
 import { indexFaces } from '@/common/api';
 
 import { isOriginalUnavailable, setAlbumAccessibility, resetFileAccessibility } from '@/common/availability';
-import { ref, watch, computed, onMounted, onUnmounted, reactive } from 'vue';
+import { ref, watch, computed, onMounted, onUnmounted, reactive, nextTick } from 'vue';
+import { closeMediaChat, mediaChat } from '@/common/mediaChat';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emit, listen } from '@tauri-apps/api/event';
 import { useI18n } from 'vue-i18n';
@@ -295,6 +296,7 @@ const fileCount = ref(0);       // Total number of files
 const fileInfo = ref<any>(null);
 const objectBoxClassKey = ref('');
 const showInfoPanel = ref(false);
+const pendingChatSeek = ref<{ fileId: number; seconds: number } | null>(null);
 const nextFilePath = ref('');
 const iconRotate = ref(0);      // icon rotation angle
 const isTransitionDisabled = ref(true);
@@ -415,9 +417,18 @@ onMounted(async() => {
   window.addEventListener('resize', handleResize);
 
   const urlParams = new URLSearchParams(window.location.search);
+  const sourceLibraryId = urlParams.get('sourceLibraryId');
+  if (sourceLibraryId && sourceLibraryId !== libConfig._libraryId) {
+    toast.error(t('media_chat.wrong_library'));
+    await appWindow.close();
+    return;
+  }
   objectBoxClassKey.value = urlParams.get('objectClassKey') || '';
 
   fileId.value    = Number(urlParams.get('fileId'));
+  showInfoPanel.value = urlParams.get('showInfo') === '1';
+  const initialSeek = Number(urlParams.get('seek'));
+  if (urlParams.get('seek') && Number.isFinite(initialSeek) && initialSeek >= 0) pendingChatSeek.value = { fileId: fileId.value, seconds: initialSeek };
   fileIndex.value = Number(urlParams.get('fileIndex'));
   fileCount.value = Number(urlParams.get('fileCount'));
   nextFilePath.value = decodeURIComponent(urlParams.get('nextFilePath') || '');
@@ -601,8 +612,8 @@ onUnmounted(() => {
   clearSlideShowTimer();
 
   // unlisten
-  unlistenImg();
-  unlistenGridView();
+  unlistenImg?.();
+  unlistenGridView?.();
   if (unlistenFilesDeleted) unlistenFilesDeleted();
   unlistenAlbumAccessChanged?.();
   unlistenThumbnailRebuild?.();
@@ -1565,10 +1576,23 @@ useMediaTitleEvents(change => {
 watch(() => mediaDisplayName(activeFileInfo.value), name => {
   void appWindow.setTitle(name ? `Lap — ${name}` : 'Lap').catch(() => {});
 });
+watch([fileInfo, mediaViewerRef, pendingChatSeek], () => {
+  const target = pendingChatSeek.value;
+  if (!target || Number(fileInfo.value?.id) !== target.fileId) return;
+  if (Number(fileInfo.value?.file_type) !== 2) { pendingChatSeek.value = null; return; }
+  if (mediaViewerRef.value?.seekVideo) {
+    mediaViewerRef.value.seekVideo(target.seconds);
+    pendingChatSeek.value = null;
+  }
+}, { flush: 'post' });
+
 function applyViewerImage(payload: any) {
   if (typeof payload?.objectClassKey === 'string') objectBoxClassKey.value = payload.objectClassKey;
   const requestedPane = String(payload?.pane || 'left');
   const pane: Pane = allPanes.includes(requestedPane as Pane) ? requestedPane as Pane : 'left';
+  if (payload?.showInfo === true) showInfoPanel.value = true;
+  pendingChatSeek.value = pane === 'left' && typeof payload?.seek === 'number' && Number.isFinite(payload.seek) && payload.seek >= 0
+    ? { fileId: Number(payload.fileId), seconds: payload.seek } : null;
   if (typeof payload?.compareMode === 'boolean') {
     isCompareModeSession.value = !!payload.compareMode;
   }
@@ -1613,6 +1637,12 @@ function applyViewerImage(payload: any) {
   }
 }
 function receiveViewerImage(payload: any) {
+  if (payload?.libraryId && payload.libraryId !== libConfig._libraryId) return;
+  if (payload?.showInfo === true && mediaChat.open) {
+    closeMediaChat();
+    void nextTick(() => receiveViewerImage(payload));
+    return;
+  }
   if (uiStore.inputStack.length > 0 && !pendingChanges.hasPending('media-title')) return;
   const approval = approvedTitleNavigation;
   approvedTitleNavigation = null;

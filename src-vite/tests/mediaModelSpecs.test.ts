@@ -52,3 +52,19 @@ test('new models defer output budgets to the server without copying official mod
     assert.equal(Object.hasOwn(model, field), false, field);
   }
 });
+
+test('reasoning references preserve model-specific levels without applying published defaults to configured models', () => {
+  for (const spec of MODEL_SPECS) {
+    if (!spec.reasoning) continue;
+    assert.equal(new Set(spec.reasoning.levels).size, spec.reasoning.levels.length);
+    assert.ok(spec.reasoning.defaultEffort === null || spec.reasoning.levels.includes(spec.reasoning.defaultEffort));
+    assert.equal(new URL(spec.reasoning.source || spec.source).protocol, 'https:');
+  }
+  assert.deepEqual(modelSpec('gpt-6.1-sol')?.reasoning?.levels, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(modelSpec('gpt-6-sol')?.reasoning?.levels.includes('none'), true);
+  assert.deepEqual(modelSpec('deepseek-flash')?.reasoning?.levels, ['low', 'high', 'max']);
+  assert.equal(modelSpec('custom-proxy-alias')?.reasoning, undefined);
+  const model = newMediaModel('provider');
+  model.remoteId = 'gpt-6.1-sol';
+  assert.equal(model.reasoning, undefined);
+});
