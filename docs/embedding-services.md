@@ -2,6 +2,30 @@
 
 核对日期：2026-10-25。Lap 的 Rust 后端随桌面程序启动；`scripts/ai-server` 用于在另一台机器部署模型 API。也可以直接使用在线 API，二者使用相同的服务／模型配置流程。
 
+## 服务列表中的内置预设
+
+在 **设置 → AI 模型 → 媒体理解**切换 **LLM 服务**或 **Embedding 服务**，即可直接选择列表中的内置服务。预设默认停用，未保存密钥、未授权传输、未检测，也不绑定默认用途。打开设置只补齐当前草稿中的缺失预设，不发送请求；填写配置、检测或保存时才按原有流程持久化。
+
+填写 API Key，按需调整基础地址与 Model ID，并允许传输后，可以保持服务停用进行检测。检测成功不会自动启用服务。启用并选择顶部默认用途、保存后，业务才可调用；批量任务另需允许后台处理。
+
+内置服务保留固定入口，可以停用、清除密钥或移除模型；自定义服务仍可删除。重新打开设置不会覆盖已保存的内置参数，也不会补回已移除的模型。同类型、同基础地址和协议的现有服务会被复用。
+
+### LLM 预设
+
+五家均采用 OpenAI 兼容的 Chat Completions 调用。下表 Model ID 是核对日官方文档中的可编辑示例，不代表账号已经开通，也不自动授予检测回执。
+
+| 服务 | API 基础地址 | 示例 Model ID |
+| --- | --- | --- |
+| 阿里百炼 | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4-Flash` |
+| 火山方舟 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-2-1-pro-260915` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-flash` |
+| LongCat | `https://api.longcat.chat/openai/v1` | `LongCat-2.0` |
+
+百炼内置地址使用可解析的 `your-workspace-id` 占位主机，需将其替换为自己的 Workspace ID，或直接填写控制台提供的完整基础地址。占位地址可以随停用预设保存，检测前会提示填写。旧 `dashscope.aliyuncs.com` 域名用于存量兼容，官方说明 2026-09-30 后不再增加新特性；已有配置保留，新模型优先使用工作空间地址。
+
+聊天协议兼容不等于模型列表接口一致。百炼模型列表使用独立的原生路由；方舟与 DeepSeek 的预设也保留手动 Model ID 入口。硅基支持同前缀的模型列表；LongCat 按当前模型列表专页使用 `/openai/v1/models`，其旧概述存在另一条路径说明，实际账号仍需验证。所有服务均可手动添加模型，模型能力仍需检测。
+
 ## 复用 LLM 服务的文本嵌入接口
 
 如果现有 LLM 服务同时提供 OpenAI 兼容的 `/embeddings`，可以复用它的基础地址和 API Key：
@@ -19,17 +43,17 @@ OpenAI 的 `/models` 用于返回当前可用模型，官方 Embeddings 接口�
 
 ## 国内在线服务
 
-在 **设置 → AI 模型 → 媒体理解 → Embedding 服务**侧栏选择服务预设，再点 **添加服务**。预设会创建一个新服务和一个可编辑的示例模型，带入对应基础地址与协议；不会修改已有服务、自动发送请求、绑定默认用途或扫描全库。填写自己的平台 API Key，启用服务并允许传输后检测，再在顶部“文本向量”／“原画面向量”中选择并保存。
+在 **设置 → AI 模型 → 媒体理解 → Embedding 服务**侧栏直接选择内置服务，填写自己的平台 API Key；自定义端点使用 **添加服务**。内置条目带入基础地址、协议和可编辑示例模型。允许传输后检测，再启用服务，在顶部“文本向量”／“原画面向量”中选择并保存。预设不会自动请求、绑定用途或扫描全库。
 
 | 服务预设 | API 基础地址 | 示例 Model ID | 接口协议 |
 | --- | --- | --- | --- |
-| 阿里百炼 · 文本 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `text-embedding-v4` | OpenAI 标准文本 |
-| 阿里百炼 · 多模态 | `https://dashscope.aliyuncs.com/api/v1` | `qwen3-vl-embedding` | 百炼原生融合 |
+| 阿里百炼 · 文本 | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `text-embedding-v4` | OpenAI 标准文本 |
+| 阿里百炼 · 多模态 | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1` | `qwen3-vl-embedding` | 百炼原生融合 |
 | 火山方舟 · 多模态 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-embedding-vision-251215` | 方舟原生融合 |
 | 硅基流动 · 文本 | `https://api.siliconflow.cn/v1` | `BAAI/bge-m3` | OpenAI 标准文本 |
 | 硅基流动 · 多模态 | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-VL-Embedding-8B` | 硅基原生图像／文本 |
 
-百炼预设采用官方示例域名；控制台提供工作空间专属域名时，可将主机改为 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`，文本保留 `/compatible-mode/v1`，多模态保留 `/api/v1`，替换其中的 `WorkspaceId`。密钥需要属于所用地域／工作空间。方舟填写推理 API Key，使用当前已开通的模型 ID 或推理接入点 ID；基础地址保留 `/api/v3`。网关地址和模型别名均可编辑，Lap 不按模型名称猜测实际能力。
+百炼文本与多模态预设均需填写自己的工作空间地址：文本保留 `/compatible-mode/v1`，多模态保留 `/api/v1`。密钥需要属于所用地域／工作空间。方舟填写推理 API Key，使用当前已开通的模型 ID 或推理接入点 ID；基础地址保留 `/api/v3`。网关地址和模型别名均可编辑，Lap 不按模型名称猜测实际能力。
 
 百炼文本与硅基文本预设均使用文本 `input` 和稠密浮点向量，默认普通文本；实际维度由检测读取。多模态预设同样可编码分析文本及文字查询，因此方舟原生模型可以同时用于“文本向量”和“原画面向量”。这两个用途保留独立索引身份。
 
@@ -104,6 +128,12 @@ ssh -N -L 8003:127.0.0.1:8003 用户@服务器
 
 ## 官方资料
 
+- [百炼 OpenAI 兼容说明](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)
+- [硅基 Chat Completions](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)
+- [方舟 Chat 调用示例](https://docs.volcengine.com/docs/ark/deep-thinking?lang=en)
+- [DeepSeek API](https://api-docs.deepseek.com/)
+- [LongCat Chat](https://longcat.chat/platform/docs/zh/api/chat)
+- [LongCat 模型列表](https://longcat.chat/platform/docs/zh/api/models)
 - [OpenAI 可用模型列表](https://developers.openai.com/api/reference/resources/models/methods/list)
 - [OpenAI 创建 Embedding](https://developers.openai.com/api/reference/resources/embeddings/methods/create)
 - [硅基流动 Embeddings 接口](https://api-docs.siliconflow.cn/docs/api/embeddings-post)

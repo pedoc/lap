@@ -283,8 +283,8 @@ pub(super) async fn probe(
         ..Default::default()
     };
     check.validate()?;
-    if !model.provider.allow_media || !model.provider.enabled {
-        return Err("请先启用服务并允许发送媒体／文字".into());
+    if !model.provider.allow_media {
+        return Err("请先允许向此服务发送媒体／文字以执行检测".into());
     }
     if !model.supports(cap) {
         return Err("请先勾选待检测能力".into());

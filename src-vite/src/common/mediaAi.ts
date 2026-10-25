@@ -11,13 +11,28 @@ export const EMBEDDING_PROTOCOLS: Record<EmbeddingProtocol, { label: string; hin
   ark_multimodal: { label: 'protocol_ark_multimodal', hint: 'ark_protocol_hint', modelList: false, queryInstruction: true, queryPresets: false },
   siliconflow_multimodal: { label: 'protocol_siliconflow_multimodal', hint: 'siliconflow_protocol_hint', modelList: true, queryInstruction: false, queryPresets: false },
 };
-export const EMBEDDING_SERVICE_PRESETS: { id: string; label: string; baseUrl: string; protocol: EmbeddingProtocol; modelId: string }[] = [
-  { id: 'dashscope_text', label: 'preset_dashscope_text', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai_text', modelId: 'text-embedding-v4' },
-  { id: 'dashscope_multimodal', label: 'preset_dashscope_multimodal', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', protocol: 'dashscope_multimodal', modelId: 'qwen3-vl-embedding' },
+export const EMBEDDING_SERVICE_PRESETS: { id: string; label: string; baseUrl: string; protocol: EmbeddingProtocol; modelId: string; modelList?: boolean }[] = [
+  { id: 'dashscope_text', label: 'preset_dashscope_text', baseUrl: 'https://your-workspace-id.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', protocol: 'openai_text', modelId: 'text-embedding-v4', modelList: false },
+  { id: 'dashscope_multimodal', label: 'preset_dashscope_multimodal', baseUrl: 'https://your-workspace-id.cn-beijing.maas.aliyuncs.com/api/v1', protocol: 'dashscope_multimodal', modelId: 'qwen3-vl-embedding' },
   { id: 'ark_multimodal', label: 'preset_ark_multimodal', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', protocol: 'ark_multimodal', modelId: 'doubao-embedding-vision-251215' },
   { id: 'siliconflow_text', label: 'preset_siliconflow_text', baseUrl: 'https://api.siliconflow.cn/v1', protocol: 'openai_text', modelId: 'BAAI/bge-m3' },
   { id: 'siliconflow_multimodal', label: 'preset_siliconflow_multimodal', baseUrl: 'https://api.siliconflow.cn/v1', protocol: 'siliconflow_multimodal', modelId: 'Qwen/Qwen3-VL-Embedding-8B' },
 ];
+export interface BuiltinServicePreset { id: string; kind: MediaServiceKind; label: string; baseUrl: string; protocol: EmbeddingProtocol; modelId: string; capabilities?: MediaCapability[]; modelList?: boolean }
+export const LLM_SERVICE_PRESETS: BuiltinServicePreset[] = [
+  { id: 'builtin-llm-dashscope', kind: 'llm', label: 'preset_llm_dashscope', baseUrl: 'https://your-workspace-id.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', protocol: 'openai_text', modelId: 'qwen3.8-max', capabilities: ['text', 'image'], modelList: false },
+  { id: 'builtin-llm-siliconflow', kind: 'llm', label: 'preset_llm_siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', protocol: 'openai_text', modelId: 'deepseek-ai/DeepSeek-V4-Flash' },
+  { id: 'builtin-llm-ark', kind: 'llm', label: 'preset_llm_ark', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', protocol: 'openai_text', modelId: 'doubao-seed-2-1-pro-260915', capabilities: ['text', 'image', 'video_frames'], modelList: false },
+  { id: 'builtin-llm-deepseek', kind: 'llm', label: 'preset_llm_deepseek', baseUrl: 'https://api.deepseek.com/v1', protocol: 'openai_text', modelId: 'deepseek-flash', capabilities: ['text', 'image'], modelList: false },
+  { id: 'builtin-llm-longcat', kind: 'llm', label: 'preset_llm_longcat', baseUrl: 'https://api.longcat.chat/openai/v1', protocol: 'openai_text', modelId: 'LongCat-2.0' },
+];
+export const BUILTIN_SERVICE_PRESETS: BuiltinServicePreset[] = [
+  ...LLM_SERVICE_PRESETS,
+  ...EMBEDDING_SERVICE_PRESETS.map(preset => ({ ...preset, id: `builtin-embedding-${preset.id.replaceAll('_', '-')}`, kind: 'embedding' as const })),
+];
+const BUILTIN_SERVICE_IDS = new Set(BUILTIN_SERVICE_PRESETS.map(preset => preset.id));
+export const isBuiltinService = (provider: MediaProvider) => BUILTIN_SERVICE_IDS.has(provider.id);
+export function hasWorkspacePlaceholder(value: string) { try { return new URL(value).hostname.startsWith('your-workspace-id.'); } catch { return false; } }
 export type MediaRole = 'media' | 'text' | 'embedding' | 'multimodalEmbedding';
 export interface MediaProvider {
   id: string; name: string; baseUrl: string; enabled: boolean; allowMedia: boolean;
@@ -48,6 +63,29 @@ export const newMediaModel = (providerId: string): MediaModel => ({
   capabilities: ['text', 'image'], maxOutputTokens: 2048,
   embedding: { dimensions: null, queryInstruction: '' }, tested: {},
 });
+function serviceEndpoint(value: string) {
+  try {
+    const url = new URL(value.trim());
+    let path = url.pathname.replace(/\/+$/, '');
+    if (!/\/v\d+$/.test(path)) path += '/v1';
+    return `${url.origin}${path}${url.search}${url.hash}`;
+  } catch { return value.trim().replace(/\/+$/, ''); }
+}
+export function appendBuiltinServices(configuration: MediaConfiguration, label: (key: string) => string) {
+  for (const preset of BUILTIN_SERVICE_PRESETS) {
+    if (configuration.providers.some(p => p.id === preset.id)) continue;
+    if (configuration.providers.some(p => (p.kind === preset.kind || preset.kind === 'embedding' && preset.protocol === 'openai_text' && p.kind === 'llm' && p.openaiEmbeddings)
+      && (p.kind === 'llm' ? 'openai_text' : p.embeddingProtocol) === preset.protocol && serviceEndpoint(p.baseUrl) === serviceEndpoint(preset.baseUrl))) continue;
+    const provider = { ...newProvider(preset.kind), id: preset.id, name: label(preset.label), baseUrl: preset.baseUrl, embeddingProtocol: preset.protocol, enabled: false };
+    configuration.providers.push(provider);
+    if (!preset.modelId) continue;
+    const model = { ...newMediaModel(provider.id), id: `${preset.id}-example`, remoteId: preset.modelId, name: preset.modelId };
+    if (configuration.models.some(current => current.id === model.id)) continue;
+    model.capabilities = preset.kind === 'llm' ? [...(preset.capabilities || ['text'])] : preset.protocol === 'openai_text' ? ['embed_text'] : ['embed_text', 'embed_multimodal'];
+    model.maxOutputTokens = null;
+    configuration.models.push(model);
+  }
+}
 export function outputTokenError(value: unknown) {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return 'output_tokens_invalid';

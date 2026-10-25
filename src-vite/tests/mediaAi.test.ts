@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { EMBEDDING_PROTOCOLS, eligibleModels, modelsForRole, rankedMediaHits, newProvider, newMediaModel, outputTokenError, type EmbeddingProtocol, type MediaConfiguration, type MediaHit } from '../src/common/mediaAi.ts';
+import { appendBuiltinServices, BUILTIN_SERVICE_PRESETS, EMBEDDING_PROTOCOLS, eligibleModels, hasWorkspacePlaceholder, isBuiltinService, modelsForRole, rankedMediaHits, newProvider, newMediaModel, outputTokenError, type EmbeddingProtocol, type MediaConfiguration, type MediaHit } from '../src/common/mediaAi.ts';
 
 test('runtime model choices require the specific tested capability and an enabled permitted service', () => {
   const p = newProvider(); p.allowMedia = true;
@@ -69,4 +69,41 @@ test('output budgets accept large API limits and a server default without an 819
   for (const value of [null, undefined, 1, 8192, 384000, 1048576, 0xFFFFFFFF]) assert.equal(outputTokenError(value), null);
   for (const value of [0, -1, 1.5, NaN, Infinity, '384000']) assert.equal(outputTokenError(value), 'output_tokens_invalid');
   assert.equal(outputTokenError(0x100000000), 'output_tokens_range');
+});
+
+test('the builtin service directory is deterministic, disabled and idempotent without binding a role', () => {
+  const c: MediaConfiguration = { version: 2, revision: 0, providers: [], models: [], roles: { media: null, text: null, embedding: null, multimodalEmbedding: null } };
+  const roles = JSON.stringify(c.roles);
+  appendBuiltinServices(c, key => key);
+  assert.equal(c.providers.length, 10); assert.equal(c.models.length, 10);
+  assert.equal(c.providers.filter(p => p.kind === 'llm').length, 5);
+  assert.equal(c.providers.filter(p => p.kind === 'embedding').length, 5);
+  assert.equal(JSON.stringify(c.roles), roles);
+  for (const p of c.providers) {
+    assert.equal(isBuiltinService(p), true); assert.equal(p.enabled, false); assert.equal(p.allowMedia, false);
+    assert.equal(p.allowBackground, false); assert.equal(p.openaiEmbeddings, false); assert.equal(p.credentialRevision, '');
+    const m = c.models.find(model => model.providerId === p.id)!;
+    assert.deepEqual(Object.keys(m.tested), []); assert.equal(m.maxOutputTokens, null); assert.equal(m.embedding.queryInstruction, '');
+    if (p.kind === 'llm') assert.deepEqual(m.capabilities, BUILTIN_SERVICE_PRESETS.find(preset => preset.id === p.id)?.capabilities || ['text']);
+  }
+  const first = JSON.stringify(c); appendBuiltinServices(c, key => `renamed-${key}`);
+  assert.equal(JSON.stringify(c), first, 'the directory never overwrites existing entries');
+});
+
+test('builtin identity and canonical endpoint matching preserve edited services, removed models and shared keys', () => {
+  const existing = newProvider(); existing.id = 'existing'; existing.name = 'My proxy'; existing.baseUrl = 'https://API.SILICONFLOW.CN:443/v1/'; existing.openaiEmbeddings = true;
+  existing.credentialRevision = 'synthetic-key-revision';
+  const changed = { ...newProvider('embedding'), id: 'builtin-embedding-ark-multimodal', name: 'Edited native service', baseUrl: 'https://custom.example/v3', embeddingProtocol: 'ark_multimodal' as const, timeoutSeconds: 500 };
+  const c: MediaConfiguration = { version: 2, revision: 1, providers: [existing, changed], models: [], roles: { media: null, text: null, embedding: null, multimodalEmbedding: null } };
+  const before = JSON.stringify([existing, changed]);
+  appendBuiltinServices(c, key => key);
+  assert.equal(JSON.stringify(c.providers.slice(0, 2)), before);
+  assert.equal(c.providers.some(p => p.id === 'builtin-llm-siliconflow'), false);
+  assert.equal(c.providers.some(p => p.id === 'builtin-embedding-siliconflow-text'), false, 'a shared existing connection covers the text embedding directory entry');
+  assert.equal(c.models.some(m => m.providerId === changed.id), false, 'a deleted example is not refilled');
+  assert.equal(c.providers.filter(p => p.id === changed.id).length, 1);
+  assert.equal(new Set(c.providers.map(p => p.id)).size, c.providers.length);
+  assert.equal(new Set(c.models.map(m => m.id)).size, c.models.length);
+  assert.equal(hasWorkspacePlaceholder('https://your-workspace-id.cn-beijing.maas.aliyuncs.com/api/v1'), true);
+  assert.equal(hasWorkspacePlaceholder('https://my-workspace.cn-beijing.maas.aliyuncs.com/api/v1'), false);
 });

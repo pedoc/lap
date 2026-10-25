@@ -280,6 +280,104 @@ async fn shared_llm_text_embedding_probe_obeys_the_flag_and_keeps_batch_ordering
     );
     assert_eq!(worker.join().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn disabled_services_can_be_manually_probed_without_becoming_enabled_for_runtime() {
+    for capability in [Capability::Text, Capability::EmbedText] {
+        let (remote, route, reply) = if capability == Capability::Text {
+            (
+                "disabled-generator",
+                "chat/completions",
+                completion("Hello"),
+            )
+        } else {
+            (
+                "disabled-embedding",
+                "embeddings",
+                json!({"model":"embedding","data":[{"index":0,"embedding":[3.0,4.0]},{"index":1,"embedding":[4.0,3.0]}],"usage":{"prompt_tokens":2,"total_tokens":2}}),
+            )
+        };
+        let (base, worker) = fixture_at_path(
+            "/gateway/v1/",
+            Some(route),
+            Some("synthetic-disabled-probe-key"),
+            vec![(200, reply)],
+        );
+        let mut model = at(base, remote);
+        model.model.capabilities = [capability].into_iter().collect();
+        model.provider.enabled = false;
+        let provider_before = serde_json::to_value(&model.provider).unwrap();
+        super::commands::probe(
+            &mut model,
+            Some("synthetic-disabled-probe-key".into()),
+            capability,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&model.provider).unwrap(),
+            provider_before
+        );
+        assert!(model.tested(capability));
+        assert!(model.require(capability, false).is_err());
+        model.provider.enabled = true;
+        assert!(model.require(capability, false).is_ok());
+        model.provider.allow_media = false;
+        assert!(
+            super::commands::probe(
+                &mut model,
+                Some("synthetic-disabled-probe-key".into()),
+                capability
+            )
+            .await
+            .unwrap_err()
+            .contains("请先允许")
+        );
+        assert!(model.require(capability, false).is_err());
+        assert_eq!(worker.join().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn probing_a_disabled_service_still_requires_the_shared_flag_and_an_exact_model_class() {
+    let mut model = at("http://127.0.0.1:1/v1/".into(), "disabled-embedding");
+    model.provider.kind = ProviderKind::Llm;
+    model.provider.enabled = false;
+    assert!(
+        super::commands::probe(
+            &mut model,
+            Some("synthetic-key".into()),
+            Capability::EmbedText
+        )
+        .await
+        .unwrap_err()
+        .contains("待检测能力")
+    );
+    model.provider.openai_embeddings = true;
+    model.model.capabilities.insert(Capability::Text);
+    assert!(
+        super::commands::probe(
+            &mut model,
+            Some("synthetic-key".into()),
+            Capability::EmbedText
+        )
+        .await
+        .unwrap_err()
+        .contains("不匹配")
+    );
+    model.model.capabilities = [Capability::Text].into_iter().collect();
+    assert!(
+        super::commands::probe(
+            &mut model,
+            Some("synthetic-key".into()),
+            Capability::EmbedText
+        )
+        .await
+        .unwrap_err()
+        .contains("待检测能力")
+    );
+    assert!(model.model.tested.is_empty());
+}
 #[tokio::test]
 async fn embeddings_reject_duplicate_indexes_and_invalid_dimensions() {
     for data in [

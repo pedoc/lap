@@ -45,6 +45,9 @@ pub fn http(provider: &Provider) -> Result<reqwest_ai::Client, String> {
     let base = config::base_url(&provider.base_url)?;
     let url = reqwest_ai::Url::parse(&base).map_err(|_| "API 地址无效")?;
     let host = url.host_str().unwrap_or_default().trim_matches(['[', ']']);
+    if host.starts_with("your-workspace-id.") {
+        return Err("请先将百炼占位地址替换为控制台提供的工作空间 API 基础地址。".into());
+    }
     let local = host == "localhost"
         || host
             .parse::<std::net::IpAddr>()
@@ -476,6 +479,19 @@ pub async fn embed_multimodal_query(model: &Resolved, text: String) -> Result<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_placeholders_are_storable_but_never_construct_http_clients() {
+        for path in ["compatible-mode/v1", "api/v1"] {
+            let provider = Provider {
+                base_url: format!("https://your-workspace-id.cn-beijing.maas.aliyuncs.com/{path}"),
+                ..Default::default()
+            };
+            assert!(config::base_url(&provider.base_url).is_ok());
+            assert!(http(&provider).unwrap_err().contains("工作空间"));
+            assert!(sdk(&provider, Some("synthetic-key".into())).is_err());
+        }
+    }
+
     #[test]
     fn dashscope_fusion_does_not_assume_openai_index_metadata() {
         for item in [
