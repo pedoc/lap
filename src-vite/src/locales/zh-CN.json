@@ -1911,6 +1911,7 @@
     }
   },
   "settings": {
+    "close": "关闭设置",
     "cuda": {
       "title": "CUDA 运行组件",
       "intro": "可选下载 CUDA 12 / cuDNN 9 依赖，不修改系统驱动或 PATH，无需安装完整 CUDA Toolkit。安装后测试所选模型，自动模式会优先尝试 CUDA。",

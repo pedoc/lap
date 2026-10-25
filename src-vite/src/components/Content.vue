@@ -2158,6 +2158,14 @@ function getActivePreviewMediaRef() {
   return null;
 }
 
+async function prepareSettingsOpen() {
+  const preview = getActivePreviewMediaRef();
+  await preview?.exitPreviewFullScreen?.();
+  if (preview?.isFullScreen) return false;
+  stopSlideShow();
+  return true;
+}
+
 async function seekMediaAiVideo(seconds: number) {
   if (!isFilmstripView.value) showQuickView.value = true;
   await nextTick();
@@ -11573,6 +11581,7 @@ watch([contentReady, showWelcomeContent], ([ready, welcome]) => {
 
 defineExpose({
   openHomePhoto,
+  prepareSettingsOpen,
   focusContent: activateContentPane,
   refreshCenteredGridLayout: refreshGridLayoutPreservingScroll,
 });

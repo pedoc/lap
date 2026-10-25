@@ -189,8 +189,12 @@ async function confirmDiscard(includeManifest = true) {
   return ask(t('settings.ai_models.discard_draft'), { kind: 'warning' });
 }
 async function changeTask(kind: string) {
-  if (busy.value || mediaSettings.value?.busy || kind === task.value || !await confirmDiscard(false)) return;
+  if (!['semantic', 'face', 'ocr', 'detection', 'media'].includes(kind)) return false;
+  if (kind === task.value) return true;
+  if (busy.value || mediaSettings.value?.busy || !await confirmDiscard(false)) return false;
   task.value = kind;
+  if (loading.value) await refresh();
+  return true;
 }
 
 function choose(id: string) {
@@ -401,5 +405,5 @@ onMounted(async () => {
   if (mounted) await refresh();
 });
 onUnmounted(() => { mounted = false; request++; unlisten.forEach(fn => fn()); });
-defineExpose({ confirmDiscard });
+defineExpose({ confirmDiscard, changeTask });
 </script>

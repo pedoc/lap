@@ -73,7 +73,9 @@ test('views no longer instantiate Leaflet maps or Leaflet markers; SDK markers a
 test('every Tauri window uses the startup proxy snapshot and main creation retains platform configuration',()=>{
  const root=new URL('../../src-tauri/',import.meta.url);for(const name of ['tauri.conf.json','tauri.windows.conf.json']){const file=JSON.parse(readFileSync(new URL(name,root),'utf8'));assert.equal(file.app.windows[0].create,false);}
  const main=readFileSync(new URL('src/main.rs',root),'utf8');assert.ok(main.includes('WebviewWindowBuilder::from_config'));assert.ok(main.includes('builder.proxy_url(proxy)'));
- const home=readFileSync(new URL('../src/views/Home.vue',import.meta.url),'utf8'),content=readFileSync(new URL('../src/components/Content.vue',import.meta.url),'utf8');assert.ok(home.includes('...await startupWindowProxy()'));assert.equal((content.match(/new WebviewWindow/g)||[]).length,(content.match(/\.\.\.await startupWindowProxy\(\)/g)||[]).length);
+ const home=readFileSync(new URL('../src/views/Home.vue',import.meta.url),'utf8'),content=readFileSync(new URL('../src/components/Content.vue',import.meta.url),'utf8');
+ for(const source of [home,content])assert.equal((source.match(/new WebviewWindow/g)||[]).length,(source.match(/\.\.\.await startupWindowProxy\(\)/g)||[]).length);
+ assert.equal((home.match(/new WebviewWindow/g)||[]).length,0,'Home settings stay in place without a separate window');
 });
 
 test('proxy changes are checked even when reusing the same native map and theme',()=>withDom(async()=>{

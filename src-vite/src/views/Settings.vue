@@ -1,9 +1,13 @@
 <template>
-  <div class="w-screen h-screen flex flex-col bg-base-300 text-base-content/70 overflow-hidden">
+  <div class="flex flex-col bg-base-300 text-base-content/70 overflow-hidden" :class="props.embedded ? 'w-full h-full min-w-0 min-h-0' : 'w-screen h-screen'">
     <!-- Title Bar -->
-    <TitleBar :titlebar="$t('sidebar.settings')" :resizable="false" viewName="Settings" class="shrink-0 z-50" />
+    <TitleBar v-if="!props.embedded" :titlebar="$t('sidebar.settings')" :resizable="false" viewName="Settings" class="shrink-0 z-50" />
+    <div v-else class="flex shrink-0 items-center justify-between gap-3 border-b border-base-content/10 px-3 py-2">
+      <h1 class="text-sm font-semibold">{{ $t('sidebar.settings') }}</h1>
+      <button type="button" class="btn btn-sm btn-ghost gap-1" :aria-label="$t('settings.close')" @click="requestClose"><IconClose class="h-4 w-4" aria-hidden="true" />{{ $t('settings.close') }}</button>
+    </div>
 
-    <div class="flex flex-1 overflow-hidden relative">
+    <div class="flex flex-1 min-w-0 min-h-0 overflow-hidden relative">
       <!-- Sidebar -->
       <div class="w-40 m-1 p-2 bg-base-200/30 flex flex-col rounded-box overflow-y-auto shrink-0 select-none">
         <div
@@ -555,7 +559,7 @@
 import { mediaViewGridLabels } from '@/common/mediaViews';
 import { mediaGridLabels } from '@/common/mediaTitle';
 
-import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
+import { ref, watch, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import { LogicalSize } from '@tauri-apps/api/dpi';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { emit } from '@tauri-apps/api/event';
@@ -580,6 +584,8 @@ import {
 import { formatFileSize, isLinux, isMac, setTheme, SCALE_VALUES } from '@/common/utils';
 import { getShortcutLabels, ShortcutActionId, ShortcutPlatform } from '@/common/shortcuts';
 import { useToast } from '@/common/toast';
+import { pendingChanges } from '@/common/pendingChanges';
+import { useUIStore } from '@/stores/uiStore';
 import { IconClose, IconRestore } from '@/common/icons';
 
 import AiModelSettings from '@/components/AiModelSettings.vue';
@@ -591,10 +597,14 @@ import BackupDialog from '@/components/BackupDialog.vue';
 import RestoreDialog from '@/components/RestoreDialog.vue';
 import TButton from '@/components/TButton.vue';
 
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+const componentEmit = defineEmits<{ close: [] }>();
+
 /// i18n
 const { locale, messages, t } = useI18n();
 const localeMsg = computed(() => messages.value[config.settings.language] as any);
 const toast = useToast();
+const uiStore = useUIStore();
 const shortcutPlatform: ShortcutPlatform = isMac ? 'mac' : (isLinux ? 'linux' : 'windows');
 const settingsTabs = [
   { id: SETTINGS_TAB.GENERAL, label: 'settings.general.title' },
@@ -613,16 +623,31 @@ const rawPreviewFields = [
 ];
 
 const appWindow = getCurrentWebviewWindow()
-const aiModelsRef = ref<{ confirmDiscard: () => Promise<boolean> } | null>(null);
+const aiModelsRef = ref<{ confirmDiscard: () => Promise<boolean>; changeTask: (task: string) => Promise<boolean> } | null>(null);
+let disposed = false;
 let changingTab = false;
+async function confirmDiscard() { return pendingChanges.confirmOne('model-settings'); }
 async function selectSettingsTab(id: number) {
-  if (changingTab || id === config.settings.tabIndex) return;
+  if (disposed || changingTab || !settingsTabs.some(tab => tab.id === id)) return false;
+  if (id === config.settings.tabIndex) return true;
   changingTab = true;
   try {
     const modelEditor = aiModelsRef.value;
-    if (modelEditor && !await modelEditor.confirmDiscard()) return;
-    if (modelEditor === aiModelsRef.value) config.settings.tabIndex = id;
+    if (!await confirmDiscard() || disposed || modelEditor !== aiModelsRef.value) return false;
+    config.settings.tabIndex = id;
+    return true;
   } finally { changingTab = false; }
+}
+async function openSection(tabIndex?: number, aiTask?: string) {
+  const targetTab = tabIndex ?? (aiTask ? SETTINGS_TAB.IMAGE_SEARCH : config.settings.tabIndex);
+  if (!await selectSettingsTab(targetTab)) return false;
+  await nextTick();
+  if (disposed || config.settings.tabIndex !== targetTab) return false;
+  return aiTask ? await aiModelsRef.value?.changeTask(aiTask) ?? false : true;
+}
+function requestClose() {
+  if (props.embedded) componentEmit('close');
+  else void appWindow.close();
 }
 const dbStorageDir = ref('');
 const isChangingDbStorage = ref(false);
@@ -1085,171 +1110,177 @@ onMounted(async () => {
     networkProxyUrl.value = savedProxy || '';
     proxyEnabled.value = !!savedProxy;
     appResources.value = await getAppResourcesStatus();
-    unlistenAppResourcesProgress = await listenAppResourcesDownloadProgress((event: any) => {
+    const stop = await listenAppResourcesDownloadProgress((event: any) => {
       appResourcesProgress.value = Math.max(0, Math.min(100, Number(event?.payload?.progress || 0)));
     });
+    if (disposed) stop(); else unlistenAppResourcesProgress = stop;
   } catch (error) {
     console.error('Failed to load network/resource settings:', error);
   }
+  if (disposed) return;
   if (!settingsTabs.some(tab => tab.id === config.settings.tabIndex)) {
     config.settings.tabIndex = SETTINGS_TAB.GENERAL;
   }
   applyWindowScale(Number(config.settings.scale || 1));
-  dbStorageDir.value = (await getDbStorageDir()) || '';
-  hasCustomDbStorage.value = await isUsingCustomDbStorage();
+  const [storageDir, customStorage] = await Promise.all([getDbStorageDir(), isUsingCustomDbStorage()]);
+  if (disposed) return;
+  dbStorageDir.value = storageDir || '';
+  hasCustomDbStorage.value = customStorage;
 
   
   // Show window after mount
-  await appWindow.show();
+  if (!props.embedded) await appWindow.show();
 
   // Window destruction is coordinated centrally after all pending-change checks.
 });
 
 onUnmounted(() => {
+  disposed = true;
   if (unlistenAppResourcesProgress) {
     unlistenAppResourcesProgress();
     unlistenAppResourcesProgress = null;
   }
-  document.documentElement.style.fontSize = '';
+  if (!props.embedded) document.documentElement.style.fontSize = '';
   window.removeEventListener('keydown', handleKeyDown);
 });
 
 // general settings
 watch(() => config.settings.tabIndex, (newValue) => {
-  emit('settings-settingsTabIndex-changed', newValue);
+  if (!props.embedded) emit('settings-settingsTabIndex-changed', newValue);
 });
 watch(() => config.settings.appearance, (newValue) => {
   setTheme(newValue, newValue === 0 ? config.settings.lightTheme : config.settings.darkTheme);
-  emit('settings-appearance-changed', newValue);
+  if (!props.embedded) emit('settings-appearance-changed', newValue);
 });
 watch(() => config.settings.lightTheme, (newValue) => {
   setTheme(config.settings.appearance, newValue);
-  emit('settings-lightTheme-changed', newValue);
+  if (!props.embedded) emit('settings-lightTheme-changed', newValue);
 });
 watch(() => config.settings.darkTheme, (newValue) => {
   setTheme(config.settings.appearance, newValue);
-  emit('settings-darkTheme-changed', newValue);
+  if (!props.embedded) emit('settings-darkTheme-changed', newValue);
 });
 watch(() => config.settings.scale, (newValue) => {
   applyWindowScale(Number(newValue || 1));
   updateSettingsWindowSize(Number(newValue || 1));
-  emit('settings-scale-changed', newValue);
+  if (!props.embedded) emit('settings-scale-changed', newValue);
 });
 watch(() => config.settings.language, (newValue) => {
   locale.value = newValue;
-  emit('settings-language-changed', newValue);
+  if (!props.embedded) emit('settings-language-changed', newValue);
 }, { immediate: true });
 watch(() => config.settings.showToolTip, (newValue) => {
-  emit('settings-showToolTip-changed', newValue);
+  if (!props.embedded) emit('settings-showToolTip-changed', newValue);
 });
 watch(() => config.settings.showStatusBar, (newValue) => {
-  emit('settings-showStatusBar-changed', newValue);
+  if (!props.embedded) emit('settings-showStatusBar-changed', newValue);
 });
 watch(() => config.settings.autoCheckUpdates, (newValue) => {
-  emit('settings-autoCheckUpdates-changed', newValue);
+  if (!props.embedded) emit('settings-autoCheckUpdates-changed', newValue);
 });
 // watch(() => config.settings.showComment, (newValue) => {
 //   emit('settings-showComment-changed', newValue);
 // });
 watch(() => config.settings.debugMode, (newValue) => {
-  emit('settings-debugMode-changed', newValue);
+  if (!props.embedded) emit('settings-debugMode-changed', newValue);
 });
 watch(() => config.settings.folderSort, (newValue) => {
-  emit('settings-folderSort-changed', newValue);
+  if (!props.embedded) emit('settings-folderSort-changed', newValue);
 });
 watch(() => config.settings.dateTimeFormat, (newValue) => {
-  emit('settings-dateTimeFormat-changed', newValue);
+  if (!props.embedded) emit('settings-dateTimeFormat-changed', newValue);
 });
 watch(() => config.settings.showSubfolderFiles, (newValue) => {
-  emit('settings-showSubfolderFiles-changed', newValue);
+  if (!props.embedded) emit('settings-showSubfolderFiles-changed', newValue);
 });
 watch(() => config.settings.groupRawJpegPairs, (newValue) => {
-  emit('settings-groupRawJpegPairs-changed', newValue);
+  if (!props.embedded) emit('settings-groupRawJpegPairs-changed', newValue);
 });
 
 watch(() => config.settings.rawPairDisplaySource, (newValue) => {
-  emit('settings-rawPairDisplaySource-changed', newValue);
+  if (!props.embedded) emit('settings-rawPairDisplaySource-changed', newValue);
 });
 watch(() => config.settings.rawPreviewSource, (newValue) => {
-  emit('settings-rawPreviewSource-changed', newValue);
+  if (!props.embedded) emit('settings-rawPreviewSource-changed', newValue);
 });
 watch(() => config.settings.rawRenderBrightness, (newValue) => {
-  emit('settings-rawRenderBrightness-changed', newValue);
+  if (!props.embedded) emit('settings-rawRenderBrightness-changed', newValue);
 });
 
 // grid view settings
 watch(() => config.settings.thumbnailSize, (newValue) => {
-  emit('settings-thumbnailSize-changed', newValue);
+  if (!props.embedded) emit('settings-thumbnailSize-changed', newValue);
 });
 
 watch(() => config.settings.mapProvider, (newValue) => {
-  emit('settings-mapProvider-changed', newValue);
+  if (!props.embedded) emit('settings-mapProvider-changed', newValue);
 });
 watch(() => config.settings.tiandituToken, (newValue) => {
-  emit('settings-tiandituToken-changed', newValue);
+  if (!props.embedded) emit('settings-tiandituToken-changed', newValue);
 });
 watch(() => config.settings.grid.style, (newValue) => {
-  emit('settings-gridStyle-changed', newValue);
+  if (!props.embedded) emit('settings-gridStyle-changed', newValue);
 });
 watch(() => config.settings.grid.scaling, (newValue) => {
-  emit('settings-gridScaling-changed', newValue);
+  if (!props.embedded) emit('settings-gridScaling-changed', newValue);
 });
 watch(() => config.settings.grid.thumbnailCorners, (newValue) => {
-  emit('settings-gridThumbnailCorners-changed', newValue);
+  if (!props.embedded) emit('settings-gridThumbnailCorners-changed', newValue);
 });
 watch(() => config.settings.grid.labelPrimary, (newValue) => {
-  emit('settings-gridLabelPrimary-changed', newValue);
+  if (!props.embedded) emit('settings-gridLabelPrimary-changed', newValue);
 });
 watch(() => config.settings.grid.labelSecondary, (newValue) => {
-  emit('settings-gridLabelSecondary-changed', newValue);
+  if (!props.embedded) emit('settings-gridLabelSecondary-changed', newValue);
 });
 watch(() => config.settings.grid.thumbnailBadge, (newValue) => {
-  emit('settings-gridThumbnailBadge-changed', newValue);
+  if (!props.embedded) emit('settings-gridThumbnailBadge-changed', newValue);
 });
 watch(() => config.settings.grid.previewPosition, (newValue) => {
-  emit('settings-filmStripViewPreviewPosition-changed', newValue);
+  if (!props.embedded) emit('settings-filmStripViewPreviewPosition-changed', newValue);
 });
 watch(() => config.settings.mapMarkerSize, (newValue) => {
-  emit('settings-mapMarkerSize-changed', newValue);
+  if (!props.embedded) emit('settings-mapMarkerSize-changed', newValue);
 });
 // image viewer settings
 watch(() => config.settings.mouseWheelMode, (newValue) => {
-  emit('settings-mouseWheelMode-changed', newValue);
+  if (!props.embedded) emit('settings-mouseWheelMode-changed', newValue);
 });
 watch(() => config.settings.navigatorViewMode, (newValue) => {
-  emit('settings-navigatorViewMode-changed', newValue);
+  if (!props.embedded) emit('settings-navigatorViewMode-changed', newValue);
 });
 watch(() => config.settings.navigatorViewSize, (newValue) => {
-  emit('settings-navigatorViewSize-changed', newValue);
+  if (!props.embedded) emit('settings-navigatorViewSize-changed', newValue);
 });
 watch(() => config.settings.navigatorSharpnessGrid, (newValue) => {
-  emit('settings-navigatorSharpnessGrid-changed', newValue);
+  if (!props.embedded) emit('settings-navigatorSharpnessGrid-changed', newValue);
 });
 watch(() => config.settings.viewBackground, (newValue) => {
-  emit('settings-viewBackground-changed', newValue);
+  if (!props.embedded) emit('settings-viewBackground-changed', newValue);
 });
 watch(() => config.settings.slideShowTransition, (newValue) => {
-  emit('settings-slideShowTransition-changed', newValue);
+  if (!props.embedded) emit('settings-slideShowTransition-changed', newValue);
 });
 watch(() => config.settings.autoPlayVideo, (newValue) => {
-  emit('settings-autoPlayVideo-changed', newValue);
+  if (!props.embedded) emit('settings-autoPlayVideo-changed', newValue);
 });
 watch(() => config.settings.loopVideo, (newValue) => {
-  emit('settings-loopVideo-changed', newValue);
+  if (!props.embedded) emit('settings-loopVideo-changed', newValue);
 });
 
 // image search settings
 watch(() => config.settings.imageSearch.thresholdIndex, (newValue) => {
-  emit('settings-imageSearchThresholdIndex-changed', newValue);
+  if (!props.embedded) emit('settings-imageSearchThresholdIndex-changed', newValue);
 });
 
 // face settings
 watch(() => config.settings.face.enabled, (newValue) => {
-  emit('settings-faceEnabled-changed', newValue);
+  if (!props.embedded) emit('settings-faceEnabled-changed', newValue);
 });
 
 // Handle keyboard shortcuts
 function handleKeyDown(event: KeyboardEvent) {
+  if (props.embedded && !uiStore.isInputActive('Settings')) return;
   const navigationKeys = ['Escape'];
 
   // Disable default behavior for certain keys
@@ -1267,12 +1298,13 @@ function handleKeyDown(event: KeyboardEvent) {
       break;
     }
     case 'Escape':
+      event.stopPropagation();
       // Close the topmost dialog first
       if (showBackupDialog.value) { showBackupDialog.value = false; return; }
       if (showRestoreDialog.value) { showRestoreDialog.value = false; return; }
       if (showChangeDbStorageDialog.value) { showChangeDbStorageDialog.value = false; return; }
       if (showResetDbStorageDialog.value) { showResetDbStorageDialog.value = false; return; }
-      appWindow.close(); // Close the window
+      requestClose();
       break;
   }
 }
@@ -1360,11 +1392,13 @@ function normalizeScale(value: number) {
 }
 
 function applyWindowScale(scale: number) {
+  if (props.embedded) return;
   const normalizedScale = normalizeScale(scale);
   document.documentElement.style.fontSize = `${normalizedScale * 16}px`;
 }
 
 async function updateSettingsWindowSize(scale: number) {
+  if (props.embedded) return;
   const normalizedScale = normalizeScale(scale);
   const width = Math.round(SETTINGS_BASE_WIDTH * normalizedScale);
   const height = Math.round(SETTINGS_BASE_HEIGHT * normalizedScale);
@@ -1374,4 +1408,5 @@ async function updateSettingsWindowSize(scale: number) {
   await appWindow.setSize(size);
 }
 
+defineExpose({ confirmDiscard, openSection });
 </script>

@@ -64,6 +64,34 @@ test('a late configuration request cannot switch back to a model selected before
   h.api.draft.value.parameters.threshold = 0.9;
   assert.equal(h.api.draftDirty.value, true);
 });
+
+test('opening a requested AI task during its first configuration load selects that task when loading completes', async () => {
+  const first = deferred(), second = deferred();
+  let requests = 0;
+  const h = harness(async command => command === 'get_ai_configuration' ? (++requests === 1 ? first.promise : second.promise) : undefined);
+  const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
+  const scope = Vue.effectScope();
+  const api: any = scope.run(() => runInNewContext(`${script};({refresh,changeTask,view,task,editingId,draft,loading});`, { ...h.ctx, watch: Vue.watch }));
+  try {
+    assert.equal(api.view.value, null);
+    assert.equal(api.task.value, 'semantic');
+    const initial = api.refresh();
+    const requested = api.changeTask('ocr');
+    await Vue.nextTick();
+    assert.equal(api.loading.value, true);
+    assert.equal(api.task.value, 'ocr');
+    assert.equal(requests, 2, 'Changing task should replace the old in-flight configuration request');
+    second.resolve(fixture());
+    await requested;
+    assert.equal(api.editingId.value, modelId);
+    assert.deepEqual(JSON.parse(JSON.stringify(api.draft.value)), fixture().models[0].configuration);
+    const stale = fixture(); stale.models[0].definition.name = 'Stale configuration';
+    first.resolve(stale);
+    await initial;
+    assert.equal(api.view.value.models[0].definition.name, fixture().models[0].definition.name);
+    assert.equal(api.editingId.value, modelId);
+  } finally { scope.stop(); }
+});
 test('settings tab navigation and destruction consult model draft protection; plain Tab stays in the form', () => {
   const settings = readFileSync(new URL('../src/views/Settings.vue', import.meta.url), 'utf8');
   assert.match(settings, /@click="selectSettingsTab\(tab.id\)"/);

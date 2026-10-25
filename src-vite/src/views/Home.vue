@@ -27,16 +27,16 @@
         tabindex="-1"
         :class="[
           'relative flex shrink-0 my-1 ml-1 z-10 select-none outline-none',
-          !leftPanelLayoutExpanded && isMac ? 'mt-12 mb-8': '',
+          (!leftPanelLayoutExpanded || showSettings) && isMac ? 'mt-12 mb-8': '',
         ]"
-        :style="{ width: leftPanelLayoutExpanded ? leftPanelWidth : '4rem' }"
+        :style="{ width: leftPanelLayoutExpanded && !showSettings ? leftPanelWidth : '4rem' }"
         data-tauri-drag-region
         @focus="uiStore.setActivePane('left-sidebar')"
       >
           <div
             class="absolute inset-y-0 left-0 bg-base-200 rounded-box"
             :class="isDraggingSplitter ? '' : 'transition-[width] duration-200 ease-in-out'"
-            :style="{ width: leftPanelVisualExpanded ? leftPanelWidth : '4rem' }"
+            :style="{ width: leftPanelVisualExpanded && !showSettings ? leftPanelWidth : '4rem' }"
           ></div>
 
           <!-- side bar -->
@@ -51,7 +51,7 @@
                 text=""
                 :tooltip="(item as any).tooltip || item.text"
                 tooltipPlacement="right"
-                :selected="config.main.sidebarIndex === item.index"
+                :selected="!showSettings && config.main.sidebarIndex === item.index"
                 :disabled="item.disabled"
                 @click="clickSidebar(item.index)"
               />
@@ -67,6 +67,7 @@
               text=""
               :tooltip="$t('sidebar.settings')"
               tooltipPlacement="right"
+              :selected="showSettings"
               @click="clickSettings"
             />
           </div>
@@ -74,6 +75,7 @@
           <!-- library title -->
           <div
             v-if="leftPanelMounted || databaseCorrupted"
+            v-show="!showSettings"
             class="absolute top-0 left-[68px] right-0 z-10 h-10 flex items-center"
             data-tauri-drag-region
           >
@@ -105,6 +107,7 @@
           <!-- panel-->
           <div
             v-if="leftPanelMounted || libraryEmpty"
+            v-show="!showSettings"
             class="absolute inset-y-0 left-16 pt-10 px-1 border-l border-base-content/5 flex flex-col overflow-hidden transition-[transform,opacity] duration-200 ease-in-out"
             :class="leftPanelVisualExpanded ? 'translate-x-0 opacity-100' : '-translate-x-full opacity-0 pointer-events-none'"
             :style="{ width: `calc(${leftPanelWidth} - 4rem)` }"
@@ -147,8 +150,8 @@
       <div v-if="!uiStore.isFullScreen"
         class="w-1 shrink-0"
         :class="{
-          'cursor-col-resize splitter-indicator splitter-vertical': leftPanelLayoutExpanded && config.main.sidebarIndex !== SIDEBAR.HOME,
-          'splitter-dragging': leftPanelLayoutExpanded && isDraggingSplitter,
+          'cursor-col-resize splitter-indicator splitter-vertical': !showSettings && leftPanelLayoutExpanded && config.main.sidebarIndex !== SIDEBAR.HOME,
+          'splitter-dragging': !showSettings && leftPanelLayoutExpanded && isDraggingSplitter,
         }" 
         @mousedown="startDraggingSplitter"
         @mouseup="stopDraggingSplitter"
@@ -161,6 +164,7 @@
           showDesktopTitleBar ? 'rounded-tl-box' : '',
         ]"
       >
+        <div v-show="!showSettings" class="contents" data-home-gallery>
         <div v-if="databaseCorrupted" class="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center" role="alert">
           <h2 class="text-lg font-medium">{{ $t('library.database_corrupted') }}</h2>
           <p class="text-sm text-base-content/60">{{ $t('library.database_corrupted_hint') }}</p>
@@ -170,6 +174,8 @@
         </div>
         <HomeDashboard v-if="databaseCorrupted === false && showHomeDashboard" ref="homeDashboardRef" :key="'home-'+libraryVersion" :open-preview="openHomePreview" :library-empty="libraryEmpty" @browse="browseHome" @search="searchFromHome" @filter="filterFromHome" />
         <MediaUtilityView v-if="databaseCorrupted===false && showMediaUtilities" :key="libraryVersion+'-'+libConfig.library.item" :mode="libConfig.library.item==='hidden-media'?'hidden':'deleted'" />
+        </div>
+        <Settings v-if="showSettings" ref="settingsRef" embedded @close="closeSettings" />
       </div>
     </div>
 
@@ -192,21 +198,21 @@
 <script setup lang="ts">
 import { useOcrAutomation } from '@/common/ocrAutomation';
 import { useObjectAutomation } from '@/common/objectAutomation';
-import { startupWindowProxy } from '@/common/windowProxy';
 import { defineAsyncComponent, ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { emit, listen } from '@tauri-apps/api/event';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getName } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { applyAlbumAccess, recheckOfflineAlbums } from '@/common/albumRecovery';
 import { config, libConfig } from '@/common/config';
 import { useAppUpdater } from '@/common/updater';
 import { useUIStore } from '@/stores/uiStore';
-import { isWin, isMac, isLinux, SCALE_VALUES } from '@/common/utils';
+import { isWin, isMac, isLinux } from '@/common/utils';
 import { matchesShortcut, ShortcutPlatform } from '@/common/shortcuts';
-import { SIDEBAR, SETTINGS_TAB, SETTINGS_BASE_WIDTH, SETTINGS_BASE_HEIGHT, PANEL_ANIMATION_MS } from '@/common/constants';
+import { SIDEBAR, SETTINGS_TAB, PANEL_ANIMATION_MS } from '@/common/constants';
 import { getAppConfig, switchLibrary, cancelIndexing, cancelFaceIndex } from '@/common/api';
+import { mediaAiBatch } from '@/common/mediaAi';
 
 // vue components
 import Library from '@/components/Library.vue';
@@ -227,6 +233,7 @@ import TitleBar from '@/components/TitleBar.vue';
 import TButton from '@/components/TButton.vue';
 import MediaUtilityView from '@/components/MediaUtilityView.vue';
 import Content from '@/components/Content.vue';
+import Settings from '@/views/Settings.vue';
 import HomeDashboard from '@/components/HomeDashboard.vue';
 import HomeSidebar from '@/components/HomeSidebar.vue';
 import { homeBrowseRules, homeEntityRules, homePeriodRules, homePreferences, type HomeBrowseTarget, type HomePhoto } from '@/common/homeDashboard';
@@ -302,6 +309,9 @@ const uiStore = useUIStore();
 // Panel component ref
 const panelRef = ref<any>(null);
 const contentRef = ref<any>(null);
+const showSettings = ref(false);
+const settingsRef = ref<{ confirmDiscard: () => Promise<boolean>; openSection: (tabIndex?: number, aiTask?: string) => Promise<boolean> } | null>(null);
+let settingsNavigating = false;
 const leftPanelRootRef = ref<HTMLElement | null>(null);
 const showPanel = computed({
   get: () => config.leftPanel.show,
@@ -469,7 +479,8 @@ const libraryMenuItems = computed(() => {
   items.push({
     label: localeMsg.value.menu.library.manage,
     // icon: IconEdit,
-    action: () => {
+    action: async () => {
+      if (showSettings.value && !await closeSettings()) return;
       showManageLibraries.value = true;
     }
   });
@@ -544,6 +555,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  uiStore.removeInputHandler('Settings');
   window.removeEventListener('focus', handleAccessRecovery);
   clearLeftPanelAnimationTimer();
   window.removeEventListener('keydown', handleHomeKeyDown);
@@ -562,6 +574,7 @@ onBeforeUnmount(() => {
 });
 
 function handleHomeKeyDown(event: KeyboardEvent) {
+  if (showSettings.value) return;
   const target = event.target as HTMLElement | null;
   if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) {
     return;
@@ -608,6 +621,7 @@ function handleHomeKeyDown(event: KeyboardEvent) {
 }
 
 const doSwitchLibrary = async (libraryId: string) => {
+  if (showSettings.value && !await closeSettings()) return;
   try {
     isSwitchingLibrary.value = true;
     databaseCorrupted.value = null;
@@ -674,14 +688,16 @@ const onManageLibrariesUpdated = async () => {
 };
 
 // click sidebar
-function clickSidebar(index: number) {
+async function clickSidebar(index: number) {
+  const wasSettings = showSettings.value;
+  if (wasSettings && !await closeSettings()) return;
   // While the library is corrupt the panel <component> is unmounted; ignore navigation so we don't
   // silently mutate the persisted sidebarIndex and dead-end in a blank pane.
   if (databaseCorrupted.value) return;
   activateMainPanel();
   if (libraryEmpty.value && index !== SIDEBAR.HOME && index !== SIDEBAR.ALBUM && index !== SIDEBAR.LIBRARY && index !== SIDEBAR.OCR && index !== SIDEBAR.OBJECTS) return;
   if (config.main.sidebarIndex === index) {
-    showPanel.value = !showPanel.value;
+    if (!wasSettings) showPanel.value = !showPanel.value;
   } else {
     showPanel.value = true;
     config.main.sidebarIndex = index;
@@ -739,6 +755,7 @@ function filterFromHome() {
 
 // Dragging the splitter
 function startDraggingSplitter(event: MouseEvent) {
+  if (showSettings.value) return;
   if(!leftPanelLayoutExpanded.value || config.main.sidebarIndex === SIDEBAR.HOME) return;
 
   isDraggingSplitter.value = true;
@@ -804,88 +821,36 @@ function handleCollectionMouseMove(event: MouseEvent) {
 
 /// click settings icon
 async function clickSettings(tabIndex?: number, aiTask?: string) {
-  if (typeof tabIndex === 'number') {
-    config.settings.tabIndex = tabIndex;
-    await emit('settings-settingsTabIndex-changed', tabIndex);
-  }
-
-  // Reuse an existing settings window if it can be shown; otherwise destroy it
-  // and create a fresh one. Re-showing a closed transparent window can fail
-  // silently on Windows, so never swallow the failure.
-  let settingsWindow: WebviewWindow | null = null;
+  if (settingsNavigating || uiStore.inputStack.some(name => name !== 'Settings' && name !== 'SearchBox')) return;
+  settingsNavigating = true;
   try {
-    settingsWindow = await WebviewWindow.getByLabel('settings');
-  } catch (error) {
-    console.error('Failed to look up settings window:', error);
-  }
-
-  if (settingsWindow) {
-    if (aiTask) await emit('ai-model-task-requested', aiTask);
-    try {
-      if (isWin && await settingsWindow.isMinimized()) {
-        await settingsWindow.unminimize();
-      }
-      await settingsWindow.show();
-      if (isWin) {
-        await settingsWindow.setFocus();
-      }
-      return;
-    } catch (error) {
-      console.error('Failed to show existing settings window, recreating:', error);
-      try {
-        await settingsWindow.destroy();
-      } catch (destroyError) {
-        console.error('Failed to destroy stale settings window:', destroyError);
-      }
+    if (!showSettings.value) {
+      if (await contentRef.value?.prepareSettingsOpen?.() === false) return;
+      showSettings.value = true;
+      uiStore.pushInputHandler('Settings');
     }
-  }
-
-  if (!await waitForSettingsLabelRelease()) return;
-
-  const options: any = {
-    url: aiTask ? `/settings?aiTask=${encodeURIComponent(aiTask)}` : '/settings',
-    title: 'Settings',
-    width: Math.round(SETTINGS_BASE_WIDTH * getSettingsWindowScale()),
-    height: Math.round(SETTINGS_BASE_HEIGHT * getSettingsWindowScale()),
-    minWidth: Math.round(SETTINGS_BASE_WIDTH * getSettingsWindowScale()),
-    minHeight: Math.round(SETTINGS_BASE_HEIGHT * getSettingsWindowScale()),
-    resizable: true,
-    maximizable: false,
-    visible: false, // Start hidden, will show after mount
-    transparent: true, // Prevent white flash on show (Tauri 2.x workaround)
-    decorations: isMac, // true for macOS, false for Windows
-    ...(isMac && {
-      titleBarStyle: 'Overlay',
-      hiddenTitle: true,
-      minimizable: false,
-    }),
-  };
-
-  // create a new settings window
-  const newSettingsWindow = new WebviewWindow('settings', { ...options, ...await startupWindowProxy() });
-  
-  newSettingsWindow.once('tauri://created', () => {
-    console.log('settings window created');
-  });
+    await nextTick();
+    if (!await settingsRef.value?.openSection(typeof tabIndex === 'number' ? tabIndex : undefined, aiTask)) return;
+    mediaAiBatch.open = false;
+    const mainWindow = getCurrentWebviewWindow();
+    if (await mainWindow.isMinimized()) await mainWindow.unminimize();
+    await mainWindow.show();
+    await mainWindow.setFocus();
+  } finally { settingsNavigating = false; }
 }
 
-// Tauri removes a destroyed webview from its label registry asynchronously.
-// Creating the next window too early lets the old close hook unregister the new
-// webview, after which every invoke fails with "failed to acquire webview
-// reference". Poll until the label is free before constructing a replacement.
-async function waitForSettingsLabelRelease(timeoutMs = 2000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const existing = await WebviewWindow.getByLabel('settings').catch(() => null);
-    if (!existing) return true;
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  console.error('Timed out waiting for the settings window label to be released');
-  return false;
-}
-
-function getSettingsWindowScale() {
-  return SCALE_VALUES.find((item) => item === Number(config.settings.scale)) ?? 1;
+async function closeSettings() {
+  if (!showSettings.value) return true;
+  if (settingsNavigating) return false;
+  settingsNavigating = true;
+  try {
+    if (!await settingsRef.value?.confirmDiscard()) return false;
+    showSettings.value = false;
+    uiStore.removeInputHandler('Settings');
+    await nextTick();
+    contentRef.value?.focusContent?.();
+    return true;
+  } finally { settingsNavigating = false; }
 }
 
 </script>

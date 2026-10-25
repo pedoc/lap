@@ -60,7 +60,7 @@ test('the actual workspace hides every root of the photo list on Home and retain
     },
   });
   const state = Vue.reactive({
-    databaseCorrupted: false, showHomeDashboard: true, showMediaUtilities: false,
+    databaseCorrupted: false, showHomeDashboard: true, showMediaUtilities: false, showSettings: false, settingsRef: null, closeSettings() {},
     showDesktopTitleBar: false, libraryVersion: 0, activeSidebarButton: { text: '首页' }, libraryEmpty: false,
     libConfig: { library: { item: LIB_ITEM.ALL } }, finishStartup() {}, openHomePreview() {}, browseHome() {}, searchFromHome() {}, filterFromHome() {},
   });
@@ -78,7 +78,7 @@ test('the actual workspace hides every root of the photo list on Home and retain
   assert.ok(walk(panel, node => node.props?.['data-old-grid'] !== undefined));
   assert.ok(walk(panel, node => node.props?.['data-viewer-bridge'] !== undefined));
   assert.ok(walk(container, node => node.props?.['data-dashboard'] !== undefined));
-  assert.match(panel.parent.props.class, /min-w-0/);
+  assert.match(panel.parent.parent.props.class, /min-w-0/);
   assert.equal(panel.parent.children.filter((node: any) => node.kind === 'element' && node.style.display !== 'none').length, 1);
   state.showHomeDashboard = false; await Vue.nextTick();
   assert.equal(panel.style.display, '');
@@ -90,6 +90,49 @@ test('the actual workspace hides every root of the photo list on Home and retain
   assert.equal(setups, 1); assert.equal(unmounts, 0);
   assert.ok(!warnings.some(warning => /non-element root|directives/.test(warning)), warnings.join('\n'));
   app.unmount();
+});
+
+test('in-place settings hides the complete gallery while retaining content and dashboard instances', async () => {
+  const { code, errors } = compileTemplate({ source: workspaceSource(), filename: 'HomeWorkspace.vue', id: 'settings-workspace' });
+  assert.deepEqual(errors, []);
+  const imports: any = {};
+  const render = runInNewContext(`${vueImports(code, imports).replace('export function render', 'function render')};render`, imports);
+  const lifecycle = { content: 0, dashboard: 0, removed: 0, settings: 0 };
+  const retained = (kind: 'content' | 'dashboard') => Vue.defineComponent({ setup() {
+    lifecycle[kind]++; Vue.onBeforeUnmount(() => lifecycle.removed++);
+    return () => Vue.h('section', { [`data-${kind}`]: '' }, kind);
+  } });
+  const state = Vue.reactive({
+    databaseCorrupted: false, showHomeDashboard: true, showMediaUtilities: false, showSettings: false, settingsRef: null,
+    showDesktopTitleBar: false, libraryVersion: 0, activeSidebarButton: { text: '首页' }, libraryEmpty: false,
+    libConfig: { library: { item: LIB_ITEM.ALL } }, finishStartup() {}, openHomePreview() {}, browseHome() {}, searchFromHome() {}, filterFromHome() {},
+    closeSettings() { state.showSettings = false; },
+  });
+  const { renderer, container } = virtualHost();
+  const app = renderer.createApp({ data: () => state, render });
+  app.component('Content', retained('content'));
+  app.component('HomeDashboard', retained('dashboard'));
+  app.component('MediaUtilityView', { render: () => Vue.h('section') });
+  app.component('Settings', { props: { embedded: Boolean }, emits: ['close'], setup(props, { emit }) {
+    lifecycle.settings++; assert.equal(props.embedded, true);
+    return () => Vue.h('button', { 'data-embedded-settings': '', onClick: () => emit('close') }, 'close');
+  } });
+  app.config.globalProperties.$t = translate;
+  app.mount(container);
+  try {
+    const gallery = walk(container, node => node.props?.['data-home-gallery'] !== undefined);
+    assert.ok(gallery);
+    state.showSettings = true; await Vue.nextTick();
+    assert.equal(gallery.style.display, 'none');
+    assert.ok(walk(container, node => node.props?.['data-content'] !== undefined));
+    assert.ok(walk(container, node => node.props?.['data-dashboard'] !== undefined));
+    const close = walk(container, node => node.props?.['data-embedded-settings'] !== undefined);
+    assert.ok(close);
+    close.props.onClick(); await Vue.nextTick();
+    assert.equal(gallery.style.display, '');
+    assert.equal(walk(container, node => node.props?.['data-embedded-settings'] !== undefined), undefined);
+    assert.deepEqual(lifecycle, { content: 1, dashboard: 1, removed: 0, settings: 1 });
+  } finally { app.unmount(); }
 });
 
 test('Home uses its own compact sidebar without changing the saved library width', () => {

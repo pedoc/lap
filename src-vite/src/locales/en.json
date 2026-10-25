@@ -1911,6 +1911,7 @@
     }
   },
   "settings": {
+    "close": "Close Settings",
     "cuda": {
       "title": "CUDA runtime component",
       "intro": "Optional CUDA 12 / cuDNN 9 libraries. No driver or PATH changes, and no full CUDA Toolkit required. Test your model after installation; Automatic tries CUDA first.",
