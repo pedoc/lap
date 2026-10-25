@@ -3,7 +3,7 @@
     ref="containerRef"
     class="w-full h-full"
     :class="{ 
-      'pointer-events-none': uiStore.inputStack.length > 0,
+      'pointer-events-none': uiStore.inputStack.some(handler => handler !== 'MediaChat'),
     }"
     @wheel="onWheel"
     @dragstart.capture.prevent

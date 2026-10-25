@@ -218,7 +218,7 @@ import { matchesShortcut, ShortcutPlatform } from '@/common/shortcuts';
 import { SIDEBAR, SETTINGS_TAB, PANEL_ANIMATION_MS } from '@/common/constants';
 import { getAppConfig, switchLibrary, cancelIndexing, cancelFaceIndex } from '@/common/api';
 import { mediaAiBatch } from '@/common/mediaAi';
-import { mediaChatFloatingReserve } from '@/common/mediaChat';
+import { closeMediaChat, mediaChat, mediaChatFloatingReserve } from '@/common/mediaChat';
 
 // vue components
 import Library from '@/components/Library.vue';
@@ -828,16 +828,22 @@ function handleCollectionMouseMove(event: MouseEvent) {
 
 /// click settings icon
 async function clickSettings(tabIndex?: number, aiTask?: string) {
-  if (settingsNavigating || uiStore.inputStack.some(name => name !== 'Settings' && name !== 'SearchBox')) return;
+  const inputBlocked = () => uiStore.inputStack.some(name => !['Settings', 'SearchBox', 'MediaChat'].includes(name));
+  if (settingsNavigating || inputBlocked()) return;
+  const openedHere = !showSettings.value;
   settingsNavigating = true;
   try {
-    if (!showSettings.value) {
-      if (await contentRef.value?.prepareSettingsOpen?.() === false) return;
+    if (openedHere) {
+      if (await contentRef.value?.prepareSettingsOpen?.() === false || inputBlocked()) return;
       showSettings.value = true;
       uiStore.pushInputHandler('Settings');
     }
     await nextTick();
-    if (!await settingsRef.value?.openSection(typeof tabIndex === 'number' ? tabIndex : undefined, aiTask)) return;
+    if (!await settingsRef.value?.openSection(typeof tabIndex === 'number' ? tabIndex : undefined, aiTask)) {
+      if (openedHere) { showSettings.value = false; uiStore.removeInputHandler('Settings'); }
+      return;
+    }
+    if (mediaChat.open) { closeMediaChat(); await nextTick(); }
     mediaAiBatch.open = false;
     const mainWindow = getCurrentWebviewWindow();
     if (await mainWindow.isMinimized()) await mainWindow.unminimize();

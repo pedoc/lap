@@ -3273,13 +3273,14 @@ async function handOffNativeDrag() {
 }
 
 function updateContentDragPosition(event: PointerEvent) {
-  if (isContentInternalDrag.value && (event.buttons & 1) && isWindowDragEdge(event)) {
+  const elementAtPointer = document.elementFromPoint(event.clientX, event.clientY);
+  const chatTarget = elementAtPointer?.closest('[data-media-chat-drop]');
+  if (!chatTarget && isContentInternalDrag.value && (event.buttons & 1) && isWindowDragEdge(event)) {
     void handOffNativeDrag();
     return;
   }
   if (!dragGhost || (event.clientX === 0 && event.clientY === 0)) return;
   dragGhost.style.transform = `translate3d(${Math.round(event.clientX - dragGhostHotspotX)}px, ${Math.round(event.clientY - dragGhostHotspotY)}px, 0)`;
-  const elementAtPointer = document.elementFromPoint(event.clientX, event.clientY);
   if (elementAtPointer?.closest('[data-collection-tray-root]') && !config.collectionTray.expanded) {
     config.collectionTray.expanded = true;
     requestAnimationFrame(() => {

@@ -122,6 +122,7 @@
 <script setup lang="ts">
 import { ref, shallowRef, triggerRef, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue';
 import { useUIStore } from '@/stores/uiStore';
+import { mediaChatDropTarget } from '@/common/mediaChatDrag';
 import { config, libConfig } from '@/common/config';
 import { SIDEBAR, GESTURE_LOCK_THRESHOLD, HORIZONTAL_NAV_THRESHOLD, MOUSE_DRAG_NAV_THRESHOLD } from '@/common/constants';
 import {
@@ -1754,6 +1755,7 @@ let dragOutStart: { x: number; y: number; path: string; preview: number[] } | nu
 function trackImageDragOut(event: MouseEvent) {
   const start = dragOutStart;
   if (!start || !(event.buttons & 1)) return;
+  if (mediaChatDropTarget(event)) return;
   if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 6 || !isWindowDragEdge(event)) return;
   mouseDragNavDeltaX.value = 0;
   mouseDragNavDeltaY.value = 0;
@@ -2230,6 +2232,7 @@ defineExpose({
   rotateView,
   getViewportState,
   applyViewportState,
+  cancelImageDrag: () => finishImageMouseDrag(false),
   zoomNavigator,
   navigateImage,
   toggleZoomFit,

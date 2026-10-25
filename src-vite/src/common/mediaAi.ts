@@ -1,5 +1,6 @@
 import { nextTick, reactive } from 'vue';
 import { emit } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { closeMediaChat } from './mediaChat.ts';
 import type { ModelReasoning } from './mediaReasoning.ts';
 
@@ -132,7 +133,10 @@ export const mediaAiBatch = reactive({ open: false, libraryId: '', fileIds: null
 export function openMediaAiBatch(libraryId: string, fileIds: number[] | null, modelId: string | null = null) {
   Object.assign(mediaAiBatch, { open: true, libraryId, fileIds: fileIds ? [...fileIds] : null, modelId });
 }
-export async function openMediaAiSettings() { closeMediaChat(); await nextTick(); return emit('app-open-preferences', { aiTask: 'media' }); }
+export async function openMediaAiSettings() {
+  if (getCurrentWebviewWindow().label !== 'main') { closeMediaChat(); await nextTick(); }
+  return emit('app-open-preferences', { aiTask: 'media' });
+}
 export const QWEN_MEDIA_QUERY = 'Retrieve media descriptions relevant to the search query.';
 export const QWEN_VISUAL_QUERY = "Retrieve images or text relevant to the user's query.";
 export const mediaTime = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;

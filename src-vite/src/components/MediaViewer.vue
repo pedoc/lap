@@ -257,6 +257,7 @@
     <div
       ref="mediaAreaRef"
       class="flex-1 w-full min-h-0 relative"
+      @pointerdown.capture="beginChatMediaDrag"
       @dblclick="$emit('media-dblclick')"
       @contextmenu.prevent="handleBackgroundContextMenu"
     >
@@ -335,6 +336,7 @@
         ]"
       >
         <Video
+          data-media-chat-source
           class="h-full w-full"
           :filePath="livePhotoVideoPath"
           :rotate="file?.rotate ?? 0"
@@ -364,6 +366,7 @@
         ]"
       >
         <Image
+          data-media-chat-source
           ref="mediaRef"
           :filePath="file?.file_path"
           :fileId="file?.id"
@@ -413,6 +416,7 @@
         class="absolute inset-0 z-20"
       >
         <Video
+          data-media-chat-source
           ref="mediaRef"
           class="h-full w-full"
           :filePath="file?.file_path"
@@ -458,7 +462,10 @@ import { useI18n } from 'vue-i18n';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { runPreviewWindowOperation, recoverPreviewWindowFocus } from '@/common/previewWindow';
 import { config, libConfig } from '@/common/config';
-import { openMediaChat } from '@/common/mediaChat';
+import { mediaChat, openMediaChat } from '@/common/mediaChat';
+import { createMediaChatPointerDrag, isMediaChatDragSurface } from '@/common/mediaChatDrag';
+import { useUIStore } from '@/stores/uiStore';
+import { objectEditActive } from '@/common/objectEditing';
 import { useToast } from '@/common/toast';
 import { isWin, isMac, isLinux, getSlideShowInterval } from '@/common/utils';
 import { getShortcutLabel, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
@@ -715,6 +722,25 @@ async function openCurrentMediaChat() {
   try { await openMediaChat(libConfig._libraryId, [fileId]); }
   catch (error: any) { toast.error(error?.message || String(error)); }
 }
+let chatPointerDrag: ReturnType<typeof createMediaChatPointerDrag> | undefined;
+function chatDragSource() {
+  const file = props.file, libraryId = libConfig._libraryId, ui = useUIStore();
+  if (!mediaChat.open || mediaChat.libraryId !== libraryId || !props.canInteract || props.toolbarOnly || props.isSlideShow
+    || ui.inputStack.some((handler: string) => handler !== 'MediaChat') || !file?.file_path || !Number.isSafeInteger(Number(file.id)) || Number(file.id) <= 0
+    || !mediaRef.value?.viewReady || objectEditActive(Number(file.id))) return null;
+  return { libraryId, fileId: Number(file.id), path: String(file.file_path), version: JSON.stringify([file.modified_at, file.size, file.rotate, ui.getFileVersion(file.file_path)]) };
+}
+function beginChatMediaDrag(event: PointerEvent) {
+  if (!isMediaChatDragSurface(event.target) || !chatDragSource()) return;
+  chatPointerDrag ||= createMediaChatPointerDrag({ source: chatDragSource,
+    snapshot: () => mediaRef.value?.getViewportState?.(),
+    cancelInteraction: () => mediaRef.value?.cancelImageDrag?.(),
+    restore: snapshot => { if (snapshot) mediaRef.value?.applyViewportState?.(snapshot, true); },
+  });
+  chatPointerDrag.start(event);
+}
+watch(() => [props.file?.id, props.file?.file_path, props.file?.modified_at, props.file?.size, props.file?.rotate, props.canInteract, props.isSlideShow, libConfig._libraryId, mediaChat.open, mediaChat.libraryId], () => chatPointerDrag?.cancel(), { flush: 'sync' });
+onBeforeUnmount(() => chatPointerDrag?.dispose());
 const isHoverLeft = ref(false);
 const isHoverRight = ref(false);
 const isHoverTop = ref(false);

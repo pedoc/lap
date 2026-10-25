@@ -124,8 +124,8 @@ test('viewer mouse drag exports the original, clears panning, and never navigate
   const document = { documentElement: { addEventListener() {}, removeEventListener() {} }, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
   const ref = value => ({ value });
   const isDraggingImage = ref(false);
-  const api = new Function('document', 'props', 'isTouchActive', 'updatePosition', 'createDragPreview', 'isWindowDragEdge', 'startNativeFileDrag', 'toast', 't', 'emit', 'isDraggingImage', 'lastMousePosition', 'mouseDragNavDeltaX', 'mouseDragNavDeltaY', 'mouseDragNavTriggered', 'latestMouseEvent', 'navDirection', 'cancelAnimationFrame', 'MOUSE_DRAG_NAV_THRESHOLD', 'animationFrameId', 'updateDragPosition', imageHandlers + '; return { handleImageMouseDown, handleImageMouseUp };')(
-    document, { filePath: '/original/raw.CR3', originalUnavailable: false, isSlideShow: false }, ref(false), () => {}, () => [42], event => event.clientX >= 984,
+  const api = new Function('mediaChatDropTarget', 'document', 'props', 'isTouchActive', 'updatePosition', 'createDragPreview', 'isWindowDragEdge', 'startNativeFileDrag', 'toast', 't', 'emit', 'isDraggingImage', 'lastMousePosition', 'mouseDragNavDeltaX', 'mouseDragNavDeltaY', 'mouseDragNavTriggered', 'latestMouseEvent', 'navDirection', 'cancelAnimationFrame', 'MOUSE_DRAG_NAV_THRESHOLD', 'animationFrameId', 'updateDragPosition', imageHandlers + '; return { handleImageMouseDown, handleImageMouseUp };')(
+    () => null, document, { filePath: '/original/raw.CR3', originalUnavailable: false, isSlideShow: false }, ref(false), () => {}, () => [42], event => event.clientX >= 984,
     async paths => calls.push(paths), { error: () => {} }, key => key, event => calls.push(event),
     isDraggingImage, ref({ x: 0, y: 0 }), ref(0), ref(0), ref(false), ref(null), ref(''), () => {}, 80, 0, () => { throw new Error('Native handoff must not flush swipe'); },
   );

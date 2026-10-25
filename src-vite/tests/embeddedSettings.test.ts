@@ -8,6 +8,11 @@ import * as Vue from 'vue';
 import * as constants from '../src/common/constants.ts';
 import { createPendingChangesRegistry } from '../src/common/pendingChanges.ts';
 
+const chatBody = stripTypeScriptTypes(readFileSync(new URL('../src/common/mediaChat.ts', import.meta.url), 'utf8'))
+  .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace(/^export /gm, '');
+const mediaAiBody = stripTypeScriptTypes(readFileSync(new URL('../src/common/mediaAi.ts', import.meta.url), 'utf8'))
+  .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace(/^export /gm, '');
+
 function script(view: string) {
   const source = readFileSync(new URL(`../src/${view}.vue`, import.meta.url), 'utf8');
   const { descriptor } = parse(source);
@@ -32,6 +37,20 @@ function lifecycle(view: string, name: string, context: any) {
   const callback = node.expression.arguments[0];
   return runInNewContext(`(${stripTypeScriptTypes(source.slice(callback.start, callback.end))})`, context);
 }
+function listener(view: string, name: string, context: any) {
+  const { source, nodes } = script(view);
+  function find(node: any): any {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'CallExpression' && node.callee.name === 'listen' && node.arguments[0]?.value === name) return node.arguments[1];
+    for (const value of Object.values(node)) {
+      const found = Array.isArray(value) ? value.map(find).find(Boolean) : value && typeof value === 'object' && 'type' in value ? find(value) : undefined;
+      if (found) return found;
+    }
+  }
+  const callback = nodes.map(find).find(Boolean);
+  assert.ok(callback, `${view} listener ${name}`);
+  return runInNewContext(`(${stripTypeScriptTypes(source.slice(callback.start, callback.end))})`, context);
+}
 function homeHarness() {
   const calls: any[] = [], uiStore = {
     inputStack: [] as string[], activePane: 'content',
@@ -39,7 +58,13 @@ function homeHarness() {
     removeInputHandler(id: string) { this.inputStack = this.inputStack.filter(value => value !== id); },
     setActivePane: (pane: string) => calls.push(['pane', pane]),
   };
+  const chat = runInNewContext(`${chatBody};({mediaChat,closeMediaChat})`, { reactive: Vue.reactive });
+  const stopChatInput = Vue.watch(() => chat.mediaChat.open, open => {
+    if (open) uiStore.pushInputHandler('MediaChat');
+    else uiStore.removeInputHandler('MediaChat');
+  });
   const windowCalls: string[] = [], mainWindow = {
+    label: 'main',
     minimized: false,
     async isMinimized() { return this.minimized; },
     async unminimize() { windowCalls.push('unminimize'); this.minimized = false; },
@@ -48,6 +73,7 @@ function homeHarness() {
   const config = Vue.reactive({ settings: { tabIndex: constants.SETTINGS_TAB.GENERAL }, main: { sidebarIndex: constants.SIDEBAR.LIBRARY }, leftPanel: { show: true } });
   const context: any = {
     ...Vue, ...constants, config, uiStore, settingsNavigating: false, mediaAiBatch: { open: true },
+    mediaChat: chat.mediaChat, closeMediaChat: () => { calls.push(['close-chat']); chat.closeMediaChat(); },
     getCurrentWebviewWindow: () => mainWindow,
     libConfig: { activePane: 'collection' }, showSettings: Vue.ref(false), settingsRef: Vue.ref(null),
     databaseCorrupted: Vue.ref(false), libraryEmpty: Vue.ref(false), showHomeDashboard: Vue.ref(false),
@@ -58,7 +84,7 @@ function homeHarness() {
   };
   const api = functions('views/Home', ['clickSettings', 'closeSettings', 'clickSidebar', 'activateMainPanel', 'handleHomeKeyDown'], context);
   context.settingsRef.value = { openSection: async (...args: any[]) => { calls.push(['section', ...args]); return true; }, confirmDiscard: async () => true };
-  return { context, api, calls, config, uiStore, mainWindow, windowCalls };
+  return { context, api, calls, config, uiStore, mainWindow, windowCalls, dispose: stopChatInput };
 }
 
 test('Home opens settings in place, forwards section requests and installs a single keyboard boundary', async () => {
@@ -93,6 +119,126 @@ test('Home leaves active dialogs and full-screen previews in control until they 
   assert.deepEqual(h.uiStore.inputStack, ['SearchBox', 'Settings'], 'A focused search box is not a modal blocker');
   assert.equal(h.context.mediaAiBatch.open, false);
   assert.deepEqual(h.windowCalls, ['unminimize', 'show', 'focus']);
+});
+
+test('the sidebar settings click yields an open chat only after settings is ready and preserves its context', async () => {
+  const h = homeHarness();
+  try {
+    Object.assign(h.context.mediaChat, { open: true, libraryId: 'library-a', fileIds: [7, 8], revision: 4 });
+    await Vue.nextTick();
+    assert.deepEqual(h.uiStore.inputStack, ['MediaChat']);
+    h.context.contentRef.value.prepareSettingsOpen = async () => { h.calls.push(['prepare']); return true; };
+    h.context.settingsRef.value.openSection = async (...args: any[]) => {
+      assert.equal(h.context.mediaChat.open, true, 'Chat stays open until the settings target accepts navigation');
+      h.calls.push(['section', ...args]); return true;
+    };
+    await h.api.clickSettings({ type: 'click', target: { tagName: 'BUTTON' } });
+    assert.equal(h.context.showSettings.value, true);
+    assert.equal(h.context.mediaChat.open, false);
+    assert.deepEqual(h.uiStore.inputStack, ['Settings']);
+    assert.deepEqual(h.calls, [['prepare'], ['section', undefined, undefined], ['close-chat']]);
+    assert.equal(h.context.mediaChat.libraryId, 'library-a');
+    assert.deepEqual(Array.from(h.context.mediaChat.fileIds), [7, 8]);
+    assert.equal(h.context.mediaChat.revision, 4);
+    assert.deepEqual(h.windowCalls, ['show', 'focus']);
+  } finally { h.dispose(); }
+});
+
+test('settings keeps chat open when preview preparation or guarded section navigation is cancelled', async () => {
+  const h = homeHarness();
+  try {
+    h.context.mediaChat.open = true; await Vue.nextTick();
+    h.context.contentRef.value.prepareSettingsOpen = async () => false;
+    await h.api.clickSettings({ type: 'click' });
+    assert.equal(h.context.showSettings.value, false);
+    assert.equal(h.context.mediaChat.open, true);
+    h.context.contentRef.value.prepareSettingsOpen = async () => true;
+    h.context.settingsRef.value.openSection = async () => false;
+    await h.api.clickSettings(constants.SETTINGS_TAB.ABOUT);
+    assert.equal(h.context.showSettings.value, false, 'A rejected initial target must remove the new settings keyboard boundary');
+    assert.equal(h.context.mediaChat.open, true);
+    assert.deepEqual(h.uiStore.inputStack, ['MediaChat']);
+    h.context.showSettings.value = true; h.uiStore.inputStack.unshift('Settings');
+    await h.api.clickSettings(constants.SETTINGS_TAB.ABOUT);
+    assert.equal(h.context.showSettings.value, true, 'Already open settings remains mounted when its editor cancels');
+    assert.equal(h.context.mediaChat.open, true);
+    assert.deepEqual(h.uiStore.inputStack, ['Settings', 'MediaChat']);
+    assert.equal(h.calls.some(([name]) => name === 'close-chat'), false);
+    assert.deepEqual(h.windowCalls, []);
+  } finally { h.dispose(); }
+});
+
+test('allowing chat to yield does not bypass other editing or modal input boundaries', async () => {
+  for (const blocker of ['MessageBox', 'FileInfo-rename', 'ImportOrganize']) {
+    const h = homeHarness();
+    try {
+      h.uiStore.inputStack.push(blocker); h.context.mediaChat.open = true; await Vue.nextTick();
+      await h.api.clickSettings({ type: 'click' });
+      assert.equal(h.context.showSettings.value, false);
+      assert.equal(h.context.mediaChat.open, true);
+      assert.deepEqual(h.calls, []);
+    } finally { h.dispose(); }
+  }
+});
+
+test('a modal opened while preview preparation is pending still prevents settings from hiding chat', async () => {
+  const h = homeHarness();
+  try {
+    h.context.mediaChat.open = true; await Vue.nextTick();
+    let finish!: (ready: boolean) => void;
+    h.context.contentRef.value.prepareSettingsOpen = () => new Promise(resolve => { finish = resolve; });
+    const opening = h.api.clickSettings({ type: 'click' });
+    h.uiStore.inputStack.push('MessageBox'); finish(true); await opening;
+    assert.equal(h.context.mediaChat.open, true);
+    assert.equal(h.context.showSettings.value, false);
+    assert.deepEqual(h.uiStore.inputStack, ['MediaChat', 'MessageBox']);
+    assert.deepEqual(h.calls, []);
+  } finally { h.dispose(); }
+});
+
+test('main-window preferences shortcuts and media settings events defer chat closure until Home accepts', async () => {
+  for (const entry of ['shortcut', 'media']) {
+    const h = homeHarness();
+    try {
+      h.context.mediaChat.open = true; await Vue.nextTick();
+      let accepted = false, navigation: Promise<any> | undefined;
+      const sections: any[][] = [];
+      h.context.settingsRef.value.openSection = async (...args: any[]) => { sections.push(args); return accepted; };
+      const preferences = listener('views/Home', 'app-open-preferences', { ...h.context, clickSettings: (...args: any[]) => { navigation = h.api.clickSettings(...args); } });
+      const emitted: any[][] = [];
+      const emit = async (name: string, payload?: any) => { emitted.push([name, payload]); preferences({ payload }); };
+      const context = { ...h.context, emit, isMac: false, handleMainWindowScaleShortcut: () => false, matchesShortcut: (action: string) => action === 'app.preferences', useUIStore: () => h.uiStore };
+      const shortcut = entry === 'shortcut' ? functions('App', ['handleKeyDown'], context).handleKeyDown : null;
+      const launch = entry === 'shortcut'
+        ? () => shortcut({ key: ',', preventDefault() {}, stopPropagation() {} })
+        : runInNewContext(`${mediaAiBody};openMediaAiSettings`, context);
+      await launch(); await Vue.nextTick(); await navigation;
+      assert.equal(h.context.mediaChat.open, true, `${entry} must not close chat before a cancelled settings transition`);
+      assert.equal(h.context.showSettings.value, false);
+      assert.deepEqual(h.uiStore.inputStack, ['MediaChat']);
+      accepted = true;
+      await launch(); await Vue.nextTick(); await navigation;
+      assert.equal(h.context.mediaChat.open, false);
+      assert.equal(h.context.showSettings.value, true);
+      assert.deepEqual(h.uiStore.inputStack, ['Settings']);
+      assert.deepEqual(structuredClone(emitted), Array.from({ length: 2 }, () => ['app-open-preferences', entry === 'media' ? { aiTask: 'media' } : undefined]));
+      assert.deepEqual(sections, Array.from({ length: 2 }, () => [entry === 'media' ? constants.SETTINGS_TAB.IMAGE_SEARCH : undefined, entry === 'media' ? 'media' : undefined]));
+    } finally { h.dispose(); }
+  }
+});
+
+test('media settings requested by a separate viewer still closes its local chat before dispatch', async () => {
+  const h = homeHarness(), emitted: any[][] = [];
+  try {
+    h.context.mediaChat.open = true; await Vue.nextTick();
+    const launch = runInNewContext(`${mediaAiBody};openMediaAiSettings`, {
+      ...h.context, getCurrentWebviewWindow: () => ({ label: 'imageviewer' }),
+      emit: async (...args: any[]) => { assert.equal(h.context.mediaChat.open, false); assert.deepEqual(h.uiStore.inputStack, []); emitted.push(args); },
+    });
+    await launch();
+    assert.deepEqual(structuredClone(emitted), [['app-open-preferences', { aiTask: 'media' }]]);
+    assert.equal(h.context.showSettings.value, false);
+  } finally { h.dispose(); }
 });
 
 test('the media view yields its full-screen overlay before settings opens and stops slideshow only after success', async () => {

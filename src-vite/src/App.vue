@@ -115,10 +115,7 @@ const handleKeyDown = (event) => {
   if (!isMac && matchesShortcut('app.preferences', event)) {
     event.preventDefault();
     event.stopPropagation();
-    if (mediaChat.open) {
-      closeMediaChat();
-      void nextTick(() => emit('app-open-preferences'));
-    } else emit('app-open-preferences');
+    void emit('app-open-preferences');
     return;
   }
 
