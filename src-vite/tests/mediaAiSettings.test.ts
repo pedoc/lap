@@ -7,6 +7,7 @@ import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import * as mediaAi from '../src/common/mediaAi.ts';
+import * as modelSpecs from '../src/common/mediaModelSpecs.ts';
 
 const source = readFileSync(new URL('../src/components/MediaAiSettings.vue', import.meta.url), 'utf8');
 function fixture() {
@@ -19,7 +20,7 @@ function harness(includeCatalog = false) {
   let stored = fixture();
   const calls: Array<[string, any]> = [];
   const dialogs: string[] = [];
-  const context: any = { ...Vue, ...mediaAi, crypto, defineExpose() {},
+  const context: any = { ...Vue, ...mediaAi, ...modelSpecs, crypto, defineExpose() {},
     appendBuiltinServices: includeCatalog ? mediaAi.appendBuiltinServices : () => {},
     useI18n: () => ({ t: (key: string, values: any = {}) => `${key} ${Object.values(values).join(' ')}` }),
     onMounted() {}, onUnmounted() {}, watch() {}, ask: async (message: string) => { dialogs.push(message); return true; }, listen: async () => () => {},
@@ -38,7 +39,7 @@ function harness(includeCatalog = false) {
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,selectedPreset,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,canListModels,modelListHint,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,selectedPreset,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,modelSpecification,formatTokenLimit,modelOutputLimit,useModelOutputLimit,outputLimitExceeded,canListModels,modelListHint,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls, dialogs };
 }
@@ -448,6 +449,83 @@ test('invalid output budgets show a field-specific error before calling the back
   assert.equal(h.calls.some(([name])=>name==='media_ai_save_configuration'),false);
 });
 
+test('manual and discovered generation models start with a server-default output budget', async () => {
+  const h = harness();
+  h.api.addModel('custom-generation-model');
+  assert.equal(h.api.draft.value.models.at(-1).maxOutputTokens, null);
+  await h.api.syncModels();
+  h.api.modelPicker.value.selection.push('optional-a');
+  h.api.addPickerModels();
+  assert.equal(h.api.draft.value.models.at(-1).remoteId, 'optional-a');
+  assert.equal(h.api.draft.value.models.at(-1).maxOutputTokens, null);
+});
+
+test('loading official specifications preserves existing output budgets, capability receipts and clean draft state', async () => {
+  const h = harness(), view = fixture();
+  const known = modelSpecs.MODEL_SPECS.find(spec => typeof spec.outputTokens === 'number')!;
+  view.configuration.models[0].remoteId = known.ids[0];
+  view.configuration.models[0].maxOutputTokens = 2048;
+  view.configuration.models.push({ ...view.configuration.models[0], id: 'legacy-large-output', maxOutputTokens: 384000, tested: { text: 'existing-receipt' } });
+  h.context.invoke = async (name: string, args: any) => { h.calls.push([name, args]); return JSON.parse(JSON.stringify(view)); };
+  await h.api.load();
+  const before = JSON.stringify(h.api.draft.value);
+  assert.deepEqual(Array.from(h.api.draft.value.models, (model: any) => model.maxOutputTokens), [2048, 384000]);
+  for (const model of h.api.draft.value.models) assert.equal(h.api.modelSpecification(model), known);
+  assert.equal(JSON.stringify(h.api.draft.value), before);
+  assert.equal(JSON.stringify(h.api.saved.value), before);
+  assert.equal(h.api.dirty.value, false);
+  assert.deepEqual(Array.from(h.calls, ([name]) => name), ['media_ai_configuration']);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.api.draft.value.models[1].tested)), { text: 'existing-receipt' });
+});
+
+test('adopting an official output limit is an explicit local edit independent of capabilities and API calls', () => {
+  const h = harness(), known = modelSpecs.MODEL_SPECS.find(spec => typeof spec.outputTokens === 'number' && spec.outputTokens !== 2048)!;
+  const view = fixture();
+  view.configuration.models[0].remoteId = known.ids[0];
+  view.configuration.models[0].maxOutputTokens = 2048;
+  h.api.receive(view);
+  const model = h.api.draft.value.models[0], capabilities = [...model.capabilities], tested = JSON.stringify(model.tested);
+  h.api.useModelOutputLimit(model);
+  assert.equal(model.maxOutputTokens, known.outputTokens);
+  assert.equal(h.api.saved.value.models[0].maxOutputTokens, 2048);
+  assert.deepEqual(Array.from(model.capabilities), capabilities);
+  assert.equal(JSON.stringify(model.tested), tested);
+  assert.equal(h.api.dirty.value, true);
+  assert.deepEqual(h.calls, []);
+  model.remoteId = 'custom-proxy-alias';
+  h.api.useModelOutputLimit(model);
+  assert.equal(model.maxOutputTokens, known.outputTokens, 'An unknown alias must not replace an existing budget');
+  model.capabilities = ['embed_text'];
+  model.remoteId = known.ids[0];
+  assert.equal(h.api.modelSpecification(model), undefined, 'Embedding models must not inherit generation output limits');
+});
+
+test('vendor capacity notation stays literal and cannot be silently adopted as an exact request budget', () => {
+  const h = harness(), known = modelSpecs.MODEL_SPECS.find(spec => typeof spec.outputTokens === 'string')!;
+  assert.ok(known, 'The catalog should preserve vendor-only unit notation');
+  const view = fixture(); view.configuration.models[0].remoteId = known.ids[0]; view.configuration.models[0].maxOutputTokens = 2048;
+  h.api.receive(view);
+  const model = h.api.draft.value.models[0];
+  assert.equal(h.api.formatTokenLimit(known.outputTokens), known.outputTokens);
+  assert.equal(h.api.modelOutputLimit(model), null);
+  h.api.useModelOutputLimit(model);
+  assert.equal(model.maxOutputTokens, 2048);
+  assert.equal(h.api.dirty.value, false);
+  assert.deepEqual(h.calls, []);
+});
+
+test('a budget above official capacity is advisory and remains usable for an explicitly configured gateway', async () => {
+  const h = harness(), known = modelSpecs.MODEL_SPECS.find(spec => typeof spec.outputTokens === 'number' && spec.outputTokens < 0xFFFFFFFF)!;
+  const view = fixture(); view.configuration.models[0].remoteId = known.ids[0]; view.configuration.models[0].maxOutputTokens = (known.outputTokens as number) + 1;
+  h.api.receive(view);
+  assert.equal(h.api.outputLimitExceeded(h.api.draft.value.models[0]), true);
+  await h.api.save();
+  assert.equal(h.api.error.value, '');
+  const saved = h.calls.find(([name]) => name === 'media_ai_save_configuration')!;
+  assert.ok(saved);
+  assert.equal(saved[1].configuration.models[0].maxOutputTokens, (known.outputTokens as number) + 1);
+});
+
 test('the real template exposes a removal button outside each collapsed model details', async () => {
   const h = harness(), imports: any = {};
   const { descriptor } = parse(source);
@@ -485,6 +563,48 @@ test('the real template exposes a removal button outside each collapsed model de
   assert.match(html, /class="min-w-0 flex-1 space-y-3[^>]*data-media-ai-service-editor/);
   assert.match(html, /title="Service"/);
   assert.match(html, /<span class="min-w-0 flex-1 truncate">Service<\/span>/);
+});
+
+test('the actual model settings template separates official capacities, unknown values and advisory request budgets', async () => {
+  const h = harness(), imports: any = {};
+  const { descriptor } = parse(source);
+  const compiled = stripTypeScriptTypes(compileScript(descriptor, { id: 'media-ai-model-specifications', inlineTemplate: true }).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=')
+    .replace("selected = ref('')", "selected = ref('provider')");
+  const render = async (remoteId: string, budget: number) => {
+    const view = fixture(); view.configuration.models[0].remoteId = remoteId; view.configuration.models[0].maxOutputTokens = budget;
+    let nulls = 0;
+    const component = runInNewContext(`${compiled};component`, { ...h.context, ...imports,
+      ref: (value: any) => Vue.ref(value === null && nulls++ === 0 ? view.configuration : value),
+    });
+    return renderToString(Vue.createSSRApp(component));
+  };
+  const find = (node: any, attribute: string, value?: string): any => {
+    if (node.type === 1 && node.props.some((prop: any) => prop.name === attribute && (value === undefined || prop.value?.content === value))) return node;
+    for (const child of node.children || []) { const found = find(child, attribute, value); if (found) return found; }
+  };
+  const known = modelSpecs.modelSpec('gpt-4.1')!;
+  const html = await render(known.ids[0], (known.outputTokens as number) + 1);
+  const panel = find(parse(`<template>${html}</template>`).descriptor.template!.ast, 'data-media-ai-model-spec');
+  assert.ok(panel);
+  for (const [key, value] of [['context', known.contextTokens], ['input', known.inputTokens], ['output', known.outputTokens]] as const) {
+    const card = find(panel, 'data-model-limit', key);
+    assert.ok(card, key);
+    assert.ok(card.loc.source.includes(h.api.formatTokenLimit(value).trim()), key);
+  }
+  assert.ok(panel.loc.source.includes(known.verifiedAt));
+  assert.ok(panel.loc.source.includes(known.source));
+  assert.match(html, /data-output-limit-warning/);
+  assert.match(html, /value="32769"/);
+  assert.doesNotMatch(html, /<input[^>]*max="32768"/);
+  const unknown = await render('custom-proxy-alias', 384000);
+  const unknownPanel = find(parse(`<template>${unknown}</template>`).descriptor.template!.ast, 'data-media-ai-model-spec');
+  assert.ok(unknownPanel);
+  for (const key of ['context', 'input', 'output']) assert.ok(find(unknownPanel, 'data-model-limit', key).loc.source.includes(h.api.formatTokenLimit(null).trim()), key);
+  assert.doesNotMatch(unknownPanel.loc.source, /href="https?:/);
+  assert.doesNotMatch(unknown, /data-output-limit-warning/);
+  assert.match(unknown, /value="384000"/);
 });
 
 test('the actual embedding service template exposes its protocol and fixed text and visual tests without capability toggles', async () => {

@@ -70,7 +70,7 @@ export const newProvider = (kind: MediaServiceKind = 'llm'): MediaProvider => ({
 });
 export const newMediaModel = (providerId: string): MediaModel => ({
   id: crypto.randomUUID(), providerId, remoteId: '', name: '', group: '', revision: '',
-  capabilities: ['text', 'image'], maxOutputTokens: 2048,
+  capabilities: ['text', 'image'], maxOutputTokens: null,
   embedding: { dimensions: null, queryInstruction: '' }, tested: {},
 });
 function serviceEndpoint(value: string) {
