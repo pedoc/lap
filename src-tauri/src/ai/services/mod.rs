@@ -6,6 +6,8 @@ pub mod config;
 pub mod requests;
 pub mod store;
 #[cfg(test)]
+mod stream_fixture;
+#[cfg(test)]
 mod tests;
 mod vendors;
 pub mod visual;

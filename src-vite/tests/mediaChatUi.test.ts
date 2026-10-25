@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createI18n } from 'vue-i18n';
-import { CHAT_RESIZE_EDGES, fitChatFrame, insertMediaMention, mentionAtCaret, resizeChatFrame, slashAtCaret } from '../src/common/mediaChatUi.ts';
+import { CHAT_RESIZE_EDGES, fitChatFrame, insertMediaMention, isChatNearBottom, mentionAtCaret, resizeChatFrame, slashAtCaret } from '../src/common/mediaChatUi.ts';
 
 test('mentions follow the caret, support Unicode names and never treat email text as a file reference', () => {
   assert.deepEqual(mentionAtCaret('比较 @海边', 6), { start: 3, end: 6, query: '海边' });
@@ -52,6 +52,13 @@ test('slash actions trigger at the caret boundary without treating URLs or exist
   assert.equal(slashAtCaret('https://', 8), null);
   assert.equal(slashAtCaret('/photos', 7), null);
   assert.equal(slashAtCaret('keep / later', 6), 5);
+});
+
+test('streaming follows only a reader near the bottom, including a short or overscrolled conversation', () => {
+  assert.equal(isChatNearBottom({ scrollHeight: 1200, clientHeight: 600, scrollTop: 530 }), true);
+  assert.equal(isChatNearBottom({ scrollHeight: 1200, clientHeight: 600, scrollTop: 527 }), false);
+  assert.equal(isChatNearBottom({ scrollHeight: 300, clientHeight: 600, scrollTop: 0 }), true);
+  assert.equal(isChatNearBottom({ scrollHeight: 1200, clientHeight: 600, scrollTop: 620 }), true);
 });
 
 test('chat hints render a literal @ through the real Chinese and English i18n message compiler', () => {

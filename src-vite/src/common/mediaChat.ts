@@ -20,10 +20,16 @@ export interface ChatSession {
   createdAt: number; updatedAt: number; messageCount: number; lastMessage: string;
   runningRequestId: string | null;
 }
+export type ChatPhase = 'queued' | 'preparing' | 'waiting' | 'thinking' | 'responding' | 'completed' | 'failed' | 'cancelled';
+export interface ChatStreamEvent {
+  libraryId: string; sessionId: string; requestId: string; seq: number;
+  kind: 'status' | 'text_delta' | 'reasoning_delta'; phase: ChatPhase; delta: string | null;
+}
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; status: 'pending' | 'completed' | 'failed' | 'cancelled';
   content: string; modelId: string | null; modelName: string; visual: boolean;
   reasoningEffort: string | null;
+  reasoningContent: string; phase: ChatPhase;
   references: ChatReference[]; error: string | null; requestId: string | null; createdAt: number;
 }
 export interface ChatSessionView { session: ChatSession; messages: ChatMessage[] }

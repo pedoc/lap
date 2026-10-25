@@ -17,6 +17,7 @@ dependencies = [
  "drag",
  "fast_image_resize",
  "flate2",
+ "futures-util",
  "genai",
  "hnsw_rs",
  "http",

@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use genai::{
     Client,
     adapter::AdapterKind,
-    chat::{ChatMessage, ChatOptions, ChatRequest, ContentPart, ReasoningEffort},
+    chat::{ChatMessage, ChatOptions, ChatRequest, ChatStream, ContentPart, ReasoningEffort},
     embed::EmbedOptions,
     resolver::{AuthData, Endpoint},
 };
@@ -80,7 +80,7 @@ pub fn sdk(provider: &Provider, key: Option<String>) -> Result<Client, String> {
         .build()
         .map_err(|_| "无法初始化模型服务".to_string())
 }
-fn error(error: genai::Error) -> String {
+pub(super) fn error(error: genai::Error) -> String {
     // SDK errors can contain entire prompts, base64 images and provider bodies.
     let status = match &error {
         genai::Error::WebModelCall { webc_error, .. }
@@ -109,6 +109,22 @@ pub async fn chat_history_with_key(
     messages: Vec<ChatMessage>,
     key: Option<String>,
 ) -> Result<String, String> {
+    let options = chat_options(model)?;
+    let response = sdk(&model.provider, key)?
+        .exec_chat(
+            &model.model.remote_id,
+            ChatRequest::new(messages).with_store(false),
+            Some(&options),
+        )
+        .await
+        .map_err(error)?;
+    let text = response.first_text().ok_or("模型没有返回文字")?.trim();
+    if text.is_empty() {
+        return Err("模型返回内容为空".into());
+    }
+    Ok(text.to_owned())
+}
+fn chat_options(model: &Resolved) -> Result<ChatOptions, String> {
     if model.provider.kind != ProviderKind::Llm || !model.model.is_generation() {
         return Err("此模型不是标准 LLM 生成模型".into());
     }
@@ -133,25 +149,36 @@ pub async fn chat_history_with_key(
     if let Some(limit) = model.model.max_output_tokens {
         options = options.with_max_tokens(limit);
     }
-    let response = sdk(&model.provider, key)?
-        .exec_chat(
+    Ok(options)
+}
+pub async fn chat_stream_with_key(
+    model: &Resolved,
+    messages: Vec<ChatMessage>,
+    key: Option<String>,
+) -> Result<ChatStream, String> {
+    let timeout = Duration::from_secs(model.provider.timeout_seconds.clamp(5, 1800));
+    let options = chat_options(model)?
+        .with_normalize_reasoning_content(false)
+        .with_stream_header_timeout(timeout)
+        .with_stream_read_timeout(timeout);
+    Ok(sdk(&model.provider, key)?
+        .exec_chat_stream(
             &model.model.remote_id,
             ChatRequest::new(messages).with_store(false),
             Some(&options),
         )
         .await
-        .map_err(error)?;
-    let text = response.first_text().ok_or("模型没有返回文字")?.trim();
-    if text.is_empty() {
-        return Err("模型返回内容为空".into());
-    }
-    Ok(text.to_owned())
+        .map_err(error)?
+        .stream)
+}
+pub async fn chat_stream(
+    model: &Resolved,
+    messages: Vec<ChatMessage>,
+) -> Result<ChatStream, String> {
+    chat_stream_with_key(model, messages, config::key(&model.provider)?).await
 }
 pub async fn chat(model: &Resolved, parts: Vec<ContentPart>) -> Result<String, String> {
     chat_with_key(model, parts, config::key(&model.provider)?).await
-}
-pub async fn chat_history(model: &Resolved, messages: Vec<ChatMessage>) -> Result<String, String> {
-    chat_history_with_key(model, messages, config::key(&model.provider)?).await
 }
 pub fn query_text(model: &Resolved, text: &str) -> String {
     if model.provider.embedding_protocol.is_multimodal() {

@@ -21,21 +21,22 @@ function configuration() {
   const model = (id: string, capabilities: string[]) => ({ id, providerId: 'provider', name: id, remoteId: id, capabilities, tested: Object.fromEntries(capabilities.map(cap => [cap, 'receipt'])) });
   return { providers: [{ id: 'provider', name: 'Service', kind: 'llm', enabled: true, allowMedia: true }], models: [model('vision', ['text', 'image', 'video_frames', 'json']), model('text', ['text']), model('image', ['image']), model('embedding', ['embed_text'])], roles: { media: 'vision', text: 'text' } };
 }
-function deferred() { let resolve!: (value: any) => void; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
+function deferred() { let resolve!: (value: any) => void, reject!: (reason: any) => void; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; }
 function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
   const calls: any[] = [], mounts: any[] = [], unmounts: any[] = [], views = new Map<string, any>([['session-a', emptyView()]]), files = [file(7), file(8, { fileType: 2, duration: 120 }), file(9)];
-  const listeners = new Map<string, Set<any>>(), storage = new Map<string, string>();
+  const listeners = new Map<string, Set<any>>(), storage = new Map<string, string>(), channels: any[] = [];
   const mediaChat = Vue.reactive({ open: false, libraryId: 'library-a', fileIds: [] as number[], revision: 0 });
   const libConfig = Vue.reactive({ _libraryId: 'library-a' });
   const handlers: string[] = [], context: any = {
     ...Vue, ...ui, crypto, setTimeout, clearTimeout, setInterval, clearInterval,
+    Channel: class { onmessage: any; constructor() { channels.push(this); } },
     mediaChat, libConfig, closeMediaChat: () => { mediaChat.open = false; }, validMediaChatIds: (values: number[]) => [...new Set(values.filter(id => Number.isSafeInteger(id) && id > 0))],
     useI18n: () => i18n || ({ t: (key: string) => key, te: () => false }),
     useUIStore: () => ({ pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const i = handlers.indexOf(id); if (i >= 0) handlers.splice(i, 1); }, isInputActive: (id: string) => handlers.at(-1) === id }),
     onMounted: (fn: any) => mounts.push(fn), onUnmounted: (fn: any) => unmounts.push(fn),
     getFileThumbById: async () => '', getTagsForFile: async () => [{ name: 'Existing' }], getThumbnailDataUrl: () => '', getThumbUrl: () => '', getDragPayload: async () => ({ filePaths: [] }), getExternalDropPaths: () => [], isWin: false, isMac: false,
     mediaTime: (value: number) => String(value), openMediaAiSettings() {}, openMediaAiBatch: (...args: any[]) => calls.push(['batch', args]), pendingChanges: { confirm: async () => true }, ask: async () => true,
-    IconFile: () => Vue.h('svg'), openMediaChatMedia: async (...args: any[]) => { calls.push(['open-media', args]); return true; },
+    ...Object.fromEntries(['IconAdd', 'IconArrowDown', 'IconClose', 'IconFile', 'IconHistory', 'IconLeft', 'IconMore', 'IconRename', 'IconSearch', 'IconSettings', 'IconTrash'].map(name => [name, () => Vue.h('svg')])), openMediaChatMedia: async (...args: any[]) => { calls.push(['open-media', args]); return true; },
     window: { innerWidth: 1440, innerHeight: 900, addEventListener: (name: string, listener: any) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(listener); }, removeEventListener: (name: string, listener: any) => listeners.get(name)?.delete(listener) },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     invoke: async (name: string, args: any) => {
@@ -54,8 +55,8 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
-  return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage,
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage, channels,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
   };
@@ -290,6 +291,99 @@ test('late polling cannot replace a completed answer with an older pending snaps
   } finally { h.dispose(); }
 });
 
+test('a channel shows an immediate optimistic turn, accepts only ordered matching deltas and keeps API reasoning separate', async () => {
+  const pending = deferred(), polling = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); await h.api.attachIds([7]); h.api.draft.value = 'Describe this';
+    const run = h.api.send(), turn = h.api.streamTurn.value, channel = h.channels[0];
+    assert.equal(h.api.draft.value, '');
+    assert.deepEqual(Array.from(h.api.renderedMessages.value, (message: any) => [message.role, message.content, message.status]), [['user', 'Describe this', 'completed'], ['assistant', '', 'pending']]);
+    assert.equal(turn.user.references.length, 0, 'Local placeholders must not invent backend source/evidence records');
+    assert.equal(turn.media[0].fileId, 7);
+    h.context.invoke = async () => polling.promise;
+    const poll = h.api.refreshCurrent();
+    const event = (seq: number, kind: string, phase: string, delta: string | null = null, extra = {}) => ({ libraryId: 'library-a', sessionId: 'session-a', requestId: turn.requestId, seq, kind, phase, delta, ...extra });
+    channel.onmessage(event(1, 'status', 'waiting'));
+    assert.equal(turn.assistant.reasoningContent, ''); assert.equal(turn.assistant.phase, 'waiting');
+    for (const extra of [{ libraryId: 'foreign' }, { sessionId: 'foreign' }, { requestId: 'foreign' }]) channel.onmessage(event(2, 'text_delta', 'responding', 'wrong', extra));
+    channel.onmessage(event(1, 'text_delta', 'responding', 'duplicate'));
+    channel.onmessage(event(2, 'reasoning_delta', 'thinking', 'API summary'));
+    channel.onmessage(event(3, 'text_delta', 'responding', 'Visible answer'));
+    polling.resolve(emptyView()); await poll;
+    assert.equal(h.api.renderedMessages.value.at(-1).content, 'Visible answer');
+    assert.equal(h.api.renderedMessages.value.at(-1).reasoningContent, 'API summary');
+    channel.onmessage(event(4, 'status', 'cancelled'));
+    channel.onmessage(event(5, 'text_delta', 'responding', 'late'));
+    assert.equal(turn.assistant.content, 'Visible answer'); assert.equal(turn.assistant.status, 'cancelled');
+    h.context.invoke = async () => [];
+    const final = emptyView(); final.messages.push({ ...clone(turn.user), id: 'saved-user', references: [reference(7)] }, { ...clone(turn.assistant), id: 'saved-assistant' });
+    pending.resolve(final); await run;
+    assert.equal(h.api.renderedMessages.value.length, 2); assert.equal(h.api.renderedMessages.value[0].id, 'saved-user');
+    assert.equal(h.api.renderedMessages.value[0].references[0].source.path, '/photos/photo-7.jpg');
+    channel.onmessage(event(6, 'text_delta', 'responding', 'after-final'));
+    assert.equal(h.api.renderedMessages.value.at(-1).content, 'Visible answer');
+  } finally { h.dispose(); }
+});
+
+test('cancelled and failed authoritative turns retain partial text without becoming completed answers', async () => {
+  for (const status of ['cancelled', 'failed']) {
+    const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+    try {
+      await h.boot(); h.api.draft.value = 'Question'; const run = h.api.send(), turn = h.api.streamTurn.value;
+      h.channels[0].onmessage({ libraryId: 'library-a', sessionId: 'session-a', requestId: turn.requestId, seq: 1, kind: 'text_delta', phase: 'responding', delta: 'Partial' });
+      const final = emptyView(); final.messages.push({ ...clone(turn.user), id: 'saved-user' }, { ...clone(turn.assistant), id: 'saved-assistant', status, phase: status, error: status === 'failed' ? 'Provider failed' : null });
+      pending.resolve(final); await run;
+      assert.equal(h.api.renderedMessages.value.at(-1).content, 'Partial'); assert.equal(h.api.renderedMessages.value.at(-1).status, status);
+      assert.equal(h.api.draft.value, '');
+    } finally { h.dispose(); }
+  }
+});
+
+test('background streams survive closing and session switches without changing another session or a newer draft', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); h.views.set('session-b', emptyView('session-b')); h.api.draft.value = 'First question';
+    const run = h.api.send(), turn = h.api.streamTurn.value;
+    h.api.draft.value = 'Next question'; h.api.attachments.value = [file(9)]; h.api.selectedModelId.value = 'image';
+    h.mediaChat.open = false; await Vue.nextTick(); await h.api.selectSession('session-b');
+    h.channels[0].onmessage({ libraryId: 'library-a', sessionId: 'session-a', requestId: turn.requestId, seq: 1, kind: 'text_delta', phase: 'responding', delta: 'A only' });
+    assert.equal(h.api.renderedMessages.value.length, 0); assert.equal(h.api.view.value.session.id, 'session-b');
+    await h.api.selectSession('session-a'); assert.equal(h.api.renderedMessages.value.at(-1).content, 'A only');
+    assert.equal(h.api.draft.value, 'Next question'); assert.equal(h.api.attachments.value[0].fileId, 9); assert.equal(h.api.selectedModelId.value, 'image');
+    h.mediaChat.open = true; await Vue.nextTick();
+    const final = emptyView(); final.messages.push({ ...clone(turn.user), id: 'saved-user' }, { ...clone(turn.assistant), id: 'saved-assistant', status: 'completed', phase: 'completed' });
+    pending.resolve(final); await run;
+    assert.equal(h.api.draft.value, 'Next question'); assert.equal(h.calls.some(([name]) => name === 'media_ai_cancel_request'), false);
+  } finally { h.dispose(); }
+});
+
+test('a rejected send restores only the untouched draft and leaves a later edit safe', async () => {
+  for (const edited of [false, true]) {
+    const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+    try {
+      await h.boot(); h.api.draft.value = 'Retry this'; const run = h.api.send();
+      if (edited) { h.api.draft.value = 'New draft'; h.api.draft.value = ''; }
+      pending.reject(new Error('Preflight rejected')); await run;
+      assert.equal(h.api.draft.value, edited ? '' : 'Retry this');
+      assert.equal(h.api.renderedMessages.value.at(-1).status, 'failed');
+    } finally { h.dispose(); }
+  }
+});
+
+test('stream scrolling follows the bottom but preserves a reader above it until the new-content action is used', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); const viewport = { scrollHeight: 1600, clientHeight: 500, scrollTop: 1100 }; h.api.messagesRoot.value = viewport;
+    h.api.draft.value = 'Question'; const run = h.api.send(), turn = h.api.streamTurn.value; await Vue.nextTick();
+    viewport.scrollTop = 200; h.api.messagesScrolled();
+    h.channels[0].onmessage({ libraryId: 'library-a', sessionId: 'session-a', requestId: turn.requestId, seq: 1, kind: 'text_delta', phase: 'responding', delta: 'Partial' });
+    await Vue.nextTick(); await Vue.nextTick();
+    assert.equal(viewport.scrollTop, 200); assert.equal(h.api.newContent.value, true);
+    await h.api.scrollMessages(true); assert.equal(viewport.scrollTop, 1600); assert.equal(h.api.newContent.value, false);
+    pending.resolve(emptyView()); await run;
+  } finally { h.dispose(); }
+});
+
 test('metadata suggestions use the selected model and editable proposals require a separate per-file adoption', async () => {
   const h = harness();
   try {
@@ -441,6 +535,33 @@ test('history rename and deletion operate on the selected library session and de
   } finally { h.dispose(); }
 });
 
+test('Chats searches and edits its chosen row without renaming or deleting the open conversation', async () => {
+  const h = harness();
+  try {
+    await h.boot(); const other = emptyView('session-b'); other.session.title = 'Beach trip'; h.views.set('session-b', other);
+    h.api.toggleHistory(); await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve));
+    h.api.historyQuery.value = 'BEACH'; assert.deepEqual(Array.from(h.api.filteredSessions.value, (session: any) => session.id), ['session-b']);
+    h.api.beginRename(other.session); h.api.renameText.value = 'Summer trip'; await h.api.renameSession();
+    assert.equal(h.views.get('session-b').session.title, 'Summer trip'); assert.equal(h.api.view.value.session.title, 'session-a');
+    await h.api.deleteSession(h.views.get('session-b').session);
+    assert.equal(h.views.has('session-b'), false); assert.equal(h.api.view.value.session.id, 'session-a');
+    h.api.showHistory.value = true; await h.api.internalDrop({ detail: { libraryId: 'library-a', fileIds: [7] } });
+    assert.equal(h.api.showHistory.value, false); assert.equal(h.api.attachments.value[0].fileId, 7);
+  } finally { h.dispose(); }
+});
+
+test('history mutations cannot cross a library change or delete the immediately pending local turn', async () => {
+  const confirmation = deferred(), sending = deferred(), h = harness({ media_chat_send: () => sending.promise });
+  try {
+    await h.boot(); h.api.draft.value = 'Question'; const run = h.api.send();
+    await h.api.deleteSession(h.api.view.value.session); assert.equal(h.calls.some(([name]) => name === 'media_chat_delete'), false);
+    sending.resolve(emptyView()); await run;
+    h.context.ask = () => confirmation.promise; const deletion = h.api.deleteSession();
+    h.libConfig._libraryId = 'library-b'; confirmation.resolve(true); await deletion;
+    assert.equal(h.calls.some(([name]) => name === 'media_chat_delete'), false);
+  } finally { h.dispose(); }
+});
+
 test('the stop action cancels an active request explicitly while merely closing keeps it running', async () => {
   const h = harness(); h.views.get('session-a').session.runningRequestId = 'active-request';
   try {
@@ -449,6 +570,30 @@ test('the stop action cancels an active request explicitly while merely closing 
     await h.api.stopAnswer();
     assert.deepEqual(h.calls.find(([name]) => name === 'media_ai_cancel_request')[1], { requestId: 'active-request' });
   } finally { h.dispose(); }
+});
+
+test('an immediate stop retries once after request registration even while its first cancellation is still pending', async () => {
+  for (const acknowledgedBeforeStop of [false, true]) {
+    const sending = deferred(), firstCancel = deferred(); let cancellationCount = 0;
+    const h = harness({ media_chat_send: () => sending.promise, media_ai_cancel_request: () => ++cancellationCount === 1 ? firstCancel.promise : Promise.resolve() });
+    try {
+      await h.boot(); h.api.draft.value = 'Question'; const run = h.api.send(), turn = h.api.streamTurn.value;
+      const status = (seq: number, phase = 'preparing') => ({ libraryId: 'library-a', sessionId: 'session-a', requestId: turn.requestId, seq, kind: 'status', phase, delta: null });
+      if (acknowledgedBeforeStop) h.channels[0].onmessage(status(1));
+      const stopping = h.api.stopAnswer();
+      assert.equal(cancellationCount, 1); assert.equal(turn.cancelRequested, true); assert.equal(turn.registeredCancelSent, acknowledgedBeforeStop);
+      h.channels[0].onmessage({ ...status(2), requestId: 'foreign' }); assert.equal(cancellationCount, 1);
+      h.channels[0].onmessage(status(acknowledgedBeforeStop ? 2 : 1));
+      assert.equal(cancellationCount, acknowledgedBeforeStop ? 1 : 2); assert.equal(turn.registeredCancelSent, true);
+      h.channels[0].onmessage(status(3, 'waiting')); h.channels[0].onmessage(status(3, 'waiting'));
+      assert.equal(cancellationCount, acknowledgedBeforeStop ? 1 : 2, 'Further or duplicate acknowledgements cannot repeat the registered cancellation');
+      firstCancel.resolve(undefined); await stopping;
+      const final = emptyView(); final.messages.push({ ...clone(turn.user), id: 'saved-user' }, { ...clone(turn.assistant), id: 'saved-assistant', status: 'cancelled', phase: 'cancelled' });
+      sending.resolve(final); await run;
+      assert.equal(h.api.renderedMessages.value.at(-1).status, 'cancelled');
+      assert.ok(h.calls.filter(([name]) => name === 'media_ai_cancel_request').every(([, args]) => args.requestId === turn.requestId));
+    } finally { h.dispose(); }
+  }
 });
 
 test('unmatched external files are never imported or represented as fabricated gallery attachments', async () => {
@@ -466,8 +611,8 @@ test('unmatched external files are never imported or represented as fabricated g
 });
 
 test('the actual dialog renders composer model and reasoning controls, media cards, eight resize handles and a compact action menu', async () => {
-  const h = harness(), imports: any = {};
-  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen, view, attachments, configuration, selectedModelId, actionsOpen });</script>')).descriptor, { id: 'media-chat-template', inlineTemplate: true }).content)
+  const h = harness(), imports: any = {}; let history = false;
+  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen, view, attachments, configuration, selectedModelId, actionsOpen, showHistory, sessions, historyMenuId });</script>')).descriptor, { id: 'media-chat-template', inlineTemplate: true }).content)
     .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
   try {
@@ -477,6 +622,8 @@ test('the actual dialog renders composer model and reasoning controls, media car
     component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
       state.previewOpen.value = true; state.configuration.value = configuration(); state.configuration.value.models[0].reasoning = { levels: ['none', 'low', 'high'], defaultEffort: 'low' }; state.selectedModelId.value = 'vision'; state.actionsOpen.value = true;
       state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: 'Answer', references: [reference(8)] });
+      state.view.value.messages.unshift({ id: 'question-a', role: 'user', status: 'completed', createdAt: 1, content: 'Question', references: [] });
+      state.showHistory.value = history; state.sessions.value = [summary(), summary('session-b')]; state.historyMenuId.value = history ? 'session-b' : '';
       context.expose(state);
     } });
     const context: any = {}; await renderToString(Vue.createSSRApp(component), context);
@@ -488,16 +635,24 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.match(html, /value="none"/); assert.match(html, /value="low"/); assert.match(html, /value="high"/);
     assert.match(html, /data-chat-attachment-card/); assert.match(html, /data-chat-reference-card/);
     assert.match(html, /data-chat-actions-menu/);
+    assert.match(html, /ml-auto w-fit[^>]+data-chat-role="user"/); assert.match(html, /mr-auto w-full[^>]+data-chat-role="assistant"/);
+    assert.doesNotMatch(html, /<aside|data-chat-reasoning-summary|data-chat-history-row/);
     assert.ok(html.indexOf('data-chat-composer-controls') > html.indexOf('<textarea'));
     for (const edge of ui.CHAT_RESIZE_EDGES) assert.ok(html.includes(`data-chat-resize="${edge}"`), edge);
     assert.doesNotMatch(html, /data-chat-media(?:\s|>)/);
     const header = html.slice(0, html.indexOf('</header>'));
-    assert.doesNotMatch(header, /<select|media_chat\.session_media|media_chat\.configure/);
+    assert.doesNotMatch(header, /<select|media_chat\.session_media|>media_chat\.configure</);
+    assert.match(header, /aria-label="media_chat.configure"/);
     assert.doesNotMatch(source, /v-model="visual"|cursor-nwse-resize|>＠ /);
     assert.match(html, /maxlength="8000"/);
     assert.match(html, /media_chat\.scope_hint/);
     assert.match(html, /data-preview-width="860" data-preview-height="740" data-preview-key="1440:900"/);
     assert.match(html, /<fieldset class="[^"]*flex-1 min-h-0 min-w-0 overflow-y-auto"[^>]*data-chat-adoption-preview/);
     assert.doesNotMatch(source, /v-html/);
+    history = true; const historyContext: any = {}; await renderToString(Vue.createSSRApp(component), historyContext);
+    const historyHtml = historyContext.teleports.body;
+    assert.match(historyHtml, /data-chat-history/); assert.equal((historyHtml.match(/data-chat-history-row/g) || []).length, 2);
+    assert.match(historyHtml, /aria-label="media_chat.search_chats"/); assert.match(historyHtml, /role="menuitem"[^>]*>[^<]*<svg[^>]*><\/svg>media_chat.rename/);
+    assert.doesNotMatch(historyHtml, /<aside|<textarea[^>]*aria-label="media_chat.question"/);
   } finally { h.dispose(); }
 });

@@ -35,3 +35,6 @@ export function slashAtCaret(text: string, caret: number): number | null {
   const end = Math.max(0, Math.min(text.length, caret));
   return /(?:^|\s)\/$/u.test(text.slice(0, end)) ? end - 1 : null;
 }
+export function isChatNearBottom(viewport: { scrollHeight: number; clientHeight: number; scrollTop: number }): boolean {
+  return viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 72;
+}
