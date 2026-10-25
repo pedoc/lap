@@ -114,3 +114,5 @@ Content-Type: application/json
 套餐通道和凭据隔离的测试与边界见 [套餐接入验证](development/verification/service-access-variants.md)，基础目录行为见 [内置停用服务目录验证](development/verification/service-presets.md)。共享连接、三家原生协议及原服务拆分记录分别见 [LLM 服务共享文本 Embedding 验证](development/verification/llm-shared-embedding.md)、[国内 Embedding 接入验证](development/verification/embedding-domestic-providers.md)和[服务拆分与原画面向量验证](development/verification/media-ai-services-v2.md)。
 
 会话入口、引用、资料建议及浮动位置设置的验证见 [媒体会话验证](development/verification/media-chat.md)。
+
+聊天数据、按需工具及业务操作的统一机制见 [Lap 助手的数据与能力机制设计](development/lap-assistant-capabilities.md)（架构提案，尚未实现）。
