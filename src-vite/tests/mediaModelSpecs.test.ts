@@ -30,6 +30,8 @@ test('verified exact model IDs retain independently published context, input and
   assert.deepEqual(limits('qwen3.8-max'), [1000000, 991808, 131072]);
   assert.deepEqual(limits('qwen3.7-plus'), [1000000, 991808, 131072]);
   assert.deepEqual(limits('LongCat-2.0'), [1048576, null, 131072]);
+  assert.deepEqual(limits('deepseek-v4-pro'), ['1M', null, 393216]);
+  assert.equal(modelSpec('deepseek-pro'), undefined);
 });
 
 test('model specification lookup never invents capacities for custom aliases or unlisted dated versions', () => {
