@@ -4,7 +4,7 @@
 
 原图／视频采样帧向量检索使用独立的 **Qwen3-VL-Embedding** profile，可直接编码媒体与文本查询，不依赖生成模型先写描述。Mage-VL、Qwen3-VL-Instruct 是生成模型，不与专用 Embedding 模型混称。
 
-Lap 已接入 Chat Completions、标准文本 Embeddings 与本目录固定的 vLLM 多模态协议，可配置媒体理解、资料建议、批量任务、两类向量检索和问答。操作入口见 [媒体理解使用说明](../../docs/media-understanding.md)。真实 GPU 安装与模型效果仍需在目标服务器验收。
+Lap 已接入 Chat Completions、标准文本 Embeddings、本目录固定的 vLLM 多模态协议，以及百炼、方舟和硅基的原生向量适配器，可配置媒体理解、资料建议、批量任务、两类向量检索和问答。操作入口见 [媒体理解使用说明](../../docs/media-understanding.md)。真实 GPU 安装与模型效果仍需在目标服务器验收。
 
 ## 1. 模型与接口
 
@@ -151,6 +151,8 @@ Mage 路线仅替换三个生成参数：端口改为 `8000`、model ID 为 `mag
 上述 `pipeline_probe.py` 仍专用于“生成描述 → 文本向量”的链路。原媒体多模态入口使用上一节的 `probe.py --protocol vllm-multimodal`；两种输入和索引身份不能混用。
 
 ## 5. 在本机 Lap 配置
+
+使用百炼、方舟或硅基在线 API 时，不必运行本目录脚本；在 Embedding 服务选择供应商预设并填写自己的 Key，再检测和绑定默认用途即可。原生多模态的协议、指令与视频聚合区别见 [Embedding 服务指南](../../docs/embedding-services.md)。本目录继续负责自建 GPU 服务，和在线服务可以混用。
 
 保持回环监听，通过自己的 SSH 连接转发所需端口，例如 Qwen 路线：
 

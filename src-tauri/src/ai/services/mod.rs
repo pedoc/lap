@@ -6,5 +6,6 @@ pub mod requests;
 pub mod store;
 #[cfg(test)]
 mod tests;
+mod vendors;
 pub mod visual;
 pub mod workflow;

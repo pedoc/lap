@@ -14,8 +14,20 @@ use std::{
 };
 
 pub(super) fn fixture(replies: Vec<(u16, Value)>) -> (String, thread::JoinHandle<Vec<Value>>) {
+    fixture_at_path("/gateway/v1/", None, None, replies)
+}
+
+fn fixture_at_path(
+    prefix: &str,
+    route: Option<&str>,
+    key: Option<&str>,
+    replies: Vec<(u16, Value)>,
+) -> (String, thread::JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}/gateway/v1/", listener.local_addr().unwrap());
+    let base = format!("http://{}{}", listener.local_addr().unwrap(), prefix);
+    let prefix = prefix.to_owned();
+    let route = route.map(str::to_owned);
+    let key = key.map(str::to_owned);
     listener.set_nonblocking(true).unwrap();
     let worker = thread::spawn(move || {
         let mut seen = Vec::new();
@@ -47,7 +59,22 @@ pub(super) fn fixture(replies: Vec<(u16, Value)>) -> (String, thread::JoinHandle
                 assert!(bytes.len() < 64 * 1024);
             };
             let head = String::from_utf8_lossy(&bytes[..end]).to_string();
-            assert!(head.contains("/gateway/v1/"), "gateway prefix must survive");
+            assert!(head.contains(&prefix), "gateway prefix must survive");
+            if let Some(route) = &route {
+                assert!(
+                    head.starts_with(&format!("POST {prefix}{route} HTTP/")),
+                    "native route must preserve the configured API prefix"
+                );
+            }
+            if let Some(key) = &key {
+                assert!(
+                    head.lines()
+                        .any(|line| line.split_once(':').is_some_and(|(name, value)| name
+                            .eq_ignore_ascii_case("authorization")
+                            && value.trim() == format!("Bearer {key}"))),
+                    "the explicit fixture key must use bearer authentication"
+                );
+            }
             let length = head
                 .lines()
                 .find_map(|l| {
@@ -381,4 +408,276 @@ async fn multimodal_adapter_preserves_frame_order_and_rejects_urls_and_invalid_v
         );
         worker.join().unwrap();
     }
+}
+
+fn native_reply(protocol: EmbeddingProtocol, frames: usize) -> Value {
+    match protocol {
+        EmbeddingProtocol::DashscopeMultimodal => {
+            json!({"output":{"embeddings":[{"index":0,"embedding":[3.0,4.0],"type":"fusion"}]}})
+        }
+        EmbeddingProtocol::ArkMultimodal => json!({"data":{"embedding":[3.0,4.0]}}),
+        EmbeddingProtocol::SiliconflowMultimodal if frames > 1 => {
+            json!({"data":(0..frames).rev().map(|index| json!({"index":index,"embedding":[3.0,4.0]})).collect::<Vec<_>>()})
+        }
+        _ => json!({"data":[{"index":0,"embedding":[3.0,4.0]}]}),
+    }
+}
+
+fn native_route(protocol: EmbeddingProtocol) -> &'static str {
+    match protocol {
+        EmbeddingProtocol::DashscopeMultimodal => {
+            "services/embeddings/multimodal-embedding/multimodal-embedding"
+        }
+        EmbeddingProtocol::ArkMultimodal => "embeddings/multimodal",
+        _ => "embeddings",
+    }
+}
+
+#[tokio::test]
+async fn native_providers_probe_real_text_queries_and_three_video_frames_before_granting_receipts()
+{
+    for protocol in [
+        EmbeddingProtocol::DashscopeMultimodal,
+        EmbeddingProtocol::ArkMultimodal,
+        EmbeddingProtocol::SiliconflowMultimodal,
+    ] {
+        let mut replies = vec![
+            (200, native_reply(protocol, 0)),
+            (200, native_reply(protocol, 0)),
+            (200, native_reply(protocol, 3)),
+        ];
+        if protocol == EmbeddingProtocol::ArkMultimodal {
+            replies.insert(2, (200, native_reply(protocol, 0)));
+        }
+        let prefix = if protocol == EmbeddingProtocol::ArkMultimodal {
+            "/gateway/api/v3/"
+        } else {
+            "/gateway/v1/"
+        };
+        let (base, worker) = fixture_at_path(
+            prefix,
+            Some(native_route(protocol)),
+            Some("synthetic-native-key"),
+            replies,
+        );
+        let mut model = at(base, "custom-native-embedding-alias");
+        model.provider.embedding_protocol = protocol;
+        model.model.capabilities = model.provider.embedding_capabilities();
+        model.model.embedding.query_instruction =
+            if protocol == EmbeddingProtocol::SiliconflowMultimodal {
+                String::new()
+            } else {
+                "Retrieve matching pictures.".into()
+            };
+        super::commands::probe(
+            &mut model,
+            Some("synthetic-native-key".into()),
+            Capability::EmbedMultimodal,
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.model.embedding.dimensions, Some(2));
+        assert!(model.tested(Capability::EmbedText));
+        assert!(model.tested(Capability::EmbedMultimodal));
+        assert!(model.require(Capability::EmbedMultimodal, false).is_ok());
+        model.provider.allow_media = false;
+        assert!(model.require(Capability::EmbedMultimodal, false).is_err());
+        let seen = worker.join().unwrap();
+        assert_eq!(
+            seen.len(),
+            if protocol == EmbeddingProtocol::ArkMultimodal {
+                4
+            } else {
+                3
+            }
+        );
+        assert!(
+            seen.iter()
+                .all(|body| body["model"] == "custom-native-embedding-alias"
+                    && body.get("messages").is_none()
+                    && body.get("max_tokens").is_none())
+        );
+        match protocol {
+            EmbeddingProtocol::DashscopeMultimodal => {
+                assert_eq!(seen[0]["parameters"]["enable_fusion"], true);
+                assert!(seen[0]["parameters"].get("instruct").is_none());
+                assert_eq!(
+                    seen[1]["parameters"]["instruct"],
+                    "Retrieve matching pictures."
+                );
+                assert_eq!(
+                    seen[1]["input"]["contents"][0]["text"],
+                    "Find a person near water"
+                );
+                let parts = seen[2]["input"]["contents"].as_array().unwrap();
+                assert_eq!(parts.len(), 6);
+                assert_eq!(parts[0]["text"], "Sampled frame at 00:00.");
+                assert_eq!(parts[4]["text"], "Sampled frame at 00:59.");
+                assert!(
+                    parts[5]["image"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("data:image/png;base64,")
+                );
+            }
+            EmbeddingProtocol::ArkMultimodal => {
+                assert_eq!(
+                    seen[0]["instructions"],
+                    "Instruction:Compress the text into one word.\nQuery:"
+                );
+                assert_eq!(
+                    seen[1]["instructions"],
+                    "Target_modality: text.\nInstruction:Retrieve matching pictures.\nQuery:"
+                );
+                assert_eq!(seen[1]["input"][0]["text"], "Find a person near water");
+                assert_eq!(
+                    seen[2]["instructions"],
+                    "Target_modality: image/text and image.\nInstruction:Retrieve matching pictures.\nQuery:"
+                );
+                let parts = seen[3]["input"].as_array().unwrap();
+                assert_eq!(parts.len(), 6);
+                assert_eq!(parts[0]["text"], "Sampled frame at 00:00.");
+                assert_eq!(parts[4]["text"], "Sampled frame at 00:59.");
+                assert_eq!(parts[5]["type"], "image_url");
+                assert_eq!(
+                    seen[3]["instructions"],
+                    "Instruction:Compress the text and image into one word.\nQuery:"
+                );
+            }
+            EmbeddingProtocol::SiliconflowMultimodal => {
+                assert_eq!(seen[0]["input"], "A person walking beside a lake.");
+                assert_eq!(seen[1]["input"], "Find a person near water");
+                let frames = seen[2]["input"].as_array().unwrap();
+                assert_eq!(frames.len(), 3);
+                assert!(frames.iter().all(|frame| {
+                    frame["image"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("data:image/png;base64,")
+                }));
+                assert!(!seen[2].to_string().contains("Sampled frame"));
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn ark_image_corpus_and_default_query_use_distinct_native_instruction_fields() {
+    let protocol = EmbeddingProtocol::ArkMultimodal;
+    let (base, worker) = fixture_at_path(
+        "/gateway/api/v3/",
+        Some(native_route(protocol)),
+        None,
+        vec![
+            (200, native_reply(protocol, 1)),
+            (200, native_reply(protocol, 0)),
+        ],
+    );
+    let mut model = at(base, "custom-native-embedding-alias");
+    model.provider.embedding_protocol = protocol;
+    model.model.capabilities = model.provider.embedding_capabilities();
+    client::embed_media_with_key(&model, vec![super::commands::probe_image().unwrap()], None)
+        .await
+        .unwrap();
+    client::embed_multimodal_query_with_key(&model, "Find a person near water".into(), None)
+        .await
+        .unwrap();
+    let seen = worker.join().unwrap();
+    assert_eq!(
+        seen[0]["instructions"],
+        "Instruction:Compress the image into one word.\nQuery:"
+    );
+    assert_eq!(
+        seen[1]["instructions"],
+        "Target_modality: image/text and image.\nInstruction:Find media content matching this description.\nQuery:"
+    );
+    assert_eq!(seen[1]["input"][0]["text"], "Find a person near water");
+}
+
+#[tokio::test]
+async fn native_probe_rejects_independent_or_incomplete_frame_results_without_a_receipt() {
+    for protocol in [
+        EmbeddingProtocol::DashscopeMultimodal,
+        EmbeddingProtocol::ArkMultimodal,
+        EmbeddingProtocol::SiliconflowMultimodal,
+    ] {
+        let invalid = match protocol {
+            EmbeddingProtocol::DashscopeMultimodal => {
+                json!({"output":{"embeddings":[{"index":0,"embedding":[3.0,4.0]},{"index":1,"embedding":[4.0,3.0]}]}})
+            }
+            EmbeddingProtocol::ArkMultimodal => json!({"data":{"embedding":[1.0]}}),
+            _ => json!({"data":[{"index":0,"embedding":[3.0,4.0]}]}),
+        };
+        let mut replies = vec![
+            (200, native_reply(protocol, 0)),
+            (200, native_reply(protocol, 0)),
+            (200, invalid),
+        ];
+        if protocol == EmbeddingProtocol::ArkMultimodal {
+            replies.insert(2, (200, native_reply(protocol, 0)));
+        }
+        let (base, worker) =
+            fixture_at_path("/gateway/v1/", Some(native_route(protocol)), None, replies);
+        let mut model = at(base, "native-embedding");
+        model.provider.embedding_protocol = protocol;
+        model.model.capabilities = model.provider.embedding_capabilities();
+        assert!(
+            super::commands::probe(&mut model, None, Capability::EmbedMultimodal)
+                .await
+                .is_err()
+        );
+        assert!(model.model.tested.is_empty());
+        worker.join().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn all_native_provider_errors_are_sanitized_and_openai_text_preserves_api_v3() {
+    for protocol in [
+        EmbeddingProtocol::DashscopeMultimodal,
+        EmbeddingProtocol::ArkMultimodal,
+        EmbeddingProtocol::SiliconflowMultimodal,
+    ] {
+        let (base, worker) = fixture_at_path(
+            "/gateway/v1/",
+            Some(native_route(protocol)),
+            None,
+            vec![(
+                401,
+                json!({"message":"private-provider-key-prompt-and-frame"}),
+            )],
+        );
+        let mut model = at(base, "native-embedding");
+        model.provider.embedding_protocol = protocol;
+        model.model.capabilities = model.provider.embedding_capabilities();
+        let error = client::embed_multimodal_query_with_key(
+            &model,
+            "private-query".into(),
+            Some("private-key".into()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("401"));
+        assert!(!error.contains("private"));
+        worker.join().unwrap();
+    }
+    let (base, worker) = fixture_at_path(
+        "/gateway/api/v3/",
+        Some("embeddings"),
+        None,
+        vec![(
+            200,
+            json!({"model":"standard-text-embedding","data":[{"index":0,"embedding":[3.0,4.0]}],"usage":{"prompt_tokens":1,"total_tokens":1}}),
+        )],
+    );
+    let model = at(base, "standard-text-embedding");
+    assert_eq!(
+        client::embed_with_key(&model, vec!["Plain text".into()], None)
+            .await
+            .unwrap(),
+        vec![vec![0.6, 0.8]]
+    );
+    let seen = worker.join().unwrap();
+    assert_eq!(seen[0]["input"], json!(["Plain text"]));
 }

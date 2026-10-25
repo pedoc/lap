@@ -2,26 +2,47 @@
 
 核对日期：2026-10-25。Lap 的 Rust 后端随桌面程序启动；`scripts/ai-server` 用于在另一台机器部署模型 API。也可以直接使用在线 API，二者使用相同的服务／模型配置流程。
 
-## 在线文本 Embedding
+## 国内在线服务
 
-在 **设置 → AI 模型 → 媒体理解 → Embedding 服务**添加服务，协议选择 **OpenAI 标准文本**。填写平台 API Key，添加实际模型，查询预设选择下表值；检测成功后，再在顶部“默认用途”的“文本向量”中选择并保存。
+在 **设置 → AI 模型 → 媒体理解 → Embedding 服务**侧栏选择服务预设，再点 **添加服务**。预设会创建一个新服务和一个可编辑的示例模型，带入对应基础地址与协议；不会修改已有服务、自动发送请求、绑定默认用途或扫描全库。填写自己的平台 API Key，启用服务并允许传输后检测，再在顶部“文本向量”／“原画面向量”中选择并保存。
 
-| 服务 | API 基础地址 | Model ID | 查询预设 |
+| 服务预设 | API 基础地址 | 示例 Model ID | 接口协议 |
 | --- | --- | --- | --- |
-| 硅基流动 | `https://api.siliconflow.cn/v1` | `BAAI/bge-m3` | 普通文本 |
-| 阿里百炼北京 | 以控制台对应工作空间的基础地址为准，形式为 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `text-embedding-v4` | 普通文本 |
+| 阿里百炼 · 文本 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `text-embedding-v4` | OpenAI 标准文本 |
+| 阿里百炼 · 多模态 | `https://dashscope.aliyuncs.com/api/v1` | `qwen3-vl-embedding` | 百炼原生融合 |
+| 火山方舟 · 多模态 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-embedding-vision-251215` | 方舟原生融合 |
+| 硅基流动 · 文本 | `https://api.siliconflow.cn/v1` | `BAAI/bge-m3` | OpenAI 标准文本 |
+| 硅基流动 · 多模态 | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-VL-Embedding-8B` | 硅基原生图像／文本 |
 
-百炼旧基础地址 `https://dashscope.aliyuncs.com/compatible-mode/v1` 仍有兼容支持；新配置优先采用控制台给出的工作空间专属地址，替换其中的 `WorkspaceId`。密钥需要属于所用地域／工作空间。
+百炼预设采用官方示例域名；控制台提供工作空间专属域名时，可将主机改为 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`，文本保留 `/compatible-mode/v1`，多模态保留 `/api/v1`，替换其中的 `WorkspaceId`。密钥需要属于所用地域／工作空间。方舟填写推理 API Key，使用当前已开通的模型 ID 或推理接入点 ID；基础地址保留 `/api/v3`。网关地址和模型别名均可编辑，Lap 不按模型名称猜测实际能力。
 
-两者的官方文本接口均支持文本 `input` 和稠密浮点向量。BGE-M3 官方说明无需额外查询指令；百炼的可选 `instruct` 是供应商接口参数，不等同于 Lap 的 Qwen3 文本前缀，所以以上配置选择普通文本。实际维度由检测读取。这里核对的是接口文档，未使用真实账户发起推理，也不承诺账户额度或免费使用。
+百炼文本与硅基文本预设均使用文本 `input` 和稠密浮点向量，默认普通文本；实际维度由检测读取。多模态预设同样可编码分析文本及文字查询，因此方舟原生模型可以同时用于“文本向量”和“原画面向量”。这两个用途保留独立索引身份。
+
+查询规则按协议区分：
+
+- 百炼原生：正文采用供应商默认编码；显式填写查询指令时通过原生 `parameters.instruct` 发送。
+- 方舟原生：面向 251215 及支持 `instructions` 的后续模型；适配器按文本／图像／混合语料设置对应原生指令。分析文本查询的 `Target_modality` 为 `text`；原画面库包含纯图片和“时间文字＋采样图”的视频片段，查询目标为 `image/text and image`。高级选项仅填写 `Instruction` 正文，适配器补齐用途对应的模板；空值使用 Lap 推荐检索指令。
+- 硅基原生：当前公开接口没有单独的查询指令字段，采用供应商默认编码；界面不展示该选项。切换至此协议会清除旧指令并要求重新检测。
+
+各协议不互相拼接查询前缀。更改模型、协议、编码规则或模型版本后重新检测，并为对应配置补建向量；旧索引保留。实际账号权限、额度及检索质量需要在所选平台验收。
 
 可以继续用现有 CliProxyAPI 处理媒体理解／文本生成，同时由其中一家在线服务生成分析文本向量。为已有分析补建向量后，在自然语言检索里选择“分析文本”。两种用途不要求来自同一供应商。
 
-### 国内多模态服务
+### 多模态接口并不相同
 
-百炼提供专用多模态模型，接口使用 `input.contents` 和独立的多模态路径；硅基流动的 VL 向量接口使用带文本／图片的 `input` 对象或数组，官方当前不支持视频。这些格式与本轮已实现的 **vLLM messages 扩展**不同，尚未接入对应适配器，不能只修改基础地址就宣称兼容。
+| 协议 | 最终路由 | 请求与响应 |
+| --- | --- | --- |
+| OpenAI 文本 | 基础地址＋`/embeddings` | 文本 `input`；`data[].embedding` |
+| 百炼多模态 | `/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding` | 有序 `input.contents`，`enable_fusion=true`；`output.embeddings[0].embedding` |
+| 方舟多模态 | `/api/v3/embeddings/multimodal` | 有序文本／`image_url` 内容块及原生 `instructions`；`data.embedding` |
+| 硅基多模态 | `/v1/embeddings` | 字符串、图片对象或图片对象批次；`data[].embedding` |
+| vLLM 多模态 | `/v1/embeddings` | `messages` 扩展及 system 指令；`data[0].embedding` |
 
-要在现版使用原画面向量检索，可以使用下面自部署的 vLLM 多模态服务；国内供应商专用接口需要后续显式适配。已有 CLIP 图文检索继续使用原来的入口与索引。
+视频继续由 Lap 按 60 秒片段取三张图像。百炼／方舟将有序采样帧和时间文字融合为一个向量；硅基官方不提供原生视频输入，Lap 将三帧作为独立图像样本编码，逐帧 L2 归一化后取均值，再归一化成一个片段向量，时间保存在数据库中。这个聚合方法不表示时序事件理解。返回向量数量、index、维度与非零范数必须全部有效，不能挑第一条或混用不同空间。
+
+三家适配器均接入已有分析、批量任务、索引补建与自然语言搜索：LLM 产出标题／说明／标签，再由选定向量服务编码分析文本；原画面索引可独立执行。细节问答继续由 LLM 使用分析证据或本次画面复核完成。已有 CLIP 图文检索保留原入口和索引。
+
+百炼／方舟原生接口不假设提供标准模型列表，预设带示例 ID，其他模型手动填写；其余协议继续提供模型发现入口。所有协议都必须通过本机的实际检测才能执行媒体任务。
 
 ## 自部署模型 API
 
@@ -73,3 +94,5 @@ ssh -N -L 8003:127.0.0.1:8003 用户@服务器
 - [百炼文本 Embedding 接口](https://www.alibabacloud.com/help/en/model-studio/text-embedding-synchronous-api)
 - [百炼地域与基础地址](https://www.alibabacloud.com/help/en/model-studio/regions)
 - [百炼多模态 Embedding 接口](https://www.alibabacloud.com/help/en/model-studio/multimodal-embedding-api-reference)
+- [方舟多模态向量化说明](https://docs.volcengine.com/docs/ark/vectorization?lang=en&redirect=1)
+- [方舟向量化指令说明](https://www.volcengine.com/docs/82379/2121931)

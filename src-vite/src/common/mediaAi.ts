@@ -3,7 +3,21 @@ import { emit } from '@tauri-apps/api/event';
 
 export type MediaCapability = 'text' | 'image' | 'video_frames' | 'json' | 'embed_text' | 'embed_multimodal';
 export type MediaServiceKind = 'llm' | 'embedding';
-export type EmbeddingProtocol = 'openai_text' | 'vllm_multimodal';
+export type EmbeddingProtocol = 'openai_text' | 'vllm_multimodal' | 'dashscope_multimodal' | 'ark_multimodal' | 'siliconflow_multimodal';
+export const EMBEDDING_PROTOCOLS: Record<EmbeddingProtocol, { label: string; hint: string; modelList: boolean; queryInstruction: boolean; queryPresets: boolean }> = {
+  openai_text: { label: 'protocol_openai_text', hint: 'embedding_hint', modelList: true, queryInstruction: true, queryPresets: true },
+  vllm_multimodal: { label: 'protocol_vllm_multimodal', hint: 'multimodal_protocol_hint', modelList: true, queryInstruction: true, queryPresets: true },
+  dashscope_multimodal: { label: 'protocol_dashscope_multimodal', hint: 'dashscope_protocol_hint', modelList: false, queryInstruction: true, queryPresets: false },
+  ark_multimodal: { label: 'protocol_ark_multimodal', hint: 'ark_protocol_hint', modelList: false, queryInstruction: true, queryPresets: false },
+  siliconflow_multimodal: { label: 'protocol_siliconflow_multimodal', hint: 'siliconflow_protocol_hint', modelList: true, queryInstruction: false, queryPresets: false },
+};
+export const EMBEDDING_SERVICE_PRESETS: { id: string; label: string; baseUrl: string; protocol: EmbeddingProtocol; modelId: string }[] = [
+  { id: 'dashscope_text', label: 'preset_dashscope_text', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai_text', modelId: 'text-embedding-v4' },
+  { id: 'dashscope_multimodal', label: 'preset_dashscope_multimodal', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', protocol: 'dashscope_multimodal', modelId: 'qwen3-vl-embedding' },
+  { id: 'ark_multimodal', label: 'preset_ark_multimodal', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', protocol: 'ark_multimodal', modelId: 'doubao-embedding-vision-251215' },
+  { id: 'siliconflow_text', label: 'preset_siliconflow_text', baseUrl: 'https://api.siliconflow.cn/v1', protocol: 'openai_text', modelId: 'BAAI/bge-m3' },
+  { id: 'siliconflow_multimodal', label: 'preset_siliconflow_multimodal', baseUrl: 'https://api.siliconflow.cn/v1', protocol: 'siliconflow_multimodal', modelId: 'Qwen/Qwen3-VL-Embedding-8B' },
+];
 export type MediaRole = 'media' | 'text' | 'embedding' | 'multimodalEmbedding';
 export interface MediaProvider {
   id: string; name: string; baseUrl: string; enabled: boolean; allowMedia: boolean;
@@ -43,7 +57,7 @@ export function modelsForRole(configuration: MediaConfiguration, role: MediaRole
   const cap: MediaCapability = role === 'media' ? 'image' : role === 'text' ? 'text' : role === 'embedding' ? 'embed_text' : 'embed_multimodal';
   const kind: MediaServiceKind = role === 'media' || role === 'text' ? 'llm' : 'embedding';
   return configuration.models.filter(m => (m.capabilities.includes(cap) || (role === 'media' && m.capabilities.includes('video_frames')))
-    && configuration.providers.some(p => p.id === m.providerId && p.kind === kind && (role !== 'multimodalEmbedding' || p.embeddingProtocol === 'vllm_multimodal')));
+    && configuration.providers.some(p => p.id === m.providerId && p.kind === kind && (role !== 'multimodalEmbedding' || p.embeddingProtocol !== 'openai_text')));
 }
 export function eligibleModels(configuration: MediaConfiguration, role: MediaRole) {
   const cap: MediaCapability = role === 'media' ? 'image' : role === 'text' ? 'text' : role === 'embedding' ? 'embed_text' : 'embed_multimodal';

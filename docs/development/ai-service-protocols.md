@@ -1,5 +1,7 @@
 # 模型服务配置与标准 API 调查
 
+> 2026-10-25 实现更新：下文保留最初设计调查。当前已拆分 LLM／Embedding 服务，四类默认用途位于顶部紧凑区域，并支持百炼、方舟、硅基原生向量协议及 vLLM 扩展。最新接口对照和配置方式以 [Embedding 服务指南](../embedding-services.md) 为准。
+
 核对日期：2026-10-23。本次基于用户给出的 Cherry Studio 设置图、上游源码和官方协议文档。结论用于修订设计及准备远程部署工具；未修改 Lap 正式后端，也未完成 GPU 实机验收。
 
 本轮重新读取了 Mage 官方 `inference_base.py`、Qwen3-VL 官方 README、DeepSeek 调用说明和 OpenAI Embeddings 文档：前两者有 OpenAI SDK Chat Completions 示例，DeepSeek 明确声明兼容 OpenAI，标准 Embeddings 的输入定义为文本或 token 数组。这里核对的是文档／源码契约，真实服务仍需按模型能力验收。

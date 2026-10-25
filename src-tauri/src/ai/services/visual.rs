@@ -160,7 +160,7 @@ pub fn search(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::ai::services::config::{EmbeddingProtocol, ProviderKind};
 
@@ -169,6 +169,149 @@ mod tests {
         model.provider.kind = ProviderKind::Embedding;
         model.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
         model
+    }
+
+    pub(crate) fn embedding_reply(
+        protocol: EmbeddingProtocol,
+        vector: Vec<f32>,
+        frames: usize,
+    ) -> serde_json::Value {
+        use serde_json::json;
+        match protocol {
+            EmbeddingProtocol::DashscopeMultimodal => {
+                json!({"output":{"embeddings":[{"index":0,"embedding":vector,"type":"fusion"}]}})
+            }
+            EmbeddingProtocol::ArkMultimodal => json!({"data":{"embedding":vector}}),
+            EmbeddingProtocol::SiliconflowMultimodal if frames > 1 => {
+                json!({"data":(0..frames).map(|index|json!({"index":index,"embedding":vector})).collect::<Vec<_>>()})
+            }
+            _ => json!({"data":[{"index":0,"embedding":vector}]}),
+        }
+    }
+
+    #[tokio::test]
+    async fn domestic_providers_connect_llm_analysis_text_and_original_image_search() {
+        use super::super::workflow;
+        use genai::chat::ContentPart;
+        use serde_json::json;
+        for protocol in [
+            EmbeddingProtocol::DashscopeMultimodal,
+            EmbeddingProtocol::ArkMultimodal,
+            EmbeddingProtocol::SiliconflowMultimodal,
+        ] {
+            let (mut c, dir) = store::tests::fixture();
+            let path = dir.path().join("photo-1.jpg");
+            image::RgbImage::from_pixel(48, 32, image::Rgb([40, 180, 80]))
+                .save(&path)
+                .unwrap();
+            let original = blake3::hash(&std::fs::read(&path).unwrap());
+            let info = crate::t_utils::FileInfo::new(path.to_str().unwrap()).unwrap();
+            c.execute(
+                "UPDATE afiles SET size=?1,modified_at=?2 WHERE id=1",
+                params![info.file_size, info.modified],
+            )
+            .unwrap();
+            let source = store::source(&c, 1).unwrap();
+            let description =
+                r#"{"title":"绿色照片","description":"一张绿色的图片","tags":["绿色"]}"#;
+            let completion = |text: &str| json!({"id":"fixture","object":"chat.completion","model":"fixture-llm","choices":[{"index":0,"message":{"role":"assistant","content":text},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}});
+            let (base, worker) = super::super::tests::fixture(vec![
+                (200, completion(description)),
+                (200, embedding_reply(protocol, vec![3.0, 4.0], 1)),
+                (200, embedding_reply(protocol, vec![3.0, 4.0], 1)),
+                (200, completion("这是一张绿色图片。[E1]")),
+                (200, embedding_reply(protocol, vec![3.0, 4.0], 1)),
+                (200, embedding_reply(protocol, vec![3.0, 4.0], 1)),
+            ]);
+            let mut llm = store::tests::model("fixture-llm");
+            llm.provider.base_url = base.clone();
+            let mut embedding = model();
+            embedding.provider.base_url = base;
+            embedding.provider.embedding_protocol = protocol;
+            embedding.model.remote_id = "custom-native-model-alias".into();
+            let input = workflow::parts(&source, 0.0, 0.0, "Describe this picture as JSON".into())
+                .await
+                .unwrap();
+            let text = client::chat_with_key(&llm, input, None).await.unwrap();
+            store::put_analysis(
+                &mut c,
+                &source,
+                0,
+                0.0,
+                0.0,
+                store::AnalysisText::parse(&text).unwrap(),
+                &llm,
+            )
+            .unwrap();
+            let analysis = store::analyses(&c, &source).unwrap().remove(0);
+            let vector = client::embed_with_key(&embedding, vec![analysis.text.document()], None)
+                .await
+                .unwrap()
+                .remove(0);
+            store::put_vector(&c, &analysis, &embedding, vector).unwrap();
+            let query = client::embed_text_query_with_key(&embedding, "绿色图片".into(), None)
+                .await
+                .unwrap();
+            let db = dir.path().join("native-pipeline.db");
+            c.execute("VACUUM INTO ?1", [db.to_str().unwrap()]).unwrap();
+            drop(c);
+            let mut c = Connection::open(db).unwrap();
+            c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+            let hit = store::search(&c, &embedding, &query, 10, None, 0)
+                .unwrap()
+                .remove(0);
+            assert_eq!(hit.file_id, 1);
+            assert!((hit.score - 1.0).abs() < 1e-6);
+            let answer = client::chat_with_key(
+                &llm,
+                vec![ContentPart::from_text(format!(
+                    "[E1] {}. Answer with citations.",
+                    hit.description
+                ))],
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(answer.contains("[E1]"));
+            let input = workflow::parts(&source, 0.0, 0.0, String::new())
+                .await
+                .unwrap();
+            let vector = client::embed_media_with_key(&embedding, input, None)
+                .await
+                .unwrap();
+            put_vector(&mut c, &source, &embedding, 0, 0.0, 0.0, 0.0, vector).unwrap();
+            let query =
+                client::embed_multimodal_query_with_key(&embedding, "绿色画面".into(), None)
+                    .await
+                    .unwrap();
+            assert!(
+                (search(&c, &embedding, &query, 10, None, 0).unwrap()[0].score - 1.0).abs() < 1e-6
+            );
+            assert_ne!(
+                embedding.embedding_profile().unwrap(),
+                embedding.multimodal_profile().unwrap()
+            );
+            let seen = worker.join().unwrap();
+            assert!(seen[0].to_string().contains("image_url"));
+            assert!(seen[1].to_string().contains("绿色照片"));
+            assert!(seen[2].to_string().contains("绿色图片"));
+            assert!(seen[4].to_string().contains("data:image/jpeg;base64,"));
+            if protocol == EmbeddingProtocol::ArkMultimodal {
+                assert!(
+                    seen[2]["instructions"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("Target_modality: text.\n")
+                );
+                assert!(
+                    seen[5]["instructions"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("Target_modality: image/text and image.\n")
+                );
+            }
+            assert_eq!(original, blake3::hash(&std::fs::read(path).unwrap()));
+        }
     }
 
     #[test]

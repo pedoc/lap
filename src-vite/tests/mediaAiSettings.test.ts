@@ -37,7 +37,7 @@ function harness() {
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,servicePreset,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,canListModels,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls, dialogs };
 }
@@ -257,6 +257,72 @@ test('query presets preserve an explicit custom instruction and do not guess a m
   assert.equal(model.remoteId, 'any-model');
 });
 
+test('service presets only append a new unpermitted service and editable sample after Add is clicked', () => {
+  assert.equal(mediaAi.EMBEDDING_SERVICE_PRESETS.length, 5);
+  for (const preset of mediaAi.EMBEDDING_SERVICE_PRESETS) {
+    const h = harness(); h.api.selectServiceKind('embedding');
+    assert.equal(h.api.servicePreset.value, 'custom');
+    h.api.keys.value.provider = 'synthetic-pending-key';
+    const existing = JSON.stringify(h.api.draft.value);
+    h.api.servicePreset.value = preset.id;
+    assert.equal(JSON.stringify(h.api.draft.value), existing, 'selecting a preset does not edit the draft');
+    h.api.addProvider();
+    const p = h.api.draft.value.providers.at(-1), m = h.api.draft.value.models.at(-1);
+    assert.equal(p.kind, 'embedding'); assert.equal(p.baseUrl, preset.baseUrl); assert.equal(p.embeddingProtocol, preset.protocol);
+    assert.equal(p.allowMedia, false); assert.equal(p.allowBackground, false); assert.equal(p.identityId, '');
+    assert.equal(m.remoteId, preset.modelId); assert.equal(m.providerId, p.id); assert.equal(m.embedding.queryInstruction, '');
+    assert.equal(m.maxOutputTokens, null); assert.deepEqual(Object.keys(m.tested), []);
+    assert.deepEqual(Array.from(m.capabilities), preset.protocol === 'openai_text' ? ['embed_text'] : ['embed_text', 'embed_multimodal']);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.api.draft.value.roles)), fixture().configuration.roles);
+    assert.equal(JSON.stringify(h.api.draft.value.providers[0]), JSON.stringify(fixture().configuration.providers[0]));
+    assert.equal(h.api.keys.value.provider, 'synthetic-pending-key');
+    assert.equal(h.api.draft.value.providers.length, 2); assert.equal(h.api.draft.value.models.length, 2);
+    assert.equal(h.api.saved.value.providers.length, 1); assert.equal(h.calls.length, 0);
+  }
+});
+
+test('unbound embedding purposes locate all native protocols without converting a service or discarding edits', () => {
+  for (const protocol of ['dashscope_multimodal', 'ark_multimodal', 'siliconflow_multimodal'] as mediaAi.EmbeddingProtocol[]) {
+    const h = harness();
+    const p = { ...mediaAi.newProvider('embedding'), id: `native-${protocol}`, name: 'Native', embeddingProtocol: protocol };
+    const m = { ...mediaAi.newMediaModel(p.id), id: 'native-model', remoteId: 'account-alias', capabilities: ['embed_text', 'embed_multimodal'] as mediaAi.MediaCapability[] };
+    h.api.draft.value.providers.push(p); h.api.draft.value.models.push(m); h.api.keys.value[p.id] = 'synthetic-pending-key';
+    const before = JSON.stringify(h.api.draft.value);
+    h.api.configureRole('multimodalEmbedding'); assert.equal(h.api.selected.value, p.id);
+    h.api.configureRole('embedding'); assert.equal(h.api.selected.value, p.id, 'a native service can supply text embeddings when no standard endpoint exists');
+    assert.equal(JSON.stringify(h.api.draft.value), before);
+    assert.equal(h.api.keys.value[p.id], 'synthetic-pending-key'); assert.equal(h.calls.length, 0);
+    h.api.draft.value.roles.multimodalEmbedding = m.id; m.capabilities = [];
+    h.api.configureRole('multimodalEmbedding'); assert.equal(h.api.selected.value, p.id);
+    assert.equal(h.api.expandedModel.value, m.id, 'navigation follows providerId even while draft capability edits are incomplete');
+  }
+});
+
+test('SiliconFlow protocol changes clear unsupported instructions and receipts while native query rules remain explicit', () => {
+  const h = harness(); h.api.selectServiceKind('embedding'); h.api.addProvider(); h.api.addModel('account-alias');
+  const p = h.api.provider.value, m = h.api.providerModels.value[0];
+  m.embedding.queryInstruction = mediaAi.QWEN_MEDIA_QUERY; m.embedding.dimensions = 1024; m.tested.embed_text = 'old';
+  p.embeddingProtocol = 'siliconflow_multimodal'; h.api.applyEmbeddingProtocol(p, [m]);
+  assert.equal(m.embedding.queryInstruction, ''); assert.equal(m.embedding.dimensions, null);
+  assert.deepEqual(Object.keys(m.tested), []); assert.deepEqual(Array.from(m.capabilities), ['embed_text', 'embed_multimodal']);
+  h.api.setQueryPreset(m, 'qwen3'); assert.equal(m.embedding.queryInstruction, '');
+  p.embeddingProtocol = 'ark_multimodal'; h.api.applyEmbeddingProtocol(p, [m]);
+  m.embedding.queryInstruction = 'Native instructions for a custom retrieval task.';
+  assert.equal(h.api.queryPreset(m), 'custom');
+  h.api.setQueryPreset(m, 'qwen3'); assert.equal(m.embedding.queryInstruction, 'Native instructions for a custom retrieval task.');
+  h.api.setQueryPreset(m, 'plain'); assert.equal(m.embedding.queryInstruction, '');
+});
+
+test('native APIs without discovery never send a models request while supported routes retain discovery', async () => {
+  for (const protocol of Object.keys(mediaAi.EMBEDDING_PROTOCOLS) as mediaAi.EmbeddingProtocol[]) {
+    const h = harness(); h.api.selectServiceKind('embedding'); h.api.addProvider();
+    h.api.provider.value.embeddingProtocol = protocol;
+    await h.api.syncModels();
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_list_models'), mediaAi.EMBEDDING_PROTOCOLS[protocol].modelList);
+    if (!mediaAi.EMBEDDING_PROTOCOLS[protocol].modelList) assert.match(h.api.error.value, /native_model_id_hint/);
+  }
+});
+
 test('the output control saves 384000 and clearing it sends null instead of an empty string', async () => {
   const h=harness();
   h.api.setOutputTokens(h.api.draft.value.models[0],{target:{value:'384000',valueAsNumber:384000,validity:{badInput:false}}});
@@ -349,4 +415,39 @@ test('the actual embedding service template exposes its protocol and fixed text 
   });
   const disabledHtml = await renderToString(Vue.createSSRApp(disabled));
   assert.equal((disabledHtml.match(/<select[^>]*id="media-ai-role-[^"]+"[^>]*disabled/g) || []).length, 2);
+});
+
+test('every actual protocol template keeps compact defaults and exposes only its applicable controls', async () => {
+  const h = harness(), imports: any = {};
+  const { descriptor } = parse(source);
+  const code = stripTypeScriptTypes(compileScript(descriptor, { id: 'media-ai-native-settings', inlineTemplate: true }).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=')
+    .replace("selected = ref('')", "selected = ref('native-service')");
+  for (const [protocol, info] of Object.entries(mediaAi.EMBEDDING_PROTOCOLS)) {
+    const view = fixture(), p = { ...mediaAi.newProvider('embedding'), id: 'native-service', name: 'Native', embeddingProtocol: protocol as mediaAi.EmbeddingProtocol };
+    const m = { ...mediaAi.newMediaModel(p.id), id: 'native-model', name: 'Native model', remoteId: 'account-alias', capabilities: (protocol === 'openai_text' ? ['embed_text'] : ['embed_text', 'embed_multimodal']) as mediaAi.MediaCapability[] };
+    view.configuration.providers.push(p); view.configuration.models.push(m);
+    let nulls = 0;
+    const component = runInNewContext(`${code}\n;component`, { ...h.context, ...imports,
+      ref: (value: any) => Vue.ref(value === null && nulls++ === 0 ? view.configuration : value === 'llm' ? 'embedding' : value),
+    });
+    const html = await renderToString(Vue.createSSRApp(component));
+    assert.match(html, new RegExp(`media_ai.${info.hint}`));
+    assert.equal(html.includes('media_ai.sync_models'), info.modelList);
+    assert.equal(html.includes('media_ai.query_preset'), info.queryInstruction);
+    assert.equal(html.includes('<textarea'), info.queryInstruction);
+    assert.equal(html.includes('value="qwen3"'), info.queryPresets);
+    assert.equal(html.includes('media_ai.cap_embed_multimodal'), protocol !== 'openai_text');
+    if (protocol === 'siliconflow_multimodal') assert.match(html, /media_ai.siliconflow_plain_hint/);
+    if (protocol === 'ark_multimodal') {
+      assert.match(html, /media_ai.query_lap_recommended/);
+      assert.match(html, /media_ai.ark_query_hint/);
+      assert.doesNotMatch(html, /media_ai.query_vendor_default|media_ai.native_query_hint/);
+    }
+    assert.equal((html.match(/data-media-ai-default-role=/g) || []).length, 2);
+    assert.ok(html.indexOf('data-media-ai-defaults') < html.indexOf('data-media-ai-model="native-model"'));
+    assert.match(html, /media_ai.service_preset/);
+    assert.doesNotMatch(html, /data-embedding-wizard|data-embedding-shortcut|media_ai.configure_embedding/);
+  }
 });

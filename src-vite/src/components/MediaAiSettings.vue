@@ -27,17 +27,19 @@
           <aside class="w-28 shrink-0 space-y-2">
             <input v-model="filter" class="input input-bordered input-xs w-full" :placeholder="t('media_ai.filter_service')" :aria-label="t('media_ai.filter_service')" />
             <div class="max-h-72 overflow-y-auto space-y-1"><button v-for="p in filteredProviders" :key="p.id" class="btn btn-sm h-auto py-2 w-full justify-start text-left break-all" :class="p.id === selected ? 'btn-active' : 'btn-ghost'" :disabled="busy" @click="selected = p.id">{{ p.name || t('media_ai.new_service') }}<span v-if="!p.enabled" class="opacity-50">· {{ t('media_ai.off') }}</span></button></div>
+            <label v-if="serviceKind === 'embedding'" class="block text-[11px] opacity-80">{{ t('media_ai.service_preset') }}<select v-model="servicePreset" class="select select-bordered select-xs w-full mt-1" :aria-label="t('media_ai.service_preset')" :title="t('media_ai.service_preset_hint')" :disabled="busy"><option value="custom">{{ t('media_ai.preset_custom') }}</option><option v-for="preset in EMBEDDING_SERVICE_PRESETS" :key="preset.id" :value="preset.id">{{ t('media_ai.' + preset.label) }}</option></select></label>
             <button class="btn btn-sm w-full" :disabled="busy" @click="addProvider">＋ {{ t('media_ai.add_service') }}</button>
           </aside>
           <div v-if="provider" class="min-w-0 flex-1 space-y-3 max-h-[min(36rem,calc(100vh-17rem))] overflow-y-auto pr-1">
             <div class="flex gap-2 items-center"><input v-model="provider.name" class="input input-bordered input-sm w-full min-w-0" :placeholder="t('media_ai.service_name')" :disabled="busy" maxlength="120" /><input v-model="provider.enabled" class="toggle toggle-sm toggle-primary" type="checkbox" :aria-label="t('media_ai.enabled')" :disabled="busy" /></div>
-            <template v-if="provider.kind === 'embedding'"><label class="block">{{ t('media_ai.embedding_protocol') }}<select v-model="provider.embeddingProtocol" class="select select-bordered select-sm w-full mt-1" :disabled="busy" @change="applyEmbeddingProtocol(provider, providerModels)"><option value="openai_text">{{ t('media_ai.protocol_openai_text') }}</option><option value="vllm_multimodal">{{ t('media_ai.protocol_vllm_multimodal') }}</option></select></label><p class="opacity-60">{{ t(provider.embeddingProtocol === 'vllm_multimodal' ? 'media_ai.multimodal_protocol_hint' : 'media_ai.embedding_hint') }}</p></template>
+            <template v-if="provider.kind === 'embedding'"><label class="block">{{ t('media_ai.embedding_protocol') }}<select v-model="provider.embeddingProtocol" class="select select-bordered select-sm w-full mt-1" :disabled="busy" @change="applyEmbeddingProtocol(provider, providerModels)"><option v-for="(protocol, id) in EMBEDDING_PROTOCOLS" :key="id" :value="id">{{ t('media_ai.' + protocol.label) }}</option></select></label><p class="opacity-60">{{ t('media_ai.' + EMBEDDING_PROTOCOLS[provider.embeddingProtocol].hint) }}</p></template>
             <label class="block">{{ t('media_ai.base_url') }}<input v-model="provider.baseUrl" class="input input-bordered input-sm w-full mt-1" placeholder="https://host/v1" :disabled="busy" /></label>
             <label class="block">API Key<input v-model="keys[provider.id]" type="password" autocomplete="new-password" class="input input-bordered input-sm w-full mt-1" :placeholder="keyPlaceholder(provider.id)" :disabled="busy" /></label>
             <button v-if="storedKeys.includes(provider.id)" class="btn btn-xs btn-ghost" :disabled="busy" @click="keys[provider.id] = ''">{{ t('media_ai.clear_key') }}</button>
             <label class="flex gap-2 items-start"><input v-model="provider.allowMedia" class="checkbox checkbox-xs" type="checkbox" :disabled="busy" />{{ t('media_ai.allow_transfer') }}</label>
             <label class="flex gap-2 items-start"><input v-model="provider.allowBackground" class="checkbox checkbox-xs" type="checkbox" :disabled="busy || !provider.allowMedia" />{{ t('media_ai.allow_background') }}</label>
-            <div class="flex flex-wrap gap-2"><button class="btn btn-xs" :disabled="busy" @click="syncModels">{{ t('media_ai.sync_models') }}</button><button class="btn btn-xs" :disabled="busy" @click="addModel()">＋ {{ t('media_ai.add_model') }}</button></div>
+            <div class="flex flex-wrap gap-2"><button v-if="canListModels(provider)" class="btn btn-xs" :disabled="busy" @click="syncModels">{{ t('media_ai.sync_models') }}</button><button class="btn btn-xs" :disabled="busy" @click="addModel()">＋ {{ t('media_ai.add_model') }}</button></div>
+            <p v-if="!canListModels(provider)" class="opacity-60">{{ t('media_ai.native_model_id_hint') }}</p>
             <p v-if="!providerModels.length" class="opacity-60">{{ t('media_ai.manual_model_hint') }}</p>
             <div v-for="m in providerModels" :key="m.id" class="relative" :data-media-ai-model="m.id">
             <details class="border border-base-content/10 rounded-box p-2" :open="m.id === expandedModel">
@@ -46,10 +48,10 @@
                 <label class="block">Model ID<input v-model="m.remoteId" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="256" /></label>
                 <label class="block">{{ t('media_ai.display_name') }}<input v-model="m.name" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="160" /></label>
                 <label class="block">{{ t('media_ai.group') }}<input v-model="m.group" class="input input-bordered input-xs w-full mt-1" :disabled="busy" maxlength="120" /></label>
-                <template v-if="provider.kind === 'embedding'"><label class="block">{{ t('media_ai.query_preset') }}<select class="select select-bordered select-xs w-full mt-1" :value="queryPreset(m)" :disabled="busy" @change="setQueryPreset(m, ($event.target as HTMLSelectElement).value)"><option value="plain">{{ t('media_ai.query_plain') }}</option><option value="qwen3">Qwen3 Embedding</option><option value="qwen3_vl">Qwen3-VL Embedding</option><option v-if="queryPreset(m) === 'custom'" value="custom">{{ t('media_ai.query_custom') }}</option></select></label><p v-if="m.embedding.dimensions" class="opacity-60">{{ t('media_ai.measured_dimensions', { count: m.embedding.dimensions }) }}<span class="ml-1">· {{ t(!dirty && m.tested.embed_text ? 'media_ai.tested' : 'media_ai.untested') }}</span></p></template>
+                <template v-if="provider.kind === 'embedding'"><label v-if="EMBEDDING_PROTOCOLS[provider.embeddingProtocol].queryInstruction" class="block">{{ t('media_ai.query_preset') }}<select class="select select-bordered select-xs w-full mt-1" :value="queryPreset(m)" :disabled="busy" @change="setQueryPreset(m, ($event.target as HTMLSelectElement).value)"><option value="plain">{{ t(provider.embeddingProtocol === 'ark_multimodal' ? 'media_ai.query_lap_recommended' : 'media_ai.query_plain') }}</option><template v-if="EMBEDDING_PROTOCOLS[provider.embeddingProtocol].queryPresets"><option value="qwen3">Qwen3 Embedding</option><option value="qwen3_vl">Qwen3-VL Embedding</option></template><option v-if="queryPreset(m) === 'custom'" value="custom">{{ t('media_ai.query_custom') }}</option></select></label><p v-else class="opacity-60">{{ t('media_ai.siliconflow_plain_hint') }}</p><p v-if="m.embedding.dimensions" class="opacity-60">{{ t('media_ai.measured_dimensions', { count: m.embedding.dimensions }) }}<span class="ml-1">· {{ t(!dirty && m.tested.embed_text ? 'media_ai.tested' : 'media_ai.untested') }}</span></p></template>
                 <p class="opacity-60">{{ t(provider.kind === 'embedding' ? 'media_ai.embedding_capabilities_hint' : 'media_ai.capabilities_hint') }}</p>
                 <div v-for="cap in capabilities" :key="cap" class="flex items-center gap-2"><label class="flex items-center gap-2 flex-1"><input v-if="provider.kind === 'llm'" v-model="m.capabilities" type="checkbox" class="checkbox checkbox-xs" :value="cap" :disabled="busy" @change="clearUnsupportedRoles" />{{ t('media_ai.cap_' + cap) }}</label><span class="opacity-50">{{ t(!dirty && m.tested[cap] ? 'media_ai.tested' : 'media_ai.untested') }}</span><button class="btn btn-xs" :disabled="busy || !m.capabilities.includes(cap)" @click="testModel(m, cap)">{{ t('media_ai.detect') }}</button></div>
-                <details><summary class="opacity-60 cursor-pointer">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2"><label class="block">{{ t('media_ai.revision') }}<input v-model="m.revision" class="input input-bordered input-xs w-full mt-1" /></label><template v-if="provider.kind === 'llm'"><label class="block">{{ t('media_ai.output_tokens') }}<input :value="m.maxOutputTokens ?? ''" @input="setOutputTokens(m, $event)" type="number" min="1" step="1" :placeholder="t('media_ai.server_default')" :aria-invalid="!!outputTokenError(m.maxOutputTokens)" class="input input-bordered input-xs w-full mt-1" /></label><p class="opacity-60">{{ t('media_ai.output_tokens_hint') }}</p><p v-if="outputTokenError(m.maxOutputTokens)" role="alert" class="text-error">{{ t('media_ai.' + outputTokenError(m.maxOutputTokens), { model: m.name || m.remoteId }) }}</p></template><label v-if="provider.kind === 'embedding'" class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label></div></details>
+                <details><summary class="opacity-60 cursor-pointer">{{ t('media_ai.advanced') }}</summary><div class="space-y-2 pt-2"><label class="block">{{ t('media_ai.revision') }}<input v-model="m.revision" class="input input-bordered input-xs w-full mt-1" /></label><template v-if="provider.kind === 'llm'"><label class="block">{{ t('media_ai.output_tokens') }}<input :value="m.maxOutputTokens ?? ''" @input="setOutputTokens(m, $event)" type="number" min="1" step="1" :placeholder="t('media_ai.server_default')" :aria-invalid="!!outputTokenError(m.maxOutputTokens)" class="input input-bordered input-xs w-full mt-1" /></label><p class="opacity-60">{{ t('media_ai.output_tokens_hint') }}</p><p v-if="outputTokenError(m.maxOutputTokens)" role="alert" class="text-error">{{ t('media_ai.' + outputTokenError(m.maxOutputTokens), { model: m.name || m.remoteId }) }}</p></template><template v-if="provider.kind === 'embedding' && EMBEDDING_PROTOCOLS[provider.embeddingProtocol].queryInstruction"><label class="block">{{ t('media_ai.query_instruction') }}<textarea v-model="m.embedding.queryInstruction" class="textarea textarea-bordered w-full mt-1" rows="2"></textarea></label><p v-if="!EMBEDDING_PROTOCOLS[provider.embeddingProtocol].queryPresets" class="opacity-60">{{ t(provider.embeddingProtocol === 'ark_multimodal' ? 'media_ai.ark_query_hint' : 'media_ai.native_query_hint') }}</p></template><label class="block">{{ t('media_ai.timeout') }}<input v-model.number="provider.timeoutSeconds" type="number" min="5" max="1800" class="input input-bordered input-xs w-full mt-1" /></label></div></details>
               </div>
             </details>
             <button type="button" class="btn btn-xs btn-square btn-ghost text-error absolute top-1.5 right-1.5" :disabled="busy" :aria-label="t('media_ai.delete_model') + ': ' + (m.name || m.remoteId)" :title="t('media_ai.delete_model')" data-remove-media-ai-model @click.stop="removeModel(m.id)"><IconTrash class="w-3.5 h-3.5" aria-hidden="true" /></button>
@@ -85,12 +87,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ModalDialog from './ModalDialog.vue';
 import { IconTrash } from '@/common/icons';
-import { eligibleModels, modelsForRole, newMediaModel, newProvider, outputTokenError, QWEN_MEDIA_QUERY, QWEN_VISUAL_QUERY, type EmbeddingProtocol, type MediaCapability, type MediaConfiguration, type MediaModel, type MediaProvider, type MediaServiceKind } from '@/common/mediaAi';
+import { eligibleModels, modelsForRole, newMediaModel, newProvider, outputTokenError, EMBEDDING_PROTOCOLS, EMBEDDING_SERVICE_PRESETS, QWEN_MEDIA_QUERY, QWEN_VISUAL_QUERY, type EmbeddingProtocol, type MediaCapability, type MediaConfiguration, type MediaModel, type MediaProvider, type MediaServiceKind } from '@/common/mediaAi';
 const { t } = useI18n();
 const draft = ref<MediaConfiguration | null>(null), baseline = ref('null'), keys = ref<Record<string, string>>({}), storedKeys = ref<string[]>([]);
 const saved = ref<MediaConfiguration | null>(null);
 const selected = ref(''), filter = ref(''), expandedModel = ref(''), busy = ref(false), loading = ref(false), error = ref(''), message = ref('');
 const serviceKind = ref<MediaServiceKind>('llm');
+const servicePreset = ref('custom');
 const preferredEmbeddingProtocol = ref<EmbeddingProtocol>('openai_text'), settingsRoot = ref<HTMLElement | null>(null);
 const modelPicker = ref<{ providerId: string; ids: string[]; selection: string[]; filter: string } | null>(null);
 const roles = ['media', 'text', 'embedding', 'multimodalEmbedding'] as const;
@@ -128,10 +131,20 @@ const keyPlaceholder = (id: string) => t(storedKeys.value.includes(id) ? 'media_
 let disposed = false, off: (() => void) | undefined;
 function receive(view: any) { if (disposed) return; draft.value = view.configuration; saved.value = clone(view.configuration); storedKeys.value = view.keysStored; keys.value = {}; baseline.value = JSON.stringify(draft.value); if (!provider.value) selected.value = draft.value?.providers.find(p => p.kind === serviceKind.value)?.id || ''; }
 function selectServiceKind(kind: MediaServiceKind) { serviceKind.value = kind; selected.value = draft.value?.providers.find(p => p.kind === kind)?.id || ''; filter.value = ''; }
-function embeddingCapabilities(p: MediaProvider): MediaCapability[] { return p.embeddingProtocol === 'vllm_multimodal' ? ['embed_text', 'embed_multimodal'] : ['embed_text']; }
-function queryPreset(m: MediaModel) { return m.embedding.queryInstruction === '' ? 'plain' : m.embedding.queryInstruction === QWEN_MEDIA_QUERY ? 'qwen3' : m.embedding.queryInstruction === QWEN_VISUAL_QUERY ? 'qwen3_vl' : 'custom'; }
-function setQueryPreset(m: MediaModel, preset: string) { if (preset !== 'custom') m.embedding.queryInstruction = preset === 'qwen3' ? QWEN_MEDIA_QUERY : preset === 'qwen3_vl' ? QWEN_VISUAL_QUERY : ''; }
-function applyEmbeddingProtocol(p: MediaProvider, models: MediaModel[]) { for (const m of models) { m.capabilities = embeddingCapabilities(p); m.embedding.dimensions = null; m.tested = {}; } clearUnsupportedRoles(); }
+function embeddingCapabilities(p: MediaProvider): MediaCapability[] { return p.embeddingProtocol !== 'openai_text' ? ['embed_text', 'embed_multimodal'] : ['embed_text']; }
+function canListModels(p: MediaProvider) { return p.kind === 'llm' || EMBEDDING_PROTOCOLS[p.embeddingProtocol].modelList; }
+function queryPreset(m: MediaModel) {
+  const protocol = draft.value?.providers.find(p => p.id === m.providerId)?.embeddingProtocol || 'openai_text';
+  if (!EMBEDDING_PROTOCOLS[protocol].queryInstruction || !m.embedding.queryInstruction.trim()) return 'plain';
+  return !EMBEDDING_PROTOCOLS[protocol].queryPresets ? 'custom' : m.embedding.queryInstruction === QWEN_MEDIA_QUERY ? 'qwen3' : m.embedding.queryInstruction === QWEN_VISUAL_QUERY ? 'qwen3_vl' : 'custom';
+}
+function setQueryPreset(m: MediaModel, preset: string) {
+  const protocol = draft.value?.providers.find(p => p.id === m.providerId)?.embeddingProtocol || 'openai_text';
+  if (!EMBEDDING_PROTOCOLS[protocol].queryInstruction || preset === 'plain') m.embedding.queryInstruction = '';
+  else if (EMBEDDING_PROTOCOLS[protocol].queryPresets && preset === 'qwen3') m.embedding.queryInstruction = QWEN_MEDIA_QUERY;
+  else if (EMBEDDING_PROTOCOLS[protocol].queryPresets && preset === 'qwen3_vl') m.embedding.queryInstruction = QWEN_VISUAL_QUERY;
+}
+function applyEmbeddingProtocol(p: MediaProvider, models: MediaModel[]) { for (const m of models) { m.capabilities = embeddingCapabilities(p); m.embedding.dimensions = null; m.tested = {}; if (!EMBEDDING_PROTOCOLS[p.embeddingProtocol].queryInstruction) m.embedding.queryInstruction = ''; } clearUnsupportedRoles(); }
 async function load() { loading.value = true; try { receive(await invoke('media_ai_configuration')); } catch (e) { error.value = String(e); } finally { loading.value = false; } }
 async function confirmDiscard() { if (busy.value) return false; return !dirty.value || ask(t('media_ai.discard'), { kind: 'warning' }); }
 async function action(work: () => Promise<void>) { if (busy.value) return; busy.value = true; error.value = ''; message.value = ''; try { await work(); } catch (e) { error.value = String(e); } finally { busy.value = false; } }
@@ -147,7 +160,14 @@ async function persist() {
 }
 async function save() { await action(async () => { await persist(); message.value = t('media_ai.saved'); }); }
 async function reload() { if (await confirmDiscard()) await load(); }
-function addProvider() { const p = newProvider(serviceKind.value); if (p.kind === 'embedding') p.embeddingProtocol = preferredEmbeddingProtocol.value; draft.value!.providers.push(p); selected.value = p.id; }
+function addProvider() {
+  const preset = serviceKind.value === 'embedding' ? EMBEDDING_SERVICE_PRESETS.find(p => p.id === servicePreset.value) : undefined;
+  const p = newProvider(serviceKind.value);
+  if (p.kind === 'embedding') p.embeddingProtocol = preset?.protocol || preferredEmbeddingProtocol.value;
+  if (preset) { p.name = t('media_ai.' + preset.label); p.baseUrl = preset.baseUrl; }
+  draft.value!.providers.push(p); selected.value = p.id; expandedModel.value = '';
+  if (preset) addModel(preset.modelId);
+}
 function addModel(remoteId = '') { const m = newMediaModel(selected.value); m.remoteId = remoteId; m.name = remoteId; if (provider.value?.kind === 'embedding') { m.capabilities = embeddingCapabilities(provider.value); m.maxOutputTokens = null; } draft.value!.models.push(m); expandedModel.value = m.id; }
 function setOutputTokens(model: MediaModel, event: Event) {
   const input = event.target as HTMLInputElement;
@@ -155,7 +175,7 @@ function setOutputTokens(model: MediaModel, event: Event) {
 }
 function removeModel(id: string) { if (busy.value) return; draft.value!.models = draft.value!.models.filter(m => m.id !== id); roles.forEach(role => { if (draft.value!.roles[role] === id) draft.value!.roles[role] = null; }); if (expandedModel.value === id) expandedModel.value = ''; message.value = t('media_ai.model_removed'); }
 async function removeProvider() { if (!provider.value || !await ask(t('media_ai.delete_confirm'), { kind: 'warning' })) return; const id = provider.value.id; providerModels.value.forEach(m => removeModel(m.id)); draft.value!.providers = draft.value!.providers.filter(p => p.id !== id); delete keys.value[id]; selected.value = draft.value!.providers[0]?.id || ''; }
-async function syncModels() { await action(async () => { const target = provider.value; if (!target) return; const ids = await invoke<string[]>('media_ai_list_models', { provider: clone(target), apiKey: keys.value[target.id] ?? null }); if (disposed) return; modelPicker.value = { providerId: target.id, ids, selection: draft.value!.models.filter(m => m.providerId === target.id).map(m => m.remoteId), filter: '' }; }); }
+async function syncModels() { await action(async () => { const target = provider.value; if (!target) return; if (!canListModels(target)) { error.value = t('media_ai.native_model_id_hint'); return; } const ids = await invoke<string[]>('media_ai_list_models', { provider: clone(target), apiKey: keys.value[target.id] ?? null }); if (disposed) return; modelPicker.value = { providerId: target.id, ids, selection: draft.value!.models.filter(m => m.providerId === target.id).map(m => m.remoteId), filter: '' }; }); }
 function addPickerModels() {
   const picker = modelPicker.value;
   if (busy.value || !picker || !draft.value?.providers.some(p => p.id === picker.providerId)) return;
@@ -171,8 +191,10 @@ async function testModel(m: MediaModel, capability: MediaCapability) { await act
 function configureRole(role: 'embedding' | 'multimodalEmbedding') {
   if (busy.value || !draft.value) return;
   const protocol: EmbeddingProtocol = role === 'multimodalEmbedding' ? 'vllm_multimodal' : 'openai_text';
-  const model = defaultModels(role).find(m => m.id === draft.value!.roles[role]);
-  const target = draft.value.providers.find(p => model ? p.id === model.providerId : p.kind === 'embedding' && p.embeddingProtocol === protocol);
+  const model = draft.value.models.find(m => m.id === draft.value!.roles[role]);
+  const providers = draft.value.providers.filter(p => p.kind === 'embedding');
+  const target = model ? draft.value.providers.find(p => p.id === model.providerId) : role === 'multimodalEmbedding'
+    ? providers.find(p => p.embeddingProtocol !== 'openai_text') : providers.find(p => p.embeddingProtocol === 'openai_text') || providers[0];
   serviceKind.value = 'embedding'; preferredEmbeddingProtocol.value = target?.embeddingProtocol || protocol;
   selected.value = target?.id || ''; expandedModel.value = model?.id || ''; filter.value = '';
   if (model) void nextTick(() => settingsRoot.value?.querySelector<HTMLElement>(`[data-media-ai-model="${model.id}"]`)?.scrollIntoView({ block: 'nearest' }));

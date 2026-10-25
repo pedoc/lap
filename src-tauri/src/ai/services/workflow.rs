@@ -511,7 +511,7 @@ fn segments(duration: f64) -> Result<Vec<(i64, f64, f64)>, String> {
         .map(|i| (i, i as f64 * 60.0, ((i + 1) as f64 * 60.0).min(duration)))
         .collect())
 }
-async fn parts(
+pub(super) async fn parts(
     src: &MediaSource,
     start: f64,
     end: f64,
@@ -1090,162 +1090,219 @@ mod tests {
     #[ignore = "requires local FFmpeg; uses synthetic media and a loopback API, no GPU or paid service"]
     async fn multimodal_real_media_roundtrip() {
         use super::super::config::{EmbeddingProtocol, ProviderKind};
-        use serde_json::json;
-        let (mut c, dir) = store::tests::fixture();
-        let image_path = dir.path().join("photo-1.jpg");
-        image::RgbImage::from_pixel(48, 32, image::Rgb([40, 180, 80]))
-            .save(&image_path)
+        for protocol in [
+            EmbeddingProtocol::VllmMultimodal,
+            EmbeddingProtocol::DashscopeMultimodal,
+            EmbeddingProtocol::ArkMultimodal,
+            EmbeddingProtocol::SiliconflowMultimodal,
+        ] {
+            eprintln!("real-media acceptance: {protocol:?}");
+            let (mut c, dir) = store::tests::fixture();
+            let image_path = dir.path().join("photo-1.jpg");
+            image::RgbImage::from_pixel(48, 32, image::Rgb([40, 180, 80]))
+                .save(&image_path)
+                .unwrap();
+            let info = crate::t_utils::FileInfo::new(image_path.to_str().unwrap()).unwrap();
+            c.execute(
+                "UPDATE afiles SET size=?1,modified_at=?2 WHERE id=1",
+                params![info.file_size, info.modified],
+            )
             .unwrap();
-        let info = crate::t_utils::FileInfo::new(image_path.to_str().unwrap()).unwrap();
-        c.execute(
-            "UPDATE afiles SET size=?1,modified_at=?2 WHERE id=1",
-            params![info.file_size, info.modified],
-        )
-        .unwrap();
-        let video_path = dir.path().join("sample.mp4");
-        let mut command = tokio::process::Command::new("ffmpeg");
-        command
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-nostdin",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=red:s=48x32:r=1:d=60",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=blue:s=48x32:r=1:d=5",
-                "-filter_complex",
-                "[0:v][1:v]concat=n=2:v=1:a=0",
-                "-c:v",
-                "mpeg4",
-                "-g",
-                "999",
-                "-sc_threshold",
-                "1000000000",
-                "-y",
-            ])
-            .arg(&video_path);
-        #[cfg(target_os = "windows")]
-        command.creation_flags(0x08000000);
-        let output = command
-            .output()
-            .await
-            .expect("FFmpeg is required for the explicit media acceptance test");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let image_hash = blake3::hash(&std::fs::read(&image_path).unwrap());
-        let video_hash = blake3::hash(&std::fs::read(&video_path).unwrap());
-        let reply = |v: Vec<f32>| (200, json!({"data":[{"index":0,"embedding":v}]}));
-        let (base, worker) = super::super::tests::fixture(vec![
-            reply(vec![1.0, 0.0]),
-            reply(vec![1.0, 0.0]),
-            reply(vec![0.0, 1.0]),
-            reply(vec![1.0, 0.0]),
-            reply(vec![1.0, 0.0]),
-        ]);
-        let mut model = store::tests::model("qwen3-vl-embedding-fixture");
-        model.provider.kind = ProviderKind::Embedding;
-        model.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
-        model.provider.base_url = base;
-        let src = store::source(&c, 1).unwrap();
-        let input = parts(&src, 0.0, 0.0, String::new()).await.unwrap();
-        let vector = client::embed_media_with_key(&model, input, None)
-            .await
-            .unwrap();
-        visual::put_vector(&mut c, &src, &model, 0, 0.0, 0.0, 0.0, vector).unwrap();
-        let query = client::embed_multimodal_query(&model, "绿色图片".into())
-            .await
-            .unwrap();
-        assert!(
-            (visual::search(&c, &model, &query, 10, None, 0).unwrap()[0].score - 1.0).abs() < 1e-6
-        );
-        assert!(store::analyses(&c, &src).unwrap().is_empty());
-        let info = crate::t_utils::FileInfo::new(video_path.to_str().unwrap()).unwrap();
-        c.execute("UPDATE afiles SET name='sample.mp4',file_type=2,duration=0,size=?1,modified_at=?2 WHERE id=1",params![info.file_size,info.modified]).unwrap();
-        let src = store::source(&c, 1).unwrap();
-        let duration = crate::t_video::get_video_duration(&src.path).await.unwrap();
-        assert_eq!(duration, 65);
-        for (segment, start, end) in segments(duration as f64).unwrap() {
-            let input = parts(&src, start, end, String::new()).await.unwrap();
+            let video_path = dir.path().join("sample.mp4");
+            let mut command = tokio::process::Command::new("ffmpeg");
+            command
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-nostdin",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=red:s=48x32:r=1:d=60",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=blue:s=48x32:r=1:d=5",
+                    "-filter_complex",
+                    "[0:v][1:v]concat=n=2:v=1:a=0",
+                    "-c:v",
+                    "mpeg4",
+                    "-g",
+                    "999",
+                    "-sc_threshold",
+                    "1000000000",
+                    "-y",
+                ])
+                .arg(&video_path);
+            #[cfg(target_os = "windows")]
+            command.creation_flags(0x08000000);
+            let output = command
+                .output()
+                .await
+                .expect("FFmpeg is required for the explicit media acceptance test");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let image_hash = blake3::hash(&std::fs::read(&image_path).unwrap());
+            let video_hash = blake3::hash(&std::fs::read(&video_path).unwrap());
+            let reply = |v: Vec<f32>, frames: usize| {
+                (200, visual::tests::embedding_reply(protocol, v, frames))
+            };
+            let (base, worker) = super::super::tests::fixture(vec![
+                reply(vec![1.0, 0.0], 1),
+                reply(vec![1.0, 0.0], 1),
+                reply(vec![0.0, 1.0], 3),
+                reply(vec![1.0, 0.0], 3),
+                reply(vec![1.0, 0.0], 1),
+            ]);
+            let mut model = store::tests::model("qwen3-vl-embedding-fixture");
+            model.provider.kind = ProviderKind::Embedding;
+            model.provider.embedding_protocol = protocol;
+            model.provider.base_url = base;
+            let src = store::source(&c, 1).unwrap();
+            let input = parts(&src, 0.0, 0.0, String::new()).await.unwrap();
             let vector = client::embed_media_with_key(&model, input, None)
                 .await
                 .unwrap();
-            visual::put_vector(
-                &mut c,
+            visual::put_vector(&mut c, &src, &model, 0, 0.0, 0.0, 0.0, vector).unwrap();
+            let query = client::embed_multimodal_query(&model, "绿色图片".into())
+                .await
+                .unwrap();
+            assert!(
+                (visual::search(&c, &model, &query, 10, None, 0).unwrap()[0].score - 1.0).abs()
+                    < 1e-6
+            );
+            assert!(store::analyses(&c, &src).unwrap().is_empty());
+            let info = crate::t_utils::FileInfo::new(video_path.to_str().unwrap()).unwrap();
+            c.execute("UPDATE afiles SET name='sample.mp4',file_type=2,duration=0,size=?1,modified_at=?2 WHERE id=1",params![info.file_size,info.modified]).unwrap();
+            let src = store::source(&c, 1).unwrap();
+            let duration = crate::t_video::get_video_duration(&src.path).await.unwrap();
+            assert_eq!(duration, 65);
+            for (segment, start, end) in segments(duration as f64).unwrap() {
+                let input = parts(&src, start, end, String::new()).await.unwrap();
+                let vector = client::embed_media_with_key(&model, input, None)
+                    .await
+                    .unwrap();
+                visual::put_vector(
+                    &mut c,
+                    &src,
+                    &model,
+                    segment,
+                    start,
+                    end,
+                    duration as f64,
+                    vector,
+                )
+                .unwrap();
+            }
+            let query = client::embed_multimodal_query(&model, "蓝色视频结尾".into())
+                .await
+                .unwrap();
+            let hits = visual::search(&c, &model, &query, 10, None, 0).unwrap();
+            assert_eq!(hits.len(), 2, "stale image source is excluded");
+            assert_eq!((hits[0].start, hits[0].end), (60.0, 65.0));
+            assert!(visual::complete(
                 &src,
-                &model,
-                segment,
-                start,
-                end,
-                duration as f64,
-                vector,
-            )
-            .unwrap();
-        }
-        let query = client::embed_multimodal_query(&model, "蓝色视频结尾".into())
-            .await
-            .unwrap();
-        let hits = visual::search(&c, &model, &query, 10, None, 0).unwrap();
-        assert_eq!(hits.len(), 2, "stale image source is excluded");
-        assert_eq!((hits[0].start, hits[0].end), (60.0, 65.0));
-        assert!(visual::complete(
-            &src,
-            &visual::vectors(&c, &src, &model).unwrap()
-        ));
-        let seen = worker.join().unwrap();
-        let images = |i: usize| {
-            seen[i]["messages"][1]["content"]
-                .as_array()
+                &visual::vectors(&c, &src, &model).unwrap()
+            ));
+            let seen = worker.join().unwrap();
+            let images = |i: usize| match protocol {
+                EmbeddingProtocol::VllmMultimodal => seen[i]["messages"][1]["content"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|p| p["type"] == "image_url")
+                    .count(),
+                EmbeddingProtocol::DashscopeMultimodal => seen[i]["input"]["contents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|p| p.get("image").is_some())
+                    .count(),
+                EmbeddingProtocol::ArkMultimodal => seen[i]["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|p| p["type"] == "image_url")
+                    .count(),
+                EmbeddingProtocol::SiliconflowMultimodal => seen[i]["input"].as_array().map_or(
+                    usize::from(seen[i]["input"].get("image").is_some()),
+                    |images| images.len(),
+                ),
+                EmbeddingProtocol::OpenaiText => unreachable!("not a media adapter"),
+            };
+            assert_eq!(images(0), 1);
+            assert_eq!(images(1), 0);
+            assert_eq!(images(2), 3);
+            assert_eq!(images(3), 3);
+            assert_eq!(images(4), 0);
+            if protocol == EmbeddingProtocol::VllmMultimodal {
+                for request in &seen {
+                    assert_eq!(request["add_generation_prompt"], true);
+                    assert!(request.get("input").is_none());
+                }
+            }
+            if protocol != EmbeddingProtocol::SiliconflowMultimodal {
+                assert!(seen[3].to_string().contains("64.500"));
+            }
+            let last_image = match protocol {
+                EmbeddingProtocol::VllmMultimodal => seen[3]["messages"][1]["content"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .rev()
+                    .find(|p| p["type"] == "image_url")
+                    .unwrap()["image_url"]["url"]
+                    .as_str()
+                    .unwrap(),
+                EmbeddingProtocol::DashscopeMultimodal => seen[3]["input"]["contents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .rev()
+                    .find(|p| p.get("image").is_some())
+                    .unwrap()["image"]
+                    .as_str()
+                    .unwrap(),
+                EmbeddingProtocol::ArkMultimodal => seen[3]["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .rev()
+                    .find(|p| p["type"] == "image_url")
+                    .unwrap()["image_url"]["url"]
+                    .as_str()
+                    .unwrap(),
+                EmbeddingProtocol::SiliconflowMultimodal => {
+                    seen[3]["input"].as_array().unwrap().last().unwrap()["image"]
+                        .as_str()
+                        .unwrap()
+                }
+                EmbeddingProtocol::OpenaiText => unreachable!("not a media adapter"),
+            };
+            let bytes = STANDARD
+                .decode(last_image.strip_prefix("data:image/jpeg;base64,").unwrap())
+                .unwrap();
+            let pixel = image::load_from_memory(&bytes)
                 .unwrap()
-                .iter()
-                .filter(|p| p["type"] == "image_url")
-                .count()
-        };
-        assert_eq!(images(0), 1);
-        assert_eq!(images(1), 0);
-        assert_eq!(images(2), 3);
-        assert_eq!(images(3), 3);
-        assert_eq!(images(4), 0);
-        for request in &seen {
-            assert_eq!(request["add_generation_prompt"], true);
-            assert!(request.get("input").is_none());
+                .to_rgb8()
+                .get_pixel(0, 0)
+                .0;
+            assert!(
+                pixel[2] as i32 - pixel[0] as i32 > 100,
+                "tail sampling must stay in the blue 60–65s segment, not the red seek keyframe at 0s"
+            );
+            assert_eq!(
+                image_hash,
+                blake3::hash(&std::fs::read(image_path).unwrap())
+            );
+            assert_eq!(
+                video_hash,
+                blake3::hash(&std::fs::read(video_path).unwrap())
+            );
         }
-        assert!(seen[3].to_string().contains("64.500"));
-        let last_image = seen[3]["messages"][1]["content"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .rev()
-            .find(|p| p["type"] == "image_url")
-            .unwrap()["image_url"]["url"]
-            .as_str()
-            .unwrap();
-        let bytes = STANDARD
-            .decode(last_image.strip_prefix("data:image/jpeg;base64,").unwrap())
-            .unwrap();
-        let pixel = image::load_from_memory(&bytes)
-            .unwrap()
-            .to_rgb8()
-            .get_pixel(0, 0)
-            .0;
-        assert!(
-            pixel[2] as i32 - pixel[0] as i32 > 100,
-            "tail sampling must stay in the blue 60–65s segment, not the red seek keyframe at 0s"
-        );
-        assert_eq!(
-            image_hash,
-            blake3::hash(&std::fs::read(image_path).unwrap())
-        );
-        assert_eq!(
-            video_hash,
-            blake3::hash(&std::fs::read(video_path).unwrap())
-        );
     }
 }

@@ -52,6 +52,53 @@ pub enum EmbeddingProtocol {
     #[default]
     OpenaiText,
     VllmMultimodal,
+    DashscopeMultimodal,
+    ArkMultimodal,
+    SiliconflowMultimodal,
+}
+impl EmbeddingProtocol {
+    pub fn is_multimodal(self) -> bool {
+        self != Self::OpenaiText
+    }
+    fn contract_encoding(self) -> Option<&'static str> {
+        match self {
+            Self::OpenaiText => None,
+            Self::VllmMultimodal => Some("vllm-multimodal-v1"),
+            Self::DashscopeMultimodal => Some("dashscope-multimodal-v1/fusion-dense"),
+            Self::ArkMultimodal => Some("ark-multimodal-v1/instructions-v2/source-query"),
+            Self::SiliconflowMultimodal => Some("siliconflow-multimodal-v1/frame-mean-v1"),
+        }
+    }
+    fn text_encoding(self) -> &'static str {
+        match self {
+            Self::OpenaiText => "media-analysis-v1/plain-text/l2-cosine",
+            Self::VllmMultimodal => "media-analysis-v2/vllm-multimodal-text/l2-cosine",
+            Self::DashscopeMultimodal => "media-analysis-v3/dashscope-fusion-dense-text/l2-cosine",
+            Self::ArkMultimodal => {
+                "media-analysis-v3/ark-multimodal-text/instructions-v2/text-query/l2-cosine"
+            }
+            Self::SiliconflowMultimodal => {
+                "media-analysis-v3/siliconflow-multimodal-text/l2-cosine"
+            }
+        }
+    }
+    fn media_encoding(self) -> &'static str {
+        match self {
+            Self::OpenaiText => "unsupported",
+            Self::VllmMultimodal => {
+                "media-multimodal-v1/vllm-messages/1280px-60s-3frames/l2-cosine"
+            }
+            Self::DashscopeMultimodal => {
+                "media-multimodal-v2/dashscope-fusion-dense/1280px-60s-3frames/l2-cosine"
+            }
+            Self::ArkMultimodal => {
+                "media-multimodal-v2/ark-multimodal/instructions-v2/image-or-mixed-query/1280px-60s-3frames/l2-cosine"
+            }
+            Self::SiliconflowMultimodal => {
+                "media-multimodal-v2/siliconflow-frame-mean-v1/1280px-60s-3frames/l2-cosine"
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -104,7 +151,7 @@ impl Provider {
             ProviderKind::Embedding => {
                 capability == Capability::EmbedText
                     || capability == Capability::EmbedMultimodal
-                        && self.embedding_protocol == EmbeddingProtocol::VllmMultimodal
+                        && self.embedding_protocol.is_multimodal()
             }
         }
     }
@@ -220,13 +267,26 @@ pub fn base_url(value: &str) -> Result<String, String> {
         "messages",
         "embeddings",
         "models",
+        "embeddings/multimodal",
+        "services/embeddings/multimodal-embedding/multimodal-embedding",
+        "services/embeddings/text-embedding/text-embedding",
     ]
     .iter()
     .any(|route| base.ends_with(&format!("/{route}")))
     {
         return Err("请填写 API 基础地址，例如 https://host/v1，不要填写具体接口路径。".into());
     }
-    if !base.ends_with("/v1") {
+    let versioned = url
+        .path()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .is_some_and(|segment| {
+            segment.strip_prefix('v').is_some_and(|number| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        });
+    if !versioned {
         base.push_str("/v1");
     }
     base.push('/');
@@ -311,6 +371,24 @@ impl Configuration {
             {
                 return Err("模型能力与服务类型或 Embedding 协议不匹配".into());
             }
+            if provider.kind == ProviderKind::Embedding
+                && provider.embedding_protocol == EmbeddingProtocol::SiliconflowMultimodal
+                && !m.embedding.query_instruction.trim().is_empty()
+            {
+                return Err("硅基流动多模态协议不支持自定义查询指令，请选择普通文本查询。".into());
+            }
+            if provider.kind == ProviderKind::Embedding
+                && provider.embedding_protocol == EmbeddingProtocol::ArkMultimodal
+                && m.embedding.query_instruction.lines().any(|line| {
+                    line.split_once(':').is_some_and(|(field, _)| {
+                        ["Target_modality", "Instruction", "Query"]
+                            .iter()
+                            .any(|reserved| field.trim().eq_ignore_ascii_case(reserved))
+                    })
+                })
+            {
+                return Err("方舟查询指令只填写 Instruction 正文，不要包含 Target_modality、Instruction 或 Query 模板字段。".into());
+            }
             short_text(&m.remote_id, 256, "服务端 Model ID")?;
             short_text(&m.name, 160, "模型显示名称")?;
             if m.max_output_tokens == Some(0) {
@@ -374,10 +452,10 @@ impl Resolved {
             self.model.max_output_tokens,
             self.model.embedding
         ]);
-        if self.provider.kind == ProviderKind::Embedding
-            && self.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal
-        {
-            identity = serde_json::json!([identity, "vllm-multimodal-v1"]);
+        if self.provider.kind == ProviderKind::Embedding {
+            if let Some(encoding) = self.provider.embedding_protocol.contract_encoding() {
+                identity = serde_json::json!([identity, encoding]);
+            }
         }
         blake3::hash(identity.to_string().as_bytes())
             .to_hex()
@@ -413,11 +491,7 @@ impl Resolved {
             &self.model.revision,
             dimension,
             &self.model.embedding.query_instruction,
-            if self.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
-                "media-analysis-v2/vllm-multimodal-text/l2-cosine"
-            } else {
-                "media-analysis-v1/plain-text/l2-cosine"
-            },
+            self.provider.embedding_protocol.text_encoding(),
         );
         Ok(
             blake3::hash(&serde_json::to_vec(&identity).map_err(|_| "向量索引身份无效")?)
@@ -437,7 +511,7 @@ impl Resolved {
             &self.model.revision,
             dimension,
             &self.model.embedding.query_instruction,
-            "media-multimodal-v1/vllm-messages/1280px-60s-3frames/l2-cosine",
+            self.provider.embedding_protocol.media_encoding(),
         );
         Ok(
             blake3::hash(&serde_json::to_vec(&identity).map_err(|_| "向量索引身份无效")?)
@@ -673,6 +747,179 @@ pub fn key(provider: &Provider) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_api_versions_are_preserved_and_full_embedding_routes_are_rejected() {
+        for (input, expected) in [
+            (
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "https://ark.cn-beijing.volces.com/api/v3/",
+            ),
+            (
+                "https://dashscope.aliyuncs.com/api/v1/",
+                "https://dashscope.aliyuncs.com/api/v1/",
+            ),
+            (
+                "http://127.0.0.1:9000/proxy/v12",
+                "http://127.0.0.1:9000/proxy/v12/",
+            ),
+            (
+                "https://gateway.example/openai",
+                "https://gateway.example/openai/v1/",
+            ),
+        ] {
+            assert_eq!(base_url(input).unwrap(), expected);
+        }
+        for endpoint in [
+            "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+            "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+            "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding",
+            "https://api.siliconflow.cn/v1/embeddings",
+        ] {
+            assert!(base_url(endpoint).is_err());
+        }
+    }
+
+    #[test]
+    fn old_protocol_hashes_remain_exact_and_new_native_spaces_are_separate() {
+        let mut model = legacy_configuration().resolve("mixed-model").unwrap();
+        model.provider.kind = ProviderKind::Embedding;
+        model.model.embedding.query_instruction.clear();
+        let mut contracts = BTreeSet::new();
+        let mut text_spaces = BTreeSet::new();
+        let mut media_spaces = BTreeSet::new();
+        for protocol in [
+            EmbeddingProtocol::OpenaiText,
+            EmbeddingProtocol::VllmMultimodal,
+            EmbeddingProtocol::DashscopeMultimodal,
+            EmbeddingProtocol::ArkMultimodal,
+            EmbeddingProtocol::SiliconflowMultimodal,
+        ] {
+            model.provider.embedding_protocol = protocol;
+            model.model.capabilities = model.provider.embedding_capabilities();
+            contracts.insert(model.contract());
+            text_spaces.insert(model.embedding_profile().unwrap());
+            if protocol.is_multimodal() {
+                media_spaces.insert(model.multimodal_profile().unwrap());
+            }
+            if matches!(
+                protocol,
+                EmbeddingProtocol::OpenaiText | EmbeddingProtocol::VllmMultimodal
+            ) {
+                let mut old = serde_json::json!([
+                    model.provider.base_url,
+                    model.provider.credential_revision,
+                    model.model.remote_id,
+                    model.model.revision,
+                    model.model.capabilities,
+                    model.model.max_output_tokens,
+                    model.model.embedding
+                ]);
+                if protocol == EmbeddingProtocol::VllmMultimodal {
+                    old = serde_json::json!([old, "vllm-multimodal-v1"]);
+                }
+                assert_eq!(
+                    model.contract(),
+                    blake3::hash(old.to_string().as_bytes())
+                        .to_hex()
+                        .to_string()
+                );
+                let marker = if protocol == EmbeddingProtocol::OpenaiText {
+                    "media-analysis-v1/plain-text/l2-cosine"
+                } else {
+                    "media-analysis-v2/vllm-multimodal-text/l2-cosine"
+                };
+                let old = (
+                    model.provider.identity(),
+                    base_url(&model.provider.base_url).unwrap(),
+                    &model.model.remote_id,
+                    &model.model.revision,
+                    model.model.embedding.dimensions.unwrap(),
+                    &model.model.embedding.query_instruction,
+                    marker,
+                );
+                assert_eq!(
+                    model.embedding_profile().unwrap(),
+                    blake3::hash(&serde_json::to_vec(&old).unwrap())
+                        .to_hex()
+                        .to_string()
+                );
+                if protocol == EmbeddingProtocol::VllmMultimodal {
+                    let old = (
+                        model.provider.identity(),
+                        base_url(&model.provider.base_url).unwrap(),
+                        &model.model.remote_id,
+                        &model.model.revision,
+                        model.model.embedding.dimensions.unwrap(),
+                        &model.model.embedding.query_instruction,
+                        "media-multimodal-v1/vllm-messages/1280px-60s-3frames/l2-cosine",
+                    );
+                    assert_eq!(
+                        model.multimodal_profile().unwrap(),
+                        blake3::hash(&serde_json::to_vec(&old).unwrap())
+                            .to_hex()
+                            .to_string()
+                    );
+                }
+            }
+            let config = Configuration {
+                providers: vec![model.provider.clone()],
+                models: vec![model.model.clone()],
+                ..Default::default()
+            };
+            config.validate().unwrap();
+        }
+        assert_eq!(
+            (contracts.len(), text_spaces.len(), media_spaces.len()),
+            (5, 5, 4)
+        );
+        assert!(
+            EmbeddingProtocol::SiliconflowMultimodal
+                .media_encoding()
+                .contains("frame-mean-v1")
+        );
+        model.model.embedding.query_instruction = "Unpublished instruction field".into();
+        let config = Configuration {
+            providers: vec![model.provider],
+            models: vec![model.model],
+            ..Default::default()
+        };
+        assert!(config.validate().unwrap_err().contains("普通文本"));
+    }
+
+    #[test]
+    fn ark_custom_query_instructions_are_body_text_without_reserved_template_fields() {
+        let mut model = legacy_configuration().resolve("mixed-model").unwrap();
+        model.provider.kind = ProviderKind::Embedding;
+        model.provider.embedding_protocol = EmbeddingProtocol::ArkMultimodal;
+        model.model.capabilities = model.provider.embedding_capabilities();
+        for text in [
+            "Target_modality: image",
+            " INSTRUCTION : Find media",
+            "prefix\n  qUeRy : question",
+        ] {
+            model.model.embedding.query_instruction = text.into();
+            let config = Configuration {
+                providers: vec![model.provider.clone()],
+                models: vec![model.model.clone()],
+                ..Default::default()
+            };
+            assert!(config.validate().unwrap_err().contains("Instruction 正文"));
+        }
+        for text in [
+            "",
+            "Find matching media.",
+            "Question: find a person near water",
+        ] {
+            model.model.embedding.query_instruction = text.into();
+            let config = Configuration {
+                providers: vec![model.provider.clone()],
+                models: vec![model.model.clone()],
+                ..Default::default()
+            };
+            config.validate().unwrap();
+        }
+    }
 
     fn legacy_configuration() -> Configuration {
         let mut config = Configuration {

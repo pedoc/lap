@@ -1,14 +1,14 @@
 # 媒体理解、Embedding 与自然语言检索
 
-本功能按 **LLM 服务**和 **Embedding 服务**分别配置。LLM 使用 OpenAI 兼容生成接口；文本 Embedding 使用标准 `/v1/embeddings`；原画面 Embedding 使用显式选择的 vLLM 多模态扩展。现有 CLIP 语义检索、人脸、OCR 和对象识别继续使用原有模型与索引。
+本功能按 **LLM 服务**和 **Embedding 服务**分别配置。LLM 使用 OpenAI 兼容生成接口；文本 Embedding 使用标准 `/embeddings`；原画面 Embedding 支持 vLLM 扩展及百炼、方舟、硅基的独立适配器。现有 CLIP 语义检索、人脸、OCR 和对象识别继续使用原有模型与索引。
 
 ## 配置 Embedding
 
 1. 打开现有的独立设置窗口，进入 **AI 模型 → 媒体理解**。
 2. 在页签内选择 **Embedding 服务 → 添加服务**；已有服务可以直接选中编辑。默认用途旁的 **配置**只定位对应服务／模型，不另开配置向导，不刷新或丢弃当前草稿。
-3. 填写服务名称、API 基础地址、API Key 和接口类型。**OpenAI 标准文本**用于分析正文和文本查询；**vLLM 多模态**用于原图、视频采样帧和文本查询。
+3. 填写服务名称、API 基础地址、API Key 和接口类型。可以先选国内供应商预设再添加服务，带入可编辑的示例模型。**OpenAI 标准文本**用于分析正文和文本查询；多模态协议按实际后端选择 vLLM、百炼、方舟或硅基，均可处理分析文本和原画面。
 4. 点 **添加模型**或从“获取模型”列表选择需要的模型，填写服务端 **Model ID**。部署脚本分别提供 `qwen3-embedding-0.6b` 和 `qwen3-vl-embedding-2b`；线上平台使用其实际提供的模型 ID。Mage-VL、Qwen-VL 生成模型不充当向量模型。
-5. 选择普通文本或匹配的 Qwen 查询预设，也可在高级选项填写自定义查询指令。普通文本不加前缀；Qwen3 文本预设对查询添加 `Instruct: ...\nQuery:...`；vLLM 多模态查询指令放在 system 消息中。模型正文不使用查询指令。
+5. 选择适合协议的查询编码规则。普通文本不加前缀；Qwen3 文本预设对查询添加 `Instruct: ...\nQuery:...`；vLLM 多模态放在 system 消息中，百炼使用 `parameters.instruct`，方舟使用原生 `instructions`；硅基使用供应商默认规则。模型正文不使用查询指令；方舟另有固定的语料类型指令。
 6. 启用服务并勾选传输许可，点对应能力旁的 **检测**。检测会先保存当前完整配置，再测试接口，检查实际维度、数量、index、有限值及非零向量；多模态检测还发送测试图片。检测成功后显示实测维度，无需聊天接口。
 7. 在类别切换按钮旁的“默认用途”栏选择模型，再点 **保存**。LLM 类别显示媒体理解／文本生成；Embedding 类别显示“文本向量”／“原画面向量”，分别对应分析文本和多模态索引。窄窗口会自动换行。检测不自动替换默认模型；配置后也不会自动扫描或上传全库。
 
@@ -59,7 +59,7 @@ Content-Type: application/json
 
 因此，服务实现 `/embeddings` 不代表其所有聊天模型都能生成向量。应在 Embedding 服务中添加实际提供的 Embedding Model ID，再检测。只有向量接口的服务也可以单独配置。
 
-“OpenAI 兼容”需要按接口核对：[阿里云文本 Embedding](https://www.alibabacloud.com/help/en/model-studio/text-embedding-synchronous-api)提供兼容的文本接口；其[多模态 Embedding](https://www.alibabacloud.com/help/en/model-studio/multimodal-embedding-api-reference)有不同约定，不在本次适配范围内。首个原画面适配器是 **vLLM 0.14.0 的 `/v1/embeddings` messages 扩展**，配合专用 [Qwen3-VL-Embedding](https://huggingface.co/Qwen/Qwen3-VL-Embedding-2B)。固定使用 `encoding_format: float`、`add_generation_prompt: true`，图片为本地处理后的 data URL；每个视频片段包含按时间排列的三张图像及采样时间文字。一次会话返回一个稠密向量，不把多模态协议冒充标准文本 `input`，也不发送服务端读取本机路径的请求。
+“OpenAI 兼容”需要按接口核对。百炼文本与硅基文本复用标准适配器，三家的多模态接口分别编码，并统一校验输出。vLLM 0.14.0 仍使用 `/v1/embeddings` messages 扩展及 `add_generation_prompt: true`。百炼开启 `enable_fusion`，方舟使用其有序输入融合；硅基逐帧编码后本地归一化均值聚合，不把独立批次误当服务端融合。原图／采样帧仅发送本地处理后的 data URL，详细协议对照见 [服务使用指南](embedding-services.md)。
 
 旧版服务配置首次载入时会备份原 JSON 并迁移；同时包含生成和向量模型的服务拆成独立条目。后端维护稳定身份，保留合法检测回执、密钥引用和原有文本索引身份。删除一个拆分条目不会删除其他条目仍引用的密钥。更改协议、模型或查询编码规则后，需要重新检测，并建立对应索引。
 
@@ -86,6 +86,6 @@ Content-Type: application/json
 
 每次写入检查图库、可见性与来源版本；采用建议使用事务并比较原标题、说明和标签快照，避免覆盖并发人工修改。分析、向量、任务和问答存入独立的 `media_ai_` 表，随图库数据库备份；服务配置随应用设置备份，密钥需要在新机器重新输入。
 
-当前接入 Chat Completions、标准文本 Embeddings，以及上述 vLLM 多模态扩展。不含 Responses、Claude Messages、其他供应商多模态格式，或 Lap 管理的 Mage／Qwen 下载及本机推理环境。自建模型服务可使用 [部署脚本](../scripts/ai-server/README.md)，其中 `embedding-multimodal` 是独立的专用向量模型环境；原 Mage/Qwen-VL profile 仍用于理解和生成。模型实际能力、显存需求与检索质量仍需在目标 GPU 服务器验收。
+当前接入 Chat Completions、标准文本 Embeddings，以及 vLLM、百炼、方舟和硅基的多模态格式。不含 Responses、Claude Messages，或 Lap 管理的 Mage／Qwen 下载及本机推理环境。自建模型服务可使用 [部署脚本](../scripts/ai-server/README.md)，其中 `embedding-multimodal` 是独立的专用向量模型环境；原 Mage/Qwen-VL profile 仍用于理解和生成。真实供应商账号权限、模型效果、显存需求与检索质量仍需在目标环境验收。
 
-本轮测试与验收边界见 [服务拆分与原画面向量验证](development/verification/media-ai-services-v2.md)。
+本轮测试与验收边界见 [国内 Embedding 接入验证](development/verification/embedding-domestic-providers.md)；原服务拆分记录见 [服务拆分与原画面向量验证](development/verification/media-ai-services-v2.md)。

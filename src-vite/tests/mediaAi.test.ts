@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { eligibleModels, rankedMediaHits, newProvider, newMediaModel, outputTokenError, type MediaConfiguration, type MediaHit } from '../src/common/mediaAi.ts';
+import { EMBEDDING_PROTOCOLS, eligibleModels, modelsForRole, rankedMediaHits, newProvider, newMediaModel, outputTokenError, type EmbeddingProtocol, type MediaConfiguration, type MediaHit } from '../src/common/mediaAi.ts';
 
 test('runtime model choices require the specific tested capability and an enabled permitted service', () => {
   const p = newProvider(); p.allowMedia = true;
@@ -32,6 +32,20 @@ test('a video appears once at its best segment rank without mutating source evid
   assert.deepEqual(ranked.map(h => h.fileId), [1, 3, 2]);
   assert.equal(ranked[0].start, 120);
   assert.equal(input.length, 4); assert.equal(input[0].fileId, 2);
+});
+
+test('every native embedding protocol is a multimodal candidate but still requires a verified service at runtime', () => {
+  for (const protocol of Object.keys(EMBEDDING_PROTOCOLS) as EmbeddingProtocol[]) {
+    const p = { ...newProvider('embedding'), embeddingProtocol: protocol, allowMedia: true };
+    const m = newMediaModel(p.id); m.capabilities = ['embed_text', 'embed_multimodal'];
+    const c: MediaConfiguration = { version: 2, revision: 0, providers: [p], models: [m], roles: { media: null, text: null, embedding: null, multimodalEmbedding: null } };
+    assert.equal(modelsForRole(c, 'embedding').length, 1);
+    assert.equal(modelsForRole(c, 'multimodalEmbedding').length, protocol === 'openai_text' ? 0 : 1);
+    assert.equal(eligibleModels(c, 'multimodalEmbedding').length, 0);
+    m.tested.embed_multimodal = 'receipt';
+    assert.equal(eligibleModels(c, 'multimodalEmbedding').length, protocol === 'openai_text' ? 0 : 1);
+    p.allowMedia = false; assert.equal(eligibleModels(c, 'multimodalEmbedding').length, 0);
+  }
 });
 
 test('output budgets accept large API limits and a server default without an 8192 cap', () => {

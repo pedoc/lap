@@ -217,6 +217,14 @@ pub async fn media_ai_list_models(
     provider: Provider,
     api_key: Option<String>,
 ) -> Result<Vec<String>, String> {
+    if provider.kind == ProviderKind::Embedding
+        && matches!(
+            provider.embedding_protocol,
+            EmbeddingProtocol::DashscopeMultimodal | EmbeddingProtocol::ArkMultimodal
+        )
+    {
+        return Err("此原生 Embedding 协议未提供统一模型列表，请手动填写 Model ID。".into());
+    }
     let key = draft_key(&provider, api_key)?;
     let mut req =
         client::http(&provider)?.get(format!("{}models", config::base_url(&provider.base_url)?));
@@ -292,14 +300,43 @@ pub(super) async fn probe(
             key.clone(),
         )
         .await?;
-        let query = client::embed_multimodal_query_with_key(
+        let query = client::embed_text_query_with_key(
             model,
             "Find a person near water".into(),
             key.clone(),
         )
         .await?;
-        let image = client::embed_media_with_key(model, vec![probe_image()?], key).await?;
-        if document[0].len() != query.len() || image.len() != query.len() {
+        let media_query = if model.provider.embedding_protocol == EmbeddingProtocol::ArkMultimodal {
+            Some(
+                client::embed_multimodal_query_with_key(
+                    model,
+                    "Find a person near water".into(),
+                    key.clone(),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let media = if model.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+            vec![probe_image()?]
+        } else {
+            vec![
+                ContentPart::from_text("Sampled frame at 00:00."),
+                probe_image()?,
+                ContentPart::from_text("Sampled frame at 00:30."),
+                probe_image()?,
+                ContentPart::from_text("Sampled frame at 00:59."),
+                probe_image()?,
+            ]
+        };
+        let image = client::embed_media_with_key(model, media, key).await?;
+        if document[0].len() != query.len()
+            || image.len() != query.len()
+            || media_query
+                .as_ref()
+                .is_some_and(|vector| vector.len() != query.len())
+        {
             return Err("文本与媒体向量维度不一致".into());
         }
         model.model.embedding.dimensions = Some(image.len());
@@ -307,9 +344,9 @@ pub(super) async fn probe(
         model.model.embedding.dimensions = None;
         let document = "A person walking beside a lake.".to_owned();
         let query = client::query_text(model, "Find a person near water");
-        let result = if model.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+        let result = if model.provider.embedding_protocol.is_multimodal() {
             let mut document = client::embed_with_key(model, vec![document], key.clone()).await?;
-            let query = client::embed_multimodal_query_with_key(model, query, key).await?;
+            let query = client::embed_text_query_with_key(model, query, key).await?;
             vec![document.pop().ok_or("缺少正文向量")?, query]
         } else {
             client::embed_with_key(model, vec![document, query], key).await?
@@ -409,7 +446,7 @@ pub async fn media_ai_save_embedding(
     model.model.tested.clear();
     model.model.embedding.dimensions = None;
     let key = draft_key(&model.provider, api_key.clone())?;
-    let capability = if model.provider.embedding_protocol == EmbeddingProtocol::VllmMultimodal {
+    let capability = if model.provider.embedding_protocol.is_multimodal() {
         Capability::EmbedMultimodal
     } else {
         Capability::EmbedText
@@ -446,6 +483,26 @@ pub async fn media_ai_save_embedding(
 mod tests {
     use super::*;
     use crate::ai::services::config::{Model, Roles};
+
+    #[tokio::test]
+    async fn unsupported_native_model_catalogs_fail_before_credentials_or_http() {
+        for protocol in [
+            EmbeddingProtocol::DashscopeMultimodal,
+            EmbeddingProtocol::ArkMultimodal,
+        ] {
+            let provider = Provider {
+                kind: ProviderKind::Embedding,
+                embedding_protocol: protocol,
+                ..Default::default()
+            };
+            assert!(
+                media_ai_list_models(provider, None)
+                    .await
+                    .unwrap_err()
+                    .contains("手动填写 Model ID")
+            );
+        }
+    }
 
     fn configuration() -> Configuration {
         Configuration {
