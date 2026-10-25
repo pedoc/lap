@@ -457,7 +457,7 @@ test('the real template exposes a removal button outside each collapsed model de
     .replace("selected = ref('')", "selected = ref('provider')");
   let nulls = 0;
   const component = runInNewContext(`${code}\n;component`, { ...h.context, ...imports,
-    ref: (value: any) => Vue.ref(value === null && nulls++ === 0 ? fixture().configuration : value),
+    ref: (value: any) => Vue.ref(value === null && nulls++ === 0 ? fixture().configuration : value === 0 ? 900 : value),
   });
   const html = await renderToString(Vue.createSSRApp(component));
   assert.match(html, /data-media-ai-model="kept"/);
@@ -478,6 +478,13 @@ test('the real template exposes a removal button outside each collapsed model de
   assert.doesNotMatch(html, /<h3[^>]*>media_ai.default_roles/);
   assert.doesNotMatch(html, /value="embed_text"/);
   assert.doesNotMatch(html, /data-embedding-wizard|data-embedding-shortcut|media_ai.configure_embedding/);
+  assert.match(html, /data-media-ai-service-layout[^>]*data-stacked="false"/);
+  assert.match(html, /<aside[^>]*style="width:15rem;"[^>]*data-media-ai-service-list/);
+  assert.match(html, /role="separator"[^>]*aria-orientation="vertical"[^>]*aria-valuemin="180"[^>]*aria-valuemax="360"[^>]*aria-valuenow="240"/);
+  assert.match(html, /data-media-ai-service-splitter/);
+  assert.match(html, /class="min-w-0 flex-1 space-y-3[^>]*data-media-ai-service-editor/);
+  assert.match(html, /title="Service"/);
+  assert.match(html, /<span class="min-w-0 flex-1 truncate">Service<\/span>/);
 });
 
 test('the actual embedding service template exposes its protocol and fixed text and visual tests without capability toggles', async () => {
@@ -592,6 +599,12 @@ test('the actual shared service template separates model types and keeps one con
   assert.match(disabled, /data-media-ai-model="shared-vector"/);
   const disabledVector = disabled.split('data-media-ai-model="shared-vector"')[1].split('data-remove-media-ai-model')[0];
   assert.match(disabledVector, /<button[^>]*disabled[^>]*>media_ai.detect/);
+  view.configuration.providers[0].enabled = false;
+  view.configuration.providers[0].openaiEmbeddings = true;
+  const disabledShared = (await render('embedding')).match(/<aside[\s\S]*?<\/aside>/)![0];
+  assert.match(disabledShared, /<span class="min-w-0 flex-1 truncate">Service<\/span><span class="shrink-0 whitespace-nowrap[^>]*>media_ai.off/);
+  assert.match(disabledShared, /<span class="truncate text-\[10px\] opacity-60">media_ai.shared_llm_connection/);
+  assert.doesNotMatch(disabledShared, /break-all/);
 });
 
 test('builtin LLM and Embedding entries render directly in the sidebar without a preset dropdown or service deletion', async () => {
@@ -613,6 +626,9 @@ test('builtin LLM and Embedding entries render directly in the sidebar without a
     assert.match(html, /media_ai.builtin_service_hint/); assert.match(html, /media_ai.off/);
     assert.doesNotMatch(html, /media_ai.service_preset|media_ai.delete_service|data-embedding-wizard/);
     assert.match(html, /media_ai.add_service/);
+    assert.match(html, /data-media-ai-service-layout[^>]*data-stacked="true"/);
+    assert.match(html, /<aside[^>]*style="width:100%;"[^>]*data-media-ai-service-list/);
+    assert.doesNotMatch(html, /data-media-ai-service-splitter/);
     if (kind === 'llm') { assert.match(html, /media_ai.workspace_url_hint/); assert.match(html, /media_ai.builtin_model_id_hint/); assert.doesNotMatch(html, /media_ai.sync_models/); }
   }
 });
@@ -637,4 +653,160 @@ test('selected Plan entries display access metadata while preserving ordinary ed
     assert.match(html, /media_ai.base_url/); assert.match(html, /API Key/); assert.match(html, /media_ai.detect/);
     assert.doesNotMatch(html, /media_ai.sync_models|data-embedding-wizard|media_ai.service_preset/);
   }
+});
+
+const SERVICE_WIDTH_KEY = 'lap.media-ai.service-list-width';
+function serviceLayoutHarness(storage = new Map<string, string>()) {
+  const base = harness(), mounts: any[] = [], unmounts: any[] = [], observers: any[] = [];
+  const listeners = new Map<string, Set<any>>(), writes: Array<[string, string]> = [], captured: number[] = [], released: number[] = [];
+  let cssWidth = 900, rootFontSize = 16;
+  const localStorage = { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { writes.push([key, value]); storage.set(key, value); } };
+  const window = {
+    localStorage,
+    addEventListener: (name: string, callback: any) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(callback); },
+    removeEventListener: (name: string, callback: any) => listeners.get(name)?.delete(callback),
+    getComputedStyle: () => ({ fontSize: `${rootFontSize}px` }),
+  };
+  class ResizeObserver {
+    disconnected = false;
+    target: any;
+    callback: any;
+    constructor(callback: any) { this.callback = callback; observers.push(this); }
+    observe(target: any) { this.target = target; }
+    disconnect() { this.disconnected = true; }
+  }
+  const scope = Vue.effectScope();
+  const code = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
+  const api: any = scope.run(() => runInNewContext(`${code}\n;({receive,draft,keys,selected,dirty,serviceKind,selectServiceKind,serviceLayoutRoot,serviceContainerWidth,preferredServiceWidth,serviceLayoutStacked,maxServiceWidth,serviceListWidth,measureServiceLayout,saveServiceWidth,startServiceResize,moveServiceResize,stopServiceResize,onServiceSplitterKeydown,resetServiceWidth});`, {
+    ...base.context, watch: Vue.watch, onMounted: (fn: any) => mounts.push(fn), onUnmounted: (fn: any) => unmounts.push(fn),
+    window, localStorage, document: { documentElement: {} }, ResizeObserver,
+    getComputedStyle: window.getComputedStyle,
+  }));
+  const root = { get clientWidth() { return cssWidth; }, getBoundingClientRect: () => ({ width: cssWidth }) };
+  const activeCaptures = new Set<number>();
+  const target = {
+    focus() {}, setPointerCapture: (id: number) => { captured.push(id); activeCaptures.add(id); },
+    hasPointerCapture: (id: number) => activeCaptures.has(id),
+    releasePointerCapture: (id: number) => { released.push(id); activeCaptures.delete(id); },
+  };
+  const pointer = (overrides: any = {}) => ({ pointerId: 7, isPrimary: true, button: 0, clientX: 200, currentTarget: target, preventDefault() {}, ...overrides });
+  return {
+    api, storage, writes, captured, released, observers, pointer, calls: base.calls,
+    mount: async () => { api.serviceLayoutRoot.value = root; for (const fn of mounts) await fn(); await Vue.nextTick(); },
+    measure: (width: number, fontSize = 16) => { cssWidth = width; rootFontSize = fontSize; api.measureServiceLayout(); },
+    dispatch: (name: string, event?: any) => { for (const fn of [...listeners.get(name) || []]) fn(event); },
+    active: (name: string) => listeners.get(name)?.size || 0,
+    business: () => JSON.stringify({ draft: api.draft.value, keys: api.keys.value, selected: api.selected.value, dirty: api.dirty.value, calls: base.calls }),
+    unmount: () => { unmounts.forEach(fn => fn()); scope.stop(); },
+  };
+}
+
+test('service list uses a wider default and temporarily yields space without overwriting the preferred width', async () => {
+  const h = serviceLayoutHarness();
+  try {
+    assert.equal(h.api.serviceLayoutStacked.value, true, 'Unmeasured settings must stay usable');
+    await h.mount(); h.measure(900);
+    assert.equal(h.api.preferredServiceWidth.value, 240);
+    assert.equal(h.api.serviceListWidth.value, 240);
+    assert.equal(h.api.maxServiceWidth.value, 360);
+    assert.equal(h.api.serviceLayoutStacked.value, false);
+    h.measure(530);
+    assert.equal(h.api.serviceListWidth.value, 202);
+    assert.equal(h.api.preferredServiceWidth.value, 240);
+    h.measure(500);
+    assert.equal(h.api.serviceLayoutStacked.value, true);
+    h.measure(1800, 32);
+    assert.equal(h.api.serviceContainerWidth.value, 900, 'Layout budgets use the same base units under UI scaling');
+    assert.equal(h.api.serviceListWidth.value, 240);
+    assert.deepEqual(h.writes, []);
+  } finally { h.unmount(); }
+});
+
+test('service splitter filters pointer identity, captures the drag and commits only on release without business changes', async () => {
+  const h = serviceLayoutHarness();
+  try {
+    await h.mount(); h.measure(900);
+    h.api.keys.value.provider = 'pending-input';
+    h.api.draft.value.providers[0].name = 'Unsaved service name';
+    const before = h.business();
+    h.api.startServiceResize(h.pointer({ button: 2 }));
+    h.api.startServiceResize(h.pointer({ isPrimary: false }));
+    assert.deepEqual(h.captured, []);
+    h.api.startServiceResize(h.pointer());
+    assert.deepEqual(h.captured, [7]);
+    assert.equal(h.active('pointermove'), 1);
+    h.dispatch('pointermove', h.pointer({ pointerId: 8, clientX: 248 }));
+    assert.equal(h.api.serviceListWidth.value, 240);
+    h.dispatch('pointermove', h.pointer({ clientX: 248 }));
+    assert.equal(h.api.serviceListWidth.value, 288);
+    assert.deepEqual(h.writes, []);
+    h.dispatch('pointerup', h.pointer({ pointerId: 8 }));
+    assert.equal(h.active('pointermove'), 1);
+    h.dispatch('pointerup', h.pointer());
+    assert.equal(h.storage.get(SERVICE_WIDTH_KEY), '288');
+    assert.deepEqual(h.released, [7]);
+    for (const event of ['pointermove', 'pointerup', 'pointercancel', 'blur']) assert.equal(h.active(event), 0);
+    assert.equal(h.business(), before);
+  } finally { h.unmount(); }
+});
+
+test('service splitter scales drag deltas and clamps its range to the current editor budget', async () => {
+  const h = serviceLayoutHarness();
+  try {
+    await h.mount(); h.measure(1800, 32);
+    h.api.startServiceResize(h.pointer());
+    h.dispatch('pointermove', h.pointer({ clientX: 232 }));
+    assert.equal(h.api.serviceListWidth.value, 256);
+    h.dispatch('pointermove', h.pointer({ clientX: 5000 }));
+    assert.equal(h.api.serviceListWidth.value, 360);
+    h.dispatch('pointermove', h.pointer({ clientX: -5000 }));
+    assert.equal(h.api.serviceListWidth.value, 180);
+    h.dispatch('pointercancel', h.pointer());
+    assert.equal(h.active('pointermove'), 0);
+    assert.deepEqual(h.released, [7]);
+    h.measure(530);
+    h.api.startServiceResize(h.pointer());
+    h.dispatch('pointermove', h.pointer({ clientX: 5000 }));
+    assert.equal(h.api.serviceListWidth.value, 202);
+    h.dispatch('blur');
+    assert.equal(h.active('pointermove'), 0);
+  } finally { h.unmount(); }
+});
+
+test('service list keyboard and reset controls persist one width across LLM and Embedding views and reopen', async () => {
+  const storage = new Map<string, string>(), h = serviceLayoutHarness(storage);
+  try {
+    await h.mount(); h.measure(900);
+    const before = h.business();
+    const key = (key: string, shiftKey = false) => h.api.onServiceSplitterKeydown({ key, shiftKey, preventDefault() {}, stopPropagation() {} });
+    key('ArrowLeft'); assert.equal(h.api.serviceListWidth.value, 232);
+    key('ArrowRight', true); assert.equal(h.api.serviceListWidth.value, 248);
+    key('Home'); assert.equal(h.api.serviceListWidth.value, 180);
+    key('End'); assert.equal(h.api.serviceListWidth.value, 360);
+    h.api.resetServiceWidth(); assert.equal(h.api.serviceListWidth.value, 240);
+    key('ArrowRight'); assert.equal(storage.get(SERVICE_WIDTH_KEY), '248');
+    assert.equal(h.business(), before);
+    h.api.selectServiceKind('embedding');
+    assert.equal(h.api.serviceListWidth.value, 248);
+    h.api.selectServiceKind('llm');
+    assert.equal(h.api.serviceListWidth.value, 248);
+  } finally { h.unmount(); }
+  const reopened = serviceLayoutHarness(storage);
+  try {
+    await reopened.mount(); reopened.measure(900);
+    assert.equal(reopened.api.serviceListWidth.value, 248);
+  } finally { reopened.unmount(); }
+});
+
+test('service layout discards invalid stored width and releases resize resources on unmount', async () => {
+  const h = serviceLayoutHarness(new Map([[SERVICE_WIDTH_KEY, 'not-a-number']]));
+  await h.mount(); h.measure(900);
+  assert.equal(h.api.preferredServiceWidth.value, 240);
+  h.api.startServiceResize(h.pointer());
+  h.unmount();
+  for (const event of ['pointermove', 'pointerup', 'pointercancel', 'blur', 'resize']) assert.equal(h.active(event), 0);
+  assert.deepEqual(h.released, [7]);
+  assert.ok(h.observers.length > 0);
+  assert.ok(h.observers.every(observer => observer.disconnected));
 });

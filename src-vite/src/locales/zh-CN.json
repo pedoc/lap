@@ -93,6 +93,8 @@
     "measured_dimensions": "实测维度：{count}",
     "detect": "检测",
     "filter_service": "搜索服务",
+    "resize_services": "调整服务列表宽度",
+    "resize_services_hint": "拖动或用左右方向键调整宽度，双击恢复默认宽度",
     "off": "已停用",
     "add_service": "添加服务",
     "enabled": "启用服务",

@@ -23,13 +23,15 @@
             <p id="media-ai-defaults-hint" class="sr-only">{{ t('media_ai.defaults_hint') }}</p>
           </div>
         </div>
-        <div class="flex gap-3 items-start rounded-box border border-base-content/10 p-2">
-          <aside class="w-28 shrink-0 space-y-2">
+        <div class="rounded-box border border-base-content/10 p-2">
+        <div ref="serviceLayoutRoot" class="flex min-w-0" :class="serviceLayoutStacked ? 'flex-col gap-3' : 'items-stretch'" data-media-ai-service-layout :data-stacked="serviceLayoutStacked">
+          <aside class="min-w-0 shrink-0 space-y-2" :style="{ width: serviceLayoutStacked ? '100%' : `${serviceListWidth / 16}rem` }" data-media-ai-service-list>
             <input v-model="filter" class="input input-bordered input-xs w-full" :placeholder="t('media_ai.filter_service')" :aria-label="t('media_ai.filter_service')" />
-            <div class="max-h-[min(36rem,calc(100vh-17rem))] overflow-y-auto space-y-1"><button v-for="p in filteredProviders" :key="p.id" class="btn btn-sm h-auto py-2 w-full justify-start text-left break-all" :class="p.id === selected ? 'btn-active' : 'btn-ghost'" :disabled="busy" @click="selected = p.id">{{ p.name || t('media_ai.new_service') }}<span v-if="serviceKind === 'embedding' && p.kind === 'llm'" class="text-[10px] opacity-60">{{ t('media_ai.shared_llm_connection') }}</span><span v-if="!p.enabled" class="opacity-50">· {{ t('media_ai.off') }}</span></button></div>
+            <div class="overflow-y-auto space-y-1" :class="serviceLayoutStacked ? 'max-h-48' : 'max-h-[min(36rem,calc(100vh-17rem))]'"><button v-for="p in filteredProviders" :key="p.id" class="btn btn-sm h-auto py-2 w-full min-w-0 flex-col items-stretch gap-1 text-left" :class="p.id === selected ? 'btn-active' : 'btn-ghost'" :disabled="busy" :title="p.name || t('media_ai.new_service')" @click="selected = p.id"><span class="flex min-w-0 items-center gap-2"><span class="min-w-0 flex-1 truncate">{{ p.name || t('media_ai.new_service') }}</span><span v-if="!p.enabled" class="shrink-0 whitespace-nowrap text-[10px] opacity-50">{{ t('media_ai.off') }}</span></span><span v-if="serviceKind === 'embedding' && p.kind === 'llm'" class="truncate text-[10px] opacity-60">{{ t('media_ai.shared_llm_connection') }}</span></button></div>
             <button class="btn btn-sm w-full" :disabled="busy" @click="addProvider">＋ {{ t('media_ai.add_service') }}</button>
           </aside>
-          <div v-if="provider" class="min-w-0 flex-1 space-y-3 max-h-[min(36rem,calc(100vh-17rem))] overflow-y-auto pr-1">
+          <div v-if="!serviceLayoutStacked" class="media-ai-service-splitter group relative w-2 shrink-0 cursor-col-resize touch-none select-none rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-primary" :class="resizingService ? 'bg-primary/10' : ''" role="separator" aria-orientation="vertical" :aria-label="t('media_ai.resize_services')" :aria-valuemin="serviceMinWidth" :aria-valuemax="maxServiceWidth" :aria-valuenow="Math.round(serviceListWidth)" :title="t('media_ai.resize_services_hint')" tabindex="0" data-media-ai-service-splitter @pointerdown="startServiceResize" @lostpointercapture="stopServiceResize" @keydown="onServiceSplitterKeydown" @dblclick="resetServiceWidth"><span class="absolute inset-y-2 left-1/2 w-px -translate-x-1/2 bg-base-content/15 group-hover:bg-primary group-focus-visible:bg-primary" :class="resizingService ? 'bg-primary' : ''" aria-hidden="true"></span></div>
+          <div v-if="provider" class="min-w-0 flex-1 space-y-3 max-h-[min(36rem,calc(100vh-17rem))] overflow-y-auto pr-1" data-media-ai-service-editor>
             <div class="flex gap-2 items-center"><input v-model="provider.name" class="input input-bordered input-sm w-full min-w-0" :placeholder="t('media_ai.service_name')" :disabled="busy" maxlength="120" /><input v-model="provider.enabled" class="toggle toggle-sm toggle-primary" type="checkbox" :aria-label="t('media_ai.enabled')" :disabled="busy" /></div>
             <div v-if="selectedPreset?.accessMode" class="space-y-1" data-media-ai-access-mode><p class="flex gap-2 items-center"><span class="opacity-60">{{ t('media_ai.access_mode') }}</span><span class="badge badge-sm">{{ t('media_ai.access_' + selectedPreset.accessMode) }}</span></p><p v-if="selectedPreset.usageHint" class="opacity-60">{{ t('media_ai.' + selectedPreset.usageHint) }}</p></div>
             <template v-if="provider.kind === 'llm' && serviceKind === 'llm'"><label class="flex gap-2 items-start"><input v-model="provider.openaiEmbeddings" type="checkbox" class="checkbox checkbox-xs" :disabled="busy" @change="updateOpenaiEmbeddings(provider)" />{{ t('media_ai.openai_embeddings') }}</label><p class="opacity-60">{{ t('media_ai.openai_embeddings_hint') }}</p></template>
@@ -63,6 +65,7 @@
             <button v-else-if="provider.kind !== 'llm' || serviceKind === 'llm'" class="btn btn-xs btn-ghost text-error" :disabled="busy" @click="removeProvider">{{ t('media_ai.delete_service') }}</button>
           </div>
           <div v-else class="p-3 opacity-60">{{ t('media_ai.empty_services') }}</div>
+        </div>
         </div>
         <div class="flex gap-2 items-center"><button class="btn btn-sm btn-primary" :disabled="busy || !dirty" @click="save">{{ t('media_ai.save') }}</button><button class="btn btn-sm" :disabled="busy" @click="reload">{{ t('media_ai.reload') }}</button><span v-if="dirty" class="text-warning">{{ t('media_ai.unsaved') }}</span></div>
     </template>
@@ -99,6 +102,70 @@ const selected = ref(''), filter = ref(''), expandedModel = ref(''), busy = ref(
 const serviceKind = ref<MediaServiceKind>('llm');
 const preferredEmbeddingProtocol = ref<EmbeddingProtocol>('openai_text'), settingsRoot = ref<HTMLElement | null>(null);
 const modelPicker = ref<{ providerId: string; ids: string[]; selection: string[]; filter: string } | null>(null);
+const serviceMinWidth = 180, serviceMaxWidth = 360, serviceEditorMinWidth = 320, serviceSplitterWidth = 8;
+const serviceWidthKey = 'lap.media-ai.service-list-width';
+const serviceLayoutRoot = ref<HTMLElement | null>(null), serviceContainerWidth = ref(0), preferredServiceWidth = ref(240), resizingService = ref(false);
+const serviceLayoutStacked = computed(() => serviceContainerWidth.value < serviceMinWidth + serviceSplitterWidth + serviceEditorMinWidth);
+const maxServiceWidth = computed(() => Math.max(serviceMinWidth, Math.min(serviceMaxWidth, serviceContainerWidth.value - serviceSplitterWidth - serviceEditorMinWidth)));
+const serviceListWidth = computed(() => Math.min(preferredServiceWidth.value, maxServiceWidth.value));
+let serviceObserver: ResizeObserver | undefined;
+let serviceDrag: { pointerId: number; target: HTMLElement; startX: number; startWidth: number; scale: number } | undefined;
+function serviceScale() { return Number.parseFloat(getComputedStyle(document.documentElement).fontSize) / 16 || 1; }
+function measureServiceLayout() {
+  serviceContainerWidth.value = (serviceLayoutRoot.value?.getBoundingClientRect().width || 0) / serviceScale();
+  if (serviceLayoutStacked.value) stopServiceResize();
+}
+function saveServiceWidth() {
+  try { localStorage.setItem(serviceWidthKey, String(preferredServiceWidth.value)); } catch { /* Layout still works without storage. */ }
+}
+function moveServiceResize(event: PointerEvent) {
+  if (!serviceDrag || event.pointerId !== serviceDrag.pointerId) return;
+  preferredServiceWidth.value = Math.max(serviceMinWidth, Math.min(maxServiceWidth.value, serviceDrag.startWidth + (event.clientX - serviceDrag.startX) / serviceDrag.scale));
+}
+function stopServiceResize(event?: PointerEvent | Event) {
+  if (!serviceDrag || event && 'pointerId' in event && event.pointerId !== serviceDrag.pointerId) return;
+  const drag = serviceDrag;
+  serviceDrag = undefined;
+  resizingService.value = false;
+  window.removeEventListener('pointermove', moveServiceResize);
+  window.removeEventListener('pointerup', stopServiceResize);
+  window.removeEventListener('pointercancel', stopServiceResize);
+  window.removeEventListener('blur', stopServiceResize);
+  if (drag.target.hasPointerCapture?.(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
+  saveServiceWidth();
+}
+function startServiceResize(event: PointerEvent) {
+  if (event.button !== 0 || !event.isPrimary || serviceLayoutStacked.value) return;
+  stopServiceResize();
+  event.preventDefault();
+  const target = event.currentTarget as HTMLElement;
+  target.focus();
+  serviceDrag = { pointerId: event.pointerId, target, startX: event.clientX, startWidth: serviceListWidth.value, scale: serviceScale() };
+  resizingService.value = true;
+  target.setPointerCapture(event.pointerId);
+  window.addEventListener('pointermove', moveServiceResize);
+  window.addEventListener('pointerup', stopServiceResize);
+  window.addEventListener('pointercancel', stopServiceResize);
+  window.addEventListener('blur', stopServiceResize);
+}
+function onServiceSplitterKeydown(event: KeyboardEvent) {
+  if (serviceLayoutStacked.value || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || event.ctrlKey || event.metaKey || event.altKey) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const step = event.shiftKey ? 16 : 8;
+  const width = event.key === 'Home' ? serviceMinWidth : event.key === 'End' ? maxServiceWidth.value : serviceListWidth.value + (event.key === 'ArrowRight' ? step : -step);
+  preferredServiceWidth.value = Math.max(serviceMinWidth, Math.min(maxServiceWidth.value, width));
+  saveServiceWidth();
+}
+function resetServiceWidth() { preferredServiceWidth.value = 240; saveServiceWidth(); }
+watch(serviceLayoutRoot, element => {
+  serviceObserver?.disconnect();
+  serviceObserver = undefined;
+  if (!element) return;
+  measureServiceLayout();
+  serviceObserver = new ResizeObserver(measureServiceLayout);
+  serviceObserver.observe(element);
+}, { flush: 'post' });
 const roles = ['media', 'text', 'embedding', 'multimodalEmbedding'] as const;
 const visibleRoles = computed(() => serviceKind.value === 'llm' ? roles.slice(0, 2) : roles.slice(2));
 const provider = computed(() => draft.value?.providers.find(p => p.id === selected.value && providerInView(p)));
@@ -216,7 +283,14 @@ function configureRole(role: 'embedding' | 'multimodalEmbedding') {
   if (model) void nextTick(() => settingsRoot.value?.querySelector<HTMLElement>(`[data-media-ai-model="${model.id}"]`)?.scrollIntoView({ block: 'nearest' }));
 }
 watch(() => provider.value?.allowMedia, value => { if (value === false && provider.value) provider.value.allowBackground = false; });
-onMounted(async () => { await load(); const stop = await listen('media-ai-configuration-changed', () => { if (!busy.value && !dirty.value) void load(); }); if (disposed) stop(); else off = stop; });
-onUnmounted(() => { disposed = true; off?.(); keys.value = {}; });
+onMounted(async () => {
+  try {
+    const stored = localStorage.getItem(serviceWidthKey), width = stored === null ? NaN : Number(stored);
+    if (stored?.trim() && Number.isFinite(width)) preferredServiceWidth.value = Math.max(serviceMinWidth, Math.min(serviceMaxWidth, width));
+  } catch { /* Use the default width when storage is unavailable. */ }
+  window.addEventListener('resize', measureServiceLayout);
+  await load(); const stop = await listen('media-ai-configuration-changed', () => { if (!busy.value && !dirty.value) void load(); }); if (disposed) stop(); else off = stop;
+});
+onUnmounted(() => { disposed = true; stopServiceResize(); serviceObserver?.disconnect(); window.removeEventListener('resize', measureServiceLayout); off?.(); keys.value = {}; });
 defineExpose({ confirmDiscard, dirty, busy, revision: computed(() => JSON.stringify([draft.value, keys.value])) });
 </script>

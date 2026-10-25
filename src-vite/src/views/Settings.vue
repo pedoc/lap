@@ -22,7 +22,7 @@
       </div>
 
       <!-- Main Content -->
-      <div class="p-2 mr-1 mb-2 flex-1 overflow-y-auto scrollbar-hide bg-base-300 cursor-default select-none">
+      <div class="p-2 mr-1 mb-2 flex-1 min-w-0 overflow-y-auto scrollbar-hide bg-base-300 cursor-default select-none">
           
         <!-- General Tab -->
         <div v-if="config.settings.tabIndex === SETTINGS_TAB.GENERAL" class="flex flex-col space-y-2">
@@ -624,8 +624,6 @@ async function selectSettingsTab(id: number) {
     if (modelEditor === aiModelsRef.value) config.settings.tabIndex = id;
   } finally { changingTab = false; }
 }
-const SETTINGS_BASE_WIDTH = 600;
-const SETTINGS_BASE_HEIGHT = 620;
 const dbStorageDir = ref('');
 const isChangingDbStorage = ref(false);
 const hasCustomDbStorage = ref(false);

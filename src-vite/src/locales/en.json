@@ -93,6 +93,8 @@
     "measured_dimensions": "Measured dimensions: {count}",
     "detect": "Test",
     "filter_service": "Filter services",
+    "resize_services": "Resize service list",
+    "resize_services_hint": "Drag or use arrow keys to resize; double-click to reset",
     "off": "Disabled",
     "add_service": "Add service",
     "enabled": "Enable service",
