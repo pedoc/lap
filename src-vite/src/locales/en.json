@@ -67,6 +67,8 @@
     "role_text": "Text generation",
     "role_embedding": "Text Embedding",
     "role_multimodalEmbedding": "Multimodal Embedding (visuals)",
+    "role_text_vectors": "Text vectors",
+    "role_visual_vectors": "Visual vectors",
     "same_media": "Same as media model",
     "unconfigured": "Not configured",
     "configure": "Configure",

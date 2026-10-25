@@ -67,6 +67,8 @@
     "role_text": "文本生成",
     "role_embedding": "文本 Embedding",
     "role_multimodalEmbedding": "多模态 Embedding（原画面）",
+    "role_text_vectors": "文本向量",
+    "role_visual_vectors": "原画面向量",
     "same_media": "与媒体理解相同",
     "unconfigured": "尚未配置",
     "configure": "配置",

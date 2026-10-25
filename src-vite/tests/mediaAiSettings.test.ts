@@ -37,7 +37,7 @@ function harness() {
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,preferredEmbeddingProtocol,filteredProviders,provider,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,defaultModelStatus,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls, dialogs };
 }
@@ -197,6 +197,34 @@ test('an unconfigured purpose selects only a matching protocol and never convert
   assert.equal(h.calls.length, 0);
 });
 
+test('contextual defaults preserve hidden role bindings, keys and pending edits across service tabs', () => {
+  const h = harness();
+  const provider = { ...mediaAi.newProvider('embedding'), id: 'vectors', name: 'Vectors', embeddingProtocol: 'vllm_multimodal' as const };
+  const model = { ...mediaAi.newMediaModel(provider.id), id: 'vectors-model', name: 'Vectors model', remoteId: 'vectors', capabilities: ['embed_text', 'embed_multimodal'] as mediaAi.MediaCapability[] };
+  h.api.draft.value.providers.push(provider); h.api.draft.value.models.push(model);
+  h.api.draft.value.roles.embedding = model.id; h.api.draft.value.roles.multimodalEmbedding = model.id;
+  h.api.keys.value[provider.id] = 'synthetic-unsaved-key';
+  const before = JSON.stringify(h.api.draft.value);
+  assert.deepEqual(Array.from(h.api.visibleRoles.value), ['media', 'text']);
+  h.api.selectServiceKind('embedding');
+  assert.deepEqual(Array.from(h.api.visibleRoles.value), ['embedding', 'multimodalEmbedding']);
+  h.api.selectServiceKind('llm');
+  assert.equal(JSON.stringify(h.api.draft.value), before);
+  assert.equal(h.api.keys.value[provider.id], 'synthetic-unsaved-key');
+  assert.equal(h.api.dirty.value, true); assert.equal(h.calls.length, 0);
+  h.api.removeModel(model.id);
+  assert.equal(h.api.draft.value.roles.embedding, null); assert.equal(h.api.draft.value.roles.multimodalEmbedding, null);
+  assert.equal(h.api.draft.value.roles.media, 'kept'); assert.equal(h.api.draft.value.roles.text, 'kept');
+});
+
+test('compact selectors provide the full selected service, model and status through their title', () => {
+  const h = harness();
+  assert.match(h.api.defaultModelTitle('media'), /Service \/ kept.*media_ai.tested/);
+  h.api.draft.value.roles.text = null;
+  assert.match(h.api.defaultModelTitle('text'), /media_ai.same_media/);
+  assert.match(h.api.defaultModelTitle('embedding'), /media_ai.unconfigured/);
+});
+
 test('the common add-service and add-model flow tests and saves both embedding purposes without a separate endpoint', async () => {
   for (const role of ['embedding', 'multimodalEmbedding']) {
     const h = harness(); h.api.configureRole(role); h.api.addProvider();
@@ -272,7 +300,10 @@ test('the real template exposes a removal button outside each collapsed model de
   }
   assert.match(html, /media_ai.llm_services/);
   assert.match(html, /media_ai.embedding_services/);
-  assert.match(html, /id="media-ai-role-multimodalEmbedding"/);
+  assert.doesNotMatch(html, /id="media-ai-role-(?:embedding|multimodalEmbedding)"/);
+  assert.equal((html.match(/data-media-ai-default-role=/g) || []).length, 2);
+  assert.ok(html.indexOf('data-media-ai-defaults') < html.indexOf('data-media-ai-model="kept"'));
+  assert.doesNotMatch(html, /<h3[^>]*>media_ai.default_roles/);
   assert.doesNotMatch(html, /value="embed_text"/);
   assert.doesNotMatch(html, /data-embedding-wizard|data-embedding-shortcut|media_ai.configure_embedding/);
 });
@@ -303,5 +334,19 @@ test('the actual embedding service template exposes its protocol and fixed text 
   assert.match(html, /value="plain"/); assert.match(html, /value="qwen3"/); assert.match(html, /value="qwen3_vl"/);
   assert.match(html, /value="custom"/); assert.match(html, /A custom retrieval instruction\./);
   assert.match(html, /media_ai.measured_dimensions 2048/);
+  assert.match(html, /id="media-ai-role-embedding"/); assert.match(html, /id="media-ai-role-multimodalEmbedding"/);
+  assert.doesNotMatch(html, /id="media-ai-role-(?:media|text)"/);
+  assert.equal((html.match(/data-media-ai-default-role=/g) || []).length, 2);
+  assert.ok(html.indexOf('data-media-ai-defaults') < html.indexOf('data-media-ai-model="visual-model"'));
+  assert.match(html, /media_ai.role_text_vectors/); assert.match(html, /media_ai.role_visual_vectors/);
+  assert.match(html, /aria-label="media_ai.role_multimodalEmbedding/);
+  assert.match(html, /aria-describedby="media-ai-defaults-hint"/);
+  assert.match(html, /focus-visible:outline-solid/);
   assert.doesNotMatch(html, /data-embedding-wizard|data-embedding-shortcut|media_ai.configure_embedding/);
+  nulls = 0;
+  const disabled = runInNewContext(`${code.replace('busy = ref(false)', 'busy = ref(true)')}\n;component`, { ...h.context, ...imports,
+    ref: (value: any) => Vue.ref(value === null && nulls++ === 0 ? view.configuration : value === 'llm' ? 'embedding' : value),
+  });
+  const disabledHtml = await renderToString(Vue.createSSRApp(disabled));
+  assert.equal((disabledHtml.match(/<select[^>]*id="media-ai-role-[^"]+"[^>]*disabled/g) || []).length, 2);
 });

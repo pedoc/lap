@@ -6,14 +6,30 @@
     <p v-if="message" role="status" class="text-success">{{ message }}</p>
     <p v-if="loading" class="loading loading-spinner loading-sm"></p>
     <template v-if="draft">
-        <div class="join" role="group" :aria-label="t('media_ai.service_type')"><button type="button" class="btn btn-sm join-item" :class="serviceKind === 'llm' ? 'btn-active' : ''" :aria-pressed="serviceKind === 'llm'" :disabled="busy" @click="selectServiceKind('llm')">{{ t('media_ai.llm_services') }}</button><button type="button" class="btn btn-sm join-item" :class="serviceKind === 'embedding' ? 'btn-active' : ''" :aria-pressed="serviceKind === 'embedding'" :disabled="busy" @click="selectServiceKind('embedding')">{{ t('media_ai.embedding_services') }}</button></div>
+        <div class="flex flex-wrap items-end justify-between gap-x-4 gap-y-2" data-media-ai-toolbar>
+          <div class="join shrink-0" role="group" :aria-label="t('media_ai.service_type')"><button type="button" class="btn btn-sm join-item" :class="serviceKind === 'llm' ? 'btn-active' : ''" :aria-pressed="serviceKind === 'llm'" :disabled="busy" @click="selectServiceKind('llm')">{{ t('media_ai.llm_services') }}</button><button type="button" class="btn btn-sm join-item" :class="serviceKind === 'embedding' ? 'btn-active' : ''" :aria-pressed="serviceKind === 'embedding'" :disabled="busy" @click="selectServiceKind('embedding')">{{ t('media_ai.embedding_services') }}</button></div>
+          <div class="min-w-0 flex-1 basis-112 max-w-3xl" role="group" :aria-label="t('media_ai.default_roles')" aria-describedby="media-ai-defaults-hint" data-media-ai-defaults>
+            <p class="mb-1 text-[11px] opacity-60" :title="t('media_ai.defaults_hint')">{{ t('media_ai.default_roles') }}</p>
+            <div class="flex flex-wrap gap-x-3 gap-y-2">
+              <div v-for="role in visibleRoles" :key="role" class="flex flex-1 basis-60 min-w-0 items-center gap-2" :data-media-ai-default-role="role">
+                <label class="shrink-0 whitespace-nowrap" :for="'media-ai-role-' + role">{{ t(role === 'embedding' ? 'media_ai.role_text_vectors' : role === 'multimodalEmbedding' ? 'media_ai.role_visual_vectors' : 'media_ai.role_' + role) }}</label>
+                <select :id="'media-ai-role-' + role" v-model="draft.roles[role]" class="select select-bordered select-sm flex-1 min-w-0 w-0 transition-none hover:border-base-content/40 active:bg-base-200 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-primary focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50" :aria-label="t('media_ai.role_' + role)" :title="defaultModelTitle(role)" :disabled="busy">
+                  <option :value="null">{{ t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured') }}</option>
+                  <option v-for="m in defaultModels(role)" :key="m.id" :value="m.id">{{ modelLabel(m) }} · {{ t('media_ai.' + defaultModelStatus(m, role)) }}</option>
+                </select>
+                <button v-if="role === 'embedding' || role === 'multimodalEmbedding'" type="button" class="btn btn-xs h-8 shrink-0" :disabled="busy" :aria-label="t('media_ai.configure') + ': ' + t('media_ai.role_' + role)" @click="configureRole(role)">{{ t('media_ai.configure') }}</button>
+              </div>
+            </div>
+            <p id="media-ai-defaults-hint" class="sr-only">{{ t('media_ai.defaults_hint') }}</p>
+          </div>
+        </div>
         <div class="flex gap-3 items-start rounded-box border border-base-content/10 p-2">
           <aside class="w-28 shrink-0 space-y-2">
             <input v-model="filter" class="input input-bordered input-xs w-full" :placeholder="t('media_ai.filter_service')" :aria-label="t('media_ai.filter_service')" />
             <div class="max-h-72 overflow-y-auto space-y-1"><button v-for="p in filteredProviders" :key="p.id" class="btn btn-sm h-auto py-2 w-full justify-start text-left break-all" :class="p.id === selected ? 'btn-active' : 'btn-ghost'" :disabled="busy" @click="selected = p.id">{{ p.name || t('media_ai.new_service') }}<span v-if="!p.enabled" class="opacity-50">· {{ t('media_ai.off') }}</span></button></div>
             <button class="btn btn-sm w-full" :disabled="busy" @click="addProvider">＋ {{ t('media_ai.add_service') }}</button>
           </aside>
-          <div v-if="provider" class="min-w-0 flex-1 space-y-3 max-h-80 overflow-y-auto pr-1">
+          <div v-if="provider" class="min-w-0 flex-1 space-y-3 max-h-[min(36rem,calc(100vh-17rem))] overflow-y-auto pr-1">
             <div class="flex gap-2 items-center"><input v-model="provider.name" class="input input-bordered input-sm w-full min-w-0" :placeholder="t('media_ai.service_name')" :disabled="busy" maxlength="120" /><input v-model="provider.enabled" class="toggle toggle-sm toggle-primary" type="checkbox" :aria-label="t('media_ai.enabled')" :disabled="busy" /></div>
             <template v-if="provider.kind === 'embedding'"><label class="block">{{ t('media_ai.embedding_protocol') }}<select v-model="provider.embeddingProtocol" class="select select-bordered select-sm w-full mt-1" :disabled="busy" @change="applyEmbeddingProtocol(provider, providerModels)"><option value="openai_text">{{ t('media_ai.protocol_openai_text') }}</option><option value="vllm_multimodal">{{ t('media_ai.protocol_vllm_multimodal') }}</option></select></label><p class="opacity-60">{{ t(provider.embeddingProtocol === 'vllm_multimodal' ? 'media_ai.multimodal_protocol_hint' : 'media_ai.embedding_hint') }}</p></template>
             <label class="block">{{ t('media_ai.base_url') }}<input v-model="provider.baseUrl" class="input input-bordered input-sm w-full mt-1" placeholder="https://host/v1" :disabled="busy" /></label>
@@ -41,11 +57,6 @@
             <button class="btn btn-xs btn-ghost text-error" :disabled="busy" @click="removeProvider">{{ t('media_ai.delete_service') }}</button>
           </div>
           <div v-else class="p-3 opacity-60">{{ t('media_ai.empty_services') }}</div>
-        </div>
-        <div class="rounded-box border border-base-content/10 p-3 space-y-3">
-          <h3 class="font-semibold text-sm">{{ t('media_ai.default_roles') }}</h3>
-          <div v-for="role in roles" :key="role" class="space-y-1"><label :for="'media-ai-role-' + role">{{ t('media_ai.role_' + role) }}</label><div class="flex gap-2"><select :id="'media-ai-role-' + role" v-model="draft.roles[role]" class="select select-bordered select-sm flex-1 min-w-0" :disabled="busy"><option :value="null">{{ t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured') }}</option><option v-for="m in defaultModels(role)" :key="m.id" :value="m.id">{{ modelLabel(m) }} · {{ t('media_ai.' + defaultModelStatus(m, role)) }}</option></select><button v-if="role === 'embedding' || role === 'multimodalEmbedding'" class="btn btn-sm" :disabled="busy" @click="configureRole(role)">{{ t('media_ai.configure') }}</button></div></div>
-          <p class="opacity-60">{{ t('media_ai.defaults_hint') }}</p>
         </div>
         <div class="flex gap-2 items-center"><button class="btn btn-sm btn-primary" :disabled="busy || !dirty" @click="save">{{ t('media_ai.save') }}</button><button class="btn btn-sm" :disabled="busy" @click="reload">{{ t('media_ai.reload') }}</button><span v-if="dirty" class="text-warning">{{ t('media_ai.unsaved') }}</span></div>
     </template>
@@ -83,6 +94,7 @@ const serviceKind = ref<MediaServiceKind>('llm');
 const preferredEmbeddingProtocol = ref<EmbeddingProtocol>('openai_text'), settingsRoot = ref<HTMLElement | null>(null);
 const modelPicker = ref<{ providerId: string; ids: string[]; selection: string[]; filter: string } | null>(null);
 const roles = ['media', 'text', 'embedding', 'multimodalEmbedding'] as const;
+const visibleRoles = computed(() => serviceKind.value === 'llm' ? roles.slice(0, 2) : roles.slice(2));
 const provider = computed(() => draft.value?.providers.find(p => p.id === selected.value && p.kind === serviceKind.value));
 const capabilities = computed<MediaCapability[]>(() => provider.value?.kind === 'embedding' ? embeddingCapabilities(provider.value) : ['text', 'image', 'video_frames', 'json']);
 const filteredProviders = computed(() => draft.value?.providers.filter(p => p.kind === serviceKind.value && p.name.toLowerCase().includes(filter.value.toLowerCase())) || []);
@@ -102,6 +114,11 @@ function defaultModelStatus(m: MediaModel, role: typeof roles[number]) {
   if (!p.allowMedia) return 'transfer_required';
   if (dirty.value) return 'unsaved';
   return saved.value && eligibleModels(saved.value, role).some(current => current.id === m.id) ? 'tested' : 'untested';
+}
+function defaultModelTitle(role: typeof roles[number]) {
+  const model = draft.value?.models.find(m => m.id === draft.value!.roles[role]);
+  return model ? `${modelLabel(model)} · ${t('media_ai.' + defaultModelStatus(model, role))}`
+    : t(role === 'text' ? 'media_ai.same_media' : 'media_ai.unconfigured');
 }
 function clearUnsupportedRoles() {
   if (!draft.value) return;
