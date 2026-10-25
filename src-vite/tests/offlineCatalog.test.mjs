@@ -148,6 +148,7 @@ function dragFixture(collection = false) {
   setAlbumAccessibility(20, false);
   const calls = { started: 0, previews: 0, hydrated: 0, preflight: [], added: [], transfers: 0 };
   const deps = {
+    boxSelection: null,
     fileList: ref([files[0]]), selectedCount: ref(2),
     document: { getElementById: () => ({ querySelector: () => null }), addEventListener: () => {}, documentElement: { addEventListener: () => {}, removeEventListener: () => {} } },
     MAX_NATIVE_DRAG_FILES: 1000, createDragPreview: () => { calls.previews++; return []; }, onContentWindowLeave: () => {},

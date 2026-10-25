@@ -1,11 +1,13 @@
 <template>
   <div
     ref="containerRef"
-    class="w-full h-full"
+    class="relative w-full h-full overflow-hidden"
     :class="{ 
       'pointer-events-none': uiStore.inputStack.some(handler => handler !== 'MediaChat'),
     }"
     @wheel="onWheel"
+    @pointerdown="onBackgroundPointerDown"
+    @click.capture="suppressBoxClick"
     @dragstart.capture.prevent
   >
     <VirtualScroll
@@ -36,6 +38,7 @@
       <div
         v-if="isGroupRow(item)"
         class="w-full h-full flex items-center"
+        data-grid-group
       >
         <div class="w-full h-8 px-1 flex items-center text-base-content/70 select-none bg-base-200/30 rounded-box">
           <div class="group flex items-center gap-1">
@@ -72,6 +75,7 @@
       <div
         v-else
         class="w-full h-full flex items-center justify-center overflow-hidden"
+        :data-grid-placeholder="!getFileItem(item) || getFileItem(item).isPlaceholder ? true : undefined"
         :class="{ 'opacity-50': draggedFileIds.has(Number(getFileItem(item)?.id)) }"
         @pointerdown="onItemPointerDown($event, getFileIndex(item, index), getFileItem(item))"
       >
@@ -79,6 +83,7 @@
           v-if="getFileItem(item) && !getFileItem(item).isPlaceholder"
           :key="getThumbnailKey(item, index)"
           :id="'item-' + getFileIndex(item, index)"
+          data-grid-thumbnail
           :file="getFileItem(item)"
           :is-selected="selectMode ? Boolean(getFileItem(item).isSelected) : getFileIndex(item, index) === selectedItemIndex"
           :is-active="getFileIndex(item, index) === selectedItemIndex"
@@ -95,6 +100,7 @@
         <div v-else class="w-full h-full bg-base-200/70"></div>
       </div>
     </VirtualScroll>
+    <div v-if="selectionBox" class="absolute z-20 pointer-events-none border border-primary bg-primary/15" :style="{ left: selectionBox.x + 'px', top: selectionBox.y + 'px', width: selectionBox.width + 'px', height: selectionBox.height + 'px' }" data-grid-selection-box></div>
     <!-- Empty State / Loading -->
     <div v-if="fileList.length === 0" class="absolute inset-0 flex flex-col items-center justify-center">
       <div class="text-base-content/30 flex flex-col items-center gap-2 text-center px-4">
@@ -122,6 +128,7 @@ import { watch, ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
 import { config } from '@/common/config';
+import { indexSelectionBoxes, intersectingSelectionBoxes, selectionRectangle } from '@/common/gridSelection';
 import { thumbnailProfile } from '@/common/thumbnailProfiles';
 import Thumbnail from '@/components/Thumbnail.vue';
 import VirtualScroll from '@/components/VirtualScroll.vue';
@@ -165,6 +172,8 @@ const props = withDefaults(defineProps<{
   dedupStatuses?: Record<number, 'keep' | 'dup'>;
   draggedFileIds?: Set<number>;
   gridSize: number;
+  marqueeEnabled?: boolean;
+  libraryId?: string;
 }>(), {
   selectedItemIndex: -1,
   timelineData: () => [],
@@ -182,6 +191,8 @@ const props = withDefaults(defineProps<{
   dedupStatuses: () => ({}),
   draggedFileIds: () => new Set<number>(),
   gridSize: 120,
+  marqueeEnabled: true,
+  libraryId: '',
 });
 
 const emit = defineEmits([
@@ -200,6 +211,9 @@ const emit = defineEmits([
   'item-drag-start',
   'item-drag',
   'item-drag-end',
+  'selection-box-start',
+  'selection-box-change',
+  'selection-box-end',
 ]);
 
 const uiStore = useUIStore();
@@ -209,6 +223,117 @@ const containerRef = ref<HTMLElement | null>(null);
 const scroller = ref<any>(null);
 const columnCount = ref(4);
 const containerWidth = ref(0);
+const selectionBox = ref<Geometry | null>(null);
+let boxGesture: { id: number; pointerId: number; start: { x: number; y: number }; clientX: number; clientY: number; initialX: number; initialY: number; active: boolean; additive: boolean; rows: number[]; indices: number[]; userSelect: string; webkitUserSelect: string } | null = null;
+let boxGestureId = 0, boxFrame: number | null = null, boxClickTimer: ReturnType<typeof setTimeout> | undefined, boxClickSuppressed = false;
+
+function onBackgroundPointerDown(event: PointerEvent) {
+  const target = event.target as HTMLElement;
+  const element = scroller.value?.$el as HTMLElement | undefined;
+  if (
+    !props.marqueeEnabled
+    || isFilmstripView.value
+    || !element
+    || event.button !== 0
+    || !event.isPrimary
+    || event.pointerType === 'touch'
+    || uiStore.inputStack.some(handler => handler !== 'MediaChat')
+    || target.closest('[data-grid-thumbnail], [data-grid-group], [data-grid-placeholder], button, input, textarea, select, a, [role="button"], [contenteditable="true"]')
+  ) return;
+  const bounds = element.getBoundingClientRect();
+  if (event.clientX >= bounds.left + element.clientWidth || event.clientY >= bounds.top + element.clientHeight) return;
+  cancelBoxSelection();
+  const origin = element.firstElementChild?.getBoundingClientRect();
+  if (!origin) return;
+  boxGesture = {
+    id: ++boxGestureId,
+    pointerId: event.pointerId,
+    start: { x: event.clientX - origin.left, y: event.clientY - origin.top },
+    clientX: event.clientX,
+    clientY: event.clientY,
+    initialX: event.clientX,
+    initialY: event.clientY,
+    active: false,
+    additive: event.ctrlKey || event.metaKey || event.shiftKey,
+    rows: [],
+    indices: [],
+    userSelect: document.documentElement.style.userSelect,
+    webkitUserSelect: document.documentElement.style.webkitUserSelect,
+  };
+  document.addEventListener('pointermove', moveBoxSelection, true);
+  document.addEventListener('pointerup', endBoxSelection, true);
+  document.addEventListener('pointercancel', cancelBoxSelection, true);
+  window.addEventListener('blur', cancelBoxSelection);
+  window.addEventListener('keydown', boxSelectionKeydown, true);
+}
+function moveBoxSelection(event: PointerEvent) {
+  const state = boxGesture;
+  if (!state || event.pointerId !== state.pointerId) return;
+  if (!(event.buttons & 1)) { cancelBoxSelection(); return; }
+  state.clientX = event.clientX;
+  state.clientY = event.clientY;
+  if (!state.active) {
+    if (Math.hypot(state.clientX - state.initialX, state.clientY - state.initialY) < 6) return;
+    state.active = true;
+    document.documentElement.style.userSelect = 'none';
+    document.documentElement.style.webkitUserSelect = 'none';
+    emit('selection-box-start', { id: state.id, additive: state.additive });
+  }
+  event.preventDefault();
+  queueBoxSelection();
+}
+function queueBoxSelection() { if (boxGesture?.active && boxFrame === null) boxFrame = requestAnimationFrame(() => { boxFrame = null; renderBoxSelection(true); }); }
+function renderBoxSelection(autoScroll = false) {
+  const state = boxGesture;
+  const element = scroller.value?.$el as HTMLElement | undefined;
+  if (!state?.active || !element || !containerRef.value) return;
+  const bounds = element.getBoundingClientRect();
+  const previous = element.scrollTop;
+  if (autoScroll && state.clientX >= bounds.left && state.clientX <= bounds.right) {
+    const delta = state.clientY < bounds.top + 28
+      ? -Math.min(18, bounds.top + 28 - state.clientY)
+      : state.clientY > bounds.bottom - 28
+        ? Math.min(18, state.clientY - bounds.bottom + 28)
+        : 0;
+    element.scrollTop = Math.max(0, Math.min(element.scrollHeight - element.clientHeight, previous + delta));
+  }
+  const origin = element.firstElementChild?.getBoundingClientRect();
+  if (!origin) return;
+  const rect = selectionRectangle(state.start, { x: Math.max(bounds.left, Math.min(bounds.right, state.clientX)) - origin.left, y: Math.max(bounds.top, Math.min(bounds.bottom, state.clientY)) - origin.top });
+  const container = containerRef.value.getBoundingClientRect();
+  selectionBox.value = { ...rect, x: rect.x + origin.left - container.left, y: rect.y + origin.top - container.top };
+  state.rows = intersectingSelectionBoxes(selectionHitIndex.value, rect);
+  const indices = state.rows.flatMap(row => {
+    const item = renderItems.value[row], file = getFileItem(item);
+    return file && !file.isPlaceholder && Number.isSafeInteger(file.id) && file.id > 0 ? [getFileIndex(item, row)] : [];
+  });
+  if (indices.length !== state.indices.length || indices.some((index, i) => index !== state.indices[i])) {
+    state.indices = indices;
+    emit('selection-box-change', { id: state.id, indices });
+  }
+  if (autoScroll && element.scrollTop !== previous) queueBoxSelection();
+}
+function endBoxSelection(event: PointerEvent) { const state = boxGesture; if (!state || event.pointerId !== state.pointerId) return; if (state.active) { state.clientX = event.clientX; state.clientY = event.clientY; renderBoxSelection(); event.preventDefault(); boxClickSuppressed = true; clearTimeout(boxClickTimer); boxClickTimer = setTimeout(() => { boxClickSuppressed = false; }, 0); } releaseBoxSelection(false); }
+function cancelBoxSelection(event?: Event) { if (event && 'pointerId' in event && boxGesture?.pointerId !== event.pointerId) return; releaseBoxSelection(true); }
+function releaseBoxSelection(cancelled: boolean) {
+  const state = boxGesture;
+  boxGesture = null;
+  selectionBox.value = null;
+  if (boxFrame !== null) cancelAnimationFrame(boxFrame);
+  boxFrame = null;
+  document.removeEventListener('pointermove', moveBoxSelection, true);
+  document.removeEventListener('pointerup', endBoxSelection, true);
+  document.removeEventListener('pointercancel', cancelBoxSelection, true);
+  window.removeEventListener('blur', cancelBoxSelection);
+  window.removeEventListener('keydown', boxSelectionKeydown, true);
+  if (state) {
+    document.documentElement.style.userSelect = state.userSelect;
+    document.documentElement.style.webkitUserSelect = state.webkitUserSelect;
+    if (state.active) emit('selection-box-end', { id: state.id, cancelled, rows: state.rows });
+  }
+}
+function boxSelectionKeydown(event: KeyboardEvent) { if (event.key === 'Escape' && boxGesture) { event.preventDefault(); event.stopImmediatePropagation(); cancelBoxSelection(); } }
+function suppressBoxClick(event: MouseEvent) { if (boxClickSuppressed) { boxClickSuppressed = false; event.preventDefault(); event.stopPropagation(); } }
 
 const groupHeaderHeight = computed(() => GROUP_HEADER_HEIGHT * Number(config.settings.scale || 1));
 let pendingPointerDrag: {
@@ -234,6 +359,7 @@ function onItemPointerDown(event: PointerEvent, index: number, file: any) {
     event.button !== 0
     || event.pointerType === 'touch'
     || target.closest('button, input, a, [role="button"]')
+    || !target.closest('[data-grid-thumbnail]')
     || !file
     || file.isPlaceholder
   ) return;
@@ -496,6 +622,14 @@ const itemHeight = computed(() => {
   return size;
 });
 
+const selectionHitIndex = computed(() => indexSelectionBoxes(renderItems.value.flatMap((item, index) => {
+  if (isGroupRow(item)) return [];
+  const box = virtualScrollGeometry.value?.[index] || { x: index % columnCount.value * itemWidth.value, y: Math.floor(index / columnCount.value) * itemHeight.value, width: itemWidth.value, height: itemHeight.value };
+  return [{ index, box }];
+})));
+watch(selectionHitIndex, queueBoxSelection);
+watch(() => [props.libraryId, props.marqueeEnabled, props.gridSize, config.settings.grid.style, config.settings.grid.viewMode, props.groupBy, uiStore.inputStack.some(handler => handler !== 'MediaChat')], () => cancelBoxSelection(), { flush: 'sync' });
+
 const filmStripItemSize = computed(() => {
   return itemWidth.value;
 });
@@ -542,6 +676,7 @@ watch(() => [props.gridSize, config.settings.grid.style, isFilmstripView.value],
 });
 
 watch(() => props.fileList, () => {
+  cancelBoxSelection();
   updateLayout();
 });
 
@@ -590,6 +725,7 @@ watch(() => props.selectedItemIndex, (newValue) => {
 onMounted(() => {
   if (containerRef.value) {
     resizeObserver = new ResizeObserver(() => {
+      cancelBoxSelection();
       // updateColumnCount(); // merged into updateLayout
       updateLayout();
     });
@@ -604,6 +740,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  cancelBoxSelection(); clearTimeout(boxClickTimer);
   window.removeEventListener('keydown', onKeyDown);
   clearPointerDragListeners();
   pendingPointerDrag = null;
@@ -646,6 +783,7 @@ function onUpdate(startIndex: number, endIndex: number) {
 }
 
 function onScroll(e: Event) {
+  queueBoxSelection();
   emit('scroll', e);
 }
 

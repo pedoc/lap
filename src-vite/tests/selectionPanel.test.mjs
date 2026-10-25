@@ -14,6 +14,7 @@ function loadFunction(name, next, values) {
 function fixture({ show = true, grid = true, hydrated = true } = {}) {
   const values = {
     config: { rightPanel: { show, mode: 'info' } },
+    boxSelection: null,
     isGridLayoutView: ref(grid), selectionPanelOpen: ref(false), selectMode: ref(false),
     selectedItemIndex: ref(0), lastSelectedIndex: ref(0), showQuickView: ref(false),
     fileList: ref([{ id: 1 }, { id: 2 }, { id: 3 }]),

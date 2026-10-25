@@ -297,6 +297,7 @@ test('starting at the window edge leaves no internal listeners after native hand
   const api = loadHandoff(Promise.resolve([{ file_path: '/one.jpg' }]));
   let pending;
   const deps = {
+    boxSelection: null,
     fileList: { value: [{ id: 1, file_path: '/one.jpg', isSelected: true }] },
     selectedCount: { value: 1 }, MAX_NATIVE_DRAG_FILES: 1000,
     document: { ...surface, documentElement: surface, getElementById: () => ({ querySelector: () => null }) },

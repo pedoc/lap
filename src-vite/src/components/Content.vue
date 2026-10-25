@@ -269,6 +269,8 @@
                 :dedup-statuses="dedupStatuses"
                 :dragged-file-ids="draggedFileIds"
                 :grid-size="gridSize"
+                :library-id="libConfig._libraryId"
+                :marquee-enabled="isGridLayoutView && !isScanStreamingMode && !showQuickView"
                 @item-clicked="handleItemClicked"
                 @item-dblclicked="handleItemDblClicked"
                 @item-select-toggled="handleItemSelectToggled"
@@ -283,6 +285,9 @@
                 @item-drag-start="markContentInternalDrag"
                 @item-drag="updateContentDragPosition"
                 @item-drag-end="clearContentInternalDrag"
+                @selection-box-start="beginBoxSelection"
+                @selection-box-change="updateBoxSelection"
+                @selection-box-end="finishBoxSelection"
               />
               <!-- Navigation buttons -->
               <div v-if="showFilmstripLayout"
@@ -3027,9 +3032,13 @@ function removeDragGhost() {
 
 function setPointerDropTarget(target: HTMLElement | null) {
   if (pointerDropTarget === target) return;
-  pointerDropTarget?.classList.remove('!bg-primary/10', '!border-primary/60');
+  pointerDropTarget?.classList.remove('!bg-primary/10', '!border-primary/60', 'ring-2', 'ring-inset', 'ring-primary/40');
   pointerDropTarget = target;
-  pointerDropTarget?.classList.add('!bg-primary/10', '!border-primary/60');
+  if (pointerDropTarget?.hasAttribute('data-media-chat-drop')) {
+    pointerDropTarget.classList.add('!border-primary/60', 'ring-2', 'ring-inset', 'ring-primary/40');
+  } else {
+    pointerDropTarget?.classList.add('!bg-primary/10', '!border-primary/60');
+  }
 }
 
 function isCopyDragModifier(event: Pick<MouseEvent, 'altKey' | 'ctrlKey'>) {
@@ -3307,6 +3316,10 @@ function markContentInternalDrag({
   hotspotXRatio: number;
   hotspotYRatio: number;
 }) {
+  if (boxSelection?.finishing && boxSelectionCurrent(boxSelection)) {
+    gridViewRef.value?.cancelPointerDrag?.();
+    return;
+  }
   const draggedFile = fileList.value[index];
   const fileItem = document.getElementById(`item-${index}`);
   if (!fileItem || !isRealFileItem(draggedFile)) return;
@@ -4016,6 +4029,7 @@ function handleItemClicked(
   index: number,
   modifiers: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean } = {}
 ) {
+  boxSelection = null;
   if (!ensureGroupedFileAtIndex(index)) return;
   const shiftKey = !!modifiers.shiftKey;
   const toggleSelection = !!(modifiers.metaKey || modifiers.ctrlKey);
@@ -4100,6 +4114,136 @@ function handleItemDblClicked(
 const lastSelectedIndex = ref(-1);
 const keyboardSelectionAnchorIndex = ref(-1);
 
+type BoxSelection = {
+  id: number; libraryId: string; queryId: number; files: any[]; ready: boolean; additive: boolean; indices: number[];
+  original: { ids: Set<number>; count: number; size: number; groups: Record<string, number>; groupSizes: Record<string, number>; mode: boolean; panel: boolean };
+  baseline: Set<number>; hits: Map<number, number>; finishing?: boolean; pendingEnd?: { id: number; cancelled: boolean; rows: number[] };
+};
+let boxSelection: BoxSelection | null = null;
+function boxSelectionCurrent(state: BoxSelection) {
+  return boxSelection === state
+    && state.libraryId === libConfig._libraryId
+    && state.queryId === currentContentRequestId
+    && state.files === fileList.value;
+}
+function beginBoxSelection(payload: { id: number; additive: boolean }) {
+  if (isScanStreamingMode.value || !isGridLayoutView.value) return;
+  const state: BoxSelection = {
+    ...payload,
+    libraryId: libConfig._libraryId,
+    queryId: currentContentRequestId,
+    files: fileList.value,
+    ready: false,
+    indices: [],
+    original: {
+      ids: new Set(selectedFileIds),
+      count: selectedCount.value,
+      size: selectedSize.value,
+      groups: { ...groupSelectedCountMap.value },
+      groupSizes: { ...groupSelectedSizeMap.value },
+      mode: selectMode.value,
+      panel: selectionPanelOpen.value,
+    },
+    baseline: new Set(),
+    hits: new Map(),
+  };
+  boxSelection = state;
+  checkUnsavedChanges(() => {
+    if (!boxSelectionCurrent(state)) return;
+    handleSelectMode(true);
+    if (state.additive && !state.original.mode && isRealFileItem(fileList.value[selectedItemIndex.value])) setItemSelected(selectedItemIndex.value, true);
+    state.baseline = new Set(selectedFileIds);
+    if (!state.additive) {
+      clearLoadedSelectionFlags();
+      resetSelectionSummary();
+      groupSelectedCountMap.value = {};
+      groupSelectedSizeMap.value = {};
+    }
+    state.ready = true;
+    updateBoxSelection({ id: state.id, indices: state.indices });
+    if (state.pendingEnd) void finishBoxSelection(state.pendingEnd);
+  });
+}
+function updateBoxSelection(payload: { id: number; indices: number[] }) {
+  const state = boxSelection;
+  if (!state || state.id !== payload.id || !boxSelectionCurrent(state)) return;
+  state.indices = payload.indices;
+  if (!state.ready) return;
+  const hits = new Map<number, number>();
+  for (const index of payload.indices) {
+    if (!Number.isSafeInteger(index) || index < 0) continue;
+    const file = fileList.value[index];
+    if (isRealFileItem(file) && Number(file.id) > 0) hits.set(Number(file.id), index);
+  }
+  for (const [fileId, index] of state.hits) {
+    if (!hits.has(fileId)) setItemSelected(index, state.additive && state.baseline.has(fileId));
+  }
+  for (const [fileId, index] of hits) {
+    if (!selectedFileIds.has(fileId)) setItemSelected(index, true);
+  }
+  state.hits = hits;
+}
+async function finishBoxSelection(payload: { id: number; cancelled: boolean; rows: number[] }) {
+  const state = boxSelection;
+  if (!state || state.id !== payload.id) return;
+  if (!boxSelectionCurrent(state)) { boxSelection = null; return; }
+  if (payload.cancelled) {
+    boxSelection = null;
+    if (state.ready) {
+      selectedFileIds.clear();
+      for (const id of state.original.ids) selectedFileIds.add(id);
+      for (const file of fileList.value) if (file) file.isSelected = state.original.ids.has(Number(file.id));
+      selectedCount.value = state.original.count;
+      selectedSize.value = state.original.size;
+      groupSelectedCountMap.value = state.original.groups;
+      groupSelectedSizeMap.value = state.original.groupSizes;
+      selectMode.value = state.original.mode;
+      selectionPanelOpen.value = state.original.panel;
+      syncSelectionVersions();
+    }
+    return;
+  }
+  if (!state.ready) { state.pendingEnd = payload; return; }
+  state.finishing = true;
+  const rows = [...new Set(payload.rows.filter(index => Number.isSafeInteger(index) && index >= 0))].sort((a, b) => a - b);
+  let groupedProcessing = false;
+  try {
+    if (rows.length && groupedModeActive.value) {
+      const chunkSize = selectionChunkSize.value;
+      const chunks = [...new Set(rows.filter(index => {
+        const row = groupedRows.value[index];
+        return !row || row.isPlaceholder || !isGroupRow(row) && !isRealFileItem(row.file);
+      }).map(index => Math.floor(index / chunkSize) * chunkSize))];
+      if (chunks.length) { isProcessing.value = true; groupedProcessing = true; }
+      for (const start of chunks) {
+        const result = await getCurrentGroupedQueryRows(start, Math.min(chunkSize, totalRowCount.value - start));
+        if (!boxSelectionCurrent(state)) return;
+        const normalized = normalizeGroupedRowsResult(result);
+        applyGroupedRows(normalized.rows, start);
+        scheduleLayoutRefresh();
+      }
+      const unresolved = rows.some(index => {
+        const row = groupedRows.value[index];
+        return !row || row.isPlaceholder || !isGroupRow(row) && !isRealFileItem(fileList.value[Number(row.file_index)]);
+      });
+      if (unresolved) { toast.error(t('info_panel.selection_load_failed')); return; }
+    } else if (rows.length && !await hydrateSelectionRange(rows[0], rows[rows.length - 1])) {
+      if (boxSelectionCurrent(state)) toast.error(t('info_panel.selection_load_failed'));
+    }
+    if (!boxSelectionCurrent(state)) return;
+    const indices = rows.flatMap(index => {
+      if (!groupedModeActive.value) return [index];
+      const row = groupedRows.value[index];
+      return isGroupRow(row) ? [] : [Number(row?.file_index)];
+    });
+    updateBoxSelection({ id: state.id, indices });
+  } catch (error) { if (boxSelectionCurrent(state)) { console.error('finishBoxSelection error:', error); toast.error(t('info_panel.selection_load_failed')); } }
+  finally {
+    if (groupedProcessing && state.libraryId === libConfig._libraryId && state.queryId === currentContentRequestId && state.files === fileList.value) isProcessing.value = false;
+    if (boxSelection === state) boxSelection = null;
+  }
+}
+
 async function hydrateSelectionRange(startIndex: number, endIndex: number) {
   const start = Math.max(0, Math.min(startIndex, endIndex));
   const end = Math.min(fileList.value.length - 1, Math.max(startIndex, endIndex));
@@ -4152,6 +4296,7 @@ async function selectRangeFromSingleSelection(anchorIndex: number, targetIndex: 
 }
 
 async function handleItemSelectToggled(index: number, shiftKey: boolean = false) {
+  boxSelection = null;
   if (!ensureGroupedFileAtIndex(index)) return;
   const targetItem = fileList.value[index];
   if (!targetItem) return;
@@ -4187,6 +4332,7 @@ async function handleItemSelectToggled(index: number, shiftKey: boolean = false)
 }
 
 function toggleKeyboardSelection(direction: 'prev' | 'next') {
+  boxSelection = null;
   if (getActivePreviewMode() !== 'none') return false;
 
   const currentIndex = selectedItemIndex.value;
@@ -4224,6 +4370,7 @@ function toggleKeyboardSelection(direction: 'prev' | 'next') {
 }
 
 async function handleDateGroupSelect({ startIndex, endIndex, selected }: { startIndex: number; endIndex: number; selected: boolean }) {
+  boxSelection = null;
   if (!selectMode.value) return;
   const start = Math.max(0, Math.min(Number(startIndex || 0), fileList.value.length));
   const end = Math.max(start, Math.min(Number(endIndex || start), fileList.value.length));
@@ -4244,6 +4391,7 @@ async function handleDateGroupSelect({ startIndex, endIndex, selected }: { start
 }
 
 async function handleGroupSelectToggled(groupRow: any, selected: boolean) {
+  boxSelection = null;
   const groupId = String(groupRow?.group_id || '');
   if (!groupId || groupSelectionLoading.value[groupId]) return;
 
@@ -4332,6 +4480,7 @@ async function getCachedGroupFileIds(groupId: string) {
 }
 
 function unselectFileFromSelection(fileId: number) {
+  boxSelection = null;
   const targetId = Number(fileId);
   const file = fileList.value.find(item => Number(item?.id || 0) === targetId);
   if (!file) return;
@@ -7293,6 +7442,10 @@ async function initializeGroupedFileList(requestId: number) {
 async function hydrateRangeForSelection(startIndex: number, endIndex: number) {
   if (fileList.value.length === 0 || endIndex <= startIndex) return true;
   const requestId = currentContentRequestId;
+  const libraryId = libConfig._libraryId;
+  const files = fileList.value;
+  const isCurrent = () => requestId === currentContentRequestId
+    && libraryId === libConfig._libraryId && files === fileList.value;
   const chunkSize = selectionChunkSize.value;
   const cappedStart = Math.max(0, Math.min(startIndex, fileList.value.length));
   const cappedEnd = Math.max(cappedStart, Math.min(endIndex, fileList.value.length));
@@ -7302,7 +7455,7 @@ async function hydrateRangeForSelection(startIndex: number, endIndex: number) {
   try {
     const firstChunkStart = Math.floor(cappedStart / chunkSize) * chunkSize;
     for (let chunkStart = firstChunkStart; chunkStart < cappedEnd; chunkStart += chunkSize) {
-      if (requestId !== currentContentRequestId) return false;
+      if (!isCurrent()) return false;
       const chunkEnd = Math.min(cappedEnd, chunkStart + chunkSize);
       const selectionStart = Math.max(cappedStart, chunkStart);
       const needsLoad = fileList.value
@@ -7311,6 +7464,7 @@ async function hydrateRangeForSelection(startIndex: number, endIndex: number) {
       if (!needsLoad) continue;
 
       const loadedFiles = await getCurrentQueryFiles(chunkStart, chunkSize);
+      if (!isCurrent()) return false;
       if (!loadedFiles || loadedFiles.length === 0) return false;
       hydratedPlaceholders = true;
 
@@ -7335,14 +7489,14 @@ async function hydrateRangeForSelection(startIndex: number, endIndex: number) {
         return false;
       }
     }
-    return requestId === currentContentRequestId;
+    return isCurrent();
   } catch (err) {
     console.error('hydrateRangeForSelection error:', err);
     return false;
   } finally {
-    isProcessing.value = false;
-    if (hydratedPlaceholders) {
-      scheduleLayoutRefresh();
+    if (isCurrent()) {
+      isProcessing.value = false;
+      if (hydratedPlaceholders) scheduleLayoutRefresh();
     }
   }
 }
@@ -10294,6 +10448,7 @@ const openCommentEditor = () => {
 }
 
 const selectAllInCurrentList = async () => {
+  boxSelection = null;
   if (groupedModeActive.value) {
     const nextCounts: Record<string, number> = {};
     const nextSizes: Record<string, number> = {};
@@ -10363,6 +10518,7 @@ const selectAllInCurrentList = async () => {
 };
 
 const selectNoneInCurrentList = () => {
+  boxSelection = null;
   clearLoadedSelectionFlags();
   resetSelectionSummary();
   groupSelectedCountMap.value = {};
@@ -10371,6 +10527,7 @@ const selectNoneInCurrentList = () => {
 };
 
 const invertSelectionInCurrentList = async () => {
+  boxSelection = null;
   selectedFileIds.clear();
   let nextCount = 0;
   let nextSize = 0;
@@ -10397,6 +10554,7 @@ const invertSelectionInCurrentList = async () => {
 
 const handleSelectMode = (value: any) => {
   if (isScanStreamingMode.value) return;
+  if (!value) boxSelection = null;
   selectMode.value = value;
   if(!selectMode.value) {
     clearLoadedSelectionFlags();

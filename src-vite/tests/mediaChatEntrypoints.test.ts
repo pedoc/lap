@@ -75,6 +75,32 @@ test('an active chat leaves Home Tab and search shortcuts inside the conversatio
   for (const key of ['Tab', 'f', 'b']) handler({ key, target: { tagName: 'DIV' }, preventDefault: () => assert.fail('Home intercepted chat input'), stopPropagation: () => assert.fail('Home intercepted chat input') });
 });
 
+test('gallery drop feedback keeps the chat background opaque and clears when leaving or finishing', () => {
+  const surface = (chat = false) => {
+    const classes = new Set(chat ? ['bg-base-100'] : []);
+    return { classes, hasAttribute: (name: string) => chat && name === 'data-media-chat-drop', classList: {
+      add: (...values: string[]) => values.forEach(value => classes.add(value)),
+      remove: (...values: string[]) => values.forEach(value => classes.delete(value)),
+    } };
+  };
+  const setTarget: any = runInNewContext(`${declaration('components/Content', 'setPointerDropTarget')};setPointerDropTarget`, { pointerDropTarget: null });
+  const chat = surface(true), folder = surface();
+  setTarget(chat);
+  assert.ok(chat.classes.has('bg-base-100'));
+  assert.ok(chat.classes.has('ring-inset'));
+  assert.ok(chat.classes.has('!border-primary/60'));
+  assert.equal([...chat.classes].filter(value => value.includes('bg-')).join(','), 'bg-base-100');
+  setTarget(chat);
+  setTarget(folder);
+  assert.deepEqual([...chat.classes], ['bg-base-100']);
+  assert.ok(folder.classes.has('!bg-primary/10'));
+  setTarget(null);
+  assert.equal(folder.classes.size, 0);
+  setTarget(chat);
+  setTarget(null);
+  assert.deepEqual([...chat.classes], ['bg-base-100']);
+});
+
 test('dropping gallery media into chat dispatches references and never enters collection or file-moving operations', async () => {
   const drops: any[] = [];
   const target = { hasAttribute: (name: string) => name === 'data-media-chat-drop', dispatchEvent: (event: any) => drops.push(event.detail) };
