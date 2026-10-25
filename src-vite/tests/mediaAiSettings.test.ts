@@ -18,24 +18,28 @@ function fixture() {
 function harness() {
   let stored = fixture();
   const calls: Array<[string, any]> = [];
+  const dialogs: string[] = [];
   const context: any = { ...Vue, ...mediaAi, crypto, defineExpose() {},
     useI18n: () => ({ t: (key: string, values: any = {}) => `${key} ${Object.values(values).join(' ')}` }),
-    onMounted() {}, onUnmounted() {}, watch() {}, ask: async () => true, listen: async () => () => {},
+    onMounted() {}, onUnmounted() {}, watch() {}, ask: async (message: string) => { dialogs.push(message); return true; }, listen: async () => () => {},
     IconTrash: () => Vue.h('svg'), ModalDialog: () => Vue.h('aside'),
     invoke: async (name: string, args: any) => {
       calls.push([name, args]);
       if (name === 'media_ai_list_models') return ['kept', 'optional-a', 'optional-b'];
-      if (name === 'media_ai_probe_draft') return { dimensions: 1024 };
       if (name === 'media_ai_save_configuration') stored = { configuration: JSON.parse(JSON.stringify(args.configuration)), keysStored: [] };
-      if (name === 'media_ai_test_model') stored.configuration.models.find(m => m.id === args.modelId)!.tested[args.capability as mediaAi.MediaCapability] = 'verified';
+      if (name === 'media_ai_test_model') {
+        const model = stored.configuration.models.find(m => m.id === args.modelId)!;
+        model.tested[args.capability as mediaAi.MediaCapability] = 'verified';
+        if (args.capability === 'embed_text' || args.capability === 'embed_multimodal') { model.embedding.dimensions = 1024; model.tested.embed_text = 'verified'; }
+      }
       return JSON.parse(JSON.stringify(stored));
     },
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,selected,expandedModel,busy,dirty,error,serviceKind,filteredProviders,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,defaultModelStatus,clearUnsupportedRoles,testModel,setOutputTokens,wizard,openWizard,chooseWizardProvider,detectEmbedding,saveEmbedding,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,preferredEmbeddingProtocol,filteredProviders,provider,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,defaultModelStatus,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
   api.receive(fixture());
-  return { api, context, calls };
+  return { api, context, calls, dialogs };
 }
 
 test('fetching models only offers a selection and adds exactly the checked new models', async () => {
@@ -157,22 +161,72 @@ test('models fetched under an embedding service inherit its protocol instead of 
   assert.equal(h.api.defaultModels('text').some((m: any) => m.remoteId === 'optional-a'), false);
 });
 
-test('the multimodal wizard requests media detection with an embedding service and leaves LLM credentials separate', async () => {
+test('configuring a default locates its draft model without discarding edits, keys or the saved snapshot', () => {
   const h = harness();
-  await h.api.openWizard('multimodalEmbedding');
-  assert.equal(h.api.wizard.value.provider.kind, 'embedding');
-  assert.equal(h.api.wizard.value.provider.embeddingProtocol, 'vllm_multimodal');
-  assert.equal(h.api.wizard.value.provider.identityId, '');
-  assert.deepEqual(Array.from(h.api.wizard.value.model.capabilities), ['embed_text', 'embed_multimodal']);
-  assert.equal(h.api.wizard.value.model.embedding.queryInstruction, mediaAi.QWEN_VISUAL_QUERY);
-  h.api.wizard.value.provider.allowMedia = true;
-  await h.api.detectEmbedding();
-  const request = h.calls.find(([name]) => name === 'media_ai_probe_draft')![1];
-  assert.equal(request.capability, 'embed_multimodal');
-  assert.equal(request.model.provider.kind, 'embedding');
-  assert.equal(request.model.model.providerId, request.model.provider.id);
-  assert.equal(h.api.wizard.value.dimension, 1024);
-  assert.equal(h.api.draft.value.providers[0].kind, 'llm');
+  const provider = { ...mediaAi.newProvider('embedding'), id: 'draft-vectors', name: 'Edited vectors', embeddingProtocol: 'vllm_multimodal' as const };
+  const model = { ...mediaAi.newMediaModel(provider.id), id: 'draft-model', name: 'Edited model', remoteId: 'custom-model', capabilities: ['embed_text', 'embed_multimodal'] as mediaAi.MediaCapability[] };
+  h.api.draft.value.providers.push(provider); h.api.draft.value.models.push(model); h.api.draft.value.roles.multimodalEmbedding = model.id;
+  h.api.keys.value[provider.id] = 'synthetic-unsaved-key'; h.api.filter.value = 'unrelated';
+  const before = JSON.stringify(h.api.draft.value);
+  h.api.configureRole('multimodalEmbedding');
+  assert.equal(h.api.serviceKind.value, 'embedding'); assert.equal(h.api.selected.value, provider.id);
+  assert.equal(h.api.expandedModel.value, model.id); assert.equal(h.api.filter.value, '');
+  assert.equal(JSON.stringify(h.api.draft.value), before);
+  assert.equal(h.api.keys.value[provider.id], 'synthetic-unsaved-key');
+  assert.equal(h.api.saved.value.providers.length, 1);
+  assert.equal(h.api.dirty.value, true);
+  assert.equal(h.calls.length, 0); assert.equal(h.dialogs.length, 0);
+});
+
+test('an unconfigured purpose selects only a matching protocol and never converts an existing service', () => {
+  const h = harness();
+  const textProvider = { ...mediaAi.newProvider('embedding'), id: 'text-vectors', name: 'Text vectors' };
+  h.api.draft.value.providers.push(textProvider);
+  const before = JSON.stringify(h.api.draft.value);
+  h.api.configureRole('multimodalEmbedding');
+  assert.equal(h.api.selected.value, ''); assert.equal(h.api.expandedModel.value, '');
+  assert.equal(h.api.preferredEmbeddingProtocol.value, 'vllm_multimodal');
+  assert.equal(JSON.stringify(h.api.draft.value), before);
+  h.api.addProvider();
+  const visualProvider = h.api.draft.value.providers.at(-1);
+  assert.equal(visualProvider.embeddingProtocol, 'vllm_multimodal');
+  assert.equal(textProvider.embeddingProtocol, 'openai_text');
+  h.api.configureRole('embedding');
+  assert.equal(h.api.selected.value, textProvider.id);
+  assert.equal(h.api.draft.value.providers.length, 3);
+  assert.equal(h.calls.length, 0);
+});
+
+test('the common add-service and add-model flow tests and saves both embedding purposes without a separate endpoint', async () => {
+  for (const role of ['embedding', 'multimodalEmbedding']) {
+    const h = harness(); h.api.configureRole(role); h.api.addProvider();
+    const provider = h.api.draft.value.providers.at(-1); provider.name = 'My vectors'; provider.baseUrl = 'http://127.0.0.1:8003/v1/'; provider.allowMedia = true;
+    h.api.addModel(); const model = h.api.draft.value.models.at(-1);
+    assert.equal(model.remoteId, '', 'adding never guesses a model ID'); assert.equal(model.embedding.queryInstruction, '');
+    model.remoteId = 'custom-vector-model';
+    const capability = role === 'multimodalEmbedding' ? 'embed_multimodal' : 'embed_text';
+    await h.api.testModel(model, capability);
+    const tested = h.api.draft.value.models.at(-1);
+    assert.equal(tested.embedding.dimensions, 1024); assert.equal(h.api.defaultModelStatus(tested, role), 'tested');
+    h.api.draft.value.roles[role] = tested.id; await h.api.save(); await h.api.load();
+    assert.equal(h.api.draft.value.roles[role], tested.id);
+    assert.equal(h.api.error.value, '');
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_probe_draft' || name === 'media_ai_save_embedding'), false);
+  }
+});
+
+test('query presets preserve an explicit custom instruction and do not guess a model family', () => {
+  const h = harness(), model = h.api.draft.value.models[0];
+  model.remoteId = 'any-model'; assert.equal(h.api.queryPreset(model), 'plain');
+  h.api.setQueryPreset(model, 'qwen3'); assert.equal(model.embedding.queryInstruction, mediaAi.QWEN_MEDIA_QUERY);
+  assert.equal(h.api.queryPreset(model), 'qwen3');
+  h.api.setQueryPreset(model, 'qwen3_vl'); assert.equal(model.embedding.queryInstruction, mediaAi.QWEN_VISUAL_QUERY);
+  assert.equal(h.api.queryPreset(model), 'qwen3_vl');
+  model.embedding.queryInstruction = 'A custom retrieval instruction.';
+  assert.equal(h.api.queryPreset(model), 'custom');
+  h.api.setQueryPreset(model, 'custom'); assert.equal(model.embedding.queryInstruction, 'A custom retrieval instruction.');
+  h.api.setQueryPreset(model, 'plain'); assert.equal(model.embedding.queryInstruction, '');
+  assert.equal(model.remoteId, 'any-model');
 });
 
 test('the output control saves 384000 and clearing it sends null instead of an empty string', async () => {
@@ -220,13 +274,14 @@ test('the real template exposes a removal button outside each collapsed model de
   assert.match(html, /media_ai.embedding_services/);
   assert.match(html, /id="media-ai-role-multimodalEmbedding"/);
   assert.doesNotMatch(html, /value="embed_text"/);
+  assert.doesNotMatch(html, /data-embedding-wizard|data-embedding-shortcut|media_ai.configure_embedding/);
 });
 
 test('the actual embedding service template exposes its protocol and fixed text and visual tests without capability toggles', async () => {
   const h = harness(), imports: any = {}, view = fixture();
   const provider = { ...mediaAi.newProvider('embedding'), id: 'visual-service', name: 'Visuals', embeddingProtocol: 'vllm_multimodal' as const };
   view.configuration.providers.push(provider);
-  const model = { ...mediaAi.newMediaModel(provider.id), id: 'visual-model', name: 'Visual embedding', remoteId: 'visual-model', capabilities: ['embed_text', 'embed_multimodal'] as mediaAi.MediaCapability[] };
+  const model = { ...mediaAi.newMediaModel(provider.id), id: 'visual-model', name: 'Visual embedding', remoteId: 'visual-model', capabilities: ['embed_text', 'embed_multimodal'] as mediaAi.MediaCapability[], embedding: { dimensions: 2048, queryInstruction: 'A custom retrieval instruction.' } };
   view.configuration.models.push(model);
   const { descriptor } = parse(source);
   const code = stripTypeScriptTypes(compileScript(descriptor, { id: 'media-ai-embedding-settings', inlineTemplate: true }).content)
@@ -245,4 +300,8 @@ test('the actual embedding service template exposes its protocol and fixed text 
   assert.doesNotMatch(html, /<input[^>]*value="(?:embed_text|embed_multimodal|text|image|json|video_frames)"/);
   assert.doesNotMatch(html, /min="1" step="1"/);
   assert.doesNotMatch(html, /data-media-ai-model="kept"/);
+  assert.match(html, /value="plain"/); assert.match(html, /value="qwen3"/); assert.match(html, /value="qwen3_vl"/);
+  assert.match(html, /value="custom"/); assert.match(html, /A custom retrieval instruction\./);
+  assert.match(html, /media_ai.measured_dimensions 2048/);
+  assert.doesNotMatch(html, /data-embedding-wizard|data-embedding-shortcut|media_ai.configure_embedding/);
 });
