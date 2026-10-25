@@ -86,7 +86,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { getDragPayload, getFileThumbById, getTagsForFile } from '@/common/api';
 import { getExternalDropPaths } from '@/common/externalDrop';
 import { getThumbnailDataUrl, getThumbUrl, isWin, isMac } from '@/common/utils';
-import { mediaTime, openMediaAiBatch, openMediaAiSettings, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
+import { mediaTime, openMediaAiBatch, openMediaAiSettings, type MediaCapability, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
 import { mediaChat, closeMediaChat, validMediaChatIds, type ChatCandidate, type ChatSession, type ChatSessionView, type ChatSource } from '@/common/mediaChat';
 import { fitChatFrame, insertMediaMention, mentionAtCaret, type ChatFrame, type MentionRange } from '@/common/mediaChatUi';
 import { pendingChanges } from '@/common/pendingChanges';
@@ -116,14 +116,16 @@ const sessionMedia = computed(() => {
   for (const file of attachments.value) files.set(file.fileId, file);
   return [...files.values()];
 });
+function chatCapabilities(pixels: boolean, files = attachments.value): MediaCapability[] {
+  return pixels && files.length ? [...new Set(files.map(file => file.fileType === 2 ? 'video_frames' as const : 'image' as const))] : ['text'];
+}
 function modelReady(model: MediaModel, pixels: boolean, files = attachments.value) {
   const provider = configuration.value?.providers.find(item => item.id === model.providerId);
   if (!provider?.enabled || !provider.allowMedia || provider.kind !== 'llm' || model.capabilities.some(cap => cap.startsWith('embed_'))) return false;
-  const capabilities = pixels && files.length ? [...new Set(files.map(file => file.fileType === 2 ? 'video_frames' : 'image'))] : ['text'];
-  return capabilities.every(cap => model.capabilities.includes(cap as any) && !!model.tested[cap as keyof typeof model.tested]);
+  return chatCapabilities(pixels, files).every(cap => model.capabilities.includes(cap));
 }
 const readyModels = computed(() => configuration.value?.models.filter(model => modelReady(model, visual.value)) || []);
-const canGenerateSuggestions = computed(() => !!configuration.value?.models.some(model => model.id === selectedModelId.value && modelReady(model, true)));
+const canGenerateSuggestions = computed(() => !!configuration.value?.models.some(model => model.id === selectedModelId.value && modelReady(model, true) && [...chatCapabilities(true), 'json' as const].every(cap => model.capabilities.includes(cap) && !!model.tested[cap])));
 const missingAnalysis = computed(() => !visual.value && attachments.value.some(file => !file.hasAnalysis));
 const canSend = computed(() => !loading.value && !sending.value && !activeRequestId.value && !!view.value && !!draft.value.trim() && draft.value.length <= 8000 && attachments.value.length <= 16 && !missingAnalysis.value && readyModels.value.some(model => model.id === selectedModelId.value) && activeLibrary.value === libConfig._libraryId);
 const modelName = (model: MediaModel) => `${configuration.value?.providers.find(provider => provider.id === model.providerId)?.name || ''} / ${model.name || model.remoteId}`;

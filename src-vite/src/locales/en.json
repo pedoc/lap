@@ -42,7 +42,7 @@
     "assistant": "Media assistant",
     "turn_media": "This turn: {count} media",
     "remove_attachment": "Remove reference: {name}",
-    "no_ready_model": "No available model meets this turn's requirements. Configure a service, test its capabilities and allow media / text transfer.",
+    "no_ready_model": "No enabled model supports this input. Check the service status, media/text transfer permission and the model's image/video or text capability labels.",
     "analysis_missing": "Some media have no valid analysis. Analyze them first, or switch to inspecting the original images / frames.",
     "choose_media": "Reference media files",
     "from_session": "This session",

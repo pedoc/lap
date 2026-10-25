@@ -50,7 +50,7 @@ function harness(overrides: any = {}) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,missingAnalysis,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame});`, context));
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,missingAnalysis,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame});`, context));
   return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -79,7 +79,36 @@ test('restored history keeps a viewer context separate until the user explicitly
   } finally { h.dispose(); }
 });
 
-test('chat filters models by ready generation capabilities and requires existing analyses for text-only media answers', async () => {
+test('chat accepts declared image capability without a probe receipt while structured suggestions and permissions remain checked', async () => {
+  const h = harness({ media_chat_send: async () => emptyView() });
+  try {
+    await h.boot();
+    const config = h.api.configuration.value;
+    const vision = config.models.find((model: any) => model.id === 'vision');
+    const image = config.models.find((model: any) => model.id === 'image');
+    vision.tested = { text: 'receipt', video_frames: 'receipt' };
+    image.tested = {};
+    const saved = clone(config);
+    await h.api.attachIds([7]); h.api.draft.value = 'What is in this photo?';
+    assert.deepEqual(Array.from(h.api.readyModels.value, (model: any) => model.id), ['vision', 'image']);
+    assert.equal(h.api.selectedModelId.value, 'vision');
+    assert.equal(h.api.canSend.value, true, 'A video receipt must not hide a declared image model');
+    assert.equal(h.api.canGenerateSuggestions.value, false, 'Ordinary chat must not bypass structured analysis checks');
+    await h.api.send();
+    assert.equal(h.calls.find(([name]) => name === 'media_chat_send')[1].modelId, 'vision');
+    h.api.selectedModelId.value = 'image';
+    assert.equal(h.api.canSend.value, true, 'A model with no probe receipts can be tried explicitly');
+    assert.deepEqual(clone(config), saved, 'Chat must not manufacture receipts or change defaults');
+    config.providers[0].allowMedia = false;
+    assert.equal(h.api.canSend.value, false);
+    config.providers[0].allowMedia = true; config.providers[0].enabled = false;
+    assert.equal(h.api.readyModels.value.length, 0);
+    config.providers[0].enabled = true; image.capabilities = ['text'];
+    assert.equal(h.api.canSend.value, false, 'Undeclared image capability remains unavailable');
+  } finally { h.dispose(); }
+});
+
+test('chat filters models by declared generation capabilities and requires existing analyses for text-only media answers', async () => {
   const h = harness();
   try {
     await h.boot(); await h.api.attachIds([7, 8]); h.api.draft.value = 'Compare';

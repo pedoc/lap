@@ -55,7 +55,7 @@ async function harness() {
     const node: any = { type, props: {}, children: [], parent: null, text: '', captures,
       focus() {}, setPointerCapture(id: number) { captures.add(id); }, hasPointerCapture(id: number) { return captures.has(id); }, releasePointerCapture(id: number) { captures.delete(id); },
       getBoundingClientRect() {
-        const isButton = type === 'button', width = isButton ? 96 * fontScale : workspaceRect.width, height = isButton ? 40 * fontScale : workspaceRect.height;
+        const isButton = type === 'button', width = isButton ? 40 * fontScale : workspaceRect.width, height = isButton ? 40 * fontScale : workspaceRect.height;
         const left = workspaceRect.left + (isButton ? parseFloat(node.props.style?.left || '0') : 0);
         const top = workspaceRect.top + (isButton ? parseFloat(node.props.style?.top || '0') : 0);
         return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top };
@@ -92,7 +92,7 @@ async function harness() {
   const app = renderer.createApp({ render: () => Vue.h(Component, props) }), container = element('root');
   app.mount(container);
   await flush();
-  const pointer = (pointerId = 1, x = 1100, y = 730, extra: any = {}) => ({
+  const pointer = (pointerId = 1, x = 1168, y = 736, extra: any = {}) => ({
     pointerId, clientX: x, clientY: y, button: 0, isPrimary: true, detail: 1,
     currentTarget: api.button.value, preventDefault() {}, stopPropagation() {}, ...extra,
   });
@@ -106,12 +106,17 @@ async function harness() {
   };
 }
 
-test('the real launcher template opens the selected media and reserves room above its actual bottom-right rect', async () => {
+test('the real icon-only launcher retains its accessible name, selected media and bottom-right notice reserve', async () => {
   const h = await harness();
   try {
     const button = h.api.button.value, rect = button.getBoundingClientRect();
     assert.equal(button.props['aria-label'], 'media_chat.open_chat');
     assert.equal(button.props.title, 'media_chat.open_chat');
+    const visibleText = (node: any): string => node.type === 'comment' ? '' : (node.text || '') + (node.children || []).map(visibleText).join('');
+    assert.equal(visibleText(button), '', 'Only the chat icon should be visible inside the launcher');
+    assert.match(button.props.class, /\bbtn-circle\b/);
+    assert.equal(rect.width, 40);
+    assert.equal(rect.height, 40);
     assert.equal(button.props.style.visibility, 'visible');
     assert.equal(rect.right, 1188);
     assert.equal(rect.bottom, 756, 'status bar and outer margin remain available');
@@ -224,7 +229,7 @@ test('four anchors and root font scaling use actual button dimensions and reserv
     h.setScale(1.5);
     await flush();
     const rect = h.api.button.value.getBoundingClientRect();
-    assert.equal(rect.width, 144); assert.equal(rect.height, 60);
+    assert.equal(rect.width, 60); assert.equal(rect.height, 60);
     assert.equal(rect.right, h.workspaceRect.left + h.workspaceRect.width - 18);
     assert.equal(rect.bottom, h.workspaceRect.top + h.workspaceRect.height - 48 - 18);
     assert.equal(h.reserve.bottom, h.window.innerHeight - rect.top + 18);

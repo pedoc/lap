@@ -42,7 +42,7 @@
     "assistant": "媒体助手",
     "turn_media": "本轮引用 {count} 项",
     "remove_attachment": "移除本轮引用：{name}",
-    "no_ready_model": "暂无符合本轮能力要求的可用模型。请配置服务、检测模型能力并允许发送媒体／文字。",
+    "no_ready_model": "暂无已启用且支持本轮输入的模型。请检查服务启用、媒体／文字传输许可，以及模型的图片／视频或文本能力标记。",
     "analysis_missing": "部分媒体尚无有效分析。请先理解媒体，或切换到查看画面模式。",
     "choose_media": "引用媒体文件",
     "from_session": "本会话",

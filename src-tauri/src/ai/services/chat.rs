@@ -443,9 +443,20 @@ fn check_model(
     if configured.contract() != model.contract() {
         return Err("会话模型配置已变化，请重新发送问题。".into());
     }
+    if configured.provider.identity() != model.provider.identity()
+        || configured.provider.kind != config::ProviderKind::Llm
+        || !configured.model.is_generation()
+    {
+        return Err("会话模型服务或接口类型已变化，请重新发送问题。".into());
+    }
+    if !configured.provider.enabled || !configured.provider.allow_media {
+        return Err("服务未启用或尚未允许本次媒体／文字传输".into());
+    }
+    // 自由问答可直接试用已声明能力；结构化资料与向量任务仍要求检测回执。
     for cap in capabilities {
-        configured.require(*cap, false)?;
-        workflow::check_policy(current, model, *cap, false)?;
+        if !configured.supports(*cap) {
+            return Err("会话模型未声明本轮所需能力，请选择匹配的模型。".into());
+        }
     }
     Ok(())
 }
@@ -1098,11 +1109,12 @@ mod tests {
         ]);
         let mut default = model("default-model");
         default.provider.base_url = base.clone();
+        default.model.tested.clear();
         let mut temporary = default.clone();
         temporary.model.id = "session-model".into();
         temporary.model.remote_id = "session-remote".into();
         temporary.model.name = "Session model".into();
-        let mut configuration = Configuration {
+        let configuration = Configuration {
             providers: vec![default.provider.clone()],
             models: vec![default.model.clone(), temporary.model.clone()],
             roles: config::Roles {
@@ -1112,17 +1124,6 @@ mod tests {
             },
             ..Default::default()
         };
-        for row in &mut configuration.models {
-            let mut resolved = Resolved {
-                provider: configuration.providers[0].clone(),
-                model: row.clone(),
-            };
-            let receipt = resolved.contract();
-            for cap in [Capability::Text, Capability::Image, Capability::VideoFrames] {
-                row.tested.insert(cap, receipt.clone());
-            }
-            resolved.model = row.clone();
-        }
         let roles = serde_json::to_string(&configuration.roles).unwrap();
         let mut c = connection();
         let session = create_on(&c, "library-a", "HTTP history")
@@ -1175,10 +1176,68 @@ mod tests {
         assert!(messages[2]["content"].to_string().contains("First answer"));
         assert!(messages[3]["content"].to_string().contains("Follow up"));
         assert_eq!(serde_json::to_string(&configuration.roles).unwrap(), roles);
+        assert!(
+            configuration
+                .models
+                .iter()
+                .all(|model| model.tested.is_empty())
+        );
         let view = view_on(&c, "library-a", &session).unwrap();
         assert_eq!(view.messages[1].model_id, "default-model");
         assert_eq!(view.messages[3].model_id, "session-model");
         assert_eq!(view.session.model_id.as_deref(), Some("session-model"));
+    }
+    #[tokio::test]
+    async fn media_chat_uses_untested_declared_modalities_without_json_or_fabricated_receipts() {
+        let (base, worker) = super::super::tests::fixture(vec![
+            (200, completion("Hello")),
+            (200, completion("An ordinary image answer")),
+            (200, completion("An ordinary sampled video answer")),
+        ]);
+        let mut selected = model("untested-chat");
+        selected.provider.base_url = base;
+        selected.model.tested.clear();
+        assert!(!selected.supports(Capability::Json));
+        let current = Configuration {
+            providers: vec![selected.provider.clone()],
+            models: vec![selected.model.clone()],
+            ..Default::default()
+        };
+        for cap in [Capability::Text, Capability::Image, Capability::VideoFrames] {
+            check_model(&current, &selected, &[cap]).unwrap();
+            assert!(
+                selected.require(cap, false).is_err(),
+                "managed workflows remain strict"
+            );
+            let mut parts = vec![ContentPart::from_text("Answer naturally without JSON.")];
+            if cap != Capability::Text {
+                parts.push(super::super::commands::probe_image().unwrap());
+            }
+            if cap == Capability::VideoFrames {
+                parts.push(ContentPart::from_text("Second sampled frame at 00:01."));
+                parts.push(super::super::commands::probe_image().unwrap());
+            }
+            let answer = client::chat_with_key(&selected, parts, Some("synthetic-chat-key".into()))
+                .await
+                .unwrap();
+            validate_answer(&answer, &[]).unwrap();
+        }
+        let seen = worker.join().unwrap();
+        for (index, request) in seen.iter().enumerate() {
+            assert!(request.get("response_format").is_none());
+            let image_count = request["messages"][0]["content"]
+                .as_array()
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter(|part| part["type"] == "image_url")
+                        .count()
+                })
+                .unwrap_or(0);
+            assert_eq!(image_count, index);
+        }
+        assert!(selected.model.tested.is_empty());
+        assert!(current.models[0].tested.is_empty());
     }
     #[tokio::test]
     async fn media_chat_failure_and_cancel_are_persistent_and_not_replayed_as_completed_history() {
@@ -1256,10 +1315,40 @@ mod tests {
         assert!(check_model(&current, &selected, &[Capability::Text]).is_err());
         current.models[0] = selected.model.clone();
         current.models[0].tested.clear();
-        assert!(check_model(&current, &selected, &[Capability::Text]).is_err());
+        check_model(&current, &selected, &[Capability::Text]).unwrap();
         current.models[0] = selected.model.clone();
         current.providers[0].allow_media = false;
         assert!(check_model(&current, &selected, &[Capability::Text]).is_err());
+        current.providers[0] = selected.provider.clone();
+        current.providers[0].enabled = false;
+        assert!(check_model(&current, &selected, &[Capability::Text]).is_err());
+        current.providers[0] = selected.provider.clone();
+        current.providers[0].allow_background = false;
+        check_model(&current, &selected, &[Capability::Text]).unwrap();
+        current.providers[0].identity_id = "another-service".into();
+        assert!(check_model(&current, &selected, &[Capability::Text]).is_err());
+        current.providers[0] = selected.provider.clone();
+        current.providers[0].base_url.push_str("changed/");
+        assert!(check_model(&current, &selected, &[Capability::Text]).is_err());
+        current.providers[0] = selected.provider.clone();
+        current.providers[0].credential_revision = "changed".into();
+        assert!(check_model(&current, &selected, &[Capability::Text]).is_err());
+        current.providers[0] = selected.provider.clone();
+        current.providers[0].kind = config::ProviderKind::Embedding;
+        assert!(check_model(&current, &selected, &[Capability::Text]).is_err());
+        let mut text_only = selected.clone();
+        text_only.model.capabilities = [Capability::Text].into_iter().collect();
+        text_only.model.tested.clear();
+        current.providers[0] = text_only.provider.clone();
+        current.models[0] = text_only.model.clone();
+        check_model(&current, &text_only, &[Capability::Text]).unwrap();
+        for cap in [Capability::Image, Capability::VideoFrames] {
+            assert!(
+                check_model(&current, &text_only, &[cap])
+                    .unwrap_err()
+                    .contains("未声明")
+            );
+        }
     }
     #[tokio::test]
     async fn media_chat_input_limits_are_explicit_and_do_not_invent_token_truncation() {

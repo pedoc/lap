@@ -4,7 +4,7 @@
       v-if="preferences.showFloatingButton"
       ref="button"
       type="button"
-      class="btn btn-sm absolute pointer-events-auto h-10 gap-2 rounded-full border border-base-content/15 bg-base-100 px-4 text-base-content shadow-md hover:border-primary/40 hover:text-primary focus-visible:outline-2 focus-visible:outline-primary touch-none select-none"
+      class="btn btn-sm btn-circle absolute pointer-events-auto h-10 w-10 rounded-full border border-base-content/15 bg-base-100 p-0 text-base-content shadow-md hover:border-primary/40 hover:text-primary focus-visible:outline-2 focus-visible:outline-primary touch-none select-none"
       :class="dragging ? 'cursor-grabbing' : 'cursor-grab'"
       :style="{ left: `${position.x}px`, top: `${position.y}px`, visibility: ready ? 'visible' : 'hidden' }"
       :disabled="!props.libraryId"
@@ -14,7 +14,7 @@
       @pointerdown.stop="startDrag"
       @lostpointercapture="cancelDrag"
       @click.stop="openChat"
-    ><IconComment class="h-4 w-4 text-primary" aria-hidden="true" /><span>{{ t('media_chat.launcher_label') }}</span></button>
+    ><IconComment class="h-5 w-5 text-primary" aria-hidden="true" /></button>
   </div>
 </template>
 
