@@ -1,8 +1,9 @@
 <template>
-  <div v-if="mediaAiBatch.open" class="modal modal-open" role="dialog" aria-modal="true" :aria-label="t('media_ai.batch_title')" @keydown.esc.stop="mediaAiBatch.open = false" @keydown.stop>
+  <div v-if="mediaAiBatch.open" class="modal modal-open z-[600]" role="dialog" aria-modal="true" :aria-label="t('media_ai.batch_title')" @keydown.esc.stop="mediaAiBatch.open = false" @keydown.stop>
     <div class="modal-box max-w-2xl max-h-[90vh] space-y-4 text-sm" data-media-ai-batch>
       <div class="flex items-center justify-between"><h2 class="font-semibold">{{ t('media_ai.batch_title') }}</h2><button class="btn btn-sm btn-ghost" :disabled="busy" @click="mediaAiBatch.open = false">{{ t('media_ai.close') }}</button></div>
       <p class="text-xs opacity-70">{{ t(mediaAiBatch.fileIds ? 'media_ai.scope_selected' : 'media_ai.scope_all', { count: mediaAiBatch.fileIds?.length }) }}</p>
+      <p v-if="mediaAiBatch.modelId" class="text-xs opacity-60">{{ t('media_chat.task_model_hint') }}</p>
       <p v-if="error" role="alert" class="text-xs text-error break-words whitespace-pre-wrap">{{ error }}</p>
       <p v-if="loading" class="loading loading-spinner loading-sm"></p>
       <template v-if="preflight">
@@ -59,19 +60,19 @@ async function refresh(full = false) {
     const next: any[] = await invoke('media_ai_jobs', { libraryId });
     if (epoch !== generation || !mediaAiBatch.open) return;
     jobs.value = next;
-    if (full) { const next = await invoke('media_ai_preflight', { libraryId, fileIds: mediaAiBatch.fileIds }); if (epoch === generation) preflight.value = next; }
+    if (full) { const next = await invoke('media_ai_preflight', { libraryId, fileIds: mediaAiBatch.fileIds, modelId: mediaAiBatch.modelId }); if (epoch === generation) preflight.value = next; }
   } catch (e) { if (epoch === generation) error.value = String(e); }
 }
 async function action(fn: () => Promise<unknown>) { if (busy.value) return; busy.value = true; error.value = ''; try { await fn(); await refresh(true); } catch (e) { error.value = String(e); } finally { busy.value = false; } }
 async function submit() {
   if (!canSubmit.value) return;
-  const next = { ...options.value, index: options.value.indexOnly || !onlyIndexes.value && options.value.index, visualIndex: !onlyIndexes.value && options.value.visualIndex, force: !onlyIndexes.value && options.value.force,
+  const next = { ...options.value, modelId: mediaAiBatch.modelId, index: options.value.indexOnly || !onlyIndexes.value && options.value.index, visualIndex: !onlyIndexes.value && options.value.visualIndex, force: !onlyIndexes.value && options.value.force,
     adopt: onlyIndexes.value ? { title: false, description: false, tags: false, createTags: false, onlyEmpty: true } : { ...options.value.adopt } };
   await action(() => invoke('media_ai_start_job', { libraryId: mediaAiBatch.libraryId, fileIds: mediaAiBatch.fileIds, options: next }));
 }
 async function pause(jobId: string) { await action(() => invoke('media_ai_pause_job', { jobId })); }
 async function resume(jobId: string, retryFailed: boolean) { await action(() => invoke('media_ai_resume_job', { libraryId: mediaAiBatch.libraryId, jobId, retryFailed })); }
-watch(() => [mediaAiBatch.open, mediaAiBatch.libraryId, mediaAiBatch.fileIds], async () => {
+watch(() => [mediaAiBatch.open, mediaAiBatch.libraryId, mediaAiBatch.fileIds, mediaAiBatch.modelId], async () => {
   generation++; clearInterval(timer); preflight.value = null; error.value = '';
   if (!mediaAiBatch.open) return;
   loading.value = true; await refresh(true); loading.value = false;

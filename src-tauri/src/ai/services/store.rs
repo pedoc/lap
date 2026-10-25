@@ -447,6 +447,8 @@ pub(super) fn rank_vectors(
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Adoption {
+    #[serde(default)]
+    pub proposal: Option<AnalysisText>,
     pub title: bool,
     pub description: bool,
     pub tags: bool,
@@ -476,6 +478,14 @@ pub fn adopt(
     {
         return Err("资料已被其他操作修改，请刷新后重新采用。".into());
     }
+    let proposal = options
+        .proposal
+        .as_ref()
+        .map(|proposal| {
+            AnalysisText::parse(&serde_json::to_string(proposal).map_err(|_| "编辑后的建议无效")?)
+        })
+        .transpose()?;
+    let text = proposal.as_ref().unwrap_or(&analysis.text);
     if options.title
         && !analysis.dismissed.contains(&"title".into())
         && (!options.only_empty
@@ -486,12 +496,7 @@ pub fn adopt(
                 .trim()
                 .is_empty())
     {
-        crate::t_media_title::set_on(
-            &tx,
-            src.file_id,
-            Some(&analysis.text.title),
-            src.title.as_deref(),
-        )?;
+        crate::t_media_title::set_on(&tx, src.file_id, Some(&text.title), src.title.as_deref())?;
     }
     if options.description
         && !analysis.dismissed.contains(&"description".into())
@@ -505,12 +510,12 @@ pub fn adopt(
     {
         tx.execute(
             "UPDATE afiles SET comments=?1 WHERE id=?2",
-            params![analysis.text.description, src.file_id],
+            params![text.description, src.file_id],
         )
         .map_err(sql_error)?;
     }
     if options.tags && !analysis.dismissed.contains(&"tags".into()) {
-        for name in &analysis.text.tags {
+        for name in &text.tags {
             let mut tag: Option<i64> = tx
                 .query_row(
                     "SELECT id FROM atags WHERE name=?1 COLLATE NOCASE",
@@ -606,6 +611,44 @@ pub(crate) mod tests {
         .unwrap();
         let a = analyses(c, &src).unwrap().remove(0);
         (src, a)
+    }
+    #[test]
+    fn media_chat_edited_proposal_keeps_analysis_and_conflict_guards() {
+        let (mut c, _dir) = fixture();
+        let (src, analysis) = seed(&mut c);
+        let edited = AnalysisText {
+            title: "编辑标题".into(),
+            description: "编辑后的说明".into(),
+            tags: vec!["编辑标签".into()],
+        };
+        let mut options = Adoption {
+            title: true,
+            description: true,
+            tags: true,
+            create_tags: true,
+            proposal: Some(edited.clone()),
+            ..Default::default()
+        };
+        adopt(&mut c, &src, &analysis.id, &options).unwrap();
+        let current = source(&c, src.file_id).unwrap();
+        assert_eq!(current.title.as_deref(), Some("编辑标题"));
+        assert_eq!(current.comments.as_deref(), Some("编辑后的说明"));
+        let original = analyses(&c, &current).unwrap().remove(0);
+        assert_eq!(original.text.title, analysis.text.title);
+        assert_eq!(original.text.description, analysis.text.description);
+        assert!(
+            adopt(&mut c, &src, &analysis.id, &options).is_err(),
+            "stale metadata must not overwrite newer edits"
+        );
+        options.proposal.as_mut().unwrap().title.clear();
+        assert!(adopt(&mut c, &current, &analysis.id, &options).is_err());
+        assert_eq!(source(&c, src.file_id).unwrap().title, current.title);
+        assert!(
+            serde_json::from_str::<Adoption>(r#"{"title":true}"#)
+                .unwrap()
+                .proposal
+                .is_none()
+        );
     }
     #[test]
     fn output_validation_does_not_accept_partial_or_oversized_json() {

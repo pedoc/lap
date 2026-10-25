@@ -527,8 +527,6 @@
             @unselect-file="unselectFileFromSelection"
             @more-action="action => action()"
             @more-action-menu="handleMoreActionMenu"
-            @media-ai="openMediaAiBatch(libConfig._libraryId, Array.from(selectedFileIds))"
-            @media-ai-all="openMediaAiBatch(libConfig._libraryId, null)"
           />
           <FileInfo
             v-else-if="renderedRightPanelContent === 'info'"
@@ -878,7 +876,8 @@ import FileInfo from '@/components/FileInfo.vue';
 import Breadcrumb from '@/components/Breadcrumb.vue';
 import DedupPane from '@/components/DedupPane.vue';
 import SelectionPanel from '@/components/SelectionPanel.vue';
-import { mediaAiSearch, openMediaAiBatch, rankedMediaHits, type MediaHit } from '@/common/mediaAi';
+import { mediaAiSearch, rankedMediaHits, type MediaHit } from '@/common/mediaAi';
+import { MEDIA_CHAT_DROP_EVENT } from '@/common/mediaChat';
 import FileConflictDialog from '@/components/FileConflictDialog.vue';
 import ScrollBar from '@/components/ScrollBar.vue';
 import SliderInput from '@/components/SliderInput.vue';
@@ -1149,6 +1148,12 @@ const getActionableSelectedItems = () =>
 const selectedFiles = computed(() => {
   selectedFilesVersion.value;
   return selectMode.value ? getActionableSelectedItems() : [];
+});
+const selectedMediaChatIds = computed(() => {
+  selectedFilesVersion.value;
+  const current = fileList.value[selectedItemIndex.value];
+  const ids = selectMode.value ? Array.from(selectedFileIds) : isRealFileItem(current) ? [Number(current.id)] : [];
+  return ids.filter(id => Number.isSafeInteger(id) && id > 0);
 });
 
 async function refreshSelectionPanelPreviews() {
@@ -3036,16 +3041,17 @@ function updateDragGhostAction(event: Pick<MouseEvent, 'altKey' | 'ctrlKey'>) {
   const copy = isCopyDragModifier(event);
   const showLabel = !!pointerDropTarget;
   const isCollectionDropTarget = !!pointerDropTarget?.dataset.collectionDropId || pointerDropTarget?.dataset.collectionDropNew === 'true';
+  const isChatDropTarget = pointerDropTarget?.hasAttribute('data-media-chat-drop');
   const icon = dragGhostAction.firstElementChild as HTMLElement | null;
   const label = dragGhostAction.lastElementChild as HTMLElement | null;
   if (icon) {
-    render(createVNode(isCollectionDropTarget || (showLabel && copy) ? IconAdd : IconPrev, {
+    render(createVNode(isChatDropTarget || isCollectionDropTarget || (showLabel && copy) ? IconAdd : IconPrev, {
       class: 'w-4 h-4',
     }), icon);
   }
   if (label) {
     label.textContent = showLabel
-      ? (isCollectionDropTarget
+      ? (isChatDropTarget ? t('media_chat.add_to_turn') : isCollectionDropTarget
         ? t('collection.drop_action')
         : copy
         ? t('info_panel.drag_action.copy')
@@ -3055,10 +3061,10 @@ function updateDragGhostAction(event: Pick<MouseEvent, 'altKey' | 'ctrlKey'>) {
   }
   dragGhostAction.style.padding = showLabel ? '0 9px 0 6px' : '0 5px';
   dragGhostAction.style.gap = showLabel ? '5px' : '0';
-  dragGhostAction.style.background = showLabel && (copy || isCollectionDropTarget)
+  dragGhostAction.style.background = showLabel && (copy || isCollectionDropTarget || isChatDropTarget)
     ? 'var(--color-success)'
     : 'color-mix(in oklab, var(--color-base-300) 94%, transparent)';
-  dragGhostAction.style.color = showLabel && (copy || isCollectionDropTarget)
+  dragGhostAction.style.color = showLabel && (copy || isCollectionDropTarget || isChatDropTarget)
     ? 'var(--color-success-content)'
     : 'var(--color-base-content)';
 }
@@ -3284,7 +3290,7 @@ function updateContentDragPosition(event: PointerEvent) {
     });
   }
   const target = elementAtPointer
-    ?.closest('[data-file-drop-path][data-file-drop-album-id], [data-collection-drop-id], [data-collection-drop-new]') as HTMLElement | null;
+    ?.closest('[data-media-chat-drop], [data-file-drop-path][data-file-drop-album-id], [data-collection-drop-id], [data-collection-drop-new]') as HTMLElement | null;
   setPointerDropTarget(target);
   updateDragGhostAction(event);
 }
@@ -3336,6 +3342,7 @@ function markContentInternalDrag({
 }
 
 async function clearContentInternalDrag(event?: PointerEvent) {
+  const dragLibraryId = libConfig._libraryId;
   const target = pointerDropTarget;
   let files = pointerDragFiles;
   const usesSelection = pointerDragUsesSelection;
@@ -3362,6 +3369,10 @@ async function clearContentInternalDrag(event?: PointerEvent) {
       }));
     }
 
+    if (target.hasAttribute('data-media-chat-drop')) {
+      if (dragLibraryId === libConfig._libraryId) target.dispatchEvent(new CustomEvent(MEDIA_CHAT_DROP_EVENT, { bubbles: true, detail: { libraryId: dragLibraryId, fileIds: files.map((file: any) => Number(file.id)).filter((id: number) => Number.isSafeInteger(id) && id > 0) } }));
+      return;
+    }
     const collectionId = target.dataset.collectionDropId;
     const collectionDropNew = target.dataset.collectionDropNew === 'true';
     if (collectionId || collectionDropNew) {
@@ -11580,6 +11591,7 @@ watch([contentReady, showWelcomeContent], ([ready, welcome]) => {
 }, { immediate: true });
 
 defineExpose({
+  selectedMediaChatIds,
   openHomePhoto,
   prepareSettingsOpen,
   focusContent: activateContentPane,

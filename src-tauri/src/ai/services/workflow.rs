@@ -17,13 +17,15 @@ use tokio_util::sync::CancellationToken;
 
 static RUNNING: LazyLock<Mutex<HashMap<String, CancellationToken>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static CALLS: LazyLock<Arc<tokio::sync::Semaphore>> =
+pub(super) static CALLS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(2)));
 static ADMISSION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct JobOptions {
+    #[serde(default)]
+    pub model_id: Option<String>,
     pub index_only: bool,
     pub index: bool,
     pub visual_index: bool,
@@ -79,7 +81,7 @@ fn ids_on(c: &rusqlite::Connection, ids: &Option<Vec<i64>>) -> Result<Vec<i64>, 
 fn policy(model: &Resolved, cap: Capability, background: bool) -> Result<(), String> {
     check_policy(&config::load()?, model, cap, background)
 }
-fn check_policy(
+pub(super) fn check_policy(
     current: &config::Configuration,
     model: &Resolved,
     cap: Capability,
@@ -114,12 +116,17 @@ fn check_policy(
 pub async fn media_ai_preflight(
     library_id: String,
     file_ids: Option<Vec<i64>>,
+    model_id: Option<String>,
 ) -> Result<Preflight, String> {
-    tauri::async_runtime::spawn_blocking(move || preflight(&library_id, file_ids))
+    tauri::async_runtime::spawn_blocking(move || preflight(&library_id, file_ids, model_id))
         .await
         .map_err(|_| "范围预检任务失败")?
 }
-fn preflight(library_id: &str, file_ids: Option<Vec<i64>>) -> Result<Preflight, String> {
+fn preflight(
+    library_id: &str,
+    file_ids: Option<Vec<i64>>,
+    model_id: Option<String>,
+) -> Result<Preflight, String> {
     let config = config::load()?;
     store::db(&library_id, |c| {
         let ids = ids_on(c, &file_ids)?;
@@ -158,7 +165,15 @@ fn preflight(library_id: &str, file_ids: Option<Vec<i64>>) -> Result<Preflight, 
             }
         }
         let background = out.total > 1 || file_ids.is_none();
-        match config.role("media").and_then(|m| {
+        match analysis_model(
+            &config,
+            &JobOptions {
+                model_id,
+                ..Default::default()
+            },
+        )
+        .and_then(|m| {
+            let m = m.ok_or("尚未选择媒体生成模型")?;
             if out.images > 0 {
                 m.require(Capability::Image, background)?;
             }
@@ -268,6 +283,22 @@ pub async fn media_ai_start_job(
     launch(app, library_id, job.clone(), false)?;
     Ok(job)
 }
+fn analysis_model(
+    configuration: &config::Configuration,
+    options: &JobOptions,
+) -> Result<Option<Resolved>, String> {
+    if options.index_only || options.visual_only {
+        return Ok(None);
+    }
+    let model = match options.model_id.as_deref() {
+        Some(id) => configuration.resolve(id)?,
+        None => configuration.role("media")?,
+    };
+    if model.provider.kind != config::ProviderKind::Llm || !model.model.is_generation() {
+        return Err("媒体资料建议需要生成模型，不能使用 Embedding 模型。".into());
+    }
+    Ok(Some(model))
+}
 fn prepare_job(
     library_id: String,
     file_ids: Option<Vec<i64>>,
@@ -282,11 +313,7 @@ fn prepare_job(
             return Err("当前范围没有可处理的媒体".into());
         }
         let background = ids.len() > 1 || file_ids.is_none();
-        let media = if options.index_only || options.visual_only {
-            None
-        } else {
-            Some(config.role("media")?)
-        };
+        let media = analysis_model(&config, &options)?;
         let embedding = if options.index || options.index_only {
             Some(config.role("embedding")?)
         } else {
@@ -1010,6 +1037,51 @@ fn validate_citations(answer: &str, evidence: &[Evidence]) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn media_chat_analysis_override_does_not_mutate_default_roles() {
+        let default = store::tests::model("default-media");
+        let custom = store::tests::model("session-media");
+        let configuration = config::Configuration {
+            providers: vec![default.provider.clone()],
+            models: vec![default.model.clone(), custom.model.clone()],
+            roles: config::Roles {
+                media: Some(default.model.id.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let roles = serde_json::to_string(&configuration.roles).unwrap();
+        let mut options = JobOptions {
+            model_id: Some(custom.model.id.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            analysis_model(&configuration, &options)
+                .unwrap()
+                .unwrap()
+                .model
+                .id,
+            "session-media"
+        );
+        assert_eq!(serde_json::to_string(&configuration.roles).unwrap(), roles);
+        options.index_only = true;
+        options.model_id = Some("not-a-model".into());
+        assert!(analysis_model(&configuration, &options).unwrap().is_none());
+        options.index_only = false;
+        options.visual_only = true;
+        assert!(analysis_model(&configuration, &options).unwrap().is_none());
+        let legacy: JobOptions = serde_json::from_str("{}").unwrap();
+        assert!(legacy.model_id.is_none());
+        assert_eq!(
+            analysis_model(&configuration, &legacy)
+                .unwrap()
+                .unwrap()
+                .model
+                .id,
+            "default-media"
+        );
+    }
     #[test]
     fn video_segments_preserve_original_time() {
         assert_eq!(

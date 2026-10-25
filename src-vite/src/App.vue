@@ -7,6 +7,7 @@
     <ToastContainer />
     <MediaJobPanel />
     <MediaAiBatch />
+    <MediaChatDialog />
     <FaceDiagnosticsDialog v-if="faceDiagnosticState.visible && faceDiagnosticState.report?.library_id === libConfig._libraryId" :report="faceDiagnosticState.report" @cancel="faceDiagnosticState.visible = false" />
   </template>
 </template>
@@ -25,14 +26,17 @@ import { matchesShortcut } from '@/common/shortcuts';
 import ToastContainer from '@/components/ToastContainer.vue';
 import MediaJobPanel from '@/components/MediaJobPanel.vue';
 import MediaAiBatch from '@/components/MediaAiBatch.vue';
+import MediaChatDialog from '@/components/MediaChatDialog.vue';
 import FaceDiagnosticsDialog from '@/components/FaceDiagnosticsDialog.vue';
 import { mediaAiSearch } from '@/common/mediaAi';
+import { mediaChat, closeMediaChat } from '@/common/mediaChat';
 import { faceDiagnosticState } from '@/common/faceDiagnostics';
 
 useOcrActivity();
 const libConfig = useLibraryStore();
 watch(() => libConfig._libraryId, libraryId => {
   Object.assign(mediaAiSearch, { active: false, libraryId, modelId: '', albumId: null, error: '', hits: [], revision: 0 });
+  if (mediaChat.libraryId && mediaChat.libraryId !== libraryId) closeMediaChat();
 });
 const isReady = ref(false);
 const config = useConfigStore();
@@ -111,14 +115,17 @@ const handleKeyDown = (event) => {
   if (!isMac && matchesShortcut('app.preferences', event)) {
     event.preventDefault();
     event.stopPropagation();
-    emit('app-open-preferences');
+    if (mediaChat.open) {
+      closeMediaChat();
+      void nextTick(() => emit('app-open-preferences'));
+    } else emit('app-open-preferences');
     return;
   }
 
   // Inputs that handle their own keys must not trigger global shortcuts (Enter is file.rename on
   // macOS). SearchBox/MoveTo/ImportOrganize are deliberately excluded — they rely on this channel.
   const uiStore = useUIStore();
-  if (uiStore.inputStack.includes('Settings')) return;
+  if (uiStore.inputStack.includes('Settings') || uiStore.inputStack.includes('MediaChat')) return;
   // MoveTo buttons activate locally; forwarding Enter would also confirm the move.
   if (
     event.key === 'Enter' && uiStore.isInputActive('MoveTo') &&

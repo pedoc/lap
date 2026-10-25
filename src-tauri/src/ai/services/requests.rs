@@ -12,6 +12,9 @@ pub struct Request {
     cancel: CancellationToken,
 }
 impl Request {
+    pub fn cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
     pub fn new(id: Option<String>) -> Result<Self, String> {
         let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if id.is_empty()

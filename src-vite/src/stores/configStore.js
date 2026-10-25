@@ -5,6 +5,7 @@ import { defineStore } from 'pinia';
 import { i18n, loadLanguage } from '@/common/i18n';
 let languageRequest = 0;
 import { SIDEBAR, MAP_MARKER_SIZES } from '@/common/constants';
+import { normalizeMediaChatSettings } from '@/common/mediaChatPosition';
 
 export const useConfigStore = defineStore('configStore', {
   state: () => ({
@@ -144,6 +145,7 @@ export const useConfigStore = defineStore('configStore', {
       scale: 1,                   // root font-size scale
       showToolTip: true,          // show button tooltip
       showStatusBar: true,        // show status bar
+      mediaChat: normalizeMediaChatSettings(),
       autoCheckUpdates: true,      // automatically check for updates
       debugMode: false,           // debug mode
 
@@ -314,6 +316,15 @@ export const useConfigStore = defineStore('configStore', {
     setShowStatusBar(showStatusBar) {
       this.settings.showStatusBar = showStatusBar;
     },
+    setMediaChat(settings) {
+      const current = this.settings.mediaChat;
+      const next = normalizeMediaChatSettings(settings, normalizeMediaChatSettings(current));
+      const samePosition = current?.floatingPosition === next.floatingPosition
+        || current?.floatingPosition && next.floatingPosition
+          && current.floatingPosition.x === next.floatingPosition.x && current.floatingPosition.y === next.floatingPosition.y;
+      if (current?.showFloatingButton === next.showFloatingButton && current?.defaultPosition === next.defaultPosition && samePosition) return;
+      this.settings.mediaChat = next;
+    },
     setAutoCheckUpdates(autoCheckUpdates) {
       this.settings.autoCheckUpdates = autoCheckUpdates;
     },
@@ -442,6 +453,7 @@ export const useConfigStore = defineStore('configStore', {
         const state = JSON.parse(value);
         const settings = state?.settings;
         if (settings) {
+          settings.mediaChat = normalizeMediaChatSettings(settings.mediaChat);
           settings.rawPreviewSource = settings.rawPreviewSource === 'rendered' ? 'rendered' : 'embedded';
           settings.rawRenderBrightness = settings.rawRenderBrightness === 'brightened' ? 'brightened' : 'original';
           settings.rawPairDisplaySource = settings.rawPairDisplaySource === 'raw' ? 'raw' : 'jpeg';

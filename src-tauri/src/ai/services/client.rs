@@ -102,6 +102,13 @@ pub async fn chat_with_key(
     parts: Vec<ContentPart>,
     key: Option<String>,
 ) -> Result<String, String> {
+    chat_history_with_key(model, vec![ChatMessage::user(parts)], key).await
+}
+pub async fn chat_history_with_key(
+    model: &Resolved,
+    messages: Vec<ChatMessage>,
+    key: Option<String>,
+) -> Result<String, String> {
     if model.provider.kind != ProviderKind::Llm || !model.model.is_generation() {
         return Err("此模型不是标准 LLM 生成模型".into());
     }
@@ -112,7 +119,7 @@ pub async fn chat_with_key(
     let response = sdk(&model.provider, key)?
         .exec_chat(
             &model.model.remote_id,
-            ChatRequest::new(vec![ChatMessage::user(parts)]).with_store(false),
+            ChatRequest::new(messages).with_store(false),
             Some(&options),
         )
         .await
@@ -125,6 +132,9 @@ pub async fn chat_with_key(
 }
 pub async fn chat(model: &Resolved, parts: Vec<ContentPart>) -> Result<String, String> {
     chat_with_key(model, parts, config::key(&model.provider)?).await
+}
+pub async fn chat_history(model: &Resolved, messages: Vec<ChatMessage>) -> Result<String, String> {
+    chat_history_with_key(model, messages, config::key(&model.provider)?).await
 }
 pub fn query_text(model: &Resolved, text: &str) -> String {
     if model.provider.embedding_protocol.is_multimodal() {

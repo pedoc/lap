@@ -1,4 +1,5 @@
 //! Standard model services are independent of the existing ONNX task contracts.
+pub mod chat;
 pub mod client;
 pub mod commands;
 pub mod config;

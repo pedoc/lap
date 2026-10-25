@@ -2,6 +2,7 @@
   <aside
     v-if="mediaJobSummaries.length"
     class="fixed bottom-3 right-3 z-[80] w-[23rem] max-w-[92vw] max-h-[55vh] overflow-auto rounded-box border border-base-content/20 bg-base-100 p-3 shadow-xl text-sm"
+    :style="mediaChatFloatingReserve.bottom ? { bottom: `${mediaChatFloatingReserve.bottom + 12}px`, maxHeight: `min(55vh, calc(100vh - ${mediaChatFloatingReserve.bottom + 24}px))` } : undefined"
     aria-live="polite"
     :aria-label="$t('media_jobs.title')"
   >
@@ -117,6 +118,7 @@ import {
   canReadMediaJobDetails,
 } from '@/common/mediaJobs';
 import { formatFileSize } from '@/common/utils';
+import { mediaChatFloatingReserve } from '@/common/mediaChat';
 const busy = ref(false),
   error = ref('');
 let disposed = false,

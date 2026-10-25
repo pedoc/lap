@@ -88,6 +88,7 @@ if (isMainWindow) {
     if (isSettingsWindow) {
       // Settings also needs language updates made from the welcome screen.
       config.setLanguage(event.payload.language)
+      config.setMediaChat(event.payload.mediaChat)
     } else {
       const { language, ...settings } = event.payload
       await config.setLanguage(language)
@@ -215,6 +216,9 @@ if (isMainWindow) {
   })
   listen('settings-showStatusBar-changed', (event) => {
     config.setShowStatusBar(event.payload)
+  })
+  listen('settings-mediaChat-changed', (event) => {
+    config.setMediaChat(event.payload)
   })
   listen('settings-autoCheckUpdates-changed', (event) => {
     config.setAutoCheckUpdates(event.payload)

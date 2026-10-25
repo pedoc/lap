@@ -103,6 +103,18 @@
               </div>
               <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="config.settings.showStatusBar" />
             </div>
+            <div class="flex items-center justify-between gap-3 p-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
+              <div class="flex flex-col gap-0.5 text-sm leading-5"><label for="show-floating-media-chat">{{ $t('media_chat.show_floating_button') }}</label><div class="text-xs text-base-content/40">{{ $t('media_chat.floating_button_hint') }}</div></div>
+              <input id="show-floating-media-chat" type="checkbox" class="toggle toggle-primary toggle-sm shrink-0" v-model="showFloatingChatButton" />
+            </div>
+            <div class="flex items-center justify-between gap-3 p-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
+              <div class="flex flex-col gap-0.5 text-sm leading-5"><label for="floating-media-chat-position">{{ $t('media_chat.default_position') }}</label><div class="text-xs text-base-content/40">{{ $t('media_chat.floating_position_hint') }}</div></div>
+              <select id="floating-media-chat-position" class="select select-bordered select-sm min-w-32 shrink-0" v-model="floatingChatDefaultPosition"><option v-for="position in FLOATING_CHAT_POSITIONS" :key="position" :value="position">{{ $t('media_chat.position_' + position.replace('-', '_')) }}</option></select>
+            </div>
+            <div class="flex items-center justify-between gap-3 p-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
+              <div class="flex flex-col gap-0.5 text-sm leading-5"><div>{{ $t('media_chat.floating_button_position') }}</div><div class="text-xs text-base-content/40">{{ $t('media_chat.reset_position_hint') }}</div></div>
+              <button type="button" class="btn btn-sm btn-ghost shrink-0" :disabled="mediaChatPreferences.floatingPosition === null" @click="resetFloatingChatPosition">{{ $t('media_chat.reset_position') }}</button>
+            </div>
           </div>
 
           <!-- album folder -->
@@ -585,6 +597,7 @@ import { formatFileSize, isLinux, isMac, setTheme, SCALE_VALUES } from '@/common
 import { getShortcutLabels, ShortcutActionId, ShortcutPlatform } from '@/common/shortcuts';
 import { useToast } from '@/common/toast';
 import { pendingChanges } from '@/common/pendingChanges';
+import { FLOATING_CHAT_POSITIONS, normalizeMediaChatSettings, type FloatingChatAnchor } from '@/common/mediaChatPosition';
 import { useUIStore } from '@/stores/uiStore';
 import { IconClose, IconRestore } from '@/common/icons';
 
@@ -605,6 +618,16 @@ const { locale, messages, t } = useI18n();
 const localeMsg = computed(() => messages.value[config.settings.language] as any);
 const toast = useToast();
 const uiStore = useUIStore();
+const mediaChatPreferences = computed(() => normalizeMediaChatSettings(config.settings.mediaChat));
+const showFloatingChatButton = computed({
+  get: () => mediaChatPreferences.value.showFloatingButton,
+  set: (value: boolean) => config.setMediaChat({ showFloatingButton: value }),
+});
+const floatingChatDefaultPosition = computed({
+  get: () => mediaChatPreferences.value.defaultPosition,
+  set: (value: FloatingChatAnchor) => config.setMediaChat({ defaultPosition: value, floatingPosition: null }),
+});
+function resetFloatingChatPosition() { config.setMediaChat({ floatingPosition: null }); }
 const shortcutPlatform: ShortcutPlatform = isMac ? 'mac' : (isLinux ? 'linux' : 'windows');
 const settingsTabs = [
   { id: SETTINGS_TAB.GENERAL, label: 'settings.general.title' },
@@ -1175,6 +1198,9 @@ watch(() => config.settings.showToolTip, (newValue) => {
 watch(() => config.settings.showStatusBar, (newValue) => {
   if (!props.embedded) emit('settings-showStatusBar-changed', newValue);
 });
+watch(() => config.settings.mediaChat, (newValue) => {
+  if (!props.embedded) emit('settings-mediaChat-changed', JSON.parse(JSON.stringify(newValue)));
+}, { deep: true });
 watch(() => config.settings.autoCheckUpdates, (newValue) => {
   if (!props.embedded) emit('settings-autoCheckUpdates-changed', newValue);
 });

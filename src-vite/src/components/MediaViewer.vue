@@ -178,6 +178,13 @@
           :shortcut="shortcut('meta.info')"
           @click="$emit('item-action', { action: 'info', index: fileIndex })"
         />
+        <TButton
+          :icon="IconComment"
+          :disabled="!file || fileIndex < 0 || !canInteract"
+          :tooltip="$t('media_chat.open_chat')"
+          data-media-chat-open
+          @click="openCurrentMediaChat"
+        />
         <!-- Linked viewport control (Compare mode only) -->
         <template v-if="mode === 2 && showSyncViewportControl">
           <IconSeparator class="t-icon-size-sm text-base-content/30" />
@@ -451,6 +458,7 @@ import { useI18n } from 'vue-i18n';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { runPreviewWindowOperation, recoverPreviewWindowFocus } from '@/common/previewWindow';
 import { config, libConfig } from '@/common/config';
+import { openMediaChat } from '@/common/mediaChat';
 import { useToast } from '@/common/toast';
 import { isWin, isMac, isLinux, getSlideShowInterval } from '@/common/utils';
 import { getShortcutLabel, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
@@ -701,6 +709,12 @@ useMediaViewTracking(() => props.file,
   () => props.trackViews && !props.toolbarOnly && props.canInteract && props.isPlaybackActive && !props.isSlideShow,
   () => !!mediaRef.value?.viewReady);
 const toast = useToast();
+async function openCurrentMediaChat() {
+  const fileId = Number(props.file?.id);
+  if (!props.canInteract || props.fileIndex < 0 || !Number.isSafeInteger(fileId) || fileId <= 0 || !libConfig._libraryId) return;
+  try { await openMediaChat(libConfig._libraryId, [fileId]); }
+  catch (error: any) { toast.error(error?.message || String(error)); }
+}
 const isHoverLeft = ref(false);
 const isHoverRight = ref(false);
 const isHoverTop = ref(false);

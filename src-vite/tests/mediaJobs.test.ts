@@ -292,6 +292,7 @@ test('the actual task panel renders safe counters, stopping and retry controls w
       ...Vue,
       ...imports,
       libConfig: { _libraryId: 'A' },
+      mediaChatFloatingReserve: Vue.reactive({ bottom: 0 }),
       mediaJobSummaries: Vue.ref([row]),
       mediaJobs: {},
       mediaJobSession: () => null,

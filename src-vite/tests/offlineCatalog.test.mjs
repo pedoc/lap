@@ -165,7 +165,7 @@ function dragFixture(collection = false) {
     t: key => key, toast: { success: () => {}, info: () => {} },
     libConfig: { activePane: 'album' },
   };
-  const result = new Function('deps', 'const {' + Object.keys(deps).join(',') + '} = deps; let pointerDragUsesSelection = false; let pointerDragFiles = null; let nativeDragFiles = null; let nativeDragPreview = []; const pointerDropTarget = ' + JSON.stringify({ dataset: collection ? { collectionDropId: '7' } : { fileDropPath: '/destination', fileDropAlbumId: '10' } }) + '; ' + dragBody + '; return { markContentInternalDrag, clearContentInternalDrag };')(deps);
+  const result = new Function('deps', 'const {' + Object.keys(deps).join(',') + '} = deps; let pointerDragUsesSelection = false; let pointerDragFiles = null; let nativeDragFiles = null; let nativeDragPreview = []; const pointerDropTarget = ' + JSON.stringify({ dataset: collection ? { collectionDropId: '7' } : { fileDropPath: '/destination', fileDropAlbumId: '10' } }) + '; pointerDropTarget.hasAttribute = () => false; ' + dragBody + '; return { markContentInternalDrag, clearContentInternalDrag };')(deps);
   return { ...result, deps, calls, files };
 }
 

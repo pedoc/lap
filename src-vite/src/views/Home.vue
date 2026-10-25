@@ -1,5 +1,5 @@
 <template>
-  <div class="fixed bottom-10 right-4 z-40 w-80 max-w-[calc(100vw-2rem)] max-h-[70vh] overflow-y-auto space-y-2">
+  <div class="fixed bottom-10 right-4 z-40 w-80 max-w-[calc(100vw-2rem)] max-h-[70vh] overflow-y-auto space-y-2" :style="mediaChatFloatingReserve.bottom ? { bottom: `${mediaChatFloatingReserve.bottom + 16}px`, maxHeight: `min(70vh, calc(100vh - ${mediaChatFloatingReserve.bottom + 32}px))` } : undefined">
     <OcrTaskBanner stacked />
     <ObjectTaskBanner />
   </div>
@@ -176,6 +176,11 @@
         <MediaUtilityView v-if="databaseCorrupted===false && showMediaUtilities" :key="libraryVersion+'-'+libConfig.library.item" :mode="libConfig.library.item==='hidden-media'?'hidden':'deleted'" />
         </div>
         <Settings v-if="showSettings" ref="settingsRef" embedded @close="closeSettings" />
+        <MediaChatLauncher
+          v-if="!showSettings && databaseCorrupted === false"
+          :library-id="libConfig._libraryId"
+          :file-ids="showHomeDashboard || showMediaUtilities ? [] : contentRef?.selectedMediaChatIds || []"
+        />
       </div>
     </div>
 
@@ -213,6 +218,7 @@ import { matchesShortcut, ShortcutPlatform } from '@/common/shortcuts';
 import { SIDEBAR, SETTINGS_TAB, PANEL_ANIMATION_MS } from '@/common/constants';
 import { getAppConfig, switchLibrary, cancelIndexing, cancelFaceIndex } from '@/common/api';
 import { mediaAiBatch } from '@/common/mediaAi';
+import { mediaChatFloatingReserve } from '@/common/mediaChat';
 
 // vue components
 import Library from '@/components/Library.vue';
@@ -234,6 +240,7 @@ import TButton from '@/components/TButton.vue';
 import MediaUtilityView from '@/components/MediaUtilityView.vue';
 import Content from '@/components/Content.vue';
 import Settings from '@/views/Settings.vue';
+import MediaChatLauncher from '@/components/MediaChatLauncher.vue';
 import HomeDashboard from '@/components/HomeDashboard.vue';
 import HomeSidebar from '@/components/HomeSidebar.vue';
 import { homeBrowseRules, homeEntityRules, homePeriodRules, homePreferences, type HomeBrowseTarget, type HomePhoto } from '@/common/homeDashboard';
@@ -574,7 +581,7 @@ onBeforeUnmount(() => {
 });
 
 function handleHomeKeyDown(event: KeyboardEvent) {
-  if (showSettings.value) return;
+  if (showSettings.value || uiStore.inputStack.includes('MediaChat')) return;
   const target = event.target as HTMLElement | null;
   if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) {
     return;

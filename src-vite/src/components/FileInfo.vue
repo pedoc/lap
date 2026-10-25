@@ -425,7 +425,6 @@
 
       <PhotoOcrInfo :file="fileInfo" @focus-line="emit('ocr-focus', $event)" />
       <PhotoObjectInfo :file="fileInfo" @focus-object="emit('object-focus', $event)" />
-      <PhotoMediaAiInfo :file="fileInfo" @seek="emit('media-ai-seek', $event)" />
 
       <!-- Map View -->
       <div v-if="hasResolvableGps(fileInfo?.gps_latitude, fileInfo?.gps_longitude)"
@@ -477,7 +476,6 @@ import { mediaDisplayName } from '@/common/mediaTitle';
 import { pendingChanges } from '@/common/pendingChanges';
 import PhotoOcrInfo from './PhotoOcrInfo.vue';
 import PhotoObjectInfo from './PhotoObjectInfo.vue';
-import PhotoMediaAiInfo from './PhotoMediaAiInfo.vue';
 import { applyPersonRename } from '@/common/faceUpdates';
 import ImageNavigator from '@/components/ImageNavigator.vue';
 import { ref, nextTick, computed, watch, onBeforeUnmount, onMounted } from 'vue';

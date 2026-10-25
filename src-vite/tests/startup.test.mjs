@@ -7,6 +7,7 @@ import { createI18n } from 'vue-i18n';
 import { defineStore, createPinia, setActivePinia } from 'pinia';
 import { ref, watch, nextTick } from 'vue';
 import ts from 'typescript';
+import * as mediaChatPosition from '../src/common/mediaChatPosition.ts';
 
 const source = await readFile(new URL('../src/common/i18n.js', import.meta.url), 'utf8');
 const storeSource = await readFile(new URL('../src/stores/configStore.js', import.meta.url), 'utf8');
@@ -64,6 +65,7 @@ test('language configuration changes only after messages load; latest choice win
   const storeModule = moduleFixture(storeSource, {
     pinia: { defineStore }, '@/common/i18n': f.module.namespace,
     '@/common/constants': { SIDEBAR: { ALBUM: 1 }, MAP_MARKER_SIZES: [10, 20] },
+    '@/common/mediaChatPosition': mediaChatPosition,
   }, { context: f.context });
   setActivePinia(createPinia());
   const config = storeModule.namespace.useConfigStore();

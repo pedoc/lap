@@ -1,5 +1,6 @@
-import { reactive } from 'vue';
+import { nextTick, reactive } from 'vue';
 import { emit } from '@tauri-apps/api/event';
+import { closeMediaChat } from './mediaChat.ts';
 
 export type MediaCapability = 'text' | 'image' | 'video_frames' | 'json' | 'embed_text' | 'embed_multimodal';
 export type MediaServiceKind = 'llm' | 'embedding';
@@ -125,11 +126,11 @@ export function rankedMediaHits(hits: MediaHit[]): MediaHit[] {
   });
 }
 export const mediaAiSearch = reactive({ active: false, libraryId: '', modelId: '', source: 'analysis' as 'analysis' | 'media', albumId: null as number | null, revision: 0, error: '', hits: [] as MediaHit[] });
-export const mediaAiBatch = reactive({ open: false, libraryId: '', fileIds: null as number[] | null });
-export function openMediaAiBatch(libraryId: string, fileIds: number[] | null) {
-  Object.assign(mediaAiBatch, { open: true, libraryId, fileIds: fileIds ? [...fileIds] : null });
+export const mediaAiBatch = reactive({ open: false, libraryId: '', fileIds: null as number[] | null, modelId: null as string | null });
+export function openMediaAiBatch(libraryId: string, fileIds: number[] | null, modelId: string | null = null) {
+  Object.assign(mediaAiBatch, { open: true, libraryId, fileIds: fileIds ? [...fileIds] : null, modelId });
 }
-export function openMediaAiSettings() { return emit('app-open-preferences', { aiTask: 'media' }); }
+export async function openMediaAiSettings() { closeMediaChat(); await nextTick(); return emit('app-open-preferences', { aiTask: 'media' }); }
 export const QWEN_MEDIA_QUERY = 'Retrieve media descriptions relevant to the search query.';
 export const QWEN_VISUAL_QUERY = "Retrieve images or text relevant to the user's query.";
 export const mediaTime = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;

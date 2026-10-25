@@ -22,7 +22,7 @@
       <select v-model="mediaAiSearch.albumId" class="select select-bordered select-xs w-full" :aria-label="$t('media_ai.scope')"><option :value="null">{{ $t('media_ai.all_albums') }}</option><option v-for="album in mediaAlbums" :key="album.id" :value="Number(album.id)">{{ album.name }}</option></select>
       <p v-if="mediaAiSearch.error" class="text-error whitespace-pre-wrap break-words" role="alert">{{ mediaAiSearch.error }}</p>
       <p class="opacity-60">{{ $t('media_ai.search_index_hint') }}</p>
-      <div class="flex gap-1 flex-wrap"><button class="btn btn-xs" @click="openMediaAiSettings">{{ $t('media_ai.configure') }}</button><button class="btn btn-xs" @click="openMediaAiBatch(libConfig._libraryId, null)">{{ $t('media_ai.batch_all') }}</button></div>
+      <div class="flex gap-1 flex-wrap"><button class="btn btn-xs" @click="openMediaAiSettings">{{ $t('media_ai.configure') }}</button></div>
       <div v-if="mediaAiSearch.hits.some(h => h.end > 0)" class="max-h-28 overflow-y-auto space-y-1"><button v-for="hit in mediaAiSearch.hits.filter(h => h.end > 0).slice(0, 10)" :key="hit.analysisId" class="block text-left link" @click="emitMediaHit(hit)">{{ hit.title }} · {{ mediaTime(hit.start) }}–{{ mediaTime(hit.end) }}</button></div>
     </div>
     <div v-if="!structuredSearch.active" class="mx-1 mb-2 px-1 shrink-0">
@@ -121,7 +121,7 @@ import { structuredSearch, openStructuredSearch } from '@/common/structuredSearc
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { getAllAlbums } from '@/common/api';
-import { mediaAiSearch, openMediaAiSettings, openMediaAiBatch, eligibleModels, mediaTime, type MediaConfiguration, type MediaHit } from '@/common/mediaAi';
+import { mediaAiSearch, openMediaAiSettings, eligibleModels, mediaTime, type MediaConfiguration, type MediaHit } from '@/common/mediaAi';
 const mediaConfiguration = ref<MediaConfiguration | null>(null), mediaAlbums = ref<any[]>([]);
 const embeddingModels = computed(() => mediaConfiguration.value ? eligibleModels(mediaConfiguration.value, mediaAiSearch.source === 'media' ? 'multimodalEmbedding' : 'embedding') : []);
 async function selectNaturalSearch() {

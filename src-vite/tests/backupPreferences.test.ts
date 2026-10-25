@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { backupPreferences, applyBackupPreferences } from '../src/common/backupPreferences.ts';
+import { normalizeMediaChatSettings } from '../src/common/mediaChatPosition.ts';
 
 test('backup includes user preferences and excludes runtime identities and derived configuration', () => {
   const state = { settings: { language: 'zh', appearance: 1, ai: { semanticModel: 'old' }, mapServices: { secret: 'not duplicated' }, tabIndex: 6 },
@@ -43,4 +44,28 @@ test('upstream collage and editor preferences round-trip without replacing newly
   assert.deepEqual(store.$state, {
     imageEditor: { quality: 1, format: 0 }, montage: { mode: 'pile', shadow: false, spacing: 1 },
   });
+});
+
+test('floating chat preferences restore remembered coordinates into a fresh null default', () => {
+  const mediaChat = { showFloatingButton: false, defaultPosition: 'top-left', floatingPosition: { x: 0.25, y: 0.75 } };
+  const saved = backupPreferences({ settings: { mediaChat } });
+  const store = {
+    $state: { settings: { mediaChat: normalizeMediaChatSettings(), showStatusBar: true } },
+    $patch(patch: any) { Object.assign(this.$state, patch); }, $persist() {},
+  };
+  applyBackupPreferences(store, saved);
+  assert.deepEqual(store.$state.settings.mediaChat, mediaChat);
+  assert.equal(store.$state.settings.showStatusBar, true);
+});
+
+test('partial or malformed restored chat preferences preserve current valid choices', () => {
+  const current = normalizeMediaChatSettings({ showFloatingButton: false, defaultPosition: 'top-right', floatingPosition: { x: 0.4, y: 0.6 } });
+  const store = {
+    $state: { settings: { mediaChat: current } },
+    $patch(patch: any) { Object.assign(this.$state, patch); }, $persist() {},
+  };
+  applyBackupPreferences(store, { settings: { mediaChat: { showFloatingButton: 1, defaultPosition: 'center', floatingPosition: { x: '1', y: null } } } });
+  assert.deepEqual(store.$state.settings.mediaChat, current);
+  applyBackupPreferences(store, { settings: { mediaChat: { floatingPosition: null } } });
+  assert.deepEqual(store.$state.settings.mediaChat, { showFloatingButton: false, defaultPosition: 'top-right', floatingPosition: null });
 });

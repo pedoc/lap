@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { onBeforeEnter, onEnter, onAfterEnter, onLeave } from '../src/common/infoPanelTransition.ts';
 import { SIDEBAR, MAP_MARKER_SIZES } from '../src/common/constants.ts';
+import { normalizeMediaChatSettings } from '../src/common/mediaChatPosition.ts';
 
 test('information sections share the existing height animation and restore natural height after expanding', () => {
   let reflows = 0;
@@ -27,7 +28,7 @@ test('OCR and object collapse preferences have independent defaults and survive 
   const source = readFileSync(new URL('../src/stores/configStore.js', import.meta.url), 'utf8')
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '')
     .replace(/^export /gm, '');
-  const options = runInNewContext(`${source};useConfigStore`, { defineStore: (_id: string, options: any) => options, SIDEBAR, MAP_MARKER_SIZES });
+  const options = runInNewContext(`${source};useConfigStore`, { defineStore: (_id: string, options: any) => options, SIDEBAR, MAP_MARKER_SIZES, normalizeMediaChatSettings });
   const state = options.state();
   assert.equal(state.infoPanel.showOcr, true);
   assert.equal(state.infoPanel.showObjects, true);

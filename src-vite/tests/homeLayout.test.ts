@@ -69,6 +69,7 @@ test('the actual workspace hides every root of the photo list on Home and retain
   app.component('Content', FragmentContent);
   app.component('HomeDashboard', { render: () => Vue.h('section', { 'data-dashboard': '' }, 'home') });
   app.component('MediaUtilityView', { render: () => Vue.h('section', { 'data-utilities': '' }, 'private') });
+  app.component('MediaChatLauncher', { render: () => Vue.h('button', { 'data-chat-launcher': '' }) });
   const warnings: string[] = []; app.config.warnHandler = warning => warnings.push(warning);
   app.config.globalProperties.$t = translate;
   app.mount(container);
@@ -113,6 +114,7 @@ test('in-place settings hides the complete gallery while retaining content and d
   app.component('Content', retained('content'));
   app.component('HomeDashboard', retained('dashboard'));
   app.component('MediaUtilityView', { render: () => Vue.h('section') });
+  app.component('MediaChatLauncher', { render: () => Vue.h('button', { 'data-chat-launcher': '' }) });
   app.component('Settings', { props: { embedded: Boolean }, emits: ['close'], setup(props, { emit }) {
     lifecycle.settings++; assert.equal(props.embedded, true);
     return () => Vue.h('button', { 'data-embedded-settings': '', onClick: () => emit('close') }, 'close');

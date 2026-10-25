@@ -1,3 +1,5 @@
+import { normalizeMediaChatSettings } from './mediaChatPosition.ts';
+
 // Only user preferences belong in a backup; derived AI/map state, active jobs,
 // library identities and transient window state must be reloaded locally.
 const GROUPS = ['settings', 'video', 'search', 'content', 'leftPanel', 'rightPanel', 'infoPanel', 'collectionTray', 'imageEditor', 'montage'];
@@ -29,6 +31,9 @@ export function applyBackupPreferences(store: any, preferences: any) {
   if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) throw new Error('Invalid backup preferences');
   const patch = Object.fromEntries(GROUPS.filter(key => Object.hasOwn(preferences, key) && store.$state[key])
     .map(key => [key, compatible(store.$state[key], preferences[key])]));
+  if (patch.settings && preferences.settings && Object.hasOwn(preferences.settings, 'mediaChat')) {
+    patch.settings.mediaChat = normalizeMediaChatSettings(clean(preferences.settings.mediaChat), normalizeMediaChatSettings(store.$state.settings.mediaChat));
+  }
   store.$patch(patch);
   // External applications are added lazily and may not exist in a fresh store.
   if (preferences.settings?.externalApps && typeof store.setExternalApps === 'function') {
