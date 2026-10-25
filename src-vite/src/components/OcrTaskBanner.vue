@@ -2,7 +2,7 @@
   <aside v-if="visible" :class="stacked ? '' : 'fixed bottom-10 right-4 z-40 w-80 max-w-[calc(100vw-2rem)]'" class="rounded-box border border-base-content/15 bg-base-100 shadow-lg p-3 space-y-2" :aria-label="t('ocr.index_title')">
     <div class="flex items-center justify-between gap-2">
       <button class="text-sm font-medium text-primary hover:underline" @click="openWorkspace">{{ t('ocr.workspace_title') }} · {{ t(view.status.running ? 'ocr.recognizing' : 'ocr.task_finished') }}</button>
-      <button v-if="!view.status.running" class="btn btn-xs btn-ghost" :aria-label="t('ocr.dismiss')" @click="dismissed = view.status.jobId">×</button>
+      <button type="button" class="btn btn-xs btn-ghost" :aria-label="t('task_progress.hide')" :title="t('task_progress.hide_hint')" @click="dismissed = jobKey">×</button>
     </div>
     <p class="text-xs opacity-60 truncate" :title="view.status.scopeName">{{ t('ocr.scope_' + (view.status.scope || 'library')) }}<span v-if="view.status.scopeName"> · {{ view.status.scopeName }}</span></p>
     <progress v-if="view.status.running" class="progress progress-primary w-full" :value="view.status.completed" :max="Math.max(1, view.status.total)"></progress>
@@ -22,7 +22,8 @@ defineProps<{ stacked?: boolean }>();
 const { t } = useI18n();
 const { view, error, busy, stop } = useOcr();
 const dismissed = ref('');
-const visible = computed(() => config.main.sidebarIndex !== SIDEBAR.OCR && view.value?.status.jobId && view.value.status.jobId !== dismissed.value);
+const jobKey = computed(() => [libConfig._libraryId, view.value?.status.jobId].join(':'));
+const visible = computed(() => config.main.sidebarIndex !== SIDEBAR.OCR && view.value?.status.jobId && jobKey.value !== dismissed.value);
 function openWorkspace() { libConfig.activePane = 'main'; config.main.sidebarIndex = SIDEBAR.OCR; }
 async function cancel() { try { await stop(); } catch { /* Inline error. */ } }
 </script>

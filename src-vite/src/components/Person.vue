@@ -1,9 +1,12 @@
 <template>
   <div class="sidebar-panel relative overflow-hidden">
     <!-- Progress stays non-blocking so committed people can be browsed immediately. -->
-    <div v-if="isIndexing" 
-      class="shrink-0 px-2 py-2 border-b border-base-content/10"
+    <div v-if="isIndexing && !faceProgressHidden"
+      class="relative shrink-0 px-2 py-2 border-b border-base-content/10"
     >
+      <button type="button" class="absolute right-1 top-1 btn btn-ghost btn-xs" :aria-label="t('task_progress.hide')" :title="t('task_progress.hide_hint')" @click="hideFaceProgress">
+        <IconClose class="w-4 h-4" aria-hidden="true" />
+      </button>
       <div class="flex flex-col items-center text-base-content/70">
         <IconUpdate class="w-4 h-4 mb-1 animate-spin" />
         <span class="text-sm text-center">
@@ -18,9 +21,8 @@
         <span v-else-if="indexProgress.faces_found > 0" class="text-xs text-center mt-1">
           {{ $t('face_index.faces_found', { count: indexProgress.faces_found.toLocaleString() }) }}
         </span>
-        <button class="btn btn-primary btn-xs mt-2" @click="clickCancelIndex">
-          <IconClose class="w-4 h-4" />
-          {{ $t('face_index.cancel') }}
+        <button type="button" class="btn btn-primary btn-xs mt-2" @click="clickCancelIndex">
+          {{ t('task_progress.stop') }}
         </button>
       </div>
     </div>
@@ -268,6 +270,11 @@ const isRenamingPerson = ref(false);
 const originalPersonName = ref('');
 const personInputRef = ref<HTMLInputElement[]>([]);
 const isIndexing = ref(false);
+const faceProgressHidden = ref(false);
+function hideFaceProgress() { faceProgressHidden.value = true; }
+watch(isIndexing, (running, wasRunning) => {
+  if (running && !wasRunning) faceProgressHidden.value = false;
+}, { flush: 'sync' });
 const indexProgress = ref({
   current: 0,
   total: 0,
@@ -430,13 +437,15 @@ const getMoreMenuItems = () => [
 ];
 
 onMounted(async () => {
+  const libraryId = libConfig._libraryId;
   loadPersons();
   checkFaceStats();
   
   // Check if indexing is already running and restore progress
   const [isRunning, progress] = await isFaceIndexing();
+  if (!isPersonMounted) return;
   
-  if (isRunning && (!progress?.library_id || progress.library_id === libConfig._libraryId)) {
+  if (libraryId === libConfig._libraryId && isRunning && (!progress?.library_id || progress.library_id === libraryId)) {
     isIndexing.value = true;
     if (progress) {
       indexProgress.value = progress;
@@ -444,20 +453,24 @@ onMounted(async () => {
   }
   
   // Set up event listeners for face indexing progress
-  unlistenProgress = await listenFaceIndexProgress((event: any) => {
-    if (event.payload.library_id && event.payload.library_id !== libConfig._libraryId) return;
+  const stopProgress = await listenFaceIndexProgress((event: any) => {
+    if (!isPersonMounted || (event.payload.library_id && event.payload.library_id !== libConfig._libraryId)) return;
     isIndexing.value = true; // Show overlay when receiving progress events
     indexProgress.value = event.payload;
   });
+  if (!isPersonMounted) { stopProgress(); return; }
+  unlistenProgress = stopProgress;
   
-  unlistenFinished = await listenFaceIndexFinished((event: any) => {
-    if (event.payload.library_id && event.payload.library_id !== libConfig._libraryId) return;
+  const stopFinished = await listenFaceIndexFinished((event: any) => {
+    if (!isPersonMounted || (event.payload.library_id && event.payload.library_id !== libConfig._libraryId)) return;
     isIndexing.value = false;
     indexProgress.value = { current: 0, total: 0, faces_found: 0, phase: 'indexing' };
     clusterProgress.value = { phase: '', current: 0, total: 0 };
     schedulePeopleRefresh(); // Keep row objects, selection and scroll after the final batch.
     checkFaceStats();
   });
+  if (!isPersonMounted) { stopFinished(); return; }
+  unlistenFinished = stopFinished;
   
   // Listen for detailed clustering progress
   unlistenCluster = await listenClusterProgress((event: any) => {
@@ -468,6 +481,7 @@ onMounted(async () => {
 
 watch(() => libConfig._libraryId, () => {
   isIndexing.value = false;
+  faceProgressHidden.value = false;
   if (isPersonMounted) { void loadPersons(true, true); void checkFaceStats(); }
 });
 watch(() => JSON.stringify([config.settings.ai?.faceModel, config.settings.ai?.faceProfile, config.settings.ai?.faceParameters]), () => {

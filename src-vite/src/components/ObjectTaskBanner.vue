@@ -16,10 +16,11 @@
           )
         }}</button
       ><button
-        v-if="!view.status.running"
+        type="button"
         class="btn btn-xs btn-ghost"
-        :aria-label="t('ocr.dismiss')"
-        @click="dismissed = view.status.jobId"
+        :aria-label="t('task_progress.hide')"
+        :title="t('task_progress.hide_hint')"
+        @click="dismissed = jobKey"
       >
         ×
       </button>
@@ -67,13 +68,14 @@ import { useObjects } from '@/common/objects';
 const { t } = useI18n(),
   { view, error, busy, stop } = useObjects(),
   dismissed = ref('');
+const jobKey = computed(() => [libConfig._libraryId, view.value?.status.jobId].join(':'));
 const taskProgress = computed(() => objectTaskProgress(view.value?.status));
 const visible = computed(
   () =>
     config.main.sidebarIndex !== SIDEBAR.OBJECTS &&
     view.value?.status.jobId &&
     (!view.value.status.historical || view.value.status.phase === 'interrupted') &&
-    view.value.status.jobId !== dismissed.value,
+    jobKey.value !== dismissed.value,
 );
 function open() {
   libConfig.activePane = 'main';

@@ -1,4 +1,9 @@
 {
+  "task_progress": {
+    "hide": "隐藏进度提示",
+    "stop": "停止识别",
+    "hide_hint": "仅隐藏提示，任务会继续在后台运行，可在对应功能页查看进度。"
+  },
   "media_ai": {
     "choose_models": "选择要添加的模型",
     "choose_models_hint": "仅添加勾选的模型。已添加的模型可在配置列表中移除。",

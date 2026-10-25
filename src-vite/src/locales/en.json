@@ -1,4 +1,9 @@
 {
+  "task_progress": {
+    "hide": "Hide progress notification",
+    "stop": "Stop recognition",
+    "hide_hint": "Hide this notification while the task continues in the background. View progress in its workspace."
+  },
   "media_ai": {
     "choose_models": "Choose models to add",
     "choose_models_hint": "Only checked models will be added. Remove configured models from their rows.",
