@@ -116,59 +116,169 @@ fn at(base: String, remote: &str) -> Resolved {
 }
 #[tokio::test]
 async fn real_sdk_analysis_document_query_persistence_retrieval_and_cited_answer() {
-    let description = r#"{"title":"湖边散步","description":"有人在湖边散步","tags":["湖泊"]}"#;
-    let (base, worker) = fixture(vec![
-        (200, completion(description)),
-        (
-            200,
-            json!({"model":"embedding","data":[{"index":1,"embedding":[4.0,3.0]},{"index":0,"embedding":[3.0,4.0]}],"usage":{"prompt_tokens":2,"total_tokens":2}}),
-        ),
-        (200, completion("有人在湖边散步。[E1]")),
-    ]);
-    let generator = at(base.clone(), "generator");
-    let mut embedding = at(base, "embedding");
-    embedding.model.embedding.query_instruction = "Find media".into();
-    let text = client::chat_with_key(
-        &generator,
-        vec![
-            ContentPart::from_text("Analyze this test image as JSON"),
-            super::commands::probe_image().unwrap(),
-        ],
-        None,
-    )
-    .await
-    .unwrap();
-    let text = store::AnalysisText::parse(&text).unwrap();
-    let query = client::query_text(&embedding, "湖边的人");
-    let vectors = client::embed_with_key(&embedding, vec![text.document(), query], None)
+    for shared in [false, true] {
+        let description = r#"{"title":"湖边散步","description":"有人在湖边散步","tags":["湖泊"]}"#;
+        let (base, worker) = fixture_at_path(
+            "/gateway/v1/",
+            None,
+            Some("synthetic-pipeline-key"),
+            vec![
+                (200, completion(description)),
+                (
+                    200,
+                    json!({"model":"embedding","data":[{"index":0,"embedding":[3.0,4.0]}],"usage":{"prompt_tokens":1,"total_tokens":1}}),
+                ),
+                (
+                    200,
+                    json!({"model":"embedding","data":[{"index":0,"embedding":[4.0,3.0]}],"usage":{"prompt_tokens":1,"total_tokens":1}}),
+                ),
+                (200, completion("有人在湖边散步。[E1]")),
+            ],
+        );
+        let mut generator = at(base.clone(), "generator");
+        generator.provider.openai_embeddings = shared;
+        generator.model.capabilities = [Capability::Text, Capability::Image].into_iter().collect();
+        let mut embedding = at(base, "embedding");
+        if shared {
+            embedding.provider = generator.provider.clone();
+        } else {
+            embedding.provider.id = "dedicated-embedding-provider".into();
+        }
+        embedding.model.provider_id = embedding.provider.id.clone();
+        embedding.model.embedding.query_instruction = "Find media".into();
+        assert!(
+            client::embed_with_key(
+                &generator,
+                vec!["Do not embed a chat model".into()],
+                Some("synthetic-pipeline-key".into())
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            client::chat_with_key(
+                &embedding,
+                vec![ContentPart::from_text(
+                    "Do not generate with an embedding model"
+                )],
+                Some("synthetic-pipeline-key".into())
+            )
+            .await
+            .is_err()
+        );
+        let text = client::chat_with_key(
+            &generator,
+            vec![
+                ContentPart::from_text("Analyze this test image as JSON"),
+                super::commands::probe_image().unwrap(),
+            ],
+            Some("synthetic-pipeline-key".into()),
+        )
         .await
         .unwrap();
-    let (mut c, dir) = store::tests::fixture();
-    let source = store::source(&c, 1).unwrap();
-    store::put_analysis(&mut c, &source, 0, 0.0, 0.0, text, &generator).unwrap();
-    let analysis = store::analyses(&c, &source).unwrap().remove(0);
-    store::put_vector(&c, &analysis, &embedding, vectors[0].clone()).unwrap();
-    let db = dir.path().join("pipeline.db");
-    c.execute("VACUUM INTO ?1", [db.to_str().unwrap()]).unwrap();
-    drop(c);
-    let c = rusqlite::Connection::open(db).unwrap();
-    let hits = store::search(&c, &embedding, &vectors[1], 10, None, 0).unwrap();
-    assert_eq!(hits[0].file_id, 1);
-    let answer = client::chat_with_key(
-        &generator,
-        vec![ContentPart::from_text(format!(
-            "[E1] {}. Answer with citations",
-            hits[0].description
-        ))],
-        None,
+        let text = store::AnalysisText::parse(&text).unwrap();
+        let vectors = client::embed_with_key(
+            &embedding,
+            vec![text.document()],
+            Some("synthetic-pipeline-key".into()),
+        )
+        .await
+        .unwrap();
+        let (mut c, dir) = store::tests::fixture();
+        let source = store::source(&c, 1).unwrap();
+        store::put_analysis(&mut c, &source, 0, 0.0, 0.0, text, &generator).unwrap();
+        let analysis = store::analyses(&c, &source).unwrap().remove(0);
+        store::put_vector(&c, &analysis, &embedding, vectors[0].clone()).unwrap();
+        let db = dir.path().join("pipeline.db");
+        c.execute("VACUUM INTO ?1", [db.to_str().unwrap()]).unwrap();
+        drop(c);
+        let c = rusqlite::Connection::open(db).unwrap();
+        let query = client::embed_text_query_with_key(
+            &embedding,
+            "湖边的人".into(),
+            Some("synthetic-pipeline-key".into()),
+        )
+        .await
+        .unwrap();
+        let hits = store::search(&c, &embedding, &query, 10, None, 0).unwrap();
+        assert_eq!(hits[0].file_id, 1);
+        let answer = client::chat_with_key(
+            &generator,
+            vec![ContentPart::from_text(format!(
+                "[E1] {}. Answer with citations",
+                hits[0].description
+            ))],
+            Some("synthetic-pipeline-key".into()),
+        )
+        .await
+        .unwrap();
+        assert!(answer.contains("[E1]"));
+        let seen = worker.join().unwrap();
+        assert_eq!(seen.len(), 4);
+        assert!(seen[0].to_string().contains("image_url"));
+        assert_eq!(seen[1]["encoding_format"], "float");
+        assert_eq!(seen[2]["input"][0], "Instruct: Find media\nQuery:湖边的人");
+    }
+}
+
+#[tokio::test]
+async fn shared_llm_text_embedding_probe_obeys_the_flag_and_keeps_batch_ordering() {
+    let reply = json!({"model":"embedding","data":[{"index":1,"embedding":[4.0,3.0]},{"index":0,"embedding":[3.0,4.0]}],"usage":{"prompt_tokens":2,"total_tokens":2}});
+    let (base, worker) = fixture_at_path(
+        "/gateway/v1/",
+        Some("embeddings"),
+        Some("synthetic-shared-key"),
+        vec![(200, reply.clone()), (200, reply)],
+    );
+    let mut model = at(base, "shared-embedding");
+    model.provider.kind = ProviderKind::Llm;
+    model.provider.openai_embeddings = true;
+    let vectors = client::embed_with_key(
+        &model,
+        vec!["document".into(), "query".into()],
+        Some("synthetic-shared-key".into()),
     )
     .await
     .unwrap();
-    assert!(answer.contains("[E1]"));
-    let seen = worker.join().unwrap();
-    assert!(seen[0].to_string().contains("image_url"));
-    assert_eq!(seen[1]["encoding_format"], "float");
-    assert_eq!(seen[1]["input"][1], "Instruct: Find media\nQuery:湖边的人");
+    assert_eq!(vectors, vec![vec![0.6, 0.8], vec![0.8, 0.6]]);
+    model.model.embedding.dimensions = Some(999);
+    super::commands::probe(
+        &mut model,
+        Some("synthetic-shared-key".into()),
+        Capability::EmbedText,
+    )
+    .await
+    .unwrap();
+    assert_eq!(model.model.embedding.dimensions, Some(2));
+    assert!(model.tested(Capability::EmbedText));
+    assert!(model.require(Capability::EmbedText, false).is_ok());
+    assert!(model.require(Capability::EmbedMultimodal, false).is_err());
+    let profile = model.embedding_profile().unwrap();
+    model.provider.openai_embeddings = false;
+    assert!(model.tested(Capability::EmbedText));
+    assert_eq!(model.embedding_profile().unwrap(), profile);
+    assert!(model.require(Capability::EmbedText, false).is_err());
+    assert!(
+        client::embed_with_key(
+            &model,
+            vec!["blocked".into()],
+            Some("synthetic-shared-key".into())
+        )
+        .await
+        .unwrap_err()
+        .contains("未启用")
+    );
+    assert!(
+        super::commands::probe(
+            &mut model,
+            Some("synthetic-shared-key".into()),
+            Capability::EmbedText
+        )
+        .await
+        .unwrap_err()
+        .contains("待检测能力")
+    );
+    assert_eq!(worker.join().unwrap().len(), 2);
 }
 #[tokio::test]
 async fn embeddings_reject_duplicate_indexes_and_invalid_dimensions() {

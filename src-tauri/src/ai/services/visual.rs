@@ -168,6 +168,7 @@ pub(crate) mod tests {
         let mut model = store::tests::model("qwen-vl-embedding");
         model.provider.kind = ProviderKind::Embedding;
         model.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
+        model.model.capabilities = model.provider.embedding_capabilities();
         model
     }
 

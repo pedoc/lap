@@ -23,6 +23,7 @@ export interface MediaProvider {
   id: string; name: string; baseUrl: string; enabled: boolean; allowMedia: boolean;
   allowBackground: boolean; timeoutSeconds: number; credentialRevision: string;
   kind: MediaServiceKind; embeddingProtocol: EmbeddingProtocol; identityId: string;
+  openaiEmbeddings: boolean;
 }
 export interface MediaModel {
   id: string; providerId: string; remoteId: string; name: string; group: string; revision: string;
@@ -40,7 +41,7 @@ export interface MediaHit {
 export const newProvider = (kind: MediaServiceKind = 'llm'): MediaProvider => ({
   id: crypto.randomUUID(), name: '', baseUrl: '', enabled: true, allowMedia: false,
   allowBackground: false, timeoutSeconds: 120, credentialRevision: '',
-  kind, embeddingProtocol: 'openai_text', identityId: '',
+  kind, embeddingProtocol: 'openai_text', identityId: '', openaiEmbeddings: false,
 });
 export const newMediaModel = (providerId: string): MediaModel => ({
   id: crypto.randomUUID(), providerId, remoteId: '', name: '', group: '', revision: '',
@@ -55,10 +56,12 @@ export function outputTokenError(value: unknown) {
 }
 export function modelsForRole(configuration: MediaConfiguration, role: MediaRole) {
   const cap: MediaCapability = role === 'media' ? 'image' : role === 'text' ? 'text' : role === 'embedding' ? 'embed_text' : 'embed_multimodal';
-  const kind: MediaServiceKind = role === 'media' || role === 'text' ? 'llm' : 'embedding';
   return configuration.models.filter(m => (m.capabilities.includes(cap) || (role === 'media' && m.capabilities.includes('video_frames')))
-    && configuration.providers.some(p => p.id === m.providerId && p.kind === kind && (role !== 'multimodalEmbedding' || p.embeddingProtocol !== 'openai_text')));
+    && configuration.providers.some(p => p.id === m.providerId && (role === 'embedding'
+      ? p.kind === 'embedding' || p.kind === 'llm' && p.openaiEmbeddings && p.embeddingProtocol === 'openai_text' && isTextEmbeddingModel(m)
+      : role === 'multimodalEmbedding' ? p.kind === 'embedding' && p.embeddingProtocol !== 'openai_text' : p.kind === 'llm')));
 }
+export function isTextEmbeddingModel(model: MediaModel) { return model.capabilities.length === 1 && model.capabilities[0] === 'embed_text'; }
 export function eligibleModels(configuration: MediaConfiguration, role: MediaRole) {
   const cap: MediaCapability = role === 'media' ? 'image' : role === 'text' ? 'text' : role === 'embedding' ? 'embed_text' : 'embed_multimodal';
   return modelsForRole(configuration, role).filter(m => ((m.capabilities.includes(cap) && !!m.tested[cap])

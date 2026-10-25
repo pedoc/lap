@@ -55,10 +55,7 @@ fn validate_roles(config: &Configuration) -> Result<(), String> {
     ] {
         if let Some(id) = id {
             let model = config.resolve(id)?;
-            if !capabilities
-                .iter()
-                .any(|cap| model.provider.supports(*cap) && model.model.capabilities.contains(cap))
-            {
+            if !capabilities.iter().any(|cap| model.supports(*cap)) {
                 return Err(format!(
                     "{role}默认模型未声明相应能力，请重新选择或清除此用途。"
                 ));
@@ -289,7 +286,7 @@ pub(super) async fn probe(
     if !model.provider.allow_media || !model.provider.enabled {
         return Err("请先启用服务并允许发送媒体／文字".into());
     }
-    if !model.provider.supports(cap) || !model.model.capabilities.contains(&cap) {
+    if !model.supports(cap) {
         return Err("请先勾选待检测能力".into());
     }
     if cap == Capability::EmbedMultimodal {
@@ -438,7 +435,7 @@ pub async fn media_ai_save_embedding(
     if config.revision != revision {
         return Err("配置已变化，请刷新".into());
     }
-    if model.provider.kind != ProviderKind::Embedding {
+    if model.provider.kind != ProviderKind::Embedding && !model.supports(Capability::EmbedText) {
         return Err("请选择 Embedding 类型的服务".into());
     }
     model.model.capabilities = model.provider.embedding_capabilities();
@@ -567,6 +564,28 @@ mod tests {
             assert!(model.model.tested.is_empty());
             assert!(model.require(capability, false).is_err());
         }
+    }
+
+    #[test]
+    fn shared_embedding_defaults_require_the_flag_without_deleting_inactive_models() {
+        let mut config = configuration();
+        config.providers[0].openai_embeddings = true;
+        let mut model = config.models[1].clone();
+        model.id = "shared-text-embedding".into();
+        model.provider_id = config.providers[0].id.clone();
+        config.models.push(model);
+        config.roles.embedding = Some("shared-text-embedding".into());
+        config.validate().unwrap();
+        validate_roles(&config).unwrap();
+        config.roles.embedding = Some(config.models[0].id.clone());
+        assert!(validate_roles(&config).is_err());
+        config.roles.embedding = Some("shared-text-embedding".into());
+        config.providers[0].openai_embeddings = false;
+        config.validate().unwrap();
+        assert!(validate_roles(&config).is_err());
+        config.roles.embedding = None;
+        validate_roles(&config).unwrap();
+        assert_eq!(config.models.len(), 3);
     }
 
     #[test]

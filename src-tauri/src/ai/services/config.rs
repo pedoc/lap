@@ -107,6 +107,7 @@ pub struct Provider {
     pub id: String,
     pub kind: ProviderKind,
     pub embedding_protocol: EmbeddingProtocol,
+    pub openai_embeddings: bool,
     /// Stable backend-owned namespace for credentials and existing vector spaces.
     pub identity_id: String,
     pub name: String,
@@ -123,6 +124,7 @@ impl Default for Provider {
             id: String::new(),
             kind: ProviderKind::Llm,
             embedding_protocol: EmbeddingProtocol::OpenaiText,
+            openai_embeddings: false,
             identity_id: String::new(),
             name: String::new(),
             base_url: String::new(),
@@ -144,16 +146,34 @@ impl Provider {
     }
     pub fn supports(&self, capability: Capability) -> bool {
         match self.kind {
-            ProviderKind::Llm => matches!(
-                capability,
-                Capability::Text | Capability::Image | Capability::VideoFrames | Capability::Json
-            ),
+            ProviderKind::Llm => {
+                matches!(
+                    capability,
+                    Capability::Text
+                        | Capability::Image
+                        | Capability::VideoFrames
+                        | Capability::Json
+                ) || capability == Capability::EmbedText
+                    && self.openai_embeddings
+                    && self.embedding_protocol == EmbeddingProtocol::OpenaiText
+            }
             ProviderKind::Embedding => {
                 capability == Capability::EmbedText
                     || capability == Capability::EmbedMultimodal
                         && self.embedding_protocol.is_multimodal()
             }
         }
+    }
+    pub fn supports_model(&self, model: &Model, capability: Capability) -> bool {
+        self.supports(capability)
+            && model.capabilities.contains(&capability)
+            && match self.kind {
+                ProviderKind::Llm if capability == Capability::EmbedText => {
+                    model.is_text_embedding()
+                }
+                ProviderKind::Llm => model.is_generation(),
+                ProviderKind::Embedding => model.capabilities == self.embedding_capabilities(),
+            }
     }
     pub fn embedding_capabilities(&self) -> BTreeSet<Capability> {
         [Capability::EmbedText, Capability::EmbedMultimodal]
@@ -206,6 +226,19 @@ impl Default for Model {
             embedding: EmbeddingOptions::default(),
             tested: BTreeMap::new(),
         }
+    }
+}
+impl Model {
+    pub fn is_text_embedding(&self) -> bool {
+        self.capabilities.len() == 1 && self.capabilities.contains(&Capability::EmbedText)
+    }
+    pub fn is_generation(&self) -> bool {
+        self.capabilities.iter().all(|cap| {
+            matches!(
+                cap,
+                Capability::Text | Capability::Image | Capability::VideoFrames | Capability::Json
+            )
+        })
     }
 }
 
@@ -365,10 +398,15 @@ impl Configuration {
                 return Err("模型 ID 无效或重复".into());
             }
             let provider = self.provider(&m.provider_id)?;
-            if m.capabilities.iter().any(|cap| !provider.supports(*cap))
-                || provider.kind == ProviderKind::Embedding
-                    && m.capabilities != provider.embedding_capabilities()
-            {
+            let valid_class = match provider.kind {
+                ProviderKind::Llm => {
+                    m.is_generation()
+                        || m.is_text_embedding()
+                            && provider.embedding_protocol == EmbeddingProtocol::OpenaiText
+                }
+                ProviderKind::Embedding => m.capabilities == provider.embedding_capabilities(),
+            };
+            if !valid_class {
                 return Err("模型能力与服务类型或 Embedding 协议不匹配".into());
             }
             if provider.kind == ProviderKind::Embedding
@@ -429,6 +467,9 @@ pub struct Resolved {
     pub model: Model,
 }
 impl Resolved {
+    pub fn supports(&self, capability: Capability) -> bool {
+        self.provider.supports_model(&self.model, capability)
+    }
     pub fn analysis_profile(&self) -> Result<String, String> {
         let identity = serde_json::json!([
             self.provider.identity(),
@@ -474,10 +515,7 @@ impl Resolved {
         {
             return Err("服务未启用或尚未允许本次媒体／文字传输".into());
         }
-        if !self.provider.supports(capability)
-            || !self.model.capabilities.contains(&capability)
-            || !self.tested(capability)
-        {
+        if !self.supports(capability) || !self.tested(capability) {
             return Err("模型能力尚未标记或当前配置未经检测".into());
         }
         Ok(())
@@ -523,6 +561,7 @@ impl Resolved {
 
 pub fn normalize_legacy_embedding_snapshot(model: &mut Resolved) {
     if model.provider.kind != ProviderKind::Llm
+        || model.provider.openai_embeddings
         || !model.model.capabilities.contains(&Capability::EmbedText)
     {
         return;
@@ -747,6 +786,78 @@ pub fn key(provider: &Provider) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_openai_embeddings_use_an_explicit_model_class_and_preserve_disabled_state() {
+        let provider: Provider =
+            serde_json::from_value(serde_json::json!({"id":"old-provider"})).unwrap();
+        assert!(!provider.openai_embeddings);
+        let mut generation = legacy_configuration().resolve("mixed-model").unwrap();
+        generation.model.capabilities = [Capability::Text, Capability::Image].into_iter().collect();
+        let generation_identity = (
+            generation.contract(),
+            generation.analysis_profile().unwrap(),
+        );
+        generation.provider.openai_embeddings = true;
+        assert_eq!(
+            generation_identity,
+            (
+                generation.contract(),
+                generation.analysis_profile().unwrap()
+            )
+        );
+        assert!(!generation.supports(Capability::EmbedText));
+        let mut embedding = generation.clone();
+        embedding.model.capabilities = [Capability::EmbedText].into_iter().collect();
+        let contract = embedding.contract();
+        embedding.model.tested = [(Capability::EmbedText, contract.clone())]
+            .into_iter()
+            .collect();
+        let profile = embedding.embedding_profile().unwrap();
+        normalize_legacy_embedding_snapshot(&mut embedding);
+        assert_eq!(embedding.provider.kind, ProviderKind::Llm);
+        assert!(embedding.require(Capability::EmbedText, false).is_ok());
+        assert!(embedding.require(Capability::Text, false).is_err());
+        assert!(embedding.multimodal_profile().is_err());
+        for enabled in [false, true] {
+            embedding.provider.openai_embeddings = enabled;
+            assert_eq!(embedding.contract(), contract);
+            assert_eq!(embedding.embedding_profile().unwrap(), profile);
+            let config = Configuration {
+                providers: vec![embedding.provider.clone()],
+                models: vec![embedding.model.clone()],
+                ..Default::default()
+            };
+            config.validate().unwrap();
+            assert_eq!(
+                embedding.require(Capability::EmbedText, false).is_ok(),
+                enabled
+            );
+        }
+        for capabilities in [
+            vec![Capability::EmbedText, Capability::Text],
+            vec![Capability::EmbedMultimodal],
+            vec![Capability::EmbedText, Capability::EmbedMultimodal],
+        ] {
+            embedding.model.capabilities = capabilities.into_iter().collect();
+            let config = Configuration {
+                providers: vec![embedding.provider.clone()],
+                models: vec![embedding.model.clone()],
+                ..Default::default()
+            };
+            assert!(config.validate().is_err());
+            assert!(!embedding.supports(Capability::EmbedText));
+        }
+        embedding.model.capabilities = [Capability::EmbedText].into_iter().collect();
+        embedding.provider.embedding_protocol = EmbeddingProtocol::VllmMultimodal;
+        let config = Configuration {
+            providers: vec![embedding.provider.clone()],
+            models: vec![embedding.model.clone()],
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+        assert!(!embedding.supports(Capability::EmbedText));
+    }
 
     #[test]
     fn native_api_versions_are_preserved_and_full_embedding_routes_are_rejected() {

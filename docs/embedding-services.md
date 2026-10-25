@@ -2,6 +2,21 @@
 
 核对日期：2026-10-25。Lap 的 Rust 后端随桌面程序启动；`scripts/ai-server` 用于在另一台机器部署模型 API。也可以直接使用在线 API，二者使用相同的服务／模型配置流程。
 
+## 复用 LLM 服务的文本嵌入接口
+
+如果现有 LLM 服务同时提供 OpenAI 兼容的 `/embeddings`，可以复用它的基础地址和 API Key：
+
+1. 在 **LLM 服务**中选中服务，开启 **兼容 OpenAI 文本 Embeddings**。
+2. 点 **手动添加嵌入模型**，填写服务端实际提供的 Embedding Model ID，例如 `text-embedding-3-small`。它是独立的嵌入模型记录，生成模型仍配置自己的 Model ID。
+3. 配置查询编码规则并检测文本嵌入能力。检测使用 `/embeddings`，检查正文／查询返回数量、维度和向量数值。
+4. 切换到 **Embedding 服务**，在顶部 **文本向量**中选择该模型并保存。同一服务会显示在该分类中，共享原有连接与密钥，只展示其嵌入模型。
+
+开关声明服务的接口兼容性，模型记录区分生成和嵌入用途。关闭开关会解除对应文本向量默认绑定并阻止新的嵌入调用，保留模型配置与已生成的索引。服务和模型仍需具备可用的权限并通过检测。
+
+OpenAI 的 `/models` 用于返回当前可用模型，官方 Embeddings 接口也建议用它查看模型；返回结果没有用于可靠分类的能力字段。兼容网关可能只列出部分模型，因此嵌入模型始终保留手动添加入口，不按名称猜测类别，也不要求先获取列表。网关必须实际实现或转发 `/embeddings`；仅开启 Lap 的兼容标记不会增加网关的接口能力。
+
+该共享方式用于分析文本和文字查询。图片／视频由多模态 LLM 先产出标题、说明、标签和片段文本，再由嵌入模型编码入库；搜索时只需编码查询文字并匹配已有向量。直接编码原图或视频采样帧时，继续使用下文的专用多模态 Embedding 协议。
+
 ## 国内在线服务
 
 在 **设置 → AI 模型 → 媒体理解 → Embedding 服务**侧栏选择服务预设，再点 **添加服务**。预设会创建一个新服务和一个可编辑的示例模型，带入对应基础地址与协议；不会修改已有服务、自动发送请求、绑定默认用途或扫描全库。填写自己的平台 API Key，启用服务并允许传输后检测，再在顶部“文本向量”／“原画面向量”中选择并保存。
@@ -89,6 +104,8 @@ ssh -N -L 8003:127.0.0.1:8003 用户@服务器
 
 ## 官方资料
 
+- [OpenAI 可用模型列表](https://developers.openai.com/api/reference/resources/models/methods/list)
+- [OpenAI 创建 Embedding](https://developers.openai.com/api/reference/resources/embeddings/methods/create)
 - [硅基流动 Embeddings 接口](https://api-docs.siliconflow.cn/docs/api/embeddings-post)
 - [BGE-M3 官方模型说明](https://huggingface.co/BAAI/bge-m3)
 - [百炼文本 Embedding 接口](https://www.alibabacloud.com/help/en/model-studio/text-embedding-synchronous-api)

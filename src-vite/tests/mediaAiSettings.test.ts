@@ -37,7 +37,7 @@ function harness() {
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,servicePreset,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,canListModels,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,servicePreset,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,canListModels,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls, dialogs };
 }
@@ -323,6 +323,65 @@ test('native APIs without discovery never send a models request while supported 
   }
 });
 
+test('LLM compatibility adds an independent text embedding model without changing generation capability or credentials', async () => {
+  const h = harness(), p = h.api.provider.value, generation = h.api.providerModels.value[0];
+  assert.equal(p.openaiEmbeddings, false);
+  p.embeddingProtocol = 'ark_multimodal'; p.openaiEmbeddings = true; h.api.updateOpenaiEmbeddings(p);
+  assert.equal(p.embeddingProtocol, 'openai_text', 'enabling resets the unused historical LLM protocol to the supported standard');
+  assert.equal(generation.tested.text, 'verified'); assert.equal(generation.tested.image, 'verified');
+  h.api.keys.value[p.id] = 'synthetic-shared-key';
+  h.api.addModel('', true);
+  const vector = h.api.draft.value.models.at(-1);
+  assert.equal(vector.remoteId, '', 'the embedding model ID remains manual');
+  assert.deepEqual(Array.from(vector.capabilities), ['embed_text']); assert.equal(vector.maxOutputTokens, null);
+  assert.equal(h.api.embeddingModel(vector), true); assert.equal(h.api.embeddingModel(generation), false);
+  assert.deepEqual(Array.from(h.api.modelCapabilities(vector)), ['embed_text']);
+  assert.equal(h.api.defaultModels('embedding').some((m: any) => m.id === vector.id), true);
+  assert.equal(h.api.defaultModels('multimodalEmbedding').some((m: any) => m.id === vector.id), false);
+  assert.equal(h.api.defaultModels('text').some((m: any) => m.id === vector.id), false);
+  assert.equal(h.calls.length, 0);
+  vector.remoteId = 'manual-embedding-alias'; await h.api.testModel(vector, 'embed_text');
+  h.api.draft.value.roles.embedding = vector.id; await h.api.save(); await h.api.load();
+  assert.equal(h.api.draft.value.roles.embedding, vector.id);
+  assert.equal(h.api.draft.value.providers.length, 1); assert.equal(h.api.draft.value.providers[0].id, p.id);
+  assert.equal(h.api.draft.value.models.find((m: any) => m.id === vector.id).providerId, p.id);
+  assert.equal(h.api.draft.value.models[0].tested.text, 'verified');
+});
+
+test('Embedding view reuses a shared LLM connection and displays only its embedding models without deleting the service', async () => {
+  const h = harness(), p = h.api.provider.value;
+  p.openaiEmbeddings = true; h.api.updateOpenaiEmbeddings(p); h.api.addModel('vector-alias', true);
+  const vector = h.api.draft.value.models.at(-1); h.api.draft.value.roles.embedding = vector.id;
+  h.api.keys.value[p.id] = 'synthetic-shared-key';
+  h.api.configureRole('embedding');
+  assert.equal(h.api.provider.value, p); assert.equal(h.api.selected.value, p.id);
+  assert.deepEqual(Array.from(h.api.providerModels.value, (m: any) => m.id), [vector.id]);
+  assert.equal(h.api.filteredProviders.value.length, 1); assert.equal(h.api.draft.value.providers.length, 1);
+  assert.equal(h.api.keys.value[p.id], 'synthetic-shared-key');
+  await h.api.removeProvider(); assert.equal(h.api.draft.value.providers.length, 1); assert.equal(h.dialogs.length, 0);
+  await h.api.syncModels(); assert.equal(h.calls.length, 0, 'the embedding view uses manual IDs rather than classifying the generation model catalog');
+  h.api.addModel('second-vector-alias');
+  assert.deepEqual(Array.from(h.api.draft.value.models.at(-1).capabilities), ['embed_text']);
+  h.api.selectServiceKind('llm');
+  assert.equal(h.api.providerModels.value.length, 3);
+  await h.api.syncModels(); assert.equal(h.calls[0][0], 'media_ai_list_models');
+});
+
+test('disabling compatibility preserves embedding models and receipts but clears only that service embedding binding', () => {
+  const h = harness(), p = h.api.provider.value;
+  p.openaiEmbeddings = true; h.api.updateOpenaiEmbeddings(p); h.api.addModel('vector-alias', true);
+  const vector = h.api.draft.value.models.at(-1); vector.tested.embed_text = 'verified'; vector.embedding.dimensions = 1024;
+  h.api.draft.value.roles.embedding = vector.id;
+  const before = JSON.stringify(h.api.draft.value.models);
+  p.openaiEmbeddings = false; h.api.updateOpenaiEmbeddings(p);
+  assert.equal(h.api.draft.value.roles.embedding, null);
+  assert.equal(h.api.draft.value.roles.media, 'kept'); assert.equal(h.api.draft.value.roles.text, 'kept');
+  assert.equal(JSON.stringify(h.api.draft.value.models), before);
+  assert.equal(h.api.defaultModels('embedding').length, 0); assert.equal(h.calls.length, 0);
+  h.api.selectServiceKind('embedding'); assert.equal(h.api.filteredProviders.value.length, 0);
+  h.api.selectServiceKind('llm'); assert.equal(h.api.providerModels.value.length, 2);
+});
+
 test('the output control saves 384000 and clearing it sends null instead of an empty string', async () => {
   const h=harness();
   h.api.setOutputTokens(h.api.draft.value.models[0],{target:{value:'384000',valueAsNumber:384000,validity:{badInput:false}}});
@@ -450,4 +509,40 @@ test('every actual protocol template keeps compact defaults and exposes only its
     assert.match(html, /media_ai.service_preset/);
     assert.doesNotMatch(html, /data-embedding-wizard|data-embedding-shortcut|media_ai.configure_embedding/);
   }
+});
+
+test('the actual shared service template separates model types and keeps one connection across categories', async () => {
+  const h = harness(), imports: any = {}, view = fixture();
+  view.configuration.providers[0].openaiEmbeddings = true;
+  const vector = { ...mediaAi.newMediaModel('provider'), id: 'shared-vector', remoteId: 'manual-vector-alias', name: 'Vector alias', capabilities: ['embed_text'] as mediaAi.MediaCapability[] };
+  view.configuration.models.push(vector);
+  const { descriptor } = parse(source);
+  const code = stripTypeScriptTypes(compileScript(descriptor, { id: 'media-ai-shared-embedding', inlineTemplate: true }).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=')
+    .replace("selected = ref('')", "selected = ref('provider')");
+  const render = async (kind: 'llm' | 'embedding') => {
+    let nulls = 0;
+    const component = runInNewContext(`${code}\n;component`, { ...h.context, ...imports,
+      ref: (value: any) => Vue.ref(value === null && nulls++ === 0 ? view.configuration : value === 'llm' ? kind : value),
+    });
+    return renderToString(Vue.createSSRApp(component));
+  };
+  const llm = await render('llm');
+  assert.match(llm, /media_ai.openai_embeddings/); assert.match(llm, /media_ai.add_embedding_model/);
+  assert.match(llm, /data-media-ai-model="kept"/); assert.match(llm, /data-media-ai-model="shared-vector"/);
+  assert.match(llm, /media_ai.model_generation/); assert.match(llm, /media_ai.model_embedding/);
+  const vectorDetails = llm.split('data-media-ai-model="shared-vector"')[1].split('data-remove-media-ai-model')[0];
+  assert.match(vectorDetails, /media_ai.query_preset/); assert.match(vectorDetails, /media_ai.query_instruction/);
+  assert.doesNotMatch(vectorDetails, /media_ai.output_tokens|<input[^>]*value="(?:text|image|embed_text)"/);
+  const embedding = await render('embedding');
+  assert.match(embedding, /media_ai.shared_llm_connection/); assert.match(embedding, /media_ai.shared_embedding_service_hint/);
+  assert.match(embedding, /data-media-ai-model="shared-vector"/); assert.doesNotMatch(embedding, /data-media-ai-model="kept"/);
+  assert.doesNotMatch(embedding, /media_ai.delete_service|media_ai.sync_models/);
+  assert.match(embedding, /id="media-ai-role-embedding"/); assert.match(embedding, /value="shared-vector"/);
+  view.configuration.providers[0].openaiEmbeddings = false;
+  const disabled = await render('llm');
+  assert.match(disabled, /data-media-ai-model="shared-vector"/);
+  const disabledVector = disabled.split('data-media-ai-model="shared-vector"')[1].split('data-remove-media-ai-model')[0];
+  assert.match(disabledVector, /<button[^>]*disabled[^>]*>media_ai.detect/);
 });

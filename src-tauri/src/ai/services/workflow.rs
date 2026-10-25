@@ -91,7 +91,11 @@ fn check_policy(
         .iter()
         .find(|p| {
             p.identity() == model.provider.identity()
-                && p.supports(cap)
+                && p.kind == model.provider.kind
+                && (model.provider.kind != config::ProviderKind::Llm
+                    || !model.model.is_text_embedding()
+                    || p.id == model.provider.id)
+                && p.supports_model(&model.model, cap)
                 && (p.kind != config::ProviderKind::Embedding
                     || p.embedding_protocol == model.provider.embedding_protocol)
         })
@@ -1065,6 +1069,7 @@ mod tests {
         config::normalize_legacy_embedding_snapshot(&mut snapshot);
         let mut llm = snapshot.provider.clone();
         llm.kind = config::ProviderKind::Llm;
+        llm.openai_embeddings = true;
         let mut embedding = snapshot.provider.clone();
         embedding.id = "new-ui-id".into();
         embedding.identity_id = snapshot.provider.id.clone();
@@ -1084,6 +1089,47 @@ mod tests {
         current.providers[1].base_url = snapshot.provider.base_url.clone();
         current.providers[1].embedding_protocol = config::EmbeddingProtocol::VllmMultimodal;
         assert!(check_policy(&current, &snapshot, Capability::EmbedText, false).is_err());
+    }
+
+    #[test]
+    fn shared_embedding_tasks_cannot_borrow_a_sibling_service_after_revocation() {
+        let mut shared = store::tests::model("shared-embedding");
+        shared.provider.id = "llm-service".into();
+        shared.provider.identity_id = "shared-origin".into();
+        shared.provider.openai_embeddings = true;
+        shared.provider.allow_media = true;
+        shared.provider.allow_background = true;
+        shared.model.provider_id = shared.provider.id.clone();
+        shared.model.capabilities = [Capability::EmbedText].into_iter().collect();
+        shared
+            .model
+            .tested
+            .insert(Capability::EmbedText, shared.contract());
+        let mut restored: Resolved =
+            serde_json::from_str(&serde_json::to_string(&shared).unwrap()).unwrap();
+        config::normalize_legacy_embedding_snapshot(&mut restored);
+        assert_eq!(restored.provider.kind, config::ProviderKind::Llm);
+        assert!(restored.provider.openai_embeddings);
+        let mut dedicated = shared.clone();
+        dedicated.provider.kind = config::ProviderKind::Embedding;
+        dedicated.provider.id = "dedicated-service".into();
+        dedicated.model.provider_id = dedicated.provider.id.clone();
+        let mut current = config::Configuration {
+            providers: vec![shared.provider.clone(), dedicated.provider.clone()],
+            ..Default::default()
+        };
+        check_policy(&current, &restored, Capability::EmbedText, true).unwrap();
+        check_policy(&current, &dedicated, Capability::EmbedText, true).unwrap();
+        current.providers[0].openai_embeddings = false;
+        assert!(check_policy(&current, &restored, Capability::EmbedText, false).is_err());
+        check_policy(&current, &dedicated, Capability::EmbedText, false).unwrap();
+        current.providers[0].openai_embeddings = true;
+        current.providers[1].allow_media = false;
+        assert!(check_policy(&current, &dedicated, Capability::EmbedText, false).is_err());
+        check_policy(&current, &restored, Capability::EmbedText, false).unwrap();
+        current.providers[1].allow_media = true;
+        current.providers.remove(0);
+        assert!(check_policy(&current, &restored, Capability::EmbedText, false).is_err());
     }
 
     #[tokio::test]
@@ -1148,6 +1194,27 @@ mod tests {
             );
             let image_hash = blake3::hash(&std::fs::read(&image_path).unwrap());
             let video_hash = blake3::hash(&std::fs::read(&video_path).unwrap());
+            // Media decoding must finish before the HTTP fixture starts its request deadlines.
+            let image_source = store::source(&c, 1).unwrap();
+            let image_input = parts(&image_source, 0.0, 0.0, String::new()).await.unwrap();
+            let video_info = crate::t_utils::FileInfo::new(video_path.to_str().unwrap()).unwrap();
+            let mut video_source = image_source.clone();
+            video_source.path = video_path.to_string_lossy().replace('\\', "/");
+            video_source.kind = 2;
+            video_source.size = video_info.file_size;
+            video_source.modified = video_info.modified;
+            video_source.duration = 0;
+            let duration = crate::t_video::get_video_duration(&video_source.path)
+                .await
+                .unwrap();
+            assert_eq!(duration, 65);
+            let mut video_inputs = Vec::new();
+            for (segment, start, end) in segments(duration as f64).unwrap() {
+                let input = parts(&video_source, start, end, String::new())
+                    .await
+                    .unwrap();
+                video_inputs.push((segment, start, end, input));
+            }
             let reply = |v: Vec<f32>, frames: usize| {
                 (200, visual::tests::embedding_reply(protocol, v, frames))
             };
@@ -1161,10 +1228,10 @@ mod tests {
             let mut model = store::tests::model("qwen3-vl-embedding-fixture");
             model.provider.kind = ProviderKind::Embedding;
             model.provider.embedding_protocol = protocol;
+            model.model.capabilities = model.provider.embedding_capabilities();
             model.provider.base_url = base;
-            let src = store::source(&c, 1).unwrap();
-            let input = parts(&src, 0.0, 0.0, String::new()).await.unwrap();
-            let vector = client::embed_media_with_key(&model, input, None)
+            let src = image_source;
+            let vector = client::embed_media_with_key(&model, image_input, None)
                 .await
                 .unwrap();
             visual::put_vector(&mut c, &src, &model, 0, 0.0, 0.0, 0.0, vector).unwrap();
@@ -1176,13 +1243,10 @@ mod tests {
                     < 1e-6
             );
             assert!(store::analyses(&c, &src).unwrap().is_empty());
-            let info = crate::t_utils::FileInfo::new(video_path.to_str().unwrap()).unwrap();
-            c.execute("UPDATE afiles SET name='sample.mp4',file_type=2,duration=0,size=?1,modified_at=?2 WHERE id=1",params![info.file_size,info.modified]).unwrap();
+            c.execute("UPDATE afiles SET name='sample.mp4',file_type=2,duration=0,size=?1,modified_at=?2 WHERE id=1",params![video_info.file_size,video_info.modified]).unwrap();
             let src = store::source(&c, 1).unwrap();
-            let duration = crate::t_video::get_video_duration(&src.path).await.unwrap();
-            assert_eq!(duration, 65);
-            for (segment, start, end) in segments(duration as f64).unwrap() {
-                let input = parts(&src, start, end, String::new()).await.unwrap();
+            assert_eq!(src.stamp(), video_source.stamp());
+            for (segment, start, end, input) in video_inputs {
                 let vector = client::embed_media_with_key(&model, input, None)
                     .await
                     .unwrap();

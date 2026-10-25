@@ -99,8 +99,8 @@ pub async fn chat_with_key(
     parts: Vec<ContentPart>,
     key: Option<String>,
 ) -> Result<String, String> {
-    if model.provider.kind != ProviderKind::Llm {
-        return Err("此服务不是标准 LLM 服务".into());
+    if model.provider.kind != ProviderKind::Llm || !model.model.is_generation() {
+        return Err("此模型不是标准 LLM 生成模型".into());
     }
     let mut options = ChatOptions::default();
     if let Some(limit) = model.model.max_output_tokens {
@@ -162,8 +162,8 @@ pub async fn embed_with_key(
     texts: Vec<String>,
     key: Option<String>,
 ) -> Result<Vec<Vec<f32>>, String> {
-    if model.provider.kind != ProviderKind::Embedding {
-        return Err("此服务不是 Embedding 服务".into());
+    if !model.supports(super::config::Capability::EmbedText) {
+        return Err("此模型未启用受支持的文本 Embedding".into());
     }
     if texts.is_empty()
         || texts.len() > 32

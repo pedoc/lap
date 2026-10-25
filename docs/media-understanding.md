@@ -1,6 +1,6 @@
 # 媒体理解、Embedding 与自然语言检索
 
-本功能按 **LLM 服务**和 **Embedding 服务**分别配置。LLM 使用 OpenAI 兼容生成接口；文本 Embedding 使用标准 `/embeddings`；原画面 Embedding 支持 vLLM 扩展及百炼、方舟、硅基的独立适配器。现有 CLIP 语义检索、人脸、OCR 和对象识别继续使用原有模型与索引。
+本功能按 **LLM 服务**和 **Embedding 服务**组织用途。LLM 使用 OpenAI 兼容生成接口；文本 Embedding 使用标准 `/embeddings`，也可复用标记兼容的 LLM 服务连接；原画面 Embedding 支持 vLLM 扩展及百炼、方舟、硅基的独立适配器。现有 CLIP 语义检索、人脸、OCR 和对象识别继续使用原有模型与索引。
 
 ## 配置 Embedding
 
@@ -18,9 +18,11 @@ API Key 存入系统凭据库，不进入 JSON、数据库或备份。留空保�
 
 国内在线服务的可复制参数、模型服务器启动方式和端口转发见 [Embedding 服务使用指南](embedding-services.md)。
 
+已有同时提供标准文本嵌入的 LLM 服务时，可在该服务开启 **兼容 OpenAI 文本 Embeddings**，通过 **手动添加嵌入模型**填写专用 Model ID、检测并绑定“文本向量”。连接和密钥共享，嵌入模型独立于生成模型。关闭兼容标记时保留模型与索引，解除对应默认绑定并禁止调用。完整流程见 [复用 LLM 服务的文本嵌入接口](embedding-services.md#复用-llm-服务的文本嵌入接口)。
+
 ## 配置媒体理解和文本生成
 
-在同一个页签选择 **LLM 服务**，添加服务，获取模型列表或手动添加 Model ID。列表只用于发现模型，不证明模型具备对应能力。LLM 模型只配置文本、图片、视频采样帧和结构化输出，不再勾选向量能力；Embedding 服务单独添加模型，并根据服务协议显示文本／多模态检测入口。
+在同一个页签选择 **LLM 服务**，添加服务，获取模型列表或手动添加 Model ID。列表只用于发现模型，不证明模型具备对应能力。生成模型配置文本、图片、视频采样帧和结构化输出；同一服务兼容文本嵌入时另加独立嵌入模型。专用 Embedding 服务根据服务协议显示文本／多模态检测入口。生成和嵌入用途不能混在同一模型记录中。
 
 “获取模型”后先勾选需要的模型，再点“添加选中”；未勾选的模型不会加入配置。已配置模型标题右侧的移除按钮始终可用，无需展开模型。移除后点击“保存”生效；对应默认用途会解除绑定，已生成的分析和索引保留。再次获取列表不会自动加回已移除模型。
 
@@ -88,4 +90,4 @@ Content-Type: application/json
 
 当前接入 Chat Completions、标准文本 Embeddings，以及 vLLM、百炼、方舟和硅基的多模态格式。不含 Responses、Claude Messages，或 Lap 管理的 Mage／Qwen 下载及本机推理环境。自建模型服务可使用 [部署脚本](../scripts/ai-server/README.md)，其中 `embedding-multimodal` 是独立的专用向量模型环境；原 Mage/Qwen-VL profile 仍用于理解和生成。真实供应商账号权限、模型效果、显存需求与检索质量仍需在目标环境验收。
 
-本轮测试与验收边界见 [国内 Embedding 接入验证](development/verification/embedding-domestic-providers.md)；原服务拆分记录见 [服务拆分与原画面向量验证](development/verification/media-ai-services-v2.md)。
+本轮共享连接的测试与边界见 [LLM 服务共享文本 Embedding 验证](development/verification/llm-shared-embedding.md)。三家原生协议及原服务拆分记录分别见 [国内 Embedding 接入验证](development/verification/embedding-domestic-providers.md)和[服务拆分与原画面向量验证](development/verification/media-ai-services-v2.md)。

@@ -48,6 +48,23 @@ test('every native embedding protocol is a multimodal candidate but still requir
   }
 });
 
+test('an LLM service can opt into standard text embeddings without granting that ability to chat or mixed models', () => {
+  const p = newProvider(); p.allowMedia = true;
+  const text = newMediaModel(p.id); text.capabilities = ['text']; text.tested.text = 'receipt';
+  const vector = newMediaModel(p.id); vector.capabilities = ['embed_text']; vector.tested.embed_text = 'receipt';
+  const mixed = newMediaModel(p.id); mixed.capabilities = ['text', 'embed_text']; mixed.tested.embed_text = 'receipt';
+  const c: MediaConfiguration = { version: 2, revision: 0, providers: [p], models: [text, vector, mixed], roles: { media: null, text: null, embedding: null, multimodalEmbedding: null } };
+  assert.equal(p.openaiEmbeddings, false); assert.equal(modelsForRole(c, 'embedding').length, 0);
+  p.openaiEmbeddings = true;
+  assert.deepEqual(modelsForRole(c, 'embedding').map(m => m.id), [vector.id]);
+  assert.deepEqual(eligibleModels(c, 'embedding').map(m => m.id), [vector.id]);
+  assert.equal(modelsForRole(c, 'multimodalEmbedding').length, 0);
+  p.embeddingProtocol = 'ark_multimodal'; assert.equal(modelsForRole(c, 'embedding').length, 0);
+  p.embeddingProtocol = 'openai_text'; p.openaiEmbeddings = false;
+  assert.equal(modelsForRole(c, 'embedding').length, 0);
+  assert.equal(eligibleModels(c, 'text').some(m => m.id === text.id), true);
+});
+
 test('output budgets accept large API limits and a server default without an 8192 cap', () => {
   for (const value of [null, undefined, 1, 8192, 384000, 1048576, 0xFFFFFFFF]) assert.equal(outputTokenError(value), null);
   for (const value of [0, -1, 1.5, NaN, Infinity, '384000']) assert.equal(outputTokenError(value), 'output_tokens_invalid');
