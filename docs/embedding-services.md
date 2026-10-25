@@ -1,4 +1,4 @@
-# Embedding 服务使用指南
+# 模型服务接入与 Embedding 使用指南
 
 核对日期：2026-10-25。Lap 的 Rust 后端随桌面程序启动；`scripts/ai-server` 用于在另一台机器部署模型 API。也可以直接使用在线 API，二者使用相同的服务／模型配置流程。
 
@@ -8,7 +8,7 @@
 
 填写 API Key，按需调整基础地址与 Model ID，并允许传输后，可以保持服务停用进行检测。检测成功不会自动启用服务。启用并选择顶部默认用途、保存后，业务才可调用；批量任务另需允许后台处理。
 
-内置服务保留固定入口，可以停用、清除密钥或移除模型；自定义服务仍可删除。重新打开设置不会覆盖已保存的内置参数，也不会补回已移除的模型。同类型、同基础地址和协议的现有服务会被复用。
+内置服务保留固定入口，可以停用、清除密钥或移除模型；自定义服务仍可删除。重新打开设置不会覆盖已保存的内置参数，也不会补回已移除的模型。一般配置按类型、基础地址和协议去重；同地址但凭据范围不同的 Token Plan 个人／团队入口始终独立。
 
 ### LLM 预设
 
@@ -16,15 +16,39 @@
 
 | 服务 | API 基础地址 | 示例 Model ID |
 | --- | --- | --- |
-| 阿里百炼 | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` |
+| 阿里百炼 · 按量 API | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` |
+| 阿里百炼 · Coding Plan | `https://coding.dashscope.aliyuncs.com/v1` | `qwen3.7-plus` |
+| 阿里百炼 · Token Plan 个人 | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `qwen3.8-max` |
+| 阿里百炼 · Token Plan 团队 | 同个人版地址，使用团队凭据 | `qwen3.8-max` |
 | 硅基流动 | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4-Flash` |
-| 火山方舟 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-2-1-pro-260915` |
+| 火山方舟 · 按量 API | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-2-1-pro-260915` |
+| 火山方舟 · Agent Plan | `https://ark.cn-beijing.volces.com/api/plan/v3` | `ark-code-latest` |
+| 火山方舟 · Coding Plan | `https://ark.cn-beijing.volces.com/api/coding/v3` | `ark-code-latest` |
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-flash` |
 | LongCat | `https://api.longcat.chat/openai/v1` | `LongCat-2.0` |
 
 百炼内置地址使用可解析的 `your-workspace-id` 占位主机，需将其替换为自己的 Workspace ID，或直接填写控制台提供的完整基础地址。占位地址可以随停用预设保存，检测前会提示填写。旧 `dashscope.aliyuncs.com` 域名用于存量兼容，官方说明 2026-09-30 后不再增加新特性；已有配置保留，新模型优先使用工作空间地址。
 
 聊天协议兼容不等于模型列表接口一致。百炼模型列表使用独立的原生路由；方舟与 DeepSeek 的预设也保留手动 Model ID 入口。硅基支持同前缀的模型列表；LongCat 按当前模型列表专页使用 `/openai/v1/models`，其旧概述存在另一条路径说明，实际账号仍需验证。所有服务均可手动添加模型，模型能力仍需检测。
+
+### 接入通道、凭据与模型能力
+
+各版本直接列为独立停用服务，分别保存地址、密钥和模型。选择另一条目不会修改原条目的 URL、复制 API Key 或迁移默认用途。百炼 Token Plan 个人与团队虽然使用同一地址，但官方明确凭据不可互用；不能仅按相同 URL 合并。方舟 Agent Plan 也要求对应套餐凭据，不能自动沿用其他方舟 Key。
+
+`ark-code-latest` 是套餐路由别名，实际模型由套餐控制台配置，也可以按官方范围填写具体 Plan Model Name。它不保证始终对应某个固定模型；不要把按量模型 ID 不加核对地复制到套餐通道。百炼 Coding Plan、Token Plan 也各有模型目录。
+
+控制台改变别名所指向的模型时，可更新高级选项中的模型版本标记并重新检测，按需重新分析或补建向量，避免沿用旧模型产物；原有索引保留。
+
+接入方式不参与模型能力过滤。示例能力不是检测回执，所有生成模型仍可按实际情况声明并检测文本、图片、视频采样帧及结构化输出。共享文本 Embedding 则需要实际实现标准 `/embeddings`；套餐名本身既不证明支持，也不证明不支持。
+
+官方另有套餐**使用范围**说明：
+
+- 方舟 [Agent Plan 套餐权益](https://ark.volcengine.com/region:cn-beijing/docs/agent-plan-personal-plan-overview#6e51df70)说明 AI 工具范围及非工具 API 调用的额度限制；[Coding Plan 适用范围](https://ark.volcengine.com/region:cn-beijing/docs/coding-plan-personal-plan-overview#926a93ec)面向个人编码与支持的 AI 编程工具。
+- 百炼 [Coding Plan 订阅前须知](https://help.aliyun.com/zh/model-studio/coding-plan)、[Token Plan 个人使用规则](https://help.aliyun.com/zh/model-studio/token-plan-personal-faq)和[团队订阅前须知](https://help.aliyun.com/zh/model-studio/token-plan-team-overview)对工具交互、自动化脚本、应用后端及非交互批量另有限定。
+
+这些条款描述套餐权益的适用范围，不等同于模型缺少某种模态能力，也不能仅凭工具兼容名单判断 Lap 一律获准或一律禁止。Lap 提供独立配置和用途提示，不伪装其他客户端、不绕过服务端权限，也不因套餐名屏蔽模型能力。实际使用应核对账号约定；配置入口和检测通过不代表已确认任意业务都在套餐权益内。
+
+其他预设的核对结果：硅基免费／`Pro/...` 模型属于模型 SKU、计费与配额差异，使用同一普通 API；DeepSeek 充值／赠送余额属于同一 API 的计费来源；LongCat 资源包会先于按量余额抵扣，同样无需新建一套接入。它们在编程工具中的兼容协议或模型版本变化，也不自动构成另一种套餐。
 
 ## 复用 LLM 服务的文本嵌入接口
 
@@ -50,12 +74,15 @@ OpenAI 的 `/models` 用于返回当前可用模型，官方 Embeddings 接口�
 | 阿里百炼 · 文本 | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `text-embedding-v4` | OpenAI 标准文本 |
 | 阿里百炼 · 多模态 | `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1` | `qwen3-vl-embedding` | 百炼原生融合 |
 | 火山方舟 · 多模态 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-embedding-vision-251215` | 方舟原生融合 |
+| 火山方舟 · Agent Plan 多模态 | `https://ark.cn-beijing.volces.com/api/plan/v3` | `doubao-embedding-vision` | 方舟原生融合 |
 | 硅基流动 · 文本 | `https://api.siliconflow.cn/v1` | `BAAI/bge-m3` | OpenAI 标准文本 |
 | 硅基流动 · 多模态 | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-VL-Embedding-8B` | 硅基原生图像／文本 |
 
 百炼文本与多模态预设均需填写自己的工作空间地址：文本保留 `/compatible-mode/v1`，多模态保留 `/api/v1`。密钥需要属于所用地域／工作空间。方舟填写推理 API Key，使用当前已开通的模型 ID 或推理接入点 ID；基础地址保留 `/api/v3`。网关地址和模型别名均可编辑，Lap 不按模型名称猜测实际能力。
 
 百炼文本与硅基文本预设均使用文本 `input` 和稠密浮点向量，默认普通文本；实际维度由检测读取。多模态预设同样可编码分析文本及文字查询，因此方舟原生模型可以同时用于“文本向量”和“原画面向量”。这两个用途保留独立索引身份。
+
+Agent Plan 向量预设来自其官方工具接入说明，并核对了官方 OpenViking → Ark SDK 的原生 `/embeddings/multimodal` 调用链。它使用独立配置和套餐模型别名，不自动复制 LLM 服务凭据。文本／查询／三帧输入仍须通过本机检测；公开的工具示例不代表已用真实账号验证 Lap 的任意媒体组合或套餐适用性。
 
 查询规则按协议区分：
 
@@ -131,9 +158,17 @@ ssh -N -L 8003:127.0.0.1:8003 用户@服务器
 - [百炼 OpenAI 兼容说明](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)
 - [硅基 Chat Completions](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)
 - [方舟 Chat 调用示例](https://docs.volcengine.com/docs/ark/deep-thinking?lang=en)
+- [方舟 Agent Plan Chat 配置](https://ark.volcengine.com/region:cn-beijing/docs/agent-plan-personal-hermes-agent#bd524f99)
+- [方舟 Coding Plan Chat 配置](https://ark.volcengine.com/region:cn-beijing/docs/coding-plan-personal-ai-hermes-agent#bd524f99)
+- [方舟 Agent Plan 向量接入](https://ark.volcengine.com/region:cn-beijing/docs/agent-plan-personal-vectorized-models)
+- [百炼 Coding Plan](https://help.aliyun.com/zh/model-studio/coding-plan)
+- [百炼 Token Plan 个人](https://help.aliyun.com/zh/model-studio/token-plan-personal-faq)
+- [百炼 Token Plan 团队](https://help.aliyun.com/zh/model-studio/token-plan-team-faq)
 - [DeepSeek API](https://api-docs.deepseek.com/)
+- [DeepSeek 计费来源说明](https://api-docs.deepseek.com/zh-cn/quick_start/pricing)
 - [LongCat Chat](https://longcat.chat/platform/docs/zh/api/chat)
 - [LongCat 模型列表](https://longcat.chat/platform/docs/zh/api/models)
+- [LongCat API 按量与资源包扣抵](https://longcat.chat/platform/docs/zh/api-pay-as-you-go)
 - [OpenAI 可用模型列表](https://developers.openai.com/api/reference/resources/models/methods/list)
 - [OpenAI 创建 Embedding](https://developers.openai.com/api/reference/resources/embeddings/methods/create)
 - [硅基流动 Embeddings 接口](https://api-docs.siliconflow.cn/docs/api/embeddings-post)

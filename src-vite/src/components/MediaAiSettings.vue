@@ -31,6 +31,7 @@
           </aside>
           <div v-if="provider" class="min-w-0 flex-1 space-y-3 max-h-[min(36rem,calc(100vh-17rem))] overflow-y-auto pr-1">
             <div class="flex gap-2 items-center"><input v-model="provider.name" class="input input-bordered input-sm w-full min-w-0" :placeholder="t('media_ai.service_name')" :disabled="busy" maxlength="120" /><input v-model="provider.enabled" class="toggle toggle-sm toggle-primary" type="checkbox" :aria-label="t('media_ai.enabled')" :disabled="busy" /></div>
+            <div v-if="selectedPreset?.accessMode" class="space-y-1" data-media-ai-access-mode><p class="flex gap-2 items-center"><span class="opacity-60">{{ t('media_ai.access_mode') }}</span><span class="badge badge-sm">{{ t('media_ai.access_' + selectedPreset.accessMode) }}</span></p><p v-if="selectedPreset.usageHint" class="opacity-60">{{ t('media_ai.' + selectedPreset.usageHint) }}</p></div>
             <template v-if="provider.kind === 'llm' && serviceKind === 'llm'"><label class="flex gap-2 items-start"><input v-model="provider.openaiEmbeddings" type="checkbox" class="checkbox checkbox-xs" :disabled="busy" @change="updateOpenaiEmbeddings(provider)" />{{ t('media_ai.openai_embeddings') }}</label><p class="opacity-60">{{ t('media_ai.openai_embeddings_hint') }}</p></template>
             <p v-if="provider.kind === 'llm' && serviceKind === 'embedding'" class="opacity-60">{{ t('media_ai.shared_embedding_service_hint') }}</p>
             <template v-if="provider.kind === 'embedding'"><label class="block">{{ t('media_ai.embedding_protocol') }}<select v-model="provider.embeddingProtocol" class="select select-bordered select-sm w-full mt-1" :disabled="busy" @change="applyEmbeddingProtocol(provider, providerModels)"><option v-for="(protocol, id) in EMBEDDING_PROTOCOLS" :key="id" :value="id">{{ t('media_ai.' + protocol.label) }}</option></select></label><p class="opacity-60">{{ t('media_ai.' + EMBEDDING_PROTOCOLS[provider.embeddingProtocol].hint) }}</p></template>
@@ -101,6 +102,7 @@ const modelPicker = ref<{ providerId: string; ids: string[]; selection: string[]
 const roles = ['media', 'text', 'embedding', 'multimodalEmbedding'] as const;
 const visibleRoles = computed(() => serviceKind.value === 'llm' ? roles.slice(0, 2) : roles.slice(2));
 const provider = computed(() => draft.value?.providers.find(p => p.id === selected.value && providerInView(p)));
+const selectedPreset = computed(() => BUILTIN_SERVICE_PRESETS.find(preset => preset.id === provider.value?.id));
 const capabilities = computed<MediaCapability[]>(() => provider.value && (provider.value.kind === 'embedding' || serviceKind.value === 'embedding') ? embeddingCapabilities(provider.value) : ['text', 'image', 'video_frames', 'json']);
 const filteredProviders = computed(() => draft.value?.providers.filter(p => providerInView(p) && p.name.toLowerCase().includes(filter.value.toLowerCase())) || []);
 const providerModels = computed(() => (draft.value?.models.filter(m => m.providerId === selected.value && (serviceKind.value === 'llm' || embeddingModel(m))) || []).sort((a, b) => a.group.localeCompare(b.group)));

@@ -23,15 +23,25 @@ fn fixture_at_path(
     key: Option<&str>,
     replies: Vec<(u16, Value)>,
 ) -> (String, thread::JoinHandle<Vec<Value>>) {
+    let keys = vec![key.map(str::to_owned); replies.len()];
+    fixture_at_path_with_keys(prefix, route, keys, replies)
+}
+
+fn fixture_at_path_with_keys(
+    prefix: &str,
+    route: Option<&str>,
+    keys: Vec<Option<String>>,
+    replies: Vec<(u16, Value)>,
+) -> (String, thread::JoinHandle<Vec<Value>>) {
+    assert_eq!(keys.len(), replies.len());
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}{}", listener.local_addr().unwrap(), prefix);
     let prefix = prefix.to_owned();
     let route = route.map(str::to_owned);
-    let key = key.map(str::to_owned);
     listener.set_nonblocking(true).unwrap();
     let worker = thread::spawn(move || {
         let mut seen = Vec::new();
-        for (status, body) in replies {
+        for ((status, body), key) in replies.into_iter().zip(keys) {
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             let mut socket = loop {
                 match listener.accept() {
@@ -114,6 +124,138 @@ fn at(base: String, remote: &str) -> Resolved {
     }
     m
 }
+
+#[tokio::test]
+async fn plan_presets_preserve_chat_paths_models_and_independent_bearer_keys() {
+    for (prefix, remote, accounts) in [
+        (
+            "/api/plan/v3/",
+            "ark-code-latest",
+            vec![("ark-agent-plan", "synthetic-ark-agent-key")],
+        ),
+        (
+            "/api/coding/v3/",
+            "ark-code-latest",
+            vec![("ark-coding-plan", "synthetic-ark-coding-key")],
+        ),
+        (
+            "/v1/",
+            "qwen3.7-plus",
+            vec![("ali-coding-plan", "synthetic-ali-coding-key")],
+        ),
+        (
+            "/compatible-mode/v1/",
+            "qwen3.8-max",
+            vec![
+                ("ali-token-personal", "synthetic-ali-personal-key"),
+                ("ali-token-team", "synthetic-ali-team-key"),
+            ],
+        ),
+    ] {
+        let keys = accounts
+            .iter()
+            .map(|(_, key)| Some((*key).to_owned()))
+            .collect();
+        let replies = vec![(200, completion("fixture-ok")); accounts.len()];
+        let (base, worker) =
+            fixture_at_path_with_keys(prefix, Some("chat/completions"), keys, replies);
+        for (provider_id, key) in accounts {
+            let mut model = at(base.clone(), remote);
+            model.provider.id = provider_id.into();
+            model.model.provider_id = provider_id.into();
+            model.model.id = format!("{provider_id}-model");
+            model.model.capabilities = [Capability::Text].into_iter().collect();
+            assert_eq!(
+                client::chat_with_key(
+                    &model,
+                    vec![ContentPart::from_text("Reply briefly")],
+                    Some(key.into())
+                )
+                .await
+                .unwrap(),
+                "fixture-ok"
+            );
+        }
+        let seen = worker.join().unwrap();
+        assert!(seen.iter().all(|body| body["model"] == remote));
+        if remote == "qwen3.8-max" {
+            assert!(
+                seen.iter()
+                    .all(|body| body.get("reasoning_effort").is_none())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn agent_plan_native_embedding_preserves_prefix_alias_and_media_query_contract() {
+    let input = vec![
+        ContentPart::from_text("Sampled frame at 00:00."),
+        super::commands::probe_image().unwrap(),
+        ContentPart::from_text("Sampled frame at 00:30."),
+        super::commands::probe_image().unwrap(),
+        ContentPart::from_text("Sampled frame at 00:59."),
+        super::commands::probe_image().unwrap(),
+    ];
+    let reply = native_reply(EmbeddingProtocol::ArkMultimodal, 3);
+    let (base, worker) = fixture_at_path(
+        "/api/plan/v3/",
+        Some("embeddings/multimodal"),
+        Some("synthetic-agent-embedding-key"),
+        vec![(200, reply.clone()), (200, reply)],
+    );
+    let mut model = at(base, "doubao-embedding-vision");
+    model.provider.embedding_protocol = EmbeddingProtocol::ArkMultimodal;
+    model.model.capabilities = model.provider.embedding_capabilities();
+    assert_eq!(
+        client::embed_media_with_key(&model, input, Some("synthetic-agent-embedding-key".into()))
+            .await
+            .unwrap(),
+        vec![0.6, 0.8]
+    );
+    assert_eq!(
+        client::embed_multimodal_query_with_key(
+            &model,
+            "Find the matching frames".into(),
+            Some("synthetic-agent-embedding-key".into())
+        )
+        .await
+        .unwrap(),
+        vec![0.6, 0.8]
+    );
+    let seen = worker.join().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen.iter()
+            .all(|body| body["model"] == "doubao-embedding-vision"
+                && body["encoding_format"] == "float"
+                && body.get("messages").is_none())
+    );
+    assert_eq!(
+        seen[0]["instructions"],
+        "Instruction:Compress the text and image into one word.\nQuery:"
+    );
+    let parts = seen[0]["input"].as_array().unwrap();
+    assert_eq!(parts.len(), 6);
+    assert_eq!(parts[0]["text"], "Sampled frame at 00:00.");
+    assert_eq!(parts[4]["text"], "Sampled frame at 00:59.");
+    assert_eq!(
+        parts
+            .iter()
+            .filter(|part| part["type"] == "image_url")
+            .count(),
+        3
+    );
+    assert_eq!(
+        seen[1]["instructions"],
+        "Target_modality: image/text and image.\nInstruction:Find media content matching this description.\nQuery:"
+    );
+    assert_eq!(
+        seen[1]["input"],
+        json!([{"type":"text","text":"Find the matching frames"}])
+    );
+}
+
 #[tokio::test]
 async fn real_sdk_analysis_document_query_persistence_retrieval_and_cited_answer() {
     for shared in [false, true] {

@@ -22,7 +22,9 @@ API Key 存入系统凭据库，不进入 JSON、数据库或备份。留空保�
 
 ## 配置媒体理解和文本生成
 
-在同一个页签选择 **LLM 服务**，直接选择百炼、硅基流动、方舟、DeepSeek 或 LongCat 内置条目，或添加自定义服务。预设初始停用、未授权传输、未检测；填入自己的地址与 Key，检测后启用并选择默认用途。获取模型列表或手动添加 Model ID；列表只用于发现模型，不证明模型具备对应能力。生成模型配置文本、图片、视频采样帧和结构化输出；同一服务兼容文本嵌入时另加独立嵌入模型。专用 Embedding 服务根据服务协议显示文本／多模态检测入口。生成和嵌入用途不能混在同一模型记录中。
+在同一个页签选择 **LLM 服务**，直接选择百炼、硅基流动、方舟、DeepSeek 或 LongCat 内置条目，或添加自定义服务。方舟按量、Agent Plan、Coding Plan，以及百炼按量、Coding Plan、Token Plan 个人／团队分别配置，地址相同也不会合并 Token 个人／团队的凭据。预设初始停用、未授权传输、未检测；填入自己的地址与 Key，检测后启用并选择默认用途。获取模型列表或手动添加 Model ID；列表只用于发现模型，不证明模型具备对应能力。
+
+生成模型配置文本、图片、视频采样帧和结构化输出；同一服务兼容文本嵌入时另加独立嵌入模型。专用 Embedding 服务根据服务协议显示文本／多模态检测入口，包含方舟 Agent Plan 原生向量预设。接入方式说明不限制模型可声明的能力；套餐权益适用范围与模型能力分开核对，详见 [接入通道说明](embedding-services.md#接入通道凭据与模型能力)。生成和嵌入用途不能混在同一模型记录中。
 
 “获取模型”后先勾选需要的模型，再点“添加选中”；未勾选的模型不会加入配置。已配置模型标题右侧的移除按钮始终可用，无需展开模型。移除后点击“保存”生效；对应默认用途会解除绑定，已生成的分析和索引保留。再次获取列表不会自动加回已移除模型。
 
@@ -90,4 +92,4 @@ Content-Type: application/json
 
 当前接入 Chat Completions、标准文本 Embeddings，以及 vLLM、百炼、方舟和硅基的多模态格式。不含 Responses、Claude Messages，或 Lap 管理的 Mage／Qwen 下载及本机推理环境。自建模型服务可使用 [部署脚本](../scripts/ai-server/README.md)，其中 `embedding-multimodal` 是独立的专用向量模型环境；原 Mage/Qwen-VL profile 仍用于理解和生成。真实供应商账号权限、模型效果、显存需求与检索质量仍需在目标环境验收。
 
-本轮预设目录的测试与边界见 [内置停用服务目录验证](development/verification/service-presets.md)。共享连接、三家原生协议及原服务拆分记录分别见 [LLM 服务共享文本 Embedding 验证](development/verification/llm-shared-embedding.md)、[国内 Embedding 接入验证](development/verification/embedding-domestic-providers.md)和[服务拆分与原画面向量验证](development/verification/media-ai-services-v2.md)。
+套餐通道和凭据隔离的测试与边界见 [套餐接入验证](development/verification/service-access-variants.md)，基础目录行为见 [内置停用服务目录验证](development/verification/service-presets.md)。共享连接、三家原生协议及原服务拆分记录分别见 [LLM 服务共享文本 Embedding 验证](development/verification/llm-shared-embedding.md)、[国内 Embedding 接入验证](development/verification/embedding-domestic-providers.md)和[服务拆分与原画面向量验证](development/verification/media-ai-services-v2.md)。

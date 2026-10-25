@@ -656,4 +656,43 @@ mod tests {
         assert!(credential_in_use(&existing, &next));
         assert!(!credential_in_use(&existing, &Configuration::default()));
     }
+
+    #[test]
+    fn same_url_plan_providers_keep_independent_credential_namespaces() {
+        let mut personal = Provider {
+            id: "ali-token-personal".into(),
+            name: "Personal".into(),
+            base_url: "https://same.example/compatible-mode/v1/".into(),
+            credential_revision: "same-revision".into(),
+            enabled: false,
+            ..Default::default()
+        };
+        let mut team = personal.clone();
+        team.id = "ali-token-team".into();
+        team.name = "Team".into();
+        preserve_identity(&mut personal, &Configuration::default()).unwrap();
+        preserve_identity(&mut team, &Configuration::default()).unwrap();
+        assert_eq!(personal.base_url, team.base_url);
+        assert_ne!(personal.identity(), team.identity());
+        assert_ne!(
+            format!(
+                "provider-{}:{}",
+                personal.identity(),
+                personal.credential_revision
+            ),
+            format!("provider-{}:{}", team.identity(), team.credential_revision)
+        );
+        let config = Configuration {
+            providers: vec![personal.clone(), team.clone()],
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        assert_eq!(config.providers.len(), 2);
+        let team_only = Configuration {
+            providers: vec![team],
+            ..Default::default()
+        };
+        assert!(!credential_in_use(&personal, &team_only));
+        assert!(credential_in_use(&personal, &config));
+    }
 }

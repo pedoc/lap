@@ -38,7 +38,7 @@ function harness(includeCatalog = false) {
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,canListModels,modelListHint,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,selectedPreset,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,canListModels,modelListHint,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls, dialogs };
 }
@@ -260,7 +260,7 @@ test('query presets preserve an explicit custom instruction and do not guess a m
 
 test('opening settings supplies disabled directory entries only in the draft without a preset picker or automatic persistence', () => {
   const h = harness(true);
-  assert.equal(h.api.draft.value.providers.length, 11); assert.equal(h.api.saved.value.providers.length, 1);
+  assert.equal(h.api.draft.value.providers.length, 1 + mediaAi.BUILTIN_SERVICE_PRESETS.length); assert.equal(h.api.saved.value.providers.length, 1);
   assert.equal(h.api.dirty.value, false); assert.equal(h.calls.length, 0);
   assert.equal(h.api.selected.value, 'provider', 'a new disabled builtin cannot steal the configured selection');
   for (const p of h.api.draft.value.providers.filter(mediaAi.isBuiltinService)) {
@@ -268,7 +268,7 @@ test('opening settings supplies disabled directory entries only in the draft wit
     assert.equal(p.openaiEmbeddings, false); assert.equal(p.credentialRevision, '');
   }
   h.api.selectServiceKind('embedding');
-  assert.equal(h.api.filteredProviders.value.length, 5);
+  assert.equal(h.api.filteredProviders.value.length, mediaAi.EMBEDDING_SERVICE_PRESETS.length);
   assert.equal(h.calls.length, 0); assert.equal(h.api.dirty.value, false);
 });
 
@@ -307,6 +307,25 @@ test('existing active and configured services outrank newly inserted disabled di
   h.api.receive(view); assert.equal(h.api.selected.value, 'configured-custom');
   view.configuration.providers[0].enabled = false;
   h.api.selected.value = ''; h.api.receive(view); assert.equal(h.api.selected.value, 'configured-custom');
+});
+
+test('Plan entries do not copy existing credentials or restrict manually marked and tested generation capabilities', async () => {
+  const h = harness(true);
+  h.api.keys.value['builtin-llm-ark'] = 'synthetic-payg-key';
+  h.api.keys.value['builtin-llm-dashscope-token-personal'] = 'synthetic-personal-key';
+  h.api.selected.value = 'builtin-llm-dashscope-token-team';
+  assert.equal(h.api.keys.value[h.api.selected.value], undefined);
+  assert.equal(h.api.selectedPreset.value.accessMode, 'token_team');
+  h.api.selected.value = 'builtin-llm-ark-agent-plan';
+  const p = h.api.provider.value, m = h.api.providerModels.value[0];
+  assert.equal(h.api.keys.value[p.id], undefined);
+  assert.deepEqual(Array.from(m.capabilities), ['text']);
+  assert.deepEqual(Array.from(h.api.modelCapabilities(m)), ['text', 'image', 'video_frames', 'json']);
+  m.capabilities.push('image', 'video_frames', 'json'); p.allowMedia = true;
+  await h.api.testModel(m, 'image');
+  assert.equal(h.calls.at(-1)![0], 'media_ai_test_model'); assert.equal(h.calls.at(-1)![1].capability, 'image');
+  assert.equal(h.api.provider.value.enabled, false);
+  assert.equal(h.api.keys.value['builtin-llm-ark-agent-plan'], undefined);
 });
 
 test('unbound embedding purposes locate all native protocols without converting a service or discarding edits', () => {
@@ -595,5 +614,27 @@ test('builtin LLM and Embedding entries render directly in the sidebar without a
     assert.doesNotMatch(html, /media_ai.service_preset|media_ai.delete_service|data-embedding-wizard/);
     assert.match(html, /media_ai.add_service/);
     if (kind === 'llm') { assert.match(html, /media_ai.workspace_url_hint/); assert.match(html, /media_ai.builtin_model_id_hint/); assert.doesNotMatch(html, /media_ai.sync_models/); }
+  }
+});
+
+test('selected Plan entries display access metadata while preserving ordinary editable model controls', async () => {
+  const h = harness(), imports: any = {}, view = fixture();
+  mediaAi.appendBuiltinServices(view.configuration, key => `media_ai.${key}`);
+  const { descriptor } = parse(source);
+  const compiled = stripTypeScriptTypes(compileScript(descriptor, { id: 'media-ai-plan-access', inlineTemplate: true }).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
+  for (const preset of mediaAi.LLM_SERVICE_PRESETS.filter(preset => preset.accessMode !== 'payg')) {
+    let nulls = 0;
+    const code = compiled.replace("selected = ref('')", `selected = ref('${preset.id}')`);
+    const component = runInNewContext(`${code}\n;component`, { ...h.context, ...imports,
+      ref: (value: any) => Vue.ref(value === null && nulls++ === 0 ? view.configuration : value),
+    });
+    const html = await renderToString(Vue.createSSRApp(component));
+    assert.match(html, /data-media-ai-access-mode/);
+    assert.ok(html.includes(`media_ai.access_${preset.accessMode}`)); assert.ok(html.includes(`media_ai.${preset.usageHint}`));
+    for (const capability of ['text', 'image', 'video_frames', 'json']) assert.ok(html.includes(`value="${capability}"`));
+    assert.match(html, /media_ai.base_url/); assert.match(html, /API Key/); assert.match(html, /media_ai.detect/);
+    assert.doesNotMatch(html, /media_ai.sync_models|data-embedding-wizard|media_ai.service_preset/);
   }
 });

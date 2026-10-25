@@ -75,9 +75,9 @@ test('the builtin service directory is deterministic, disabled and idempotent wi
   const c: MediaConfiguration = { version: 2, revision: 0, providers: [], models: [], roles: { media: null, text: null, embedding: null, multimodalEmbedding: null } };
   const roles = JSON.stringify(c.roles);
   appendBuiltinServices(c, key => key);
-  assert.equal(c.providers.length, 10); assert.equal(c.models.length, 10);
-  assert.equal(c.providers.filter(p => p.kind === 'llm').length, 5);
-  assert.equal(c.providers.filter(p => p.kind === 'embedding').length, 5);
+  assert.equal(c.providers.length, BUILTIN_SERVICE_PRESETS.length); assert.equal(c.models.length, BUILTIN_SERVICE_PRESETS.length);
+  assert.equal(c.providers.filter(p => p.kind === 'llm').length, 10);
+  assert.equal(c.providers.filter(p => p.kind === 'embedding').length, 6);
   assert.equal(JSON.stringify(c.roles), roles);
   for (const p of c.providers) {
     assert.equal(isBuiltinService(p), true); assert.equal(p.enabled, false); assert.equal(p.allowMedia, false);
@@ -106,4 +106,43 @@ test('builtin identity and canonical endpoint matching preserve edited services,
   assert.equal(new Set(c.models.map(m => m.id)).size, c.models.length);
   assert.equal(hasWorkspacePlaceholder('https://your-workspace-id.cn-beijing.maas.aliyuncs.com/api/v1'), true);
   assert.equal(hasWorkspacePlaceholder('https://my-workspace.cn-beijing.maas.aliyuncs.com/api/v1'), false);
+});
+
+test('Token Plan personal and team keep distinct provider scopes even with the same endpoint or an existing custom token service', () => {
+  const existing = newProvider(); existing.id = 'custom-token'; existing.name = 'My token subscription';
+  existing.baseUrl = 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'; existing.credentialRevision = 'synthetic-existing-key';
+  const c: MediaConfiguration = { version: 2, revision: 1, providers: [existing], models: [], roles: { media: null, text: null, embedding: null, multimodalEmbedding: null } };
+  const before = JSON.stringify(existing);
+  appendBuiltinServices(c, key => key);
+  const personal = c.providers.find(p => p.id === 'builtin-llm-dashscope-token-personal')!;
+  const team = c.providers.find(p => p.id === 'builtin-llm-dashscope-token-team')!;
+  assert.ok(personal); assert.ok(team); assert.notEqual(personal.id, team.id); assert.equal(personal.baseUrl, team.baseUrl);
+  assert.equal(personal.credentialRevision, ''); assert.equal(team.credentialRevision, '');
+  assert.equal(personal.identityId, ''); assert.equal(team.identityId, '');
+  assert.equal(JSON.stringify(existing), before);
+  assert.equal(c.providers.filter(p => p.baseUrl === existing.baseUrl).length, 3);
+  const first = JSON.stringify(c); appendBuiltinServices(c, key => key); assert.equal(JSON.stringify(c), first);
+});
+
+test('Plan endpoints and native Agent Plan embeddings remain independent of the existing pay-as-you-go services', () => {
+  const c: MediaConfiguration = { version: 2, revision: 1, providers: [], models: [], roles: { media: null, text: null, embedding: null, multimodalEmbedding: null } };
+  appendBuiltinServices(c, key => key);
+  const expected = [
+    ['builtin-llm-ark-agent-plan', 'https://ark.cn-beijing.volces.com/api/plan/v3', 'ark-code-latest'],
+    ['builtin-llm-ark-coding-plan', 'https://ark.cn-beijing.volces.com/api/coding/v3', 'ark-code-latest'],
+    ['builtin-llm-dashscope-coding-plan', 'https://coding.dashscope.aliyuncs.com/v1', 'qwen3.7-plus'],
+    ['builtin-embedding-ark-agent-plan', 'https://ark.cn-beijing.volces.com/api/plan/v3', 'doubao-embedding-vision'],
+  ];
+  for (const [id, baseUrl, modelId] of expected) {
+    const p = c.providers.find(p => p.id === id)!, m = c.models.find(m => m.providerId === id)!;
+    assert.equal(p.baseUrl, baseUrl); assert.equal(m.remoteId, modelId); assert.equal(p.enabled, false);
+    assert.equal(p.openaiEmbeddings, false); assert.equal(p.allowBackground, false); assert.equal(p.allowMedia, false);
+    assert.equal(p.credentialRevision, ''); assert.equal(m.maxOutputTokens, null); assert.deepEqual(Object.keys(m.tested), []);
+    assert.equal(BUILTIN_SERVICE_PRESETS.find(preset => preset.id === id)?.modelList, false);
+  }
+  assert.equal(c.providers.find(p => p.id === 'builtin-llm-ark')?.baseUrl, 'https://ark.cn-beijing.volces.com/api/v3');
+  assert.ok(c.providers.some(p => p.id === 'builtin-llm-dashscope'));
+  const native = c.providers.find(p => p.id === 'builtin-embedding-ark-agent-plan')!;
+  assert.equal(native.kind, 'embedding'); assert.equal(native.embeddingProtocol, 'ark_multimodal');
+  assert.deepEqual(c.models.find(m => m.providerId === native.id)?.capabilities, ['embed_text', 'embed_multimodal']);
 });
