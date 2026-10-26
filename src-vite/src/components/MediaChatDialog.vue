@@ -50,7 +50,10 @@
             <article v-for="message in renderedMessages" :key="message.requestId ? `${message.requestId}:${message.role}` : message.id" class="min-w-0 space-y-2" :class="message.role === 'user' ? 'ml-auto w-fit max-w-[88%] rounded-box bg-base-200 px-4 py-3' : 'mr-auto w-full max-w-full py-1 pr-4'" :data-chat-message="message.id" :data-chat-role="message.role">
               <div class="flex justify-between gap-2 text-[10px] opacity-50"><span>{{ t(message.role === 'user' ? 'media_chat.you' : 'media_chat.assistant') }}<span v-if="message.role === 'assistant' && message.modelName"> · {{ message.modelName }}</span><span v-if="message.role === 'assistant' && message.reasoningEffort"> · {{ t('media_chat.reasoning') }}: {{ reasoningLabel(message.reasoningEffort) }}</span></span><time>{{ new Date(message.createdAt).toLocaleString() }}</time></div>
               <details v-if="message.role === 'assistant' && message.reasoningContent?.trim()" class="rounded-box border border-base-content/10 px-3 py-2 text-base-content/65" data-chat-reasoning-summary><summary class="cursor-pointer select-none text-[11px]">{{ t('media_chat.reasoning_summary') }}</summary><p class="mt-2 whitespace-pre-wrap break-words leading-relaxed select-text">{{ message.reasoningContent }}</p></details>
-              <p v-if="message.content" class="whitespace-pre-wrap break-words leading-relaxed select-text" data-chat-message-content>{{ message.content }}</p>
+              <template v-if="message.content">
+                <MediaChatMarkdown v-if="message.role === 'assistant'" :content="message.content" :streaming="message.status === 'pending'" data-chat-message-content @link-error="error = $event" @rendered="markdownRendered" />
+                <p v-else class="whitespace-pre-wrap break-words leading-relaxed select-text" data-chat-message-content>{{ message.content }}</p>
+              </template>
               <p v-if="message.role === 'assistant' && (message.status === 'pending' || message.status === 'failed' || message.status === 'cancelled')" class="flex items-center gap-2 text-[11px]" :class="message.status === 'failed' ? 'text-error' : 'text-base-content/50'" role="status" :data-chat-phase="message.phase || (message.status === 'pending' ? 'waiting' : message.status)"><span v-if="message.status === 'pending'" class="loading loading-dots loading-xs"></span>{{ t('media_chat.phase_' + (message.phase || (message.status === 'pending' ? 'waiting' : message.status))) }}</p>
               <p v-if="message.error" class="text-error whitespace-pre-wrap break-words">{{ message.error }}</p>
               <div v-if="message.toolCalls?.length" class="space-y-2" data-chat-tool-calls>
@@ -143,6 +146,7 @@ import { CHAT_RESIZE_EDGES, fitChatFrame, insertMediaMention, isChatNearBottom, 
 import { IconAdd, IconArrowDown, IconClose, IconFile, IconFileInfo, IconHistory, IconLeft, IconMore, IconRename, IconSearch, IconSettings, IconTrash } from '@/common/icons';
 import { pendingChanges } from '@/common/pendingChanges';
 import ModalDialog from './ModalDialog.vue';
+import MediaChatMarkdown from './MediaChatMarkdown.vue';
 
 const { t, te } = useI18n(), uiStore = useUIStore();
 const root = ref<HTMLElement | null>(null), composer = ref<HTMLTextAreaElement | null>(null), messagesRoot = ref<HTMLElement | null>(null);
@@ -473,6 +477,7 @@ async function refreshCurrent() {
   const next = await invoke<ChatSessionView>('media_chat_inspect', { libraryId, sessionId }); if (!disposed && epoch === messageGeneration && libraryId === activeLibrary.value && libraryId === libConfig._libraryId && sessionId === view.value?.session.id) view.value = snapshotView(next);
 }
 function messagesScrolled() { if (!messagesRoot.value) return; scrollRevision++; nearBottom.value = isChatNearBottom(messagesRoot.value); if (nearBottom.value) newContent.value = false; }
+function markdownRendered() { if (mediaChat.open && !showHistory.value) return scrollMessages(); }
 async function scrollMessages(force = false) { const follow = force || nearBottom.value, revision = scrollRevision, sessionId = view.value?.session.id, libraryId = activeLibrary.value; await nextTick(); if (sessionId !== view.value?.session.id || libraryId !== activeLibrary.value) return; if (revision !== scrollRevision && !nearBottom.value) { newContent.value = true; return; } if (follow) { if (messagesRoot.value) messagesRoot.value.scrollTop = messagesRoot.value.scrollHeight; nearBottom.value = true; newContent.value = false; } else newContent.value = true; }
 async function internalDrop(event: Event) { const detail = (event as CustomEvent<{ libraryId: string; fileIds: number[] }>).detail; if (detail?.libraryId !== activeLibrary.value) { notice.value = t('media_chat.wrong_library'); return; } showHistory.value = false; historyMenuId.value = ''; await attachIds(detail.fileIds); }
 async function dropFiles(event: DragEvent) {

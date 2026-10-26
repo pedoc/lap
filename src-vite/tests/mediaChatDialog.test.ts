@@ -9,6 +9,7 @@ import { createI18n } from 'vue-i18n';
 import * as Vue from 'vue';
 import * as ui from '../src/common/mediaChatUi.ts';
 import { CHAT_CONTEXT_FIELDS, normalizeChatContextFields } from '../src/common/mediaChat.ts';
+import { renderChatMarkdown } from '../src/common/chatMarkdown.ts';
 
 const source = readFileSync(new URL('../src/components/MediaChatDialog.vue', import.meta.url), 'utf8');
 const body = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
@@ -39,6 +40,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     getFileThumbById: async () => '', getTagsForFile: async () => [{ name: 'Existing' }], getThumbnailDataUrl: () => '', getThumbUrl: () => '', getDragPayload: async () => ({ filePaths: [] }), getExternalDropPaths: () => [], isWin: false, isMac: false,
     mediaTime: (value: number) => String(value), openMediaAiSettings() {}, openMediaAiBatch: (...args: any[]) => calls.push(['batch', args]), pendingChanges: { confirm: async () => true }, ask: async () => true,
     ...Object.fromEntries(['IconAdd', 'IconArrowDown', 'IconClose', 'IconFile', 'IconFileInfo', 'IconHistory', 'IconLeft', 'IconMore', 'IconRename', 'IconSearch', 'IconSettings', 'IconTrash'].map(name => [name, () => Vue.h('svg')])), openMediaChatMedia: async (...args: any[]) => { calls.push(['open-media', args]); return true; },
+    MediaChatMarkdown: { props: ['content', 'streaming'], emits: ['rendered', 'link-error'], setup: (props: any) => () => Vue.h('div', { 'data-chat-markdown-fixture': '', 'data-streaming': String(props.streaming), innerHTML: renderChatMarkdown(props.content) }) },
     window: { innerWidth: 1440, innerHeight: 900, addEventListener: (name: string, listener: any) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(listener); }, removeEventListener: (name: string, listener: any) => listeners.get(name)?.delete(listener) },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     invoke: async (name: string, args: any) => {
@@ -57,7 +59,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
   return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage, channels,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -509,6 +511,27 @@ test('stream scrolling follows the bottom but preserves a reader above it until 
   } finally { h.dispose(); }
 });
 
+test('delayed Markdown DOM updates follow only the visible conversation and preserve a reader above the bottom', async () => {
+  const h = harness();
+  try {
+    await h.boot();
+    const viewport = { scrollHeight: 1600, clientHeight: 500, scrollTop: 200 };
+    h.api.messagesRoot.value = viewport; h.api.nearBottom.value = true;
+    h.mediaChat.open = false;
+    await h.api.markdownRendered();
+    assert.equal(viewport.scrollTop, 200); assert.equal(h.api.newContent.value, false);
+    await h.boot(); h.api.showHistory.value = true;
+    viewport.scrollTop = 200; h.api.nearBottom.value = true;
+    await h.api.markdownRendered();
+    assert.equal(viewport.scrollTop, 200); assert.equal(h.api.newContent.value, false);
+    h.api.showHistory.value = false;
+    await h.api.markdownRendered(); assert.equal(viewport.scrollTop, 1600);
+    viewport.scrollTop = 200; h.api.messagesScrolled();
+    await h.api.markdownRendered();
+    assert.equal(viewport.scrollTop, 200); assert.equal(h.api.newContent.value, true);
+  } finally { h.dispose(); }
+});
+
 test('metadata suggestions use the selected model and editable proposals require a separate per-file adoption', async () => {
   const h = harness();
   try {
@@ -746,7 +769,7 @@ test('the actual dialog renders composer model and reasoning controls, media car
     const setup = component.setup;
     component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
       state.previewOpen.value = true; state.configuration.value = configuration(); state.configuration.value.models[0].reasoning = { levels: ['none', 'low', 'high'], defaultEffort: 'low' }; state.selectedModelId.value = 'vision'; state.actionsOpen.value = true;
-      state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: 'Answer', references: [reference(8)] });
+      state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: '**Answer**\n\n- Detail [1]', references: [reference(8)] });
       state.contextOpen.value = true;
       state.view.value.messages[0].toolCalls = [
         { callId: 'task-call', name: 'start_media_task', arguments: {}, status: 'completed', result: { task: { id: 'job-a', state: 'running', total: 2, completed: 1, failed: 0 } }, localData: null, error: null, createdAt: 1, completedAt: 2 },
@@ -755,7 +778,7 @@ test('the actual dialog renders composer model and reasoning controls, media car
         { callId: 'failed-call', name: 'get_media_content', arguments: { file_id: 9 }, status: 'failed', result: null, localData: null, error: 'Fixture read failed', createdAt: 1, completedAt: 2 },
         proposalCall(),
       ];
-      state.view.value.messages.unshift({ id: 'question-a', role: 'user', status: 'completed', createdAt: 1, content: 'Question', references: [] });
+      state.view.value.messages.unshift({ id: 'question-a', role: 'user', status: 'completed', createdAt: 1, content: '**Question**', references: [] });
       state.showHistory.value = history; state.sessions.value = [summary(), summary('session-b')]; state.historyMenuId.value = history ? 'session-b' : '';
       context.expose(state);
     } });
@@ -767,6 +790,8 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.match(html, /data-chat-reasoning/);
     assert.match(html, /value="none"/); assert.match(html, /value="low"/); assert.match(html, /value="high"/);
     assert.match(html, /data-chat-attachment-card/); assert.match(html, /data-chat-reference-card/);
+    assert.match(html, /data-chat-markdown-fixture/); assert.match(html, /<strong>Answer<\/strong>/); assert.match(html, /<li>Detail \[1\]<\/li>/);
+    assert.match(html, /data-chat-message-content>\*\*Question\*\*<\/p>/); assert.doesNotMatch(html, /<strong>Question<\/strong>/);
     assert.match(html, /data-chat-actions-menu/);
     assert.match(html, /data-chat-context-toggle/); assert.match(html, /data-chat-context-panel/);
     assert.match(html, /data-chat-tool-call="task-call"/); assert.match(html, /data-chat-tool-task="job-a"/); assert.match(html, /data-chat-tool-proposal="proposal-a"/);
