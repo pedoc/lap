@@ -16,6 +16,8 @@
     "open_chat": "打开媒体对话",
     "launcher_label": "聊天",
     "show_floating_button": "显示悬浮聊天按钮",
+    "auto_dock_window": "聊天窗口自动贴边",
+    "auto_dock_window_hint": "靠近左侧或右侧，调整应用窗口大小时跟随；拖动可切换贴边方向。",
     "floating_button_hint": "仅影响图库中的悬浮按钮，关闭后仍可从查看页工具栏打开聊天。",
     "default_position": "默认位置",
     "floating_position_hint": "更换角落会移回新位置；拖动后记住自定义位置。",

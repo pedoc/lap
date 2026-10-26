@@ -108,6 +108,10 @@
               <input id="show-floating-media-chat" type="checkbox" class="toggle toggle-primary toggle-sm shrink-0" v-model="showFloatingChatButton" />
             </div>
             <div class="flex items-center justify-between gap-3 p-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
+              <div class="flex flex-col gap-0.5 text-sm leading-5"><label for="auto-dock-media-chat">{{ $t('media_chat.auto_dock_window') }}</label><div class="text-xs text-base-content/40">{{ $t('media_chat.auto_dock_window_hint') }}</div></div>
+              <input id="auto-dock-media-chat" type="checkbox" class="toggle toggle-primary toggle-sm shrink-0" v-model="autoDockChatWindow" />
+            </div>
+            <div class="flex items-center justify-between gap-3 p-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
               <div class="flex flex-col gap-0.5 text-sm leading-5"><label for="floating-media-chat-position">{{ $t('media_chat.default_position') }}</label><div class="text-xs text-base-content/40">{{ $t('media_chat.floating_position_hint') }}</div></div>
               <select id="floating-media-chat-position" class="select select-bordered select-sm min-w-32 shrink-0" v-model="floatingChatDefaultPosition"><option v-for="position in FLOATING_CHAT_POSITIONS" :key="position" :value="position">{{ $t('media_chat.position_' + position.replace('-', '_')) }}</option></select>
             </div>
@@ -622,6 +626,10 @@ const mediaChatPreferences = computed(() => normalizeMediaChatSettings(config.se
 const showFloatingChatButton = computed({
   get: () => mediaChatPreferences.value.showFloatingButton,
   set: (value: boolean) => config.setMediaChat({ showFloatingButton: value }),
+});
+const autoDockChatWindow = computed({
+  get: () => mediaChatPreferences.value.autoDockWindow,
+  set: (value: boolean) => config.setMediaChat({ autoDockWindow: value }),
 });
 const floatingChatDefaultPosition = computed({
   get: () => mediaChatPreferences.value.defaultPosition,

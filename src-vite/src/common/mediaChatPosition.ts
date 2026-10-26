@@ -4,12 +4,13 @@ export interface FloatingChatPoint { x: number; y: number }
 export interface FloatingChatSize { width: number; height: number }
 export interface MediaChatSettings {
   showFloatingButton: boolean;
+  autoDockWindow: boolean;
   defaultPosition: FloatingChatAnchor;
   // Fractions of the available travel between the viewport margins, not screen pixels.
   floatingPosition: FloatingChatPoint | null;
 }
 
-const defaultSettings: MediaChatSettings = { showFloatingButton: true, defaultPosition: 'bottom-right', floatingPosition: null };
+const defaultSettings: MediaChatSettings = { showFloatingButton: true, autoDockWindow: false, defaultPosition: 'bottom-right', floatingPosition: null };
 const fraction = (value: number) => Math.max(0, Math.min(1, value));
 const dimension = (value: number) => Number.isFinite(value) ? Math.max(0, value) : 0;
 function point(value: unknown): value is FloatingChatPoint {
@@ -24,6 +25,7 @@ export function normalizeMediaChatSettings(value?: unknown, fallback: MediaChatS
     ? { x: fraction(incoming.floatingPosition.x), y: fraction(incoming.floatingPosition.y) } : fallback.floatingPosition;
   return {
     showFloatingButton: typeof incoming.showFloatingButton === 'boolean' ? incoming.showFloatingButton : fallback.showFloatingButton,
+    autoDockWindow: typeof incoming.autoDockWindow === 'boolean' ? incoming.autoDockWindow : fallback.autoDockWindow,
     defaultPosition: FLOATING_CHAT_POSITIONS.includes(incoming.defaultPosition as FloatingChatAnchor) ? incoming.defaultPosition! : fallback.defaultPosition,
     floatingPosition: stored ? { ...stored } : null,
   };

@@ -10,6 +10,7 @@
         <div v-if="!showHistory && view" class="relative shrink-0" data-chat-session-menu @pointerdown.stop>
           <button class="btn btn-sm btn-square btn-ghost" :title="t('media_chat.session_actions')" :aria-label="t('media_chat.session_actions')" :aria-expanded="sessionActionsOpen" @click="sessionActionsOpen = !sessionActionsOpen"><IconMore class="size-4" aria-hidden="true" /></button>
           <div v-if="sessionActionsOpen" class="absolute right-0 top-full z-40 mt-1 w-40 rounded-box border border-base-content/10 bg-base-100 p-1 shadow-xl" role="menu" :aria-label="t('media_chat.session_actions')">
+            <button class="flex w-full items-center gap-2 rounded px-3 py-2 text-left hover:bg-base-200" role="menuitemcheckbox" :aria-checked="autoDockWindow" :title="t('media_chat.auto_dock_window_hint')" data-chat-auto-dock @click="toggleAutoDockWindow"><span class="inline-block size-4 shrink-0 text-center" aria-hidden="true">{{ autoDockWindow ? '✓' : '' }}</span>{{ t('media_chat.auto_dock_window') }}</button>
             <button class="flex w-full items-center gap-2 rounded px-3 py-2 text-left hover:bg-base-200" role="menuitem" @click="beginRename()"><IconRename class="size-4 opacity-60" />{{ t('media_chat.rename') }}</button>
             <button class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-error hover:bg-base-200 disabled:opacity-40" role="menuitem" :disabled="!!activeRequestId" @click="deleteSession()"><IconTrash class="size-4 opacity-60" />{{ t('media_chat.delete') }}</button>
           </div>
@@ -134,7 +135,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
-import { libConfig } from '@/common/config';
+import { config, libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
 import { getDragPayload, getFileThumbById, getTagsForFile } from '@/common/api';
 import { getExternalDropPaths } from '@/common/externalDrop';
@@ -142,7 +143,7 @@ import { getThumbnailDataUrl, getThumbUrl, isWin, isMac } from '@/common/utils';
 import { mediaTime, openMediaAiBatch, openMediaAiSettings, type MediaCapability, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
 import { mediaChat, closeMediaChat, validMediaChatIds, CHAT_CONTEXT_FIELDS, normalizeChatContextFields, type ChatCandidate, type ChatContextField, type ChatMessage, type ChatReference, type ChatSession, type ChatSessionView, type ChatSource, type ChatStreamEvent, type ChatToolCall, type ChatToolScope } from '@/common/mediaChat';
 import { openMediaChatMedia } from '@/common/mediaChatMedia';
-import { CHAT_RESIZE_EDGES, fitChatFrame, insertMediaMention, isChatNearBottom, mentionAtCaret, resizeChatFrame, slashAtCaret, type ChatFrame, type ChatResizeEdge, type MentionRange } from '@/common/mediaChatUi';
+import { CHAT_RESIZE_EDGES, captureChatDockAnchor, dockChatFrame, fitChatFrame, insertMediaMention, isChatNearBottom, mentionAtCaret, normalizeChatDockAnchor, resizeChatFrame, slashAtCaret, type ChatDockAnchor, type ChatFrame, type ChatResizeEdge, type MentionRange } from '@/common/mediaChatUi';
 import { IconAdd, IconArrowDown, IconClose, IconFile, IconFileInfo, IconHistory, IconLeft, IconMore, IconRename, IconSearch, IconSettings, IconTrash } from '@/common/icons';
 import { pendingChanges } from '@/common/pendingChanges';
 import ModalDialog from './ModalDialog.vue';
@@ -155,6 +156,8 @@ const viewport = ref({ width: window.innerWidth, height: window.innerHeight });
 const previewSize = computed(() => ({ width: Math.max(1, Math.min(860, viewport.value.width - 24)), height: Math.max(1, Math.min(740, viewport.value.height - 24)) }));
 const frame = ref<ChatFrame>({ x: 12, y: 12, width: 1000, height: 680 });
 const frameStyle = computed(() => ({ left: `${frame.value.x}px`, top: `${frame.value.y}px`, width: `${frame.value.width}px`, height: `${frame.value.height}px` }));
+const autoDockWindow = computed(() => config.settings.mediaChat?.autoDockWindow === true);
+let dockAnchor: ChatDockAnchor | null = null, frameReady = false;
 const showHistory = ref(false), historyQuery = ref(''), historyMenuId = ref(''), sessionActionsOpen = ref(false);
 const historyMenuStyle = ref<Record<string, string>>({});
 const sessions = ref<ChatSession[]>([]), view = ref<ChatSessionView | null>(null), activeLibrary = ref(''), configuration = ref<MediaConfiguration | null>(null);
@@ -625,8 +628,33 @@ async function applySuggestions() {
 }
 
 let gesture: { mode: 'move' | 'resize'; edge?: ChatResizeEdge; pointerId: number; x: number; y: number; frame: ChatFrame; target: HTMLElement } | undefined;
-function fitFrame() { endFrameGesture(); viewport.value = { width: window.innerWidth, height: window.innerHeight }; frame.value = fitChatFrame(frame.value, viewport.value); }
-function saveFrame() { try { localStorage.setItem('lap.media-chat.window', JSON.stringify(frame.value)); } catch { /* The dialog remains usable without storage. */ } }
+function fitFrame() {
+  endFrameGesture();
+  if (autoDockWindow.value && !dockAnchor) dockAnchor = captureChatDockAnchor(frame.value, viewport.value);
+  viewport.value = { width: window.innerWidth, height: window.innerHeight };
+  frame.value = autoDockWindow.value && dockAnchor ? dockChatFrame(dockAnchor, viewport.value) : fitChatFrame(frame.value, viewport.value);
+  saveFrame();
+}
+function saveFrame() { try { localStorage.setItem('lap.media-chat.window', JSON.stringify({ ...frame.value, ...(autoDockWindow.value && dockAnchor ? { dock: dockAnchor } : {}) })); } catch { /* The dialog remains usable without storage. */ } }
+function updateDockAfterGesture(mode: 'move' | 'resize', initial: ChatFrame) {
+  const previous = dockAnchor, next = captureChatDockAnchor(frame.value, viewport.value, previous);
+  if (previous && mode === 'resize') {
+    next.side = previous.side;
+    if (frame.value.width === initial.width) next.width = previous.width;
+    if (frame.value.height === initial.height) next.height = previous.height;
+  }
+  if (previous && mode === 'move') { next.width = previous.width; next.height = previous.height; }
+  dockAnchor = next;
+  frame.value = dockChatFrame(next, viewport.value);
+}
+function toggleAutoDockWindow() { config.setMediaChat({ autoDockWindow: !autoDockWindow.value }); sessionActionsOpen.value = false; }
+watch(autoDockWindow, enabled => {
+  if (!frameReady) return;
+  endFrameGesture();
+  dockAnchor = enabled ? captureChatDockAnchor(frame.value, viewport.value, dockAnchor) : null;
+  if (dockAnchor) frame.value = dockChatFrame(dockAnchor, viewport.value);
+  saveFrame();
+}, { flush: 'sync' });
 function resizeHandleStyle(edge: ChatResizeEdge) {
   const style: Record<string, string> = { cursor: `${edge}-resize` };
   if (edge.length === 2) { style.width = '12px'; style.height = '12px'; }
@@ -638,8 +666,8 @@ function resizeHandleStyle(edge: ChatResizeEdge) {
 }
 function beginFrameGesture(event: PointerEvent, mode: 'move' | 'resize', edge?: ChatResizeEdge) { if (event.button !== 0 || !event.isPrimary || (event.target as HTMLElement)?.closest('button, input, select, a')) return; event.preventDefault(); endFrameGesture(); const target = event.currentTarget as HTMLElement; gesture = { mode, edge, pointerId: event.pointerId, x: event.clientX, y: event.clientY, frame: { ...frame.value }, target }; try { target.setPointerCapture(event.pointerId); } catch { /* Window listeners also support platforms without pointer capture. */ } window.addEventListener('pointermove', moveFrameGesture); window.addEventListener('pointerup', endFrameGesture); window.addEventListener('pointercancel', endFrameGesture); window.addEventListener('blur', endFrameGesture); }
 function moveFrameGesture(event: PointerEvent) { if (!gesture || event.pointerId !== gesture.pointerId) return; const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y; frame.value = gesture.mode === 'move' ? fitChatFrame({ ...gesture.frame, x: gesture.frame.x + dx, y: gesture.frame.y + dy }, viewport.value) : resizeChatFrame(gesture.frame, gesture.edge || 'se', dx, dy, viewport.value); }
-function endFrameGesture(event?: PointerEvent | Event) { if (!gesture || event && 'pointerId' in event && event.pointerId !== gesture.pointerId) return; const old = gesture; gesture = undefined; if (old.target.hasPointerCapture?.(old.pointerId)) old.target.releasePointerCapture(old.pointerId); window.removeEventListener('pointermove', moveFrameGesture); window.removeEventListener('pointerup', endFrameGesture); window.removeEventListener('pointercancel', endFrameGesture); window.removeEventListener('blur', endFrameGesture); saveFrame(); }
-function resizeKeydown(event: KeyboardEvent, edge: ChatResizeEdge) { if (event.key === 'Escape') { endFrameGesture(); return; } if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); const step = event.shiftKey ? 16 : 8; frame.value = resizeChatFrame(frame.value, edge, event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0, event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0, viewport.value); saveFrame(); }
+function endFrameGesture(event?: PointerEvent | Event) { if (!gesture || event && 'pointerId' in event && event.pointerId !== gesture.pointerId) return; const old = gesture; gesture = undefined; if (old.target.hasPointerCapture?.(old.pointerId)) old.target.releasePointerCapture(old.pointerId); window.removeEventListener('pointermove', moveFrameGesture); window.removeEventListener('pointerup', endFrameGesture); window.removeEventListener('pointercancel', endFrameGesture); window.removeEventListener('blur', endFrameGesture); if (autoDockWindow.value) updateDockAfterGesture(old.mode, old.frame); saveFrame(); }
+function resizeKeydown(event: KeyboardEvent, edge: ChatResizeEdge) { if (event.key === 'Escape') { endFrameGesture(); return; } if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); const step = event.shiftKey ? 16 : 8, initial = frame.value; frame.value = resizeChatFrame(initial, edge, event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0, event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0, viewport.value); if (autoDockWindow.value) updateDockAfterGesture('resize', initial); saveFrame(); }
 watch(() => [mediaChat.open, mediaChat.revision], () => { if (mediaChat.open) void openEntry(); else { rememberDraft(); closePicker(); contextOpen.value = false; actionsOpen.value = false; actionSlash = null; sessionActionsOpen.value = false; historyMenuId.value = ''; cancelRename(); endFrameGesture(); previewOpen.value = false; toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; } }, { immediate: true });
 watch(() => mediaChat.open, open => { if (open && !inputRegistered) { uiStore.pushInputHandler('MediaChat'); inputRegistered = true; } else if (!open && inputRegistered) { uiStore.removeInputHandler('MediaChat'); inputRegistered = false; } }, { immediate: true });
 watch(() => libConfig._libraryId, libraryId => { if (activeLibrary.value && libraryId !== activeLibrary.value) { rememberDraft(); generation++; suggestionJob.value = ''; suggestionLibrary = ''; previewRows.value = []; previewError.value = ''; previewOpen.value = false; closeMediaChat(); } });
@@ -651,10 +679,14 @@ watch([selectedModelId, reasoningLevels, defaultReasoningEffort], normalizeReaso
 watch([draft, attachments, selectedModelId, reasoningEffort, toolsEnabled, toolScope, contextFields], () => { draftRevision++; rememberDraft(); }, { deep: true, flush: 'sync' });
 watch(() => { const messages = renderedMessages.value, last = messages.at(-1); return [messages.length, last?.content, last?.reasoningContent, last?.phase, last?.status, last?.toolCalls]; }, () => { if (mediaChat.open && !showHistory.value) void scrollMessages(); });
 onMounted(() => {
+  viewport.value = { width: window.innerWidth, height: window.innerHeight };
   try {
     const stored = localStorage.getItem('lap.media-chat.window');
-    frame.value = fitChatFrame(stored ? JSON.parse(stored) : {}, { width: window.innerWidth, height: window.innerHeight });
-  } catch { /* Use the initial frame. */ }
+    const remembered = stored ? JSON.parse(stored) : {};
+    frame.value = fitChatFrame(remembered, viewport.value);
+    dockAnchor = autoDockWindow.value ? normalizeChatDockAnchor(remembered?.dock) || captureChatDockAnchor(remembered, viewport.value) : null;
+  } catch { dockAnchor = autoDockWindow.value ? captureChatDockAnchor(frame.value, viewport.value) : null; }
+  frameReady = true;
   fitFrame();
   window.addEventListener('resize', fitFrame);
   window.addEventListener('pointerdown', dismissActionsOutside);

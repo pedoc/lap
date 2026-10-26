@@ -10,6 +10,7 @@ import * as Vue from 'vue';
 import * as ui from '../src/common/mediaChatUi.ts';
 import { CHAT_CONTEXT_FIELDS, normalizeChatContextFields } from '../src/common/mediaChat.ts';
 import { renderChatMarkdown } from '../src/common/chatMarkdown.ts';
+import { normalizeMediaChatSettings } from '../src/common/mediaChatPosition.ts';
 
 const source = readFileSync(new URL('../src/components/MediaChatDialog.vue', import.meta.url), 'utf8');
 const body = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
@@ -29,11 +30,12 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
   const listeners = new Map<string, Set<any>>(), storage = new Map<string, string>(), channels: any[] = [];
   const mediaChat = Vue.reactive({ open: false, libraryId: 'library-a', fileIds: [] as number[], revision: 0 });
   const libConfig = Vue.reactive({ _libraryId: 'library-a' });
+  const config = Vue.reactive({ settings: { mediaChat: normalizeMediaChatSettings() }, setMediaChat(patch: any) { this.settings.mediaChat = normalizeMediaChatSettings({ ...this.settings.mediaChat, ...patch }); } });
   const handlers: string[] = [], context: any = {
     ...Vue, ...ui, CHAT_CONTEXT_FIELDS, normalizeChatContextFields, crypto, setTimeout, clearTimeout, setInterval, clearInterval,
     Channel: class { onmessage: any; constructor() { channels.push(this); } },
     listen: async () => () => {},
-    mediaChat, libConfig, closeMediaChat: () => { mediaChat.open = false; }, validMediaChatIds: (values: number[]) => [...new Set(values.filter(id => Number.isSafeInteger(id) && id > 0))],
+    config, mediaChat, libConfig, closeMediaChat: () => { mediaChat.open = false; }, validMediaChatIds: (values: number[]) => [...new Set(values.filter(id => Number.isSafeInteger(id) && id > 0))],
     useI18n: () => i18n || ({ t: (key: string) => key, te: () => false }),
     useUIStore: () => ({ pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const i = handlers.indexOf(id); if (i >= 0) handlers.splice(i, 1); }, isInputActive: (id: string) => handlers.at(-1) === id }),
     onMounted: (fn: any) => mounts.push(fn), onUnmounted: (fn: any) => unmounts.push(fn),
@@ -59,7 +61,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
   return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage, channels,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -263,6 +265,83 @@ test('edge gestures keep the opposite corner fixed, track one pointer and clear 
   } finally { h.dispose(); }
   assert.equal(captures.size, 0);
   assert.equal([...h.listeners.values()].reduce((count, listeners) => count + listeners.size, 0), 0);
+});
+
+test('enabled docking follows app resizing and restores the preferred size after a narrow viewport', async () => {
+  const h = harness();
+  try {
+    h.storage.set('lap.media-chat.window', JSON.stringify({ x: 600, y: 200, width: 800, height: 500 }));
+    await h.boot(); h.mounts.forEach(mount => mount());
+    assert.equal(h.api.autoDockWindow.value, false);
+    h.api.toggleAutoDockWindow(); assert.equal(h.context.config.settings.mediaChat.autoDockWindow, true);
+    assert.equal(h.api.frame.value.x, 628);
+    const resize = (width: number, height: number) => { h.context.window.innerWidth = width; h.context.window.innerHeight = height; h.listeners.get('resize')!.forEach(listener => listener()); };
+    resize(1800, 1000);
+    assert.deepEqual(clone(h.api.frame.value), { x: 988, y: 250, width: 800, height: 500 });
+    resize(600, 500);
+    assert.deepEqual(clone(h.api.frame.value), { x: 12, y: 12, width: 576, height: 476 });
+    const saved = JSON.parse(h.storage.get('lap.media-chat.window')!);
+    assert.equal(saved.dock.side, 'right'); assert.equal(saved.dock.width, 800); assert.equal(saved.dock.verticalFraction, 0.5);
+    resize(1800, 1000);
+    assert.deepEqual(clone(h.api.frame.value), { x: 988, y: 250, width: 800, height: 500 });
+    h.mediaChat.open = false; await Vue.nextTick(); resize(2000, 1000);
+    assert.equal(h.api.frame.value.x, 1188, 'A hidden chat must still follow its remembered edge');
+  } finally { h.dispose(); }
+});
+
+test('dragging switches docking sides, manual resizing retains the side and disabling leaves a freely floating frame', async () => {
+  const h = harness();
+  try {
+    h.storage.set('lap.media-chat.window', JSON.stringify({ x: 100, y: 100, width: 800, height: 500 }));
+    await h.boot(); h.mounts.forEach(mount => mount()); h.api.toggleAutoDockWindow();
+    assert.equal(h.api.frame.value.x, 12);
+    const target = { setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
+    h.api.beginFrameGesture({ button: 0, isPrimary: true, pointerId: 4, clientX: 20, clientY: 120, currentTarget: target, target: { closest: () => null }, preventDefault() {} }, 'move');
+    h.listeners.get('pointermove')!.forEach(listener => listener({ pointerId: 4, clientX: 1000, clientY: 140 }));
+    h.listeners.get('pointerup')!.forEach(listener => listener({ pointerId: 4 }));
+    assert.equal(h.api.frame.value.x, 628);
+    assert.equal(JSON.parse(h.storage.get('lap.media-chat.window')!).dock.side, 'right');
+    h.api.resizeKeydown({ key: 'ArrowLeft', shiftKey: false, preventDefault() {} }, 'w');
+    assert.equal(h.api.frame.value.width, 808); assert.equal(h.api.frame.value.x + h.api.frame.value.width, 1428);
+    h.api.toggleAutoDockWindow(); assert.equal(h.api.autoDockWindow.value, false);
+    assert.equal(JSON.parse(h.storage.get('lap.media-chat.window')!).dock, undefined);
+    const x = h.api.frame.value.x;
+    h.context.window.innerWidth = 1800; h.api.fitFrame();
+    assert.equal(h.api.frame.value.x, x, 'Disabled docking keeps the free position while remaining in bounds');
+  } finally { h.dispose(); }
+});
+
+test('one-axis or no-op resizing in a narrow viewport preserves the preferred size on untouched axes', async () => {
+  const h = harness();
+  try {
+    h.storage.set('lap.media-chat.window', JSON.stringify({ x: 600, y: 200, width: 800, height: 500 }));
+    await h.boot(); h.mounts.forEach(mount => mount()); h.api.toggleAutoDockWindow();
+    h.context.window.innerWidth = 600; h.context.window.innerHeight = 600; h.api.fitFrame();
+    const target = { setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
+    h.api.beginFrameGesture({ button: 0, isPrimary: true, pointerId: 4, clientX: 20, clientY: 120, currentTarget: target, target: { closest: () => null }, preventDefault() {} }, 'resize', 'e');
+    h.api.endFrameGesture({ pointerId: 4 });
+    let dock = JSON.parse(h.storage.get('lap.media-chat.window')!).dock;
+    assert.equal(dock.width, 800); assert.equal(dock.height, 500);
+    h.api.resizeKeydown({ key: 'ArrowDown', shiftKey: false, preventDefault() {} }, 'e');
+    assert.equal(JSON.parse(h.storage.get('lap.media-chat.window')!).dock.width, 800);
+    h.api.resizeKeydown({ key: 'ArrowDown', shiftKey: false, preventDefault() {} }, 's');
+    dock = JSON.parse(h.storage.get('lap.media-chat.window')!).dock;
+    assert.equal(dock.width, 800); assert.equal(dock.height, 508);
+    h.context.window.innerWidth = 1800; h.context.window.innerHeight = 1000; h.api.fitFrame();
+    assert.equal(h.api.frame.value.width, 800); assert.equal(h.api.frame.value.height, 508);
+  } finally { h.dispose(); }
+});
+
+test('stored docking intent is applied after preference and frame restoration, independently of the last clamped frame', async () => {
+  const h = harness();
+  try {
+    h.context.window.innerWidth = 1800; h.context.window.innerHeight = 1000;
+    h.context.config.setMediaChat({ autoDockWindow: true });
+    h.storage.set('lap.media-chat.window', JSON.stringify({ x: 12, y: 12, width: 576, height: 476, dock: { side: 'right', verticalFraction: 0.75, width: 800, height: 500 } }));
+    await h.boot(); h.mounts.forEach(mount => mount());
+    assert.deepEqual(clone(h.api.frame.value), { x: 988, y: 369, width: 800, height: 500 });
+    assert.equal(JSON.parse(h.storage.get('lap.media-chat.window')!).dock.verticalFraction, 0.75);
+  } finally { h.dispose(); }
 });
 
 test('mentions add a real file ID, keyboard selection consumes Enter and ordinary text never invents reference IDs', async () => {

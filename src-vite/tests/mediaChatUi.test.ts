@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createI18n } from 'vue-i18n';
-import { CHAT_RESIZE_EDGES, fitChatFrame, insertMediaMention, isChatNearBottom, mentionAtCaret, resizeChatFrame, slashAtCaret } from '../src/common/mediaChatUi.ts';
+import { CHAT_RESIZE_EDGES, captureChatDockAnchor, dockChatFrame, fitChatFrame, insertMediaMention, isChatNearBottom, mentionAtCaret, normalizeChatDockAnchor, resizeChatFrame, slashAtCaret } from '../src/common/mediaChatUi.ts';
 
 test('mentions follow the caret, support Unicode names and never treat email text as a file reference', () => {
   assert.deepEqual(mentionAtCaret('比较 @海边', 6), { start: 3, end: 6, query: '海边' });
@@ -33,6 +33,35 @@ test('all eight resize edges move only their named sides and keep the opposite s
     assert.equal(resized.x + resized.width, edge.includes('e') ? 940 : 900, `${edge} right`);
     assert.equal(resized.y + resized.height, edge.includes('s') ? 640 : 600, `${edge} bottom`);
   }
+});
+
+test('docking follows the nearest horizontal edge and retains relative vertical placement as the app grows', () => {
+  const anchor = captureChatDockAnchor({ x: 600, y: 200, width: 800, height: 500 }, { width: 1440, height: 900 });
+  assert.deepEqual(anchor, { side: 'right', verticalFraction: 0.5, width: 800, height: 500 });
+  assert.deepEqual(dockChatFrame(anchor, { width: 1800, height: 1000 }), { x: 988, y: 250, width: 800, height: 500 });
+  const left = captureChatDockAnchor({ x: 30, y: 12, width: 800, height: 500 }, { width: 1440, height: 900 });
+  assert.deepEqual(dockChatFrame(left, { width: 1800, height: 1000 }), { x: 12, y: 12, width: 800, height: 500 });
+  const bottom = captureChatDockAnchor({ x: 600, y: 388, width: 800, height: 500 }, { width: 1440, height: 900 });
+  assert.equal(dockChatFrame(bottom, { width: 1800, height: 1100 }).y, 588);
+});
+
+test('temporarily narrow viewports cannot erase the docking side, vertical intent or preferred size', () => {
+  const anchor = { side: 'right' as const, verticalFraction: 1, width: 800, height: 500 };
+  const narrow = dockChatFrame(anchor, { width: 600, height: 500 });
+  assert.deepEqual(narrow, { x: 12, y: 12, width: 576, height: 476 });
+  const captured = captureChatDockAnchor(narrow, { width: 600, height: 500 }, anchor);
+  assert.equal(captured.side, 'right'); assert.equal(captured.verticalFraction, 1);
+  assert.deepEqual(dockChatFrame(anchor, { width: 1800, height: 1000 }), { x: 988, y: 488, width: 800, height: 500 });
+  assert.equal(anchor.width, 800); assert.equal(anchor.height, 500);
+  assert.equal(captureChatDockAnchor({}, { width: 600, height: 500 }).side, 'right');
+});
+
+test('stored docking metadata is validated and an equal-distance side remains stable', () => {
+  for (const value of [null, {}, { side: 'top', width: 800, height: 500, verticalFraction: 0 }, { side: 'left', width: -1, height: 500, verticalFraction: 0 }, { side: 'left', width: 800, height: 500, verticalFraction: NaN }]) assert.equal(normalizeChatDockAnchor(value), null);
+  const anchor = normalizeChatDockAnchor({ side: 'left', width: 800, height: 500, verticalFraction: 3 })!;
+  assert.equal(anchor.verticalFraction, 1);
+  assert.equal(captureChatDockAnchor({ x: 320, y: 200, width: 800, height: 500 }, { width: 1440, height: 900 }, anchor).side, 'left');
+  assert.equal(captureChatDockAnchor({ x: 320, y: 200, width: 800, height: 500 }, { width: 1440, height: 900 }).side, 'right');
 });
 
 test('edge resizing clamps to viewport and minimum size without shifting the fixed opposite corner', () => {

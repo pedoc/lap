@@ -322,7 +322,7 @@ export const useConfigStore = defineStore('configStore', {
       const samePosition = current?.floatingPosition === next.floatingPosition
         || current?.floatingPosition && next.floatingPosition
           && current.floatingPosition.x === next.floatingPosition.x && current.floatingPosition.y === next.floatingPosition.y;
-      if (current?.showFloatingButton === next.showFloatingButton && current?.defaultPosition === next.defaultPosition && samePosition) return;
+      if (current?.showFloatingButton === next.showFloatingButton && current?.autoDockWindow === next.autoDockWindow && current?.defaultPosition === next.defaultPosition && samePosition) return;
       this.settings.mediaChat = next;
     },
     setAutoCheckUpdates(autoCheckUpdates) {

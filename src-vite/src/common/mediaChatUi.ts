@@ -20,6 +20,31 @@ export function fitChatFrame(frame: Partial<ChatFrame>, viewport: { width: numbe
   const y = Math.max(12, Math.min(Math.max(12, viewport.height - height - 12), finite(frame.y, (viewport.height - height) / 2)));
   return { x, y, width, height };
 }
+export interface ChatDockAnchor { side: 'left' | 'right'; verticalFraction: number; width: number; height: number }
+export function normalizeChatDockAnchor(value: unknown): ChatDockAnchor | null {
+  if (!value || typeof value !== 'object') return null;
+  const anchor = value as ChatDockAnchor;
+  if (!['left', 'right'].includes(anchor.side) || ![anchor.verticalFraction, anchor.width, anchor.height].every(Number.isFinite) || anchor.width <= 0 || anchor.height <= 0) return null;
+  return { side: anchor.side, verticalFraction: Math.max(0, Math.min(1, anchor.verticalFraction)), width: anchor.width, height: anchor.height };
+}
+export function captureChatDockAnchor(frame: Partial<ChatFrame>, viewport: { width: number; height: number }, previous?: ChatDockAnchor | null): ChatDockAnchor {
+  const fitted = fitChatFrame(frame, viewport);
+  const horizontal = Math.max(0, viewport.width - fitted.width - 24), vertical = Math.max(0, viewport.height - fitted.height - 24);
+  const left = fitted.x - 12, right = horizontal - left;
+  return {
+    side: horizontal === 0 || Math.abs(left - right) < 1 ? previous?.side || 'right' : left < right ? 'left' : 'right',
+    verticalFraction: vertical > 0 ? Math.max(0, Math.min(1, (fitted.y - 12) / vertical)) : previous?.verticalFraction ?? 0.5,
+    width: Number.isFinite(frame.width) && frame.width! > 0 ? frame.width! : fitted.width,
+    height: Number.isFinite(frame.height) && frame.height! > 0 ? frame.height! : fitted.height,
+  };
+}
+export function dockChatFrame(anchor: ChatDockAnchor, viewport: { width: number; height: number }): ChatFrame {
+  const fitted = fitChatFrame(anchor, viewport);
+  return { ...fitted,
+    x: anchor.side === 'left' ? 12 : Math.max(12, viewport.width - fitted.width - 12),
+    y: 12 + Math.max(0, viewport.height - fitted.height - 24) * Math.max(0, Math.min(1, anchor.verticalFraction)),
+  };
+}
 export function resizeChatFrame(initial: ChatFrame, edge: ChatResizeEdge, dx: number, dy: number, viewport: { width: number; height: number }): ChatFrame {
   const frame = fitChatFrame(initial, viewport);
   const minWidth = Math.min(620, Math.max(1, viewport.width - 24)), minHeight = Math.min(420, Math.max(1, viewport.height - 24));

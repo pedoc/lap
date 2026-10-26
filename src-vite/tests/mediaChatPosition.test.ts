@@ -43,10 +43,10 @@ test('resizing clamps the effective location without overwriting the remembered 
 
 test('malformed settings and unavailable geometry use finite safe defaults', () => {
   assert.deepEqual(normalizeMediaChatSettings({ showFloatingButton: 'false', defaultPosition: 'center', floatingPosition: { x: Infinity, y: 0 } }), {
-    showFloatingButton: true, defaultPosition: 'bottom-right', floatingPosition: null,
+    showFloatingButton: true, autoDockWindow: false, defaultPosition: 'bottom-right', floatingPosition: null,
   });
   assert.deepEqual(normalizeMediaChatSettings({ showFloatingButton: false, floatingPosition: { x: -1, y: 4 } }), {
-    showFloatingButton: false, defaultPosition: 'bottom-right', floatingPosition: { x: 0, y: 1 },
+    showFloatingButton: false, autoDockWindow: false, defaultPosition: 'bottom-right', floatingPosition: { x: 0, y: 1 },
   });
   assert.deepEqual(getFloatingChatPosition({}, { width: NaN, height: Infinity }, 48), { x: 0, y: 0 });
   assert.deepEqual(normalizeFloatingChatPosition({ x: NaN, y: Infinity }, { width: 20, height: 20 }, 48), { x: 0, y: 0 });
@@ -54,6 +54,16 @@ test('malformed settings and unavailable geometry use finite safe defaults', () 
   const next = normalizeMediaChatSettings({}, first);
   next.floatingPosition!.x = 1;
   assert.equal(first.floatingPosition!.x, 0.4, 'normalized preference objects must not share mutable position records');
+});
+
+test('window docking defaults off and honors explicit booleans while preserving current preferences', () => {
+  assert.equal(normalizeMediaChatSettings().autoDockWindow, false);
+  assert.equal(normalizeMediaChatSettings({ showFloatingButton: false }).autoDockWindow, false);
+  const current = normalizeMediaChatSettings({ autoDockWindow: true, floatingPosition: { x: 0.3, y: 0.6 } });
+  assert.equal(normalizeMediaChatSettings({ autoDockWindow: 'false' }, current).autoDockWindow, true);
+  const disabled = normalizeMediaChatSettings({ autoDockWindow: false }, current);
+  assert.equal(disabled.autoDockWindow, false);
+  assert.deepEqual(disabled.floatingPosition, current.floatingPosition);
 });
 
 function configDefinition() {
@@ -70,8 +80,8 @@ test('fresh and legacy persisted configuration receive media chat defaults and s
   const legacy = definition.persist.serializer.deserialize('{"settings":{"showStatusBar":false}}');
   assert.equal(legacy.settings.showStatusBar, false);
   assert.deepEqual(copy(legacy.settings.mediaChat), normalizeMediaChatSettings());
-  const saved = definition.persist.serializer.deserialize('{"settings":{"mediaChat":{"showFloatingButton":false,"defaultPosition":"top-left","floatingPosition":{"x":2,"y":-1}}}}');
-  assert.deepEqual(copy(saved.settings.mediaChat), { showFloatingButton: false, defaultPosition: 'top-left', floatingPosition: { x: 1, y: 0 } });
+  const saved = definition.persist.serializer.deserialize('{"settings":{"mediaChat":{"showFloatingButton":false,"autoDockWindow":true,"defaultPosition":"top-left","floatingPosition":{"x":2,"y":-1}}}}');
+  assert.deepEqual(copy(saved.settings.mediaChat), { showFloatingButton: false, autoDockWindow: true, defaultPosition: 'top-left', floatingPosition: { x: 1, y: 0 } });
 });
 
 test('the real settings controls preserve hidden positions and reset only the requested preference', () => {
@@ -81,7 +91,7 @@ test('the real settings controls preserve hidden positions and reset only the re
   const ai = config.settings.ai;
   const { descriptor } = parse(readFileSync(new URL('../src/views/Settings.vue', import.meta.url), 'utf8'));
   const script = compileScript(descriptor, { id: 'media-chat-preferences' });
-  const names = ['mediaChatPreferences', 'showFloatingChatButton', 'floatingChatDefaultPosition', 'resetFloatingChatPosition'];
+  const names = ['mediaChatPreferences', 'showFloatingChatButton', 'autoDockChatWindow', 'floatingChatDefaultPosition', 'resetFloatingChatPosition'];
   const code = names.map(name => {
     const node: any = script.scriptSetupAst!.find((node: any) => node.type === 'FunctionDeclaration' && node.id.name === name
       || node.type === 'VariableDeclaration' && node.declarations.some((item: any) => item.id.name === name));
@@ -89,14 +99,19 @@ test('the real settings controls preserve hidden positions and reset only the re
     return descriptor.scriptSetup!.content.slice(node.start, node.end);
   }).join('\n');
   const controls = runInNewContext(`${stripTypeScriptTypes(code)};({${names.join(',')}})`, { ...Vue, config, normalizeMediaChatSettings });
+  assert.equal(controls.autoDockChatWindow.value, false);
+  controls.autoDockChatWindow.value = true;
+  assert.equal(config.settings.mediaChat.autoDockWindow, true);
+  assert.deepEqual(copy(config.settings.mediaChat.floatingPosition), { x: 0.2, y: 0.7 });
+  controls.autoDockChatWindow.value = false;
   controls.showFloatingChatButton.value = false;
-  assert.deepEqual(copy(config.settings.mediaChat), { showFloatingButton: false, defaultPosition: 'bottom-right', floatingPosition: { x: 0.2, y: 0.7 } });
+  assert.deepEqual(copy(config.settings.mediaChat), { showFloatingButton: false, autoDockWindow: false, defaultPosition: 'bottom-right', floatingPosition: { x: 0.2, y: 0.7 } });
   controls.showFloatingChatButton.value = true;
   controls.floatingChatDefaultPosition.value = 'top-left';
-  assert.deepEqual(copy(config.settings.mediaChat), { showFloatingButton: true, defaultPosition: 'top-left', floatingPosition: null });
+  assert.deepEqual(copy(config.settings.mediaChat), { showFloatingButton: true, autoDockWindow: false, defaultPosition: 'top-left', floatingPosition: null });
   config.setMediaChat({ floatingPosition: { x: 0.9, y: 0.8 } });
   controls.resetFloatingChatPosition();
-  assert.deepEqual(copy(config.settings.mediaChat), { showFloatingButton: true, defaultPosition: 'top-left', floatingPosition: null });
+  assert.deepEqual(copy(config.settings.mediaChat), { showFloatingButton: true, autoDockWindow: false, defaultPosition: 'top-left', floatingPosition: null });
   assert.equal(config.settings.ai, ai, 'launcher preferences must leave model configuration untouched');
 });
 
@@ -174,15 +189,17 @@ test('standalone settings and the main window synchronize both directions withou
     runInNewContext(source.slice(update.start, update.end), mainContext);
     runInNewContext(source.slice(sync.start, sync.end), { config: settings, isMainWindow: false, isSettingsWindow: true, listen, emit, settingsSyncRequest: 0 });
     scope.run(() => runInNewContext(chatPreferenceWatch(), { config: settings, props: { embedded: false }, watch: Vue.watch, emit }));
-    settings.setMediaChat({ showFloatingButton: false, defaultPosition: 'top-left', floatingPosition: { x: 0.25, y: 0.75 } });
+    settings.setMediaChat({ showFloatingButton: false, autoDockWindow: true, defaultPosition: 'top-left', floatingPosition: { x: 0.25, y: 0.75 } });
     for (let i = 0; i < 4; i++) await Vue.nextTick();
     assert.deepEqual(copy(main.settings.mediaChat), copy(settings.settings.mediaChat));
+    assert.equal(main.settings.mediaChat.autoDockWindow, true);
     assert.deepEqual(events, ['settings-mediaChat-changed', 'config-settings-synced']);
     events.length = 0;
-    main.setMediaChat({ floatingPosition: { x: 0.8, y: 0.2 } });
+    main.setMediaChat({ autoDockWindow: false, floatingPosition: { x: 0.8, y: 0.2 } });
     const current = main.settings.mediaChat;
     for (let i = 0; i < 4; i++) await Vue.nextTick();
     assert.deepEqual(copy(settings.settings.mediaChat), copy(current));
+    assert.equal(settings.settings.mediaChat.autoDockWindow, false);
     assert.equal(main.settings.mediaChat, current, 'The reflected update must preserve the main window object');
     assert.deepEqual(events, ['config-settings-synced', 'settings-mediaChat-changed']);
   } finally { scope.stop(); stops.forEach(stop => stop()); }

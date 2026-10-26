@@ -16,6 +16,8 @@
     "open_chat": "Open media chat",
     "launcher_label": "Chat",
     "show_floating_button": "Show floating chat button",
+    "auto_dock_window": "Dock chat window to an edge",
+    "auto_dock_window_hint": "Stay at the left or right edge as the app window resizes. Drag the chat window to switch sides.",
     "floating_button_hint": "Controls the library button only. Chat remains available from the media viewer toolbar.",
     "default_position": "Default position",
     "floating_position_hint": "Choosing a corner resets the position. Dragging remembers a custom position.",

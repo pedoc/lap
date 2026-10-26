@@ -47,7 +47,7 @@ test('upstream collage and editor preferences round-trip without replacing newly
 });
 
 test('floating chat preferences restore remembered coordinates into a fresh null default', () => {
-  const mediaChat = { showFloatingButton: false, defaultPosition: 'top-left', floatingPosition: { x: 0.25, y: 0.75 } };
+  const mediaChat = { showFloatingButton: false, autoDockWindow: true, defaultPosition: 'top-left', floatingPosition: { x: 0.25, y: 0.75 } };
   const saved = backupPreferences({ settings: { mediaChat } });
   const store = {
     $state: { settings: { mediaChat: normalizeMediaChatSettings(), showStatusBar: true } },
@@ -67,5 +67,20 @@ test('partial or malformed restored chat preferences preserve current valid choi
   applyBackupPreferences(store, { settings: { mediaChat: { showFloatingButton: 1, defaultPosition: 'center', floatingPosition: { x: '1', y: null } } } });
   assert.deepEqual(store.$state.settings.mediaChat, current);
   applyBackupPreferences(store, { settings: { mediaChat: { floatingPosition: null } } });
-  assert.deepEqual(store.$state.settings.mediaChat, { showFloatingButton: false, defaultPosition: 'top-right', floatingPosition: null });
+  assert.deepEqual(store.$state.settings.mediaChat, { showFloatingButton: false, autoDockWindow: false, defaultPosition: 'top-right', floatingPosition: null });
+});
+
+test('old chat backups preserve the docking default and explicit disabling survives restoration', () => {
+  const store = {
+    $state: { settings: { mediaChat: normalizeMediaChatSettings() } },
+    $patch(patch: any) { Object.assign(this.$state, patch); }, $persist() {},
+  };
+  applyBackupPreferences(store, { settings: { mediaChat: { showFloatingButton: false } } });
+  assert.equal(store.$state.settings.mediaChat.autoDockWindow, false);
+  store.$state.settings.mediaChat.autoDockWindow = true;
+  applyBackupPreferences(store, { settings: { mediaChat: { autoDockWindow: 'false' } } });
+  assert.equal(store.$state.settings.mediaChat.autoDockWindow, true);
+  applyBackupPreferences(store, { settings: { mediaChat: { autoDockWindow: false } } });
+  assert.equal(store.$state.settings.mediaChat.autoDockWindow, false);
+  assert.equal(store.$state.settings.mediaChat.showFloatingButton, false);
 });
