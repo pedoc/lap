@@ -43,12 +43,12 @@ pub fn definitions() -> Vec<Tool> {
     let mut out = vec![
         tool(
             "get_media_info",
-            "Read existing catalogue data for visible media. Request only needed fields. Does not run recognition. People names distinguish confirmed/suggested/unknown; regions and index state include coverage. Local paths and embeddings are never returned.",
+            "Read existing catalogue data for visible media. Request only needed fields. Does not run recognition. People names distinguish confirmed/suggested/unknown; regions and index state include coverage. Position describes the face center in the displayed image only when coordinate alignment is known. Local paths and embeddings are never returned.",
             json!({"type":"object","properties":{"file_ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"maxItems":16},"fields":{"type":"array","items":{"type":"string","enum":["file","tags","people","objects","ocr","exif","location","analysis"]},"uniqueItems":true}},"required":["file_ids"],"additionalProperties":false}),
         ),
         tool(
             "get_media_content",
-            "Read authorized pixels of one visible image or a video interval of at most 60 seconds (three sampled frames). A normalized x,y,width,height region requires explicit coordinate_space. decoded_image means EXIF-oriented decoded pixels. Rotated legacy face_catalog/source_image and OCR document regions require full-image review instead of implicit conversion. Cloud-only originals are never downloaded.",
+            "Read authorized pixels of one visible image or a video interval of at most 60 seconds (three sampled frames), with the permitted catalogue context. A normalized x,y,width,height region requires explicit coordinate_space. decoded_image means EXIF-oriented decoded pixels. Rotated legacy face_catalog/source_image and OCR document regions require full-image review instead of implicit conversion. Catalogue regions describe the full image, not a cropped view. Cloud-only originals are never downloaded.",
             json!({"type":"object","properties":{"file_id":{"type":"integer","minimum":1},"start":{"type":"number","minimum":0},"end":{"type":"number","minimum":0},"region":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"coordinate_space":{"type":"string","enum":["decoded_image","source_image","face_catalog","ocr_document"]}},"required":["file_id"],"additionalProperties":false}),
         ),
         search::definition(),
@@ -258,6 +258,7 @@ fn info_on(
     let mut items = Vec::new();
     let mut refs = Vec::new();
     let mut truncated = false;
+    let item_budget = (64 * 1024 - 512) / ids.len().max(1);
     for id in ids {
         let src = store::source(c, *id)?;
         let mut item = json!({"fileId":id,"sourceStamp":src.stamp(),"indexStatus":index_status(c,&src,configuration)?});
@@ -272,17 +273,7 @@ fn info_on(
         };
             item[field] = value;
         }
-        if serde_json::to_vec(&items)
-            .map_err(|_| "工具结果编码失败")?
-            .len()
-            + serde_json::to_vec(&item)
-                .map_err(|_| "工具结果编码失败")?
-                .len()
-            > 64 * 1024
-        {
-            truncated = true;
-            break;
-        }
+        truncated |= fit_info_item(&mut item, item_budget)?;
         let end = if src.kind == 2 {
             (src.duration as f64).min(60.0).max(0.0)
         } else {
@@ -297,6 +288,95 @@ fn info_on(
         parts: Vec::new(),
         local: None,
     })
+}
+fn reduce_info_value(value: &mut Value) -> bool {
+    match value {
+        Value::String(text) if text.chars().count() > 128 => {
+            *text = limited(text, (text.chars().count() / 2).max(128));
+            true
+        }
+        Value::Array(items) if items.iter().all(Value::is_number) => false,
+        Value::Array(items) if items.len() > 1 => {
+            items.truncate(items.len().div_ceil(2));
+            true
+        }
+        Value::Array(items) => items.iter_mut().any(reduce_info_value),
+        Value::Object(fields) => fields.values_mut().any(reduce_info_value),
+        _ => false,
+    }
+}
+fn fit_info_item(item: &mut Value, budget: usize) -> Result<bool, String> {
+    let mut truncated = Vec::new();
+    let target = budget.saturating_sub(256);
+    // Long prose must not evict the whole image, its people, or every later reference.
+    for field in [
+        "analysis", "ocr", "exif", "tags", "file", "location", "objects", "people",
+    ] {
+        let mut changed = false;
+        while serde_json::to_vec(item)
+            .map_err(|_| "工具结果编码失败")?
+            .len()
+            > target
+        {
+            let Some(value) = item.get_mut(field) else {
+                break;
+            };
+            if !reduce_info_value(value) {
+                if !["people", "objects"].contains(&field) {
+                    *value = if value.is_array() {
+                        json!([])
+                    } else {
+                        json!({"status":"omitted","reason":"context_budget"})
+                    };
+                    changed = true;
+                }
+                break;
+            }
+            changed = true;
+        }
+        if changed {
+            truncated.push(field);
+            item["truncatedFields"] = json!(truncated);
+        }
+    }
+    if serde_json::to_vec(item)
+        .map_err(|_| "工具结果编码失败")?
+        .len()
+        > budget
+    {
+        return Err("媒体资料摘要仍超过大小上限，请减少引用数量或资料类别。".into());
+    }
+    Ok(!truncated.is_empty())
+}
+pub(super) fn context_on(
+    c: &Connection,
+    references: &[chat::Reference],
+    fields: &[String],
+    configuration: &config::Configuration,
+) -> Result<Value, String> {
+    for reference in references {
+        if store::source(c, reference.file_id)?.stamp() != reference.source_stamp {
+            return Err("媒体已变化，请重新引用。".into());
+        }
+    }
+    if fields.is_empty() {
+        return Ok(json!({"status":"ok","items":[],"truncated":false}));
+    }
+    let ids: Vec<_> = references
+        .iter()
+        .map(|reference| reference.file_id)
+        .collect();
+    let mut output = info_on(c, &ids, fields, configuration)?.json;
+    for item in output["items"].as_array_mut().ok_or("媒体资料无法编码")? {
+        let index = references
+            .iter()
+            .position(|reference| item["fileId"] == reference.file_id)
+            .ok_or("媒体资料与引用不匹配")?;
+        if item["sourceStamp"] != references[index].source_stamp {
+            return Err("媒体已变化，请重新引用。".into());
+        }
+    }
+    Ok(output)
 }
 fn tags(c: &Connection, id: i64) -> Result<Value, String> {
     let mut s=c.prepare("SELECT t.id,t.name FROM atags t JOIN afile_tags ft ON ft.tag_id=t.id WHERE ft.file_id=?1 ORDER BY t.id LIMIT 101").map_err(store::sql_error)?;
@@ -329,6 +409,40 @@ fn person_name(c: &Connection, id: Option<i64>) -> Result<Option<String>, String
 fn people(c: &Connection, src: &store::MediaSource) -> Result<Value, String> {
     people_on(c, src, &crate::t_search::Profiles::current().face)
 }
+fn face_position(region: &face_annotations::Region, orientation: i32) -> Option<Value> {
+    if orientation != 1
+        || ![region.x, region.y, region.width, region.height]
+            .iter()
+            .all(|value| value.is_finite())
+        || region.x < 0.0
+        || region.y < 0.0
+        || region.width <= 0.0
+        || region.height <= 0.0
+        || region.x + region.width > 1.00001
+        || region.y + region.height > 1.00001
+    {
+        return None;
+    }
+    let x = region.x + region.width / 2.0;
+    let y = region.y + region.height / 2.0;
+    let horizontal = if x < 1.0 / 3.0 {
+        "left"
+    } else if x > 2.0 / 3.0 {
+        "right"
+    } else {
+        "center"
+    };
+    let vertical = if y < 1.0 / 3.0 {
+        "top"
+    } else if y > 2.0 / 3.0 {
+        "bottom"
+    } else {
+        "middle"
+    };
+    Some(
+        json!({"horizontal":horizontal,"vertical":vertical,"center":[x,y],"basis":"decoded_image","subject":"face_center"}),
+    )
+}
 fn people_on(c: &Connection, src: &store::MediaSource, profile: &str) -> Result<Value, String> {
     if src.kind == 2 {
         return Ok(
@@ -350,7 +464,7 @@ fn people_on(c: &Connection, src: &store::MediaSource, profile: &str) -> Result<
             } else {
                 "unknown"
             };
-            items.push(json!({"annotationId":a.id,"personId":if name.is_some(){a.person_id}else{None},"name":name,"state":state,"region":a.region,"source":"manual"}));
+            items.push(json!({"annotationId":a.id,"personId":if name.is_some(){a.person_id}else{None},"name":name,"state":state,"position":face_position(&a.region,src.orientation),"region":a.region,"source":"manual"}));
         }
     }
     let scanned = if columns(c, "afiles")?.contains("has_faces") {
@@ -399,13 +513,13 @@ fn people_on(c: &Connection, src: &store::MediaSource, profile: &str) -> Result<
             let region =
                 face_annotations::normalized_box(&bounds, src.width as i64, src.height as i64)?;
             let name = person_name(c, person)?;
-            items.push(json!({"faceId":id,"personId":if name.is_some(){person}else{None},"state":if name.is_some(){"suggested"}else{"unknown"},"name":name,"region":region,"source":"automatic"}));
+            items.push(json!({"faceId":id,"personId":if name.is_some(){person}else{None},"state":if name.is_some(){"suggested"}else{"unknown"},"name":name,"position":face_position(&region,src.orientation),"region":region,"source":"automatic"}));
         }
     }
     let truncated = items.len() > 100;
     items.truncate(100);
     Ok(
-        json!({"status":if items.is_empty()&&!compatible&&scanned!=0{"stale"}else if scanned==0&&items.is_empty(){"not_indexed"}else{"ready"},"items":items,"truncated":truncated,"modelCompatible":compatible,"scanComplete":scanned!=0&&compatible,"coverage":if scanned!=0&&compatible{"indexed_image"}else{"manual_regions_only"},"coordinateSpace":{"units":"normalized","basis":"face_catalog","width":src.width,"height":src.height,"exifOrientation":src.orientation,"cropSupported":src.orientation==1}}),
+        json!({"status":if items.is_empty()&&!compatible&&scanned!=0{"stale"}else if scanned==0&&items.is_empty(){"not_indexed"}else{"ready"},"items":items,"truncated":truncated,"modelCompatible":compatible,"scanComplete":scanned!=0&&compatible,"coverage":if scanned!=0&&compatible{"indexed_image"}else{"manual_regions_only"},"positionStatus":if src.orientation==1{"display_aligned"}else{"coordinate_alignment_unknown"},"coordinateSpace":{"units":"normalized","basis":"face_catalog","origin":"top_left","regionFormat":"x_y_width_height","width":src.width,"height":src.height,"exifOrientation":src.orientation,"cropSupported":src.orientation==1}}),
     )
 }
 fn objects(c: &Connection, id: i64) -> Result<Value, String> {
@@ -639,15 +753,30 @@ async fn content(library: &str, args: &Value, ctx: &ToolContext) -> Result<ToolO
             .map_err(|_| "媒体画面准备失败，请检查原文件与采样区间。".to_string())?
     };
     chat::check_model(&config::load()?, &ctx.model, &[cap])?;
-    let reference = store::db(library, |c| {
-        let current = store::source(c, src.file_id)?;
-        if current.stamp() != src.stamp() {
-            return Err("媒体已变化，请重新引用。".into());
-        }
-        reference_on(c, src.clone(), start, end)
-    })?;
+    let configuration = config::load()?;
+    store::db(library, |c| {
+        let reference = reference_on(c, src.clone(), start, end)?;
+        content_output_on(
+            c,
+            &args,
+            reference,
+            parts,
+            &ctx.allowed_fields,
+            &configuration,
+        )
+    })
+}
+fn content_output_on(
+    c: &Connection,
+    args: &ContentArgs,
+    reference: chat::Reference,
+    parts: Vec<ContentPart>,
+    fields: &[String],
+    configuration: &config::Configuration,
+) -> Result<ToolOutput, String> {
+    let catalogue = context_on(c, std::slice::from_ref(&reference), fields, configuration)?;
     Ok(ToolOutput {
-        json: json!({"status":"ok","items":[{"fileId":src.file_id,"start":start,"end":end,"region":args.region,"coordinateSpace":args.coordinate_space,"frameCount":if src.kind==2{3}else{1},"coverage":if src.kind==2{"sampled_frames_only"}else{"image"}}]}),
+        json: json!({"status":"ok","items":[{"fileId":reference.file_id,"start":reference.start,"end":reference.end,"region":args.region,"coordinateSpace":args.coordinate_space,"frameCount":if reference.file_type==2{3}else{1},"coverage":if reference.file_type==2{"sampled_frames_only"}else{"image"}}],"catalogue":catalogue}),
         references: vec![reference],
         parts,
         local: None,
@@ -780,6 +909,51 @@ mod tests {
                 .iter()
                 .any(|f| f["state"] == "confirmed" && f["name"] == "Visible Name")
         );
+        let named = faces.iter().find(|f| f["name"] == "Visible Name").unwrap();
+        assert_eq!(named["position"]["horizontal"], "left");
+        assert_eq!(named["position"]["subject"], "face_center");
+        assert_eq!(named["region"]["width"], json!(0.2f32));
+        let args: ContentArgs = serde_json::from_value(json!({"file_id":1})).unwrap();
+        let pixels = vec![ContentPart::from_binary_base64(
+            "image/jpeg",
+            "synthetic-pixels",
+            None,
+        )];
+        let content = content_output_on(
+            &c,
+            &args,
+            output.references[0].clone(),
+            pixels,
+            &["people".into()],
+            &config::Configuration::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            content.json["catalogue"]["items"][0]["people"]["items"][0]["name"],
+            "Visible Name"
+        );
+        assert_eq!(
+            content.json["catalogue"]["items"][0]["people"]["items"][0]["position"]["horizontal"],
+            "left"
+        );
+        assert!(content.json["catalogue"]["items"][0].get("file").is_none());
+        assert_eq!(content.parts.len(), 1);
+        assert!(!content.json.to_string().contains(&src.path));
+        let plain = content_output_on(
+            &c,
+            &args,
+            output.references[0].clone(),
+            Vec::new(),
+            &[],
+            &config::Configuration::default(),
+        )
+        .unwrap();
+        assert!(
+            plain.json["catalogue"]["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         assert!(
             faces
                 .iter()
@@ -813,6 +987,48 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn assistant_face_positions_do_not_guess_rotated_or_invalid_coordinates() {
+        let mut region = face_annotations::Region {
+            x: 0.7,
+            y: 0.1,
+            width: 0.1,
+            height: 0.1,
+        };
+        let position = face_position(&region, 1).unwrap();
+        assert_eq!(position["horizontal"], "right");
+        assert_eq!(position["vertical"], "top");
+        for orientation in 2..=8 {
+            assert!(face_position(&region, orientation).is_none());
+        }
+        region.width = f32::NAN;
+        assert!(face_position(&region, 1).is_none());
+        region.width = 0.5;
+        assert!(face_position(&region, 1).is_none());
+    }
+    #[test]
+    fn assistant_context_budget_keeps_people_regions_and_every_media_summary() {
+        let face = json!({"name":"Fixture Person","state":"confirmed","region":{"x":0.1,"y":0.2,"width":0.2,"height":0.3},"position":{"horizontal":"left","center":[0.2,0.35]}});
+        let mut output = json!({"status":"ok","items":[],"truncated":false});
+        for id in 1..=16 {
+            let mut item = json!({"fileId":id,"sourceStamp":"fixture","people":{"items":[face.clone()]},"objects":{"items":[{"id":"object-1","bounds":[0.1,0.2,0.3,0.4],"class":{"name":"person"}}]},"ocr":{"text":"长文字".repeat(12000),"items":[{"text":"长文字".repeat(1000),"bounds":[0.1,0.2,0.3,0.4]}]},"analysis":(0..12).map(|index|json!({"analysisId":format!("a-{index}"),"description":"长说明".repeat(3000)})).collect::<Vec<_>>()});
+            assert!(fit_info_item(&mut item, (64 * 1024 - 512) / 16).unwrap());
+            assert_eq!(item["people"]["items"][0], face);
+            assert_eq!(
+                item["objects"]["items"][0]["bounds"],
+                json!([0.1, 0.2, 0.3, 0.4])
+            );
+            assert!(
+                item["truncatedFields"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("analysis"))
+            );
+            output["items"].as_array_mut().unwrap().push(item);
+        }
+        assert_eq!(output["items"].as_array().unwrap().len(), 16);
+        assert!(serde_json::to_vec(&output).unwrap().len() <= 64 * 1024);
     }
     #[test]
     fn assistant_effective_object_and_ocr_human_edits_override_models() {

@@ -18,7 +18,6 @@
       </div>
     </div>
     <div class="absolute top-3 left-3 z-30 flex flex-col items-end gap-1" @mousedown.stop @dblclick.stop>
-      <button class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm" :class="ocrShowBoxes ? 'text-primary' : ''" :aria-pressed="ocrShowBoxes" @click.stop="ocrShowBoxes = !ocrShowBoxes">{{ t('ocr.boxes') }} · {{ document.lines.length }}</button>
       <p v-if="ocrShowBoxes && !compatible" class="max-w-60 rounded-box bg-base-100/90 p-2 text-xs text-warning">{{ t('ocr.geometry_hint') }}</p>
     </div>
   </template>

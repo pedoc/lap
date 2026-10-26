@@ -748,7 +748,13 @@ test('the actual dialog renders composer model and reasoning controls, media car
       state.previewOpen.value = true; state.configuration.value = configuration(); state.configuration.value.models[0].reasoning = { levels: ['none', 'low', 'high'], defaultEffort: 'low' }; state.selectedModelId.value = 'vision'; state.actionsOpen.value = true;
       state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: 'Answer', references: [reference(8)] });
       state.contextOpen.value = true;
-      state.view.value.messages[0].toolCalls = [{ callId: 'task-call', name: 'start_media_task', arguments: {}, status: 'completed', result: { task: { id: 'job-a', state: 'running', total: 2, completed: 1, failed: 0 } }, localData: null, error: null, createdAt: 1, completedAt: 2 }, proposalCall()];
+      state.view.value.messages[0].toolCalls = [
+        { callId: 'task-call', name: 'start_media_task', arguments: {}, status: 'completed', result: { task: { id: 'job-a', state: 'running', total: 2, completed: 1, failed: 0 } }, localData: null, error: null, createdAt: 1, completedAt: 2 },
+        { callId: 'info-call', name: 'get_media_info', arguments: { file_ids: [8], fields: ['people'] }, status: 'completed', result: { people: [{ name: '<script>unsafe</script>', region: [0.15, 0.2, 0.3, 0.4], attribution: 'confirmed' }] }, localData: { path: 'LOCAL_ONLY_SECRET_PATH' }, error: null, createdAt: 1, completedAt: 2 },
+        { callId: 'pending-call', name: 'get_media_content', arguments: { file_id: 8 }, status: 'running', result: null, localData: null, error: null, createdAt: 1, completedAt: null },
+        { callId: 'failed-call', name: 'get_media_content', arguments: { file_id: 9 }, status: 'failed', result: null, localData: null, error: 'Fixture read failed', createdAt: 1, completedAt: 2 },
+        proposalCall(),
+      ];
       state.view.value.messages.unshift({ id: 'question-a', role: 'user', status: 'completed', createdAt: 1, content: 'Question', references: [] });
       state.showHistory.value = history; state.sessions.value = [summary(), summary('session-b')]; state.historyMenuId.value = history ? 'session-b' : '';
       context.expose(state);
@@ -764,6 +770,15 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.match(html, /data-chat-actions-menu/);
     assert.match(html, /data-chat-context-toggle/); assert.match(html, /data-chat-context-panel/);
     assert.match(html, /data-chat-tool-call="task-call"/); assert.match(html, /data-chat-tool-task="job-a"/); assert.match(html, /data-chat-tool-proposal="proposal-a"/);
+    const infoCall = html.slice(html.indexOf('data-chat-tool-call="info-call"'), html.indexOf('data-chat-tool-call="pending-call"'));
+    assert.match(infoCall, /data-chat-tool-arguments/); assert.match(infoCall, /data-chat-tool-result/);
+    assert.match(infoCall, /get_media_info · info-call/);
+    assert.match(infoCall, /&quot;file_ids&quot;:\s*\[\s*8/); assert.match(infoCall, /&quot;fields&quot;:\s*\[\s*&quot;people&quot;/);
+    assert.match(infoCall, /&quot;region&quot;:\s*\[\s*0\.15,\s*0\.2,\s*0\.3,\s*0\.4/);
+    assert.match(infoCall, /&lt;script&gt;unsafe&lt;\/script&gt;/);
+    assert.match(infoCall, /max-h-64 overflow-auto whitespace-pre-wrap break-all/);
+    assert.doesNotMatch(html, /LOCAL_ONLY_SECRET_PATH|<script>unsafe/);
+    assert.match(html, /media_chat.tool_awaiting_result/); assert.match(html, /media_chat.tool_empty_result/); assert.match(html, /Fixture read failed/);
     const location = html.match(/<input[^>]*data-chat-context-field="location"[^>]*>/)![0]; assert.doesNotMatch(location, /checked/);
     assert.doesNotMatch(html, /sourceStamp|"analysisId"|"arguments"/);
     assert.match(html, /ml-auto w-fit[^>]+data-chat-role="user"/); assert.match(html, /mr-auto w-full[^>]+data-chat-role="assistant"/);

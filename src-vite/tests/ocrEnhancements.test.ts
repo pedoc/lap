@@ -15,7 +15,7 @@ const t=(key:string)=>key.split('.').reduce((value,key)=>value?.[key],locale)||k
 const tick=async()=>{await Vue.nextTick();await new Promise(resolve=>setImmediate(resolve));};
 function regionHarness(invoke:any=async()=>({document:{text:'one\ntwo',lines:[{text:'one'},{text:'two'}]}})) {
   const calls:any[]=[],mounted:any[]=[],unmount:any[]=[],listeners:any={},copied:string[]=[],events:any[]=[];
-  const ctx:any={...Vue,crypto:{randomUUID},ocrSelectionRect,ocrBusy:Vue.ref(false),navigator:{clipboard:{writeText:async(text:string)=>copied.push(text)}},useI18n:()=>({t}),useUIStore:()=>({removeInputHandler(){},pushInputHandler(){}}),
+  const ctx:any={...Vue,crypto:{randomUUID},ocrSelectionRect,ocrBusy:Vue.ref(false),ocrShowBoxes:Vue.ref(true),navigator:{clipboard:{writeText:async(text:string)=>copied.push(text)}},useI18n:()=>({t}),useUIStore:()=>({removeInputHandler(){},pushInputHandler(){}}),
     defineEmits:()=> (...args:any[])=>events.push(args),defineExpose:()=>{},
     DOMPoint:class { x:number;y:number;constructor(x:number,y:number){this.x=x;this.y=y;} matrixTransform(matrix:any){return matrix.transform(this.x,this.y);} },
     props:Vue.reactive({fileId:7,fileVersion:1,width:1000,height:800,x:0,y:0,zoom:1,rotate:0,ready:true}),
@@ -52,7 +52,8 @@ test('region control renders before a photo has a whole-image OCR result',async(
   const h=regionHarness();const {descriptor}=parse(read('OcrRegionTool'));const imports:any={};
   const script=stripTypeScriptTypes(compileScript(descriptor,{id:'ocr-region',inlineTemplate:true}).content).replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g,(_m,names)=>{for(const name of names.split(',')){const[original,alias]=name.trim().split(/\s+as\s+/);imports[alias||original]=(Vue as any)[original];}return '';}).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'').replace('export default','const component=');
   const component=runInNewContext(`${script};component`,{...h.ctx,...imports});
-  const html=await renderToString(Vue.createSSRApp(component,h.ctx.props));assert.match(html,/框选文字/);assert.doesNotMatch(html,/undefined/);h.dispose();
+  let html=await renderToString(Vue.createSSRApp(component,h.ctx.props));assert.match(html,/框选文字/);assert.doesNotMatch(html,/undefined/);
+  h.ctx.ocrShowBoxes.value=false;html=await renderToString(Vue.createSSRApp(component,h.ctx.props));assert.doesNotMatch(html,/框选文字|补录文字框/);h.dispose();
 });
 
 test('temporary direction override is explicit and never modifies global model configuration',async()=>{

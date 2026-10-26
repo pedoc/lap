@@ -4761,7 +4761,7 @@ function handleItemAction(payload: { action: string, index: number }) {
     'rerecognize-text': () => void recognizeSelectedText(true),
     'detect-faces': () => void detectSelectedFaces(),
     'redetect-faces': () => void detectSelectedFaces(true),
-    'toggle-face-boxes': () => { config.setFaceEnabled(true); config.settings.face.showBoxes = config.settings.face.showBoxes === false; },
+    'toggle-face-boxes': () => { config.settings.face.showBoxes = config.settings.face.showBoxes === false; },
     'find-person': () => {
       if (!config.settings.face.enabled) return;
       enterPersonSearchMode(fileList.value[selectedItemIndex.value]);

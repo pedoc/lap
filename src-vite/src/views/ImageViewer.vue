@@ -1516,7 +1516,7 @@ const handleItemAction = async (payload: { action: string }) => {
     case 'rerecognize-text': await recognizeViewerText(true); break;
     case 'detect-faces': await detectViewerFaces(); break;
     case 'redetect-faces': await detectViewerFaces(true); break;
-    case 'toggle-face-boxes': config.setFaceEnabled(true); config.settings.face.showBoxes = config.settings.face.showBoxes === false; break;
+    case 'toggle-face-boxes': config.settings.face.showBoxes = config.settings.face.showBoxes === false; break;
     case 'favorite':
       await toggleFavorite(pane);
       break;

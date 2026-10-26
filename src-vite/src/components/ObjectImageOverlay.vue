@@ -283,20 +283,13 @@
       @mousedown.stop
       @dblclick.stop
     >
-      <button
-        v-if="document.objects.length"
-        class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
-        :class="showObjectBoxes ? 'text-primary' : ''"
-        :aria-pressed="showObjectBoxes"
-        @click.stop="showObjectBoxes = !showObjectBoxes"
-      >
-        {{ t('objects.boxes') }} · {{ visibleObjects.length }}<template v-if="currentClassKey && boxScope==='current'"> / {{ document.objects.length }}</template>
-      </button>
+      <span v-if="showObjectBoxes && document.objects.length" class="rounded-box bg-base-100/90 px-2 py-1 text-xs text-base-content/70">{{ t('objects.boxes') }} · {{ visibleObjects.length }}<template v-if="currentClassKey && boxScope==='current'"> / {{ document.objects.length }}</template></span>
       <select v-if="showObjectBoxes && currentClassKey && document.objects.length" v-model="boxScope" data-object-box-scope class="select select-sm max-w-64 bg-base-100 text-base-content shadow-sm" :aria-label="t('objects.box_scope')" @pointerdown.stop @keydown.stop @wheel.stop>
         <option value="current">{{ t('objects.boxes_only_class', { name: currentClassName }) }}</option>
         <option value="all">{{ t('objects.boxes_all_classes') }}</option>
       </select>
       <button
+        v-if="showObjectBoxes"
         class="btn btn-sm bg-base-100/90 border-base-content/15 shadow-sm"
         :disabled="!canCorrect"
         :title="loading || !choices.length ? t('objects.loading') : !compatible ? t('objects.geometry') : t('objects.edit_hint')"

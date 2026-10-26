@@ -13,7 +13,9 @@
     <div 
       v-if="showToolbar"
       id="responsiveDiv"
+      data-viewer-toolbar
       :class="computedToolbarClass"
+      :style="toolbarSpaceStyle"
       data-tauri-drag-region
     >
       <!-- App Icon + Title (left side, ImageViewer on Windows) -->
@@ -23,7 +25,8 @@
           {{ mediaDisplayName(file) || $t('image_viewer.title') }}
         </span>
       </div>
-      <div ref="buttonsRef" class="flex items-center space-x-1">
+      <div ref="buttonsRef" class="viewer-toolbar-actions flex max-w-full flex-wrap items-center justify-center gap-1 py-1">
+        <div role="group" :aria-label="t('viewer_toolbar.browse')" class="flex shrink-0 items-center gap-1">
         <TButton
           :icon="IconPrev"
           :disabled="fileIndex <= 0 || isSlideShow || !canInteract"
@@ -71,6 +74,8 @@
             </template>
           </ContextMenu>
         </div>
+        </div>
+        <div v-if="toolbarLayout.zoom" role="group" :aria-label="t('viewer_toolbar.zoom')" class="flex shrink-0 items-center gap-1 border-l border-base-content/15 pl-1">
         <TButton
           :icon="IconZoomOut"
           :disabled="fileIndex < 0 || imageScale <= imageMinScale || isSlideShow || !canInteract"
@@ -92,8 +97,8 @@
           :shortcut="shortcut('view.zoomFit')"
           @click="$emit('update:isZoomFit', !isZoomFit)"
         />
-        <template v-if="showExtraIcons">
-          <IconSeparator class="t-icon-size-sm text-base-content/30" />
+        </div>
+        <div v-if="showExtraIcons" role="group" :aria-label="t('viewer_toolbar.organize')" class="flex shrink-0 items-center gap-1 border-l border-base-content/15 pl-1">
           <TButton
             :icon="file?.is_favorite ? IconHeartFilled : IconHeart"
             :disabled="fileIndex < 0 || isSlideShow || !canInteract"
@@ -168,7 +173,21 @@
             :shortcut="shortcut('meta.rotate')"
             @click="$emit('item-action', { action: 'rotate', index: fileIndex })"
           />
-        </template>
+        </div>
+        <div v-if="isImageMedia" role="group" :aria-label="t('viewer_toolbar.overlays')" class="flex shrink-0 items-center gap-1 border-l border-base-content/15 pl-1">
+          <template v-if="toolbarLayout.overlays">
+            <span class="px-1 text-[10px] text-base-content/50">{{ t('viewer_toolbar.overlays_short') }}</span>
+            <button v-for="overlay in overlayControls" :key="overlay.key" type="button" class="btn btn-sm btn-ghost btn-square border-0 shadow-none" :class="overlay.selected ? 'text-primary bg-primary/10' : 'text-base-content/70'" :data-viewer-overlay="overlay.key" :aria-label="overlay.label" :title="overlay.label" :aria-pressed="overlay.selected" :disabled="!canUseOverlays" @click.stop="toggleOverlay(overlay.key)"><component :is="overlay.icon" class="size-5" /></button>
+          </template>
+          <ContextMenu v-else :menuItems="overlayMenuItems" :disabled="!canUseOverlays" @open-change="handleMenuOpenChange" @click.stop>
+            <template #trigger="{ toggle }"><button type="button" data-viewer-overlay-menu class="btn btn-sm btn-ghost btn-square border-0 shadow-none" :aria-label="t('viewer_toolbar.overlays')" :title="t('viewer_toolbar.overlays')" :disabled="!canUseOverlays" @click.stop="toggle"><IconPersonSearch class="size-5" /></button></template>
+          </ContextMenu>
+        </div>
+        <div v-if="toolbarLayout.files" role="group" :aria-label="t('viewer_toolbar.files')" class="flex shrink-0 items-center gap-1 border-l border-base-content/15 pl-1">
+          <TButton :icon="IconImageEdit" :disabled="!canUseOverlays" :tooltip="$t('menu.file.edit_image')" @click="$emit('item-action', { action: 'edit', index: fileIndex })" />
+          <TButton :icon="IconPhotoSearch" :disabled="!canUseOverlays" :tooltip="$t('menu.file.find_similar_images')" @click="$emit('item-action', { action: 'search-similar', index: fileIndex })" />
+          <TButton :icon="IconFolder" :disabled="fileIndex < 0 || !canInteract" :tooltip="isMac ? $t('menu.file.reveal_in_finder') : $t('menu.file.reveal_in_file_explorer')" @click="$emit('item-action', { action: 'reveal', index: fileIndex })" />
+        </div>
         <TButton
           v-if="mode === 2"
           :icon="IconFileInfo"
@@ -195,14 +214,13 @@
             @click="$emit('item-action', { action: 'toggle-sync-viewport' })"
           />
         </template>
-        <ContextMenu v-if="mode !== 2"
+        <ContextMenu
           ref="contextMenuRef"
-          :iconMenu="IconMore"
-          :menuItems="singleFileMenuItems"
+          :menuItems="toolbarMenuItems"
           :disabled="fileIndex < 0 || isSlideShow || !canInteract"
           @open-change="handleMenuOpenChange"
           @click.stop
-        />
+        ><template #trigger="{ toggle }"><TButton :icon="IconMore" data-viewer-more :tooltip="t('viewer_toolbar.more')" :disabled="fileIndex < 0 || isSlideShow || !canInteract" @click.stop="toggle" /></template></ContextMenu>
         <IconSeparator v-if="mode !== 2" class="t-icon-size-sm text-base-content/30" />
         <TButton
           :icon="!isFullScreen ? IconFullScreen : IconRestoreScreen"
@@ -467,6 +485,9 @@ import { createMediaChatPointerDrag, isMediaChatDragSurface } from '@/common/med
 import { useUIStore } from '@/stores/uiStore';
 import { objectEditActive } from '@/common/objectEditing';
 import { useToast } from '@/common/toast';
+import { viewerToolbarLayout } from '@/common/viewerToolbar';
+import { ocrShowBoxes } from '@/common/ocr';
+import { showObjectBoxes } from '@/common/objects';
 import { isWin, isMac, isLinux, getSlideShowInterval } from '@/common/utils';
 import { getShortcutLabel, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
 import { isOriginalUnavailable, setFileAccessibility } from '@/common/availability';
@@ -514,6 +535,12 @@ import {
   IconVideoPlay,
   IconLivePhoto,
   IconExclamation,
+  IconPersonSearch,
+  IconFileSearch,
+  IconBox,
+  IconImageEdit,
+  IconPhotoSearch,
+  IconFolder,
 } from '@/common/icons';
 import ContextMenu from '@/components/ContextMenu.vue';
 import iconLogo from '@/assets/images/icon.png';
@@ -782,7 +809,36 @@ const filenameMaxWidth = computed(() => {
   }
   return 200; // Fallback
 });
-const showExtraIcons = computed(() => containerWidth.value > 600);
+const isImageMedia = computed(() => [1, 3].includes(Number(props.file?.file_type)));
+const canUseOverlays = computed(() => isImageMedia.value && props.fileIndex >= 0 && props.canInteract && !props.isSlideShow);
+const toolbarReservedWidth = computed(() => showDesktopWindowControls && props.mode === 2 && showWindowControlsBar.value
+  ? 48 + (props.showWindowControls ? 144 : 0) : 16);
+const toolbarSpaceStyle = computed(() => showDesktopWindowControls && props.mode === 2 && showWindowControlsBar.value
+  ? { paddingLeft: '48px', paddingRight: props.showWindowControls ? '144px' : '8px' } : undefined);
+const toolbarLayout = computed(() => viewerToolbarLayout(
+  containerWidth.value - toolbarReservedWidth.value,
+  6 + (props.mode === 2 ? 1 : 0) + (props.mode !== 2 && !isFullScreen.value ? 1 : 0)
+    + (isFullScreen.value || (props.mode === 0 && config.mediaViewer.isPinned) ? 1 : 0)
+    + (props.mode === 2 && props.showSyncViewportControl ? 1 : 0) + (isImageMedia.value ? 1 : 0)
+    + (props.isSlideShow ? 2 : 0),
+  isImageMedia.value,
+));
+const showExtraIcons = computed(() => toolbarLayout.value.metadata);
+const overlayControls = computed(() => [
+  { key: 'faces', icon: IconPersonSearch, label: t('viewer_toolbar.faces'), selected: config.settings.face.showBoxes !== false },
+  { key: 'ocr', icon: IconFileSearch, label: t('viewer_toolbar.ocr'), selected: ocrShowBoxes.value },
+  { key: 'objects', icon: IconBox, label: t('viewer_toolbar.objects'), selected: showObjectBoxes.value },
+]);
+function toggleOverlay(key: string) {
+  if (!canUseOverlays.value) return;
+  if (key === 'faces') config.settings.face.showBoxes = config.settings.face.showBoxes === false;
+  if (key === 'ocr') ocrShowBoxes.value = !ocrShowBoxes.value;
+  if (key === 'objects') showObjectBoxes.value = !showObjectBoxes.value;
+}
+const overlayMenuItems = computed(() => overlayControls.value.map(control => ({
+  label: `${control.selected ? '✓ ' : ''}${control.label}`, icon: control.icon,
+  action: () => toggleOverlay(control.key),
+})));
 // Window control state (Windows + ImageViewer mode)
 const showDesktopWindowControls = isWin || isLinux;
 // Preview owns its fullscreen session; the standalone viewer delegates to its window.
@@ -1116,17 +1172,26 @@ const showWindowControlsBar = computed(() => {
   return props.showToolbar && !(showDesktopWindowControls && props.mode === 2 && props.isFullScreen);
 });
 let resizeObserver: ResizeObserver | null = null;
+let toolbarResizeFrame: number | null = null;
+let pendingContainerWidth: number | undefined, pendingButtonsWidth: number | undefined;
 
 onMounted(() => {
   resizeObserver = new ResizeObserver((entries) => {
-    measureRawControls();
     for (const entry of entries) {
       if (entry.target === containerRef.value) {
-        containerWidth.value = entry.contentRect.width;
+        pendingContainerWidth = entry.contentRect.width;
       } else if (entry.target === buttonsRef.value) {
-        buttonsWidth.value = entry.contentRect.width;
+        pendingButtonsWidth = entry.contentRect.width;
       }
     }
+    // Group changes resize the observed buttons; commit outside this observer delivery.
+    if (toolbarResizeFrame === null) toolbarResizeFrame = requestAnimationFrame(() => {
+      toolbarResizeFrame = null;
+      if (pendingContainerWidth !== undefined) containerWidth.value = pendingContainerWidth;
+      if (pendingButtonsWidth !== undefined) buttonsWidth.value = pendingButtonsWidth;
+      pendingContainerWidth = pendingButtonsWidth = undefined;
+      measureRawControls();
+    });
   });
 
   if (containerRef.value) {
@@ -1144,6 +1209,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   previewDisposed = true;
+  if (toolbarResizeFrame !== null) cancelAnimationFrame(toolbarResizeFrame);
+  toolbarResizeFrame = null;
+  pendingContainerWidth = pendingButtonsWidth = undefined;
   stopPreviewResizeListener();
   void exitPreviewFullScreen();
   if (resizeObserver) {
@@ -1224,7 +1292,7 @@ function cycleViewBackground() {
 }
 
 const computedToolbarClass = computed(() => {
-  const commonClasses = 'absolute z-80 h-10 flex flex-row items-center justify-center select-none';
+  const commonClasses = 'absolute z-80 min-h-10 max-w-[calc(100%-1rem)] flex flex-row items-center justify-center select-none';
 
   if (isFullScreen.value) {
     const floatingClasses = 'left-1/2 top-4 -translate-x-1/2 px-2 rounded-box bg-base-100/30 hover:bg-base-100/70 transition-[opacity,transform] duration-300 ease-in-out';
@@ -1236,9 +1304,9 @@ const computedToolbarClass = computed(() => {
   if (isPinned) {
     // Keep the edge where the floating toolbar was pinned.
     if (props.mode !== 2 && config.mediaViewer.pinnedPosition === 'bottom') {
-      return `${commonClasses} relative bottom-0 left-0 w-full order-last`;
+      return `${commonClasses} relative bottom-0 left-0 w-full max-w-full! order-last`;
     }
-    return `${commonClasses} relative top-0 left-0 w-full`;
+    return `${commonClasses} relative top-0 left-0 w-full max-w-full!`;
   } else {
     // Floating Hover Bar
     const floatingClasses = 'left-1/2 -translate-x-1/2 px-2 rounded-box bg-base-100/30 hover:bg-base-100/70 transition-[opacity,transform] duration-300 ease-in-out';
@@ -1454,6 +1522,18 @@ const singleFileMenuItems = computed(() => {
     t,
     (action) => emit('item-action', { action, index: props.fileIndex })
   ).value;
+});
+const toolbarMenuItems = computed(() => {
+  const hidden = [];
+  if (!toolbarLayout.value.zoom) hidden.push(
+    { label: t('image_viewer.toolbar.zoom_out'), icon: IconZoomOut, disabled: props.imageScale <= props.imageMinScale, action: handleZoomOut },
+    { label: t('image_viewer.toolbar.zoom_in'), icon: IconZoomIn, disabled: props.imageScale >= props.imageMaxScale, action: handleZoomIn },
+    { label: t(props.isZoomFit ? 'image_viewer.toolbar.zoom_actual' : 'image_viewer.toolbar.zoom_fit'), icon: IconZoomFit, action: () => emit('update:isZoomFit', !props.isZoomFit) },
+  );
+  if (isImageMedia.value) hidden.push({ label: t('viewer_toolbar.overlays'), icon: IconPersonSearch, children: overlayMenuItems.value });
+  const files = useFileMenuItems(selectedFile, localeMsg, isMac, t,
+    (action) => emit('item-action', { action, index: props.fileIndex })).value;
+  return [...hidden, ...(hidden.length ? [{ label: '-', action: null }] : []), ...files];
 });
 </script>
 

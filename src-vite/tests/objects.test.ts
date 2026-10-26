@@ -522,10 +522,13 @@ test('drawing a missed object opens the photo canvas without a standalone correc
   assert.doesNotMatch(html, /人工修正|objects\.edit/);
   h.dispose();
 });
-test('image viewers expose drawing but no separate correction button, including zero detections', async () => {
+test('object drawing follows the toolbar overlay switch, including zero detections', async () => {
   const ctx = context();
   const props = { fileId: 7, width: 1000, height: 800, x: 0, y: 0, zoom: 1, rotate: 0, ready: true, transition: false };
   let html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), props));
+  assert.doesNotMatch(html, /画框/);
+  ctx.showObjectBoxes.value = true;
+  html = await renderToString(Vue.createSSRApp(component('ObjectImageOverlay', ctx), props));
   assert.match(html, /画框/);
   assert.doesNotMatch(html, /人工修正|objects\.edit/);
   assert.doesNotMatch(html, /disabled/);

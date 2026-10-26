@@ -1,6 +1,6 @@
 <template>
   <div v-if="ready" class="absolute inset-0 pointer-events-none" @keydown.stop>
-    <div class="absolute top-3 right-3 z-40 pointer-events-auto flex gap-1" @mousedown.stop @dblclick.stop>
+    <div v-if="ocrShowBoxes || selecting || busy || output || error" class="absolute top-3 right-3 z-40 pointer-events-auto flex max-w-[calc(100%-1.5rem)] flex-wrap justify-end gap-1" @mousedown.stop @dblclick.stop>
       <select v-model="rotation" class="select select-sm w-28 bg-base-100/90" :disabled="busy || ocrBusy || mergeBusy" :aria-label="t('ocr.direction')"><option v-for="value in ['model','0','auto','90','180','270']" :key="value" :value="value">{{ t('ocr.rotation_' + value) }}</option></select>
       <button class="btn btn-sm bg-base-100/90 shadow-sm" :class="selecting && mode === 'manual' ? 'text-primary' : ''" :disabled="busy || mergeBusy" :aria-pressed="selecting && mode === 'manual'" @click.stop="toggleSelection('manual')">{{ t(selecting && mode === 'manual' ? 'ocr.region_cancel' : 'ocr.add_text') }}</button>
       <button class="btn btn-sm bg-base-100/90 shadow-sm" :class="selecting && mode === 'recognize' ? 'text-primary' : ''" :disabled="busy || ocrBusy || mergeBusy" :aria-pressed="selecting && mode === 'recognize'" @click.stop="toggleSelection('recognize')">{{ t(selecting && mode === 'recognize' ? 'ocr.region_cancel' : 'ocr.region_select') }}</button>
@@ -33,7 +33,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
-import { ocrBusy } from '@/common/ocr';
+import { ocrBusy, ocrShowBoxes } from '@/common/ocr';
 import { ocrSelectionRect } from '@/common/ocrUi';
 const props = defineProps<{ fileId?: number; fileVersion?: number; width: number; height: number; x: number; y: number; zoom: number; rotate: number; ready: boolean; mergeBusy?: boolean }>();
 const emit = defineEmits(['add','merge']);
