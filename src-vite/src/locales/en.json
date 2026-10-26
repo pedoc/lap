@@ -883,6 +883,10 @@
     "execution_accelerated": "Last backend: GPU acceleration"
   },
   "sidebar": {
+    "reorder_hint": "Drag to reorder navigation, or right-click to move up or down",
+    "move_up": "Move up",
+    "move_down": "Move down",
+    "reset_order": "Reset navigation order",
     "home": "Home",
     "library": "Library",
     "album": "Albums",

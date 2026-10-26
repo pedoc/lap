@@ -6,6 +6,7 @@ import { i18n, loadLanguage } from '@/common/i18n';
 let languageRequest = 0;
 import { SIDEBAR, MAP_MARKER_SIZES } from '@/common/constants';
 import { normalizeMediaChatSettings } from '@/common/mediaChatPosition';
+import { DEFAULT_SIDEBAR_ORDER, normalizeSidebarOrder } from '@/common/sidebarOrder';
 
 export const useConfigStore = defineStore('configStore', {
   state: () => ({
@@ -145,6 +146,7 @@ export const useConfigStore = defineStore('configStore', {
       scale: 1,                   // root font-size scale
       showToolTip: true,          // show button tooltip
       showStatusBar: true,        // show status bar
+      sidebarOrder: [...DEFAULT_SIDEBAR_ORDER],
       mediaChat: normalizeMediaChatSettings(),
       autoCheckUpdates: true,      // automatically check for updates
       debugMode: false,           // debug mode
@@ -316,6 +318,12 @@ export const useConfigStore = defineStore('configStore', {
     setShowStatusBar(showStatusBar) {
       this.settings.showStatusBar = showStatusBar;
     },
+    setSidebarOrder(order) {
+      const current = this.settings.sidebarOrder;
+      const next = normalizeSidebarOrder(order);
+      if (Array.isArray(current) && current.length === next.length && current.every((id, index) => id === next[index])) return;
+      this.settings.sidebarOrder = next;
+    },
     setMediaChat(settings) {
       const current = this.settings.mediaChat;
       const next = normalizeMediaChatSettings(settings, normalizeMediaChatSettings(current));
@@ -453,6 +461,7 @@ export const useConfigStore = defineStore('configStore', {
         const state = JSON.parse(value);
         const settings = state?.settings;
         if (settings) {
+          settings.sidebarOrder = normalizeSidebarOrder(settings.sidebarOrder);
           settings.mediaChat = normalizeMediaChatSettings(settings.mediaChat);
           settings.rawPreviewSource = settings.rawPreviewSource === 'rendered' ? 'rendered' : 'embedded';
           settings.rawRenderBrightness = settings.rawRenderBrightness === 'brightened' ? 'brightened' : 'original';

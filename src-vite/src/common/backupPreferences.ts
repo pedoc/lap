@@ -1,4 +1,5 @@
 import { normalizeMediaChatSettings } from './mediaChatPosition.ts';
+import { normalizeSidebarOrder } from './sidebarOrder.ts';
 
 // Only user preferences belong in a backup; derived AI/map state, active jobs,
 // library identities and transient window state must be reloaded locally.
@@ -33,6 +34,9 @@ export function applyBackupPreferences(store: any, preferences: any) {
     .map(key => [key, compatible(store.$state[key], preferences[key])]));
   if (patch.settings && preferences.settings && Object.hasOwn(preferences.settings, 'mediaChat')) {
     patch.settings.mediaChat = normalizeMediaChatSettings(clean(preferences.settings.mediaChat), normalizeMediaChatSettings(store.$state.settings.mediaChat));
+  }
+  if (patch.settings && preferences.settings && Object.hasOwn(preferences.settings, 'sidebarOrder')) {
+    patch.settings.sidebarOrder = normalizeSidebarOrder(clean(preferences.settings.sidebarOrder));
   }
   store.$patch(patch);
   // External applications are added lazily and may not exist in a fresh store.

@@ -2,10 +2,10 @@
   <TButton
     buttonSize="large"
     :icon="icon"
-    :tooltip="summary"
+    :tooltip="hideTooltip ? '' : summary"
     tooltipPlacement="right"
     :tooltipAutoHide="!status"
-    :tooltipAlways="!!status"
+    :tooltipAlways="!!status && !hideTooltip"
     :selected="selected"
     :disabled="disabled"
     @click="emit('click', $event)"
@@ -42,6 +42,7 @@ const props = defineProps<{
   selected?: boolean;
   disabled?: boolean;
   status?: RecognitionIndicator | null;
+  hideTooltip?: boolean;
 }>();
 const emit = defineEmits<{ click: [event: Event] }>();
 const summary = computed(() => props.status

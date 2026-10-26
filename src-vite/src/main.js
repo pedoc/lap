@@ -89,6 +89,7 @@ if (isMainWindow) {
       // Settings also needs language updates made from the welcome screen.
       config.setLanguage(event.payload.language)
       config.setMediaChat(event.payload.mediaChat)
+      if (Object.hasOwn(event.payload, 'sidebarOrder')) config.setSidebarOrder(event.payload.sidebarOrder)
     } else {
       const { language, ...settings } = event.payload
       await config.setLanguage(language)

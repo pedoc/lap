@@ -7,6 +7,7 @@ import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import * as constants from '../src/common/constants.ts';
 import { getFloatingChatPosition, normalizeFloatingChatPosition, normalizeMediaChatSettings } from '../src/common/mediaChatPosition.ts';
+import { DEFAULT_SIDEBAR_ORDER, normalizeSidebarOrder } from '../src/common/sidebarOrder.ts';
 
 const viewport = { width: 1000, height: 800 };
 const copy = (value: any) => JSON.parse(JSON.stringify(value));
@@ -70,7 +71,7 @@ function configDefinition() {
   const source = readFileSync(new URL('../src/stores/configStore.js', import.meta.url), 'utf8')
     .replace(/^import .*$/gm, '').replace('export const useConfigStore', 'const useConfigStore');
   return runInNewContext(`${source};useConfigStore`, {
-    ...constants, normalizeMediaChatSettings, defineStore: (_name: string, options: any) => options,
+    ...constants, normalizeMediaChatSettings, DEFAULT_SIDEBAR_ORDER, normalizeSidebarOrder, defineStore: (_name: string, options: any) => options,
   });
 }
 
@@ -157,6 +158,7 @@ test('standalone settings and the main window synchronize both directions withou
   const definition = configDefinition(), main: any = Vue.reactive(definition.state()), settings: any = Vue.reactive(definition.state());
   for (const config of [main, settings]) {
     config.setMediaChat = (value: unknown) => definition.actions.setMediaChat.call(config, value);
+    config.setSidebarOrder = (value: unknown) => definition.actions.setSidebarOrder.call(config, value);
     config.setLanguage = async () => {};
   }
   const listeners = new Map<string, Array<(event: any) => unknown>>(), events: string[] = [], stops: Array<() => void> = [];

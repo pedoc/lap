@@ -37,23 +37,49 @@
           <!-- side bar -->
           <div 
             class="fixed top-14 min-w-16 bottom-10 z-10 flex flex-col items-center space-y-1 overflow-y-auto no-scrollbar"
-            data-tauri-drag-region
+            data-sidebar-navigation
           >
-            <div v-for="item in visibleButtons" :key="item.index" class="shrink-0">
+            <VueDraggable
+              ref="sidebarDraggableRef"
+              :key="sidebarListVersion"
+              v-model="visibleButtons"
+              class="flex shrink-0 flex-col items-center gap-1 [&_[role=button]]:cursor-grab"
+              :animation="150"
+              :clone="item => item"
+              :forceFallback="true"
+              :fallbackOnBody="true"
+              :fallbackTolerance="6"
+              fallbackClass="lap-sidebar-drag-fallback"
+              :disabled="isSwitchingLibrary"
+              direction="vertical"
+              ghostClass="opacity-30"
+              :aria-label="t('sidebar.reorder_hint')"
+              :data-sidebar-dragging="sidebarDragging || undefined"
+              @start="startSidebarDrag"
+              @end="endSidebarDrag"
+              @pointerdown.stop @mousedown.stop @touchstart.stop
+              @pointercancel="cancelSidebarDrag"
+              @keydown.esc="cancelSidebarDrag"
+            >
+            <div v-for="item in visibleButtons" :key="item.index" class="shrink-0" :data-sidebar-item="item.index" @contextmenu.prevent.stop="openSidebarOrderMenu($event, item.index)">
               <RecognitionSidebarButton
                 :icon="item.icon"
                 :label="(item as any).tooltip || item.text"
                 :selected="!showSettings && config.main.sidebarIndex === item.index"
                 :disabled="item.disabled"
                 :status="recognitionIndicators[item.index]"
+                :hideTooltip="sidebarDragging"
                 :data-sidebar-button="item.index"
-                @click="clickSidebar(item.index)"
+                @click="clickSidebarButton(item.index)"
               />
             </div>
+            </VueDraggable>
+            <ContextMenu ref="sidebarOrderMenuRef" class="absolute size-0" :menuItems="() => sidebarOrderMenuItems"><template #trigger><span class="hidden"></span></template></ContextMenu>
 
             <div class="flex-1"></div>
 
             <TButton 
+              data-sidebar-settings
               class="mt-auto"
               :class="showDebugBadge ? 'text-warning': ''"
               :buttonSize="'large'" 
@@ -62,7 +88,7 @@
               :tooltip="$t('sidebar.settings')"
               tooltipPlacement="right"
               :selected="showSettings"
-              @click="clickSettings"
+              @click="clickSidebarSettings"
             />
           </div>
 
@@ -203,6 +229,8 @@ import { useFaceRecognitionStatus } from '@/common/faceRecognitionStatus';
 import { faceRecognitionIndicator, indexedRecognitionIndicator, type RecognitionIndicator } from '@/common/recognitionStatus';
 import RecognitionSidebarButton from '@/components/RecognitionSidebarButton.vue';
 import { defineAsyncComponent, ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue';
+import { VueDraggable } from 'vue-draggable-plus';
+import { DEFAULT_SIDEBAR_ORDER, normalizeSidebarOrder, moveSidebarItem } from '@/common/sidebarOrder';
 import { useI18n } from 'vue-i18n';
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -446,14 +474,83 @@ const leftPanelWidth = computed(() =>
   `${(Number(config.main.sidebarIndex === SIDEBAR.HOME ? 256 : config.leftPanel.width || 260) / 16).toFixed(2)}rem`
 );
 
-const visibleButtons = computed(() =>
-  buttons.value
-    .map((item) => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.HOME && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY && item.index !== SIDEBAR.OCR && item.index !== SIDEBAR.OBJECTS }))
-    .filter(item => !item.hidden)
-    .sort((a, b) => a.index === SIDEBAR.HOME ? -1 : b.index === SIDEBAR.HOME ? 1 : a.index - b.index)
-);
+const sidebarDragging = ref(false), sidebarListVersion = ref(0), sidebarOrderMenuRef = ref<any>(null), sidebarMenuId = ref<number | null>(null);
+const sidebarDraggableRef = ref<{ destroy: () => void } | null>(null);
+let draggedSidebarId: number | null = null, sidebarClickBlockedUntil = 0;
+type SidebarButton = (typeof buttons.value)[number] & { disabled: boolean };
+const visibleButtons = computed({
+  get: () => {
+    const items = new Map<number, (typeof buttons.value)[number]>(buttons.value.map(item => [item.index, item]));
+    return normalizeSidebarOrder(config.settings.sidebarOrder)
+      .map(id => items.get(id))
+      .filter((item): item is (typeof buttons.value)[number] => !!item && !item.hidden)
+      .map(item => ({ ...item, disabled: libraryEmpty.value && item.index !== SIDEBAR.HOME && item.index !== SIDEBAR.ALBUM && item.index !== SIDEBAR.LIBRARY && item.index !== SIDEBAR.OCR && item.index !== SIDEBAR.OBJECTS }));
+  },
+  set: (items: SidebarButton[]) => {
+    if (!sidebarDragging.value || draggedSidebarId === null) return;
+    const index = items.findIndex(item => item.index === draggedSidebarId);
+    const target = items[index + 1] || items[index - 1];
+    if (index < 0 || !target) return;
+    config.setSidebarOrder(moveSidebarItem(config.settings.sidebarOrder, draggedSidebarId, target.index, index === items.length - 1));
+  },
+});
+function startSidebarDrag(event: { item: HTMLElement }) {
+  const id = Number(event.item.dataset.sidebarItem);
+  if (!visibleButtons.value.some(item => item.index === id)) return;
+  uiStore.setActivePane('left-sidebar');
+  draggedSidebarId = id;
+  sidebarDragging.value = true;
+}
+function endSidebarDrag() {
+  if (sidebarDragging.value) sidebarClickBlockedUntil = Date.now() + 250;
+  sidebarDragging.value = false;
+  draggedSidebarId = null;
+}
+function disposeSidebarDrag() {
+  endSidebarDrag();
+  sidebarDraggableRef.value?.destroy();
+  // Sortable's programmatic destroy releases listeners but leaves its body fallback clone.
+  document.querySelectorAll('.lap-sidebar-drag-fallback').forEach(element => element.remove());
+}
+function cancelSidebarDrag(event?: Event) {
+  if (!sidebarDragging.value) return;
+  if (event?.type === 'keydown') { event.preventDefault(); event.stopPropagation(); }
+  disposeSidebarDrag();
+  sidebarListVersion.value++;
+}
+function handleSidebarDragKeyDown(event: KeyboardEvent) {
+  if (event.key === 'Escape') cancelSidebarDrag(event);
+}
+function clickSidebarButton(id: number) {
+  if (!sidebarDragging.value && Date.now() >= sidebarClickBlockedUntil) return clickSidebar(id);
+}
+function clickSidebarSettings() {
+  if (!sidebarDragging.value && Date.now() >= sidebarClickBlockedUntil) return clickSettings();
+}
+function moveSidebarButton(id: number, direction: -1 | 1) {
+  const index = visibleButtons.value.findIndex(item => item.index === id), target = visibleButtons.value[index + direction];
+  if (index < 0 || !target) return;
+  config.setSidebarOrder(moveSidebarItem(config.settings.sidebarOrder, id, target.index, direction > 0));
+}
+function resetSidebarOrder() { config.setSidebarOrder([...DEFAULT_SIDEBAR_ORDER]); }
+function openSidebarOrderMenu(event: MouseEvent, id: number) {
+  if (sidebarDragging.value) return;
+  sidebarMenuId.value = id;
+  sidebarOrderMenuRef.value?.open(event.clientX, event.clientY);
+}
+const sidebarOrderMenuItems = computed(() => {
+  const id = sidebarMenuId.value, index = visibleButtons.value.findIndex(item => item.index === id);
+  return [
+    { label: t('sidebar.move_up'), disabled: index <= 0, action: () => { if (id !== null) moveSidebarButton(id, -1); } },
+    { label: t('sidebar.move_down'), disabled: index < 0 || index >= visibleButtons.value.length - 1, action: () => { if (id !== null) moveSidebarButton(id, 1); } },
+    { label: '-', action: null },
+    { label: t('sidebar.reset_order'), disabled: normalizeSidebarOrder(config.settings.sidebarOrder).every((id, index) => id === DEFAULT_SIDEBAR_ORDER[index]), action: resetSidebarOrder },
+  ];
+});
+watch(isSwitchingLibrary, switching => { if (switching) cancelSidebarDrag(); });
 
 watch(() => config.settings.face.enabled, (enabled) => {
+  cancelSidebarDrag();
   if (!enabled && config.main.sidebarIndex === SIDEBAR.PERSON) {
     config.main.sidebarIndex = SIDEBAR.ALBUM;
   }
@@ -516,6 +613,8 @@ watch(databaseCorrupted, corrupted => {
 });
 
 onMounted(async () => {
+  window.addEventListener('blur', cancelSidebarDrag);
+  window.addEventListener('keydown', handleSidebarDragKeyDown, { capture: true });
   window.addEventListener('keydown', handleHomeKeyDown);
   unlistenOpenPreferences = await listen('app-open-preferences', (event: any) => {
     void clickSettings(event.payload?.aiTask ? SETTINGS_TAB.IMAGE_SEARCH : undefined, event.payload?.aiTask);
@@ -565,6 +664,9 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  disposeSidebarDrag();
+  window.removeEventListener('blur', cancelSidebarDrag);
+  window.removeEventListener('keydown', handleSidebarDragKeyDown, { capture: true });
   uiStore.removeInputHandler('Settings');
   window.removeEventListener('focus', handleAccessRecovery);
   clearLeftPanelAnimationTimer();

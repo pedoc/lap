@@ -883,6 +883,10 @@
     "execution_accelerated": "最近执行后端：GPU 加速"
   },
   "sidebar": {
+    "reorder_hint": "拖动调整导航顺序，或右键上移、下移",
+    "move_up": "上移",
+    "move_down": "下移",
+    "reset_order": "恢复默认顺序",
     "home": "主页",
     "library": "资料库",
     "album": "相册",

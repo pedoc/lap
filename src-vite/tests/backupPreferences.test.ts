@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { backupPreferences, applyBackupPreferences } from '../src/common/backupPreferences.ts';
 import { normalizeMediaChatSettings } from '../src/common/mediaChatPosition.ts';
+import { DEFAULT_SIDEBAR_ORDER, normalizeSidebarOrder } from '../src/common/sidebarOrder.ts';
+import { SIDEBAR } from '../src/common/constants.ts';
 
 test('backup includes user preferences and excludes runtime identities and derived configuration', () => {
   const state = { settings: { language: 'zh', appearance: 1, ai: { semanticModel: 'old' }, mapServices: { secret: 'not duplicated' }, tabIndex: 6 },
@@ -83,4 +85,25 @@ test('old chat backups preserve the docking default and explicit disabling survi
   applyBackupPreferences(store, { settings: { mediaChat: { autoDockWindow: false } } });
   assert.equal(store.$state.settings.mediaChat.autoDockWindow, false);
   assert.equal(store.$state.settings.mediaChat.showFloatingButton, false);
+});
+
+test('sidebar ordering survives backup restoration and only explicitly supplied ordering replaces the current choice', () => {
+  const order = normalizeSidebarOrder([SIDEBAR.OCR, SIDEBAR.PERSON, SIDEBAR.HOME]);
+  const saved = backupPreferences({ settings: { sidebarOrder: order }, main: { sidebarIndex: SIDEBAR.OCR } });
+  assert.deepEqual(saved, { settings: { sidebarOrder: order } });
+  let persisted = 0;
+  const store = {
+    $state: { settings: { sidebarOrder: [...DEFAULT_SIDEBAR_ORDER], showStatusBar: true } },
+    $patch(patch: any) { Object.assign(this.$state, patch); }, $persist() { persisted++; },
+  };
+  applyBackupPreferences(store, saved);
+  assert.deepEqual(store.$state.settings.sidebarOrder, order);
+  applyBackupPreferences(store, { settings: { showStatusBar: false } });
+  assert.deepEqual(store.$state.settings.sidebarOrder, order);
+  applyBackupPreferences(store, { settings: { sidebarOrder: [SIDEBAR.OBJECTS, SIDEBAR.OBJECTS, '0', 999, SIDEBAR.PERSON] } });
+  assert.deepEqual(store.$state.settings.sidebarOrder, normalizeSidebarOrder([SIDEBAR.OBJECTS, SIDEBAR.PERSON]));
+  applyBackupPreferences(store, { settings: { sidebarOrder: null } });
+  assert.deepEqual(store.$state.settings.sidebarOrder, DEFAULT_SIDEBAR_ORDER);
+  assert.equal(store.$state.settings.showStatusBar, false);
+  assert.equal(persisted, 4);
 });
