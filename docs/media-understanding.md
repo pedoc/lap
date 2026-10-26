@@ -115,4 +115,4 @@ Content-Type: application/json
 
 会话入口、引用、资料建议及浮动位置设置的验证见 [媒体会话验证](development/verification/media-chat.md)。
 
-聊天数据、按需工具及业务操作的统一机制见 [Lap 助手的数据与能力机制设计](development/lap-assistant-capabilities.md)（架构提案，尚未实现）。
+Lap 面向 Agent 的工具接入方案见 [将 Lap 能力暴露给 Agent](development/lap-assistant-capabilities.md)（设计提案，尚未实现）。
