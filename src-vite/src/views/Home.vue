@@ -1,9 +1,4 @@
 <template>
-  <div class="fixed bottom-10 right-4 z-40 w-80 max-w-[calc(100vw-2rem)] max-h-[70vh] overflow-y-auto space-y-2" :style="mediaChatFloatingReserve.bottom ? { bottom: `${mediaChatFloatingReserve.bottom + 16}px`, maxHeight: `min(70vh, calc(100vh - ${mediaChatFloatingReserve.bottom + 32}px))` } : undefined">
-    <OcrTaskBanner stacked />
-    <ObjectTaskBanner />
-  </div>
-  
   <div class="w-screen h-screen flex flex-col overflow-hidden select-none bg-base-300 text-base-content/70">
     <transition name="fade">
       <div
@@ -45,14 +40,13 @@
             data-tauri-drag-region
           >
             <div v-for="item in visibleButtons" :key="item.index" class="shrink-0">
-              <TButton
-                :buttonSize="'large'"
+              <RecognitionSidebarButton
                 :icon="item.icon"
-                text=""
-                :tooltip="(item as any).tooltip || item.text"
-                tooltipPlacement="right"
+                :label="(item as any).tooltip || item.text"
                 :selected="!showSettings && config.main.sidebarIndex === item.index"
                 :disabled="item.disabled"
+                :status="recognitionIndicators[item.index]"
+                :data-sidebar-button="item.index"
                 @click="clickSidebar(item.index)"
               />
             </div>
@@ -203,6 +197,11 @@
 <script setup lang="ts">
 import { useOcrAutomation } from '@/common/ocrAutomation';
 import { useObjectAutomation } from '@/common/objectAutomation';
+import { ocrView, ocrError, ocrBusy } from '@/common/ocr';
+import { objectView, objectError, objectBusy } from '@/common/objects';
+import { useFaceRecognitionStatus } from '@/common/faceRecognitionStatus';
+import { faceRecognitionIndicator, indexedRecognitionIndicator, type RecognitionIndicator } from '@/common/recognitionStatus';
+import RecognitionSidebarButton from '@/components/RecognitionSidebarButton.vue';
 import { defineAsyncComponent, ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { emit, listen } from '@tauri-apps/api/event';
@@ -218,7 +217,7 @@ import { matchesShortcut, ShortcutPlatform } from '@/common/shortcuts';
 import { SIDEBAR, SETTINGS_TAB, PANEL_ANIMATION_MS } from '@/common/constants';
 import { getAppConfig, switchLibrary, cancelIndexing, cancelFaceIndex } from '@/common/api';
 import { mediaAiBatch } from '@/common/mediaAi';
-import { closeMediaChat, mediaChat, mediaChatFloatingReserve } from '@/common/mediaChat';
+import { closeMediaChat, mediaChat } from '@/common/mediaChat';
 
 // vue components
 import Library from '@/components/Library.vue';
@@ -231,8 +230,6 @@ const Location = defineAsyncComponent(() => import('@/components/Location.vue'))
 const Person = defineAsyncComponent(() => import('@/components/Person.vue'));
 const ImageText = defineAsyncComponent(() => import('@/components/ImageText.vue'));
 const ObjectBrowser = defineAsyncComponent(() => import('@/components/ObjectBrowser.vue'));
-const ObjectTaskBanner = defineAsyncComponent(() => import('@/components/ObjectTaskBanner.vue'));
-const OcrTaskBanner = defineAsyncComponent(() => import('@/components/OcrTaskBanner.vue'));
 const Camera = defineAsyncComponent(() => import('@/components/Camera.vue'));
 
 import TitleBar from '@/components/TitleBar.vue';
@@ -310,6 +307,12 @@ useOcrAutomation();
 useObjectAutomation();
 const { locale, messages, t } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
+const faceRecognition = useFaceRecognitionStatus();
+const recognitionIndicators = computed<Record<number, RecognitionIndicator | null>>(() => ({
+  [SIDEBAR.PERSON]: faceRecognitionIndicator({ running: faceRecognition.running.value, progress: faceRecognition.progress.value, cluster: faceRecognition.cluster.value, result: faceRecognition.result.value, error: faceRecognition.error.value }, t),
+  [SIDEBAR.OCR]: indexedRecognitionIndicator('ocr', ocrView.value, ocrError.value, ocrBusy.value, libConfig._libraryId, t),
+  [SIDEBAR.OBJECTS]: indexedRecognitionIndicator('objects', objectView.value, objectError.value, objectBusy.value, libConfig._libraryId, t),
+}));
 
 const uiStore = useUIStore();
 

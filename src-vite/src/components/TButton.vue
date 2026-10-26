@@ -3,8 +3,11 @@
     <div 
       ref="triggerRef"
       class="relative inline-flex"
-      @mouseenter="showTooltip"
-      @mouseleave="hideTooltip"
+      @mouseenter="enterTooltip"
+      @mouseleave="leaveTooltip"
+      @focusin="focusTooltip"
+      @focusout="blurTooltip"
+      @keydown.esc="dismissTooltip"
     >
       <div
         class="btn btn-ghost btn-square rounded-box border-0 focus:outline-none shadow-none! flex flex-col text-base-content/70 hover:text-base-content"
@@ -19,6 +22,8 @@
           }
         ]"
         role="button"
+        :aria-label="text || tooltipText || undefined"
+        :aria-describedby="isHovered && hasTooltip ? tooltipId : undefined"
         :aria-disabled="disabled"
         :tabindex="disabled ? -1 : 0"
         @click="handleClick"
@@ -53,16 +58,19 @@
           {{ text }}
         </span>
       </div>
+      <slot name="badge" />
     </div>
     <Teleport to="body">
       <transition name="fade">
         <div
           v-if="isHovered && hasTooltip"
+          :id="tooltipId"
           ref="tooltipRef"
-          class="fixed z-1000 px-2 py-1 text-xs leading-tight max-w-xs whitespace-normal text-center rounded-box bg-base-100 shadow-lg pointer-events-none"
+          role="tooltip"
+          class="fixed z-1000 px-2 py-1 text-xs leading-tight max-w-[min(20rem,calc(100vw-1rem))] max-h-[calc(100vh-1rem)] overflow-hidden whitespace-normal break-words text-center rounded-box bg-base-100 shadow-lg pointer-events-none"
           :style="tooltipStyle"
         >
-          {{ tooltipText }}
+          <slot name="tooltip">{{ tooltipText }}</slot>
         </div>
       </transition>
     </Teleport>
@@ -71,7 +79,7 @@
 
 <script setup lang="ts">
 import { TOOLTIP_GAP, TOOLTIP_PADDING, TOOLTIP_AUTO_HIDE_MS } from '@/common/constants';
-import { computed, ref, onBeforeUnmount, nextTick, type CSSProperties } from 'vue';
+import { computed, ref, onBeforeUnmount, nextTick, useId, watch, type CSSProperties } from 'vue';
 import { config } from '@/common/config';
 import type { Component } from 'vue';
 
@@ -123,6 +131,14 @@ const props = defineProps({
   tooltipPlacement: {
     type: String,
     default: 'bottom'
+  },
+  tooltipAutoHide: {
+    type: Boolean,
+    default: true
+  },
+  tooltipAlways: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -132,9 +148,11 @@ const tooltipText = computed(() => {
   if (!props.shortcut) return props.tooltip;
   return props.tooltip ? `${props.tooltip} (${props.shortcut})` : props.shortcut;
 });
-const hasTooltip = computed(() => Boolean(tooltipText.value && config.settings.showToolTip));
+const hasTooltip = computed(() => Boolean(tooltipText.value && (props.tooltipAlways || config.settings.showToolTip)));
 
 const isHovered = ref(false);
+const tooltipId = useId();
+let pointerInside = false, focusInside = false;
 const triggerRef = ref<HTMLElement | null>(null);
 const tooltipRef = ref<HTMLElement | null>(null);
 const tooltipStyle = ref<CSSProperties>({
@@ -211,7 +229,7 @@ const showTooltip = () => {
   attachPositionListeners();
   void updateTooltipPosition();
 
-  tooltipTimer = setTimeout(() => {
+  if (props.tooltipAutoHide) tooltipTimer = setTimeout(() => {
     isHovered.value = false;
     removePositionListeners();
     tooltipTimer = null;
@@ -223,6 +241,20 @@ const hideTooltip = () => {
   isHovered.value = false;
   removePositionListeners();
 };
+function enterTooltip() { pointerInside = true; showTooltip(); }
+function leaveTooltip() { pointerInside = false; if (!focusInside) hideTooltip(); }
+function focusTooltip() { focusInside = true; showTooltip(); }
+function blurTooltip() { focusInside = false; if (!pointerInside) hideTooltip(); }
+function dismissTooltip(event: KeyboardEvent) {
+  if (!isHovered.value) return;
+  event.stopPropagation();
+  hideTooltip();
+}
+watch(tooltipText, () => { if (isHovered.value) void updateTooltipPosition(); });
+watch([hasTooltip, () => props.tooltipAutoHide], ([available]) => {
+  if (!available) hideTooltip();
+  else if (isHovered.value || pointerInside || focusInside) showTooltip();
+});
 
 const handleClick = (event: Event) => {
   if (props.disabled) return;

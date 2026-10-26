@@ -185,6 +185,12 @@
     "suggestion_unavailable": "No valid suggestion is available for this media. Analyze it again and retry.",
     "task_model_hint": "This task uses the model selected in the chat. Vector indexing continues to use the Embedding models configured in settings."
   },
+  "recognition_status": {
+    "requesting": "Processing task request",
+    "attention": "Needs attention",
+    "failed": "Recognition failed for {count} items",
+    "open_details": "Open this workspace for details and task actions."
+  },
   "task_progress": {
     "hide": "Hide progress notification",
     "stop": "Stop recognition",
