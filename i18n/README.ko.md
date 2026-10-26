@@ -20,7 +20,7 @@ Lap은 오픈 소스 기반의 '로컬 우선(local-first)' 사진 관리 도구
 
 | 플랫폼 | 패키지 | 비고 |
 | :-- | :-- | :-- |
-| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Apple 공증 완료 |
+| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | 서명 및 공증 여부는 릴리스에 따라 다릅니다 |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | 서명되지 않음 — SmartScreen이 다운로드를 차단하면 **보관**을 클릭하세요 |
 | **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Debian 기반 배포판용（Ubuntu, Debian, Linux Mint 등） |
 | **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | 파일에 실행 권한을 부여한 다음 더블 클릭하여 실행 |

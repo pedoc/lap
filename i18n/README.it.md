@@ -20,7 +20,7 @@ Aprire la pagina dell'[ultima release](https://github.com/julyx10/lap/releases/l
 
 | Piattaforma | Pacchetto | Nota |
 | :-- | :-- | :-- |
-| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Notarizzato da Apple |
+| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Firma e notarizzazione dipendono dalla versione |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | Non firmato — se SmartScreen blocca il download, fare clic su **Mantieni comunque** |
 | **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Per distribuzioni basate su Debian (Ubuntu, Debian, Linux Mint, ecc.) |
 | **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | Rendere il file eseguibile, quindi fare doppio clic per avviarlo |

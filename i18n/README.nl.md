@@ -20,7 +20,7 @@ Open de [pagina met de nieuwste release](https://github.com/julyx10/lap/releases
 
 | Platform | Pakket | Opmerking |
 | :-- | :-- | :-- |
-| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Genotariseerd door Apple |
+| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Ondertekening en notarisatie verschillen per release |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | Niet ondertekend — als SmartScreen de download blokkeert, klik dan op **Toch behouden** |
 | **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Voor op Debian gebaseerde distributies (Ubuntu, Debian, Linux Mint, enz.) |
 | **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | Maak het bestand uitvoerbaar en dubbelklik om het te starten |

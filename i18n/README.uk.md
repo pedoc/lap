@@ -20,7 +20,7 @@ Lap — це менеджер фотографій із відкритим ко�
 
 | Платформа | Пакунок | Примітка |
 | :-- | :-- | :-- |
-| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Нотаризовано Apple |
+| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Підпис і нотаризація залежать від випуску |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | Без підпису — якщо SmartScreen блокує завантаження, натисніть **Усе одно зберегти** |
 | **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Для дистрибутивів на основі Debian (Ubuntu, Debian, Linux Mint тощо) |
 | **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | Зробіть файл виконуваним, потім двічі клацніть для запуску |

@@ -20,7 +20,7 @@ Nyissa meg a [legújabb kiadás oldalát](https://github.com/julyx10/lap/release
 
 | Platform | Csomag | Megjegyzés |
 | :-- | :-- | :-- |
-| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Az Apple által hitelesítve (notarizált) |
+| **macOS (Apple Silicon / Intel)** | `_aarch64.dmg` / `_x64.dmg` | Az aláírás és hitelesítés kiadásonként eltérhet |
 | **Windows 10/11 (x64 / ARM64)** | `_x64_en-US.msi` / `_arm64_en-US.msi` | Nem aláírt — ha a SmartScreen blokkolja a letöltést, kattintson a **Megtartás mindenképp** gombra |
 | **Linux (x64 / ARM64)** | `_amd64.deb` / `_arm64.deb` | Debian-alapú disztribúciókhoz (Ubuntu, Debian, Linux Mint stb.) |
 | **Linux (x64 / ARM64)** | `_amd64.AppImage` / `_aarch64.AppImage` | Tegye a fájlt futtathatóvá, majd indítsa dupla kattintással |
