@@ -61,13 +61,12 @@ watch(
 );
 
 onMounted(async () => {
+  // Capture also covers dialogs that stop context-menu events from bubbling.
+  window.addEventListener('contextmenu', handleContextMenu, { capture: true });
   const win = getCurrentWebviewWindow();
   if (win.label === 'main') {
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     applyMainWindowScale(Number(config.settings.scale || 1));
-    if (import.meta.env.PROD) {
-      window.addEventListener('contextmenu', handleContextMenu);
-    }
   }
 
   setTheme(config.settings.appearance, 
@@ -97,13 +96,11 @@ onMounted(async () => {
 });
 
 onUnmounted(async () => {
+  window.removeEventListener('contextmenu', handleContextMenu, { capture: true });
   const win = getCurrentWebviewWindow();
   if (win.label === 'main') {
     window.removeEventListener('keydown', handleKeyDown, { capture: true });
     document.documentElement.style.fontSize = '';
-    if (import.meta.env.PROD) {
-      window.removeEventListener('contextmenu', handleContextMenu);
-    }
   }
 });
 
