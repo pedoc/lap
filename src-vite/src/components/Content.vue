@@ -10182,9 +10182,13 @@ const indexAndInsertSavedFile = async (filePath: string, saveAsContext: SaveAsCo
 const toggleFavorite = async () => {
   if (selectedItemIndex.value >= 0) {
     const item = fileList.value[selectedItemIndex.value];
-    item.is_favorite = !item.is_favorite;
+    const previous = item.is_favorite;
+    item.is_favorite = !previous;
     // update the favorite status in the database
-    await setFileFavorite(item.id, item.is_favorite);
+    if (await setFileFavorite(item.id, item.is_favorite) === null) {
+      item.is_favorite = previous;
+      return;
+    }
     syncFileMetaToImageViewer(item.id, { is_favorite: item.is_favorite });
   }
 };
@@ -10221,9 +10225,13 @@ const toggleSelectModeFavorite = async () => {
 const setSelectedFileRating = async (rating: number) => {
   if (selectedItemIndex.value >= 0) {
     const item = fileList.value[selectedItemIndex.value];
+    const previous = item.rating;
     const normalized = item.rating === rating ? 0 : rating;
     item.rating = normalized;
-    await setFileRating(item.id, normalized);
+    if (await setFileRating(item.id, normalized) === null) {
+      item.rating = previous;
+      return;
+    }
     syncFileMetaToImageViewer(item.id, { rating: normalized });
   }
 };

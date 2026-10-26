@@ -1317,9 +1317,13 @@ const toggleFavorite = async (pane: Pane = 'left') => {
   const currentFileId = getFileIdByPane(pane);
   if (!target || currentFileId <= 0) return;
 
-  const isFavorite = !target.is_favorite;
+  const previous = target.is_favorite;
+  const isFavorite = !previous;
   applyFileMetaToPanes(currentFileId, { is_favorite: isFavorite });
-  await setFileFavorite(currentFileId, isFavorite);
+  if (await setFileFavorite(currentFileId, isFavorite) === null) {
+    applyFileMetaToPanes(currentFileId, { is_favorite: previous });
+    return;
+  }
   syncFileMetaToContent(currentFileId, { is_favorite: isFavorite });
 };
 
@@ -1328,9 +1332,13 @@ const setCurrentFileRating = async (rating: number, pane: Pane = 'left') => {
   const currentFileId = getFileIdByPane(pane);
   if (!target || currentFileId <= 0) return;
 
+  const previous = target.rating;
   const normalized = Number(target.rating || 0) === rating ? 0 : rating;
   applyFileMetaToPanes(currentFileId, { rating: normalized });
-  await setFileRating(currentFileId, normalized);
+  if (await setFileRating(currentFileId, normalized) === null) {
+    applyFileMetaToPanes(currentFileId, { rating: previous });
+    return;
+  }
   syncFileMetaToContent(currentFileId, { rating: normalized });
 };
 
