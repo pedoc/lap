@@ -40,6 +40,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     useUIStore: () => ({ pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const i = handlers.indexOf(id); if (i >= 0) handlers.splice(i, 1); }, isInputActive: (id: string) => handlers.at(-1) === id }),
     onMounted: (fn: any) => mounts.push(fn), onUnmounted: (fn: any) => unmounts.push(fn),
     getFileThumbById: async () => '', getTagsForFile: async () => [{ name: 'Existing' }], getThumbnailDataUrl: () => '', getThumbUrl: () => '', getDragPayload: async () => ({ filePaths: [] }), getExternalDropPaths: () => [], isWin: false, isMac: false,
+    getAllTags: async (parentId: number) => { calls.push(['getAllTags', { parentId }]); return [{ name: 'Existing' }, { name: 'Catalog tag' }]; },
     mediaTime: (value: number) => String(value), openMediaAiSettings() {}, openMediaAiBatch: (...args: any[]) => calls.push(['batch', args]), pendingChanges: { confirm: async () => true }, ask: async () => true,
     ...Object.fromEntries(['IconAdd', 'IconArrowDown', 'IconClose', 'IconFile', 'IconFileInfo', 'IconHistory', 'IconLeft', 'IconMore', 'IconRename', 'IconSearch', 'IconSettings', 'IconTrash'].map(name => [name, () => Vue.h('svg')])), openMediaChatMedia: async (...args: any[]) => { calls.push(['open-media', args]); return true; },
     MediaChatMarkdown: { props: ['content', 'streaming'], emits: ['rendered', 'link-error'], setup: (props: any) => () => Vue.h('div', { 'data-chat-markdown-fixture': '', 'data-streaming': String(props.streaming), innerHTML: renderChatMarkdown(props.content) }) },
@@ -61,7 +62,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,messageProposals,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,onlyEmpty,createTags,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,messageProposals,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,previewRows,previewVisibleFields,previewTags,addPreviewTags,removePreviewTag,previewTagKeydown,previewTagValidation,previewTagState,previewTagCatalog,previewHasText,previewHasTags,previewSelectedFieldCount,selectPreviewAnalysis,applySuggestions,adoptionCount,onlyEmpty,createTags,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
   return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage, channels,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -649,6 +650,117 @@ test('tool metadata suggestions load real analyses into the editable adoption pr
   } finally { h.dispose(); }
 });
 
+test('a tag-only proposal keeps its visible field when deselected and never adopts fields outside its original scope', async () => {
+  const h = harness();
+  try {
+    await h.boot(); const call = directProposalCall(); call.localData.proposal.fields = { title: false, description: false, tags: true };
+    await h.api.reviewToolProposal(call); const row = h.api.previewRows.value[0];
+    assert.deepEqual(Array.from(h.api.previewVisibleFields(row)), ['tags']);
+    assert.equal(h.api.previewHasText.value, false); assert.equal(h.api.previewHasTags.value, true); assert.equal(h.api.previewSelectedFieldCount.value, 1);
+    row.fields.tags = false;
+    assert.deepEqual(Array.from(h.api.previewVisibleFields(row)), ['tags'], 'Deselecting a change must leave it visible so it can be reselected');
+    assert.equal(h.api.previewSelectedFieldCount.value, 0); await h.api.applySuggestions();
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    row.fields.tags = true; row.fields.title = true; row.fields.description = true;
+    assert.equal(h.api.previewSelectedFieldCount.value, 1, 'Unavailable fields are excluded even if selection state is changed programmatically');
+    await h.api.applySuggestions(); const adopted = h.calls.find(([name]) => name === 'media_ai_adopt')[1];
+    assert.equal(adopted.options.tags, true); assert.equal(adopted.options.title, false); assert.equal(adopted.options.description, false);
+  } finally { h.dispose(); }
+});
+
+test('tag chips normalize additions, distinguish library and attached tags, and remove only the selected suggestion', async () => {
+  const h = harness();
+  try {
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall()); const row = h.api.previewRows.value[0];
+    assert.deepEqual(h.calls.filter(([name]) => name === 'getAllTags').map(([, args]) => args), [{ parentId: 0 }]);
+    row.tagsText = ' Existing、Catalog tag、Existing '; row.tagDraft = ' Beach,beach；海边 ';
+    h.api.addPreviewTags(row);
+    assert.deepEqual(Array.from(h.api.previewTags(row)), ['Existing', 'Catalog tag', 'Beach', '海边']); assert.equal(row.tagDraft, '');
+    assert.equal(h.api.previewTagState(row, 'Existing'), 'existing'); assert.equal(h.api.previewTagState(row, 'Catalog tag'), 'add');
+    assert.equal(h.api.previewTagState(row, 'Beach'), 'new');
+    h.api.removePreviewTag(row, 'Beach');
+    assert.deepEqual(Array.from(h.api.previewTags(row)), ['Existing', 'Catalog tag', '海边']);
+    assert.deepEqual(Array.from(row.currentTags), ['Existing']); assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    h.api.previewTagCatalog.value = null; assert.equal(h.api.previewTagState(row, 'Unknown tag'), 'unknown');
+  } finally { h.dispose(); }
+});
+
+test('tag validation preserves oversized or unsafe input and blocks adoption including an uncommitted draft', async () => {
+  const tags = Array.from({ length: 21 }, (_, index) => `tag-${index}`);
+  for (const [text, draft] of [[tags.join('、'), ''], [tags.slice(0, 20).join('、'), tags[20]], ['🙂'.repeat(65), ''], ['control\u0001tag', '']]) {
+    const h = harness();
+    try {
+      await h.boot(); const call = directProposalCall(); call.localData.proposal.fields = { title: false, description: false, tags: true };
+      await h.api.reviewToolProposal(call); const row = h.api.previewRows.value[0]; row.tagsText = text; row.tagDraft = draft;
+      const before = Array.from(h.api.previewTags({ tagsText: [text, draft].join('、') }));
+      assert.ok(h.api.previewTagValidation(row)); assert.equal(h.api.adoptionCount.value, 0);
+      await h.api.applySuggestions();
+      assert.deepEqual(Array.from(h.api.previewTags({ tagsText: [row.tagsText, row.tagDraft].join('、') })), before);
+      assert.ok(h.api.previewTagValidation(row)); assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    } finally { h.dispose(); }
+  }
+  const h = harness();
+  try {
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall()); const row = h.api.previewRows.value[0];
+    row.tagsText = '🙂'.repeat(64); assert.equal(h.api.previewTagValidation(row), '', 'Tag length counts Unicode characters rather than UTF-16 units');
+  } finally { h.dispose(); }
+});
+
+test('adoption commits valid unfinished tag input into the exact confirmed payload without dropping or duplicating tags', async () => {
+  const h = harness();
+  try {
+    await h.boot(); const call = directProposalCall(); call.localData.proposal.fields = { title: false, description: false, tags: true };
+    await h.api.reviewToolProposal(call); const row = h.api.previewRows.value[0];
+    row.tagsText = 'Existing'; row.tagDraft = 'Catalog tag、Beach、beach'; h.api.createTags.value = true;
+    await h.api.applySuggestions(); const adopted = h.calls.find(([name]) => name === 'media_ai_adopt')[1];
+    assert.deepEqual(adopted.options.proposal.tags, ['Existing', 'Catalog tag', 'Beach']);
+    assert.equal(row.tagDraft, ''); assert.equal(adopted.options.createTags, true); assert.equal(row.applied, true);
+  } finally { h.dispose(); }
+});
+
+test('tag entry waits for IME completion and consumes only its commit keys without sending a chat turn', async () => {
+  const h = harness();
+  try {
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall()); const row = h.api.previewRows.value[0]; row.tagsText = ''; row.tagDraft = '海边';
+    let prevented = 0;
+    const key = (value: string, composing = false) => ({ key: value, isComposing: composing, preventDefault() { prevented++; }, stopPropagation() {} });
+    h.api.previewTagKeydown(row, key('Enter', true));
+    assert.equal(row.tagDraft, '海边'); assert.equal(h.api.previewTags(row).length, 0); assert.equal(prevented, 0);
+    h.api.previewTagKeydown(row, key('Enter')); assert.deepEqual(Array.from(h.api.previewTags(row)), ['海边']);
+    for (const [index, separator] of [',', '，', ';', '；'].entries()) { row.tagDraft = `tag-${index}`; h.api.previewTagKeydown(row, key(separator)); }
+    assert.equal(h.api.previewTags(row).length, 5); assert.equal(prevented, 5);
+    row.tagDraft = 'Not committed'; h.api.previewTagKeydown(row, key('a'));
+    assert.equal(row.tagDraft, 'Not committed'); assert.equal(prevented, 5);
+    assert.equal(h.calls.some(([name]) => name === 'media_chat_send' || name === 'media_ai_adopt'), false);
+  } finally { h.dispose(); }
+});
+
+test('deselected invalid tags do not block a selected title and are omitted from adoption validation', async () => {
+  const h = harness();
+  try {
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall()); const row = h.api.previewRows.value[0];
+    row.fields.tags = false; row.tagsText = '🙂'.repeat(65); row.tagDraft = 'control\u0001tag';
+    assert.equal(h.api.adoptionCount.value, 1); assert.equal(h.api.previewSelectedFieldCount.value, 1);
+    await h.api.applySuggestions(); const adopted = h.calls.find(([name]) => name === 'media_ai_adopt')[1];
+    assert.equal(adopted.options.title, true); assert.equal(adopted.options.tags, false); assert.deepEqual(adopted.options.proposal.tags, []);
+  } finally { h.dispose(); }
+});
+
+test('failed metadata adoption preserves the edited values and selected fields without claiming success or retrying automatically', async () => {
+  const h = harness({ media_ai_adopt: () => { throw new Error('Fixture metadata write failure'); } });
+  try {
+    await h.boot(); const call = directProposalCall(); call.localData.proposal.fields.description = true;
+    await h.api.reviewToolProposal(call); const row = h.api.previewRows.value[0];
+    row.proposal.title = 'Reviewed title'; row.proposal.description = 'Reviewed description'; row.tagsText = 'Reviewed tag'; row.fields.description = false;
+    const edited = clone({ proposal: row.proposal, tagsText: row.tagsText, fields: row.fields });
+    await h.api.applySuggestions();
+    assert.equal(row.applied, false); assert.match(row.error, /Fixture metadata write failure/);
+    assert.deepEqual(clone({ proposal: row.proposal, tagsText: row.tagsText, fields: row.fields }), edited);
+    assert.equal(h.calls.filter(([name]) => name === 'media_ai_adopt').length, 1);
+    assert.equal(h.api.previewOpen.value, true); assert.equal(call.localData.proposal.files[0].proposal.title, 'Tool proposal');
+  } finally { h.dispose(); }
+});
+
 test('a multi-file tool proposal stays fully visible and cannot be applied while later files are still loading', async () => {
   const pending = deferred(), h = harness({ media_ai_inspect: (args: any) => args.fileId === 9 ? pending.promise : { source: mediaSource(7), analyses: [{ id: 'analysis-7', title: 'Real', description: '', tags: [] }] } });
   try {
@@ -881,25 +993,31 @@ test('dismissed suggestion fields stay unselectable and are excluded from adopti
   } finally { h.dispose(); }
 });
 
-test('metadata preview keeps its initial size while results load and fits small or resized viewports', async () => {
+test('metadata preview keeps viewport bounds while results load without assigning a fixed content height', async () => {
   const h = harness();
   try {
     await h.boot(); h.api.fitFrame();
-    assert.deepEqual(clone(h.api.previewSize.value), { width: 860, height: 740 });
+    assert.deepEqual(clone(h.api.previewSize.value), { width: 860, maxHeight: 800 });
+    await h.api.reviewToolProposal(proposalCall()); const singleRows = clone(h.api.previewRows.value);
+    assert.deepEqual(clone(h.api.previewSize.value), { width: 860, maxHeight: 800 });
     const call = proposalCall(); call.localData.proposal.files = [7, 8, 9].map(id => ({ ...file(id), source: mediaSource(id), analysisId: `analysis-${id}`, proposal: { title: 'Suggested', description: 'Description', tags: [] } }));
-    const initialSize = clone(h.api.previewSize.value), initialViewport = clone(h.api.viewport.value);
-    await h.api.reviewToolProposal(call);
+    const initialViewport = clone(h.api.viewport.value), preparing = h.api.reviewToolProposal(call);
+    assert.deepEqual(clone(h.api.previewSize.value), { width: 1040, maxHeight: 800 }, 'Multi-media previews use their wider bound as soon as rows are prepared');
+    await preparing;
     assert.equal(h.api.previewRows.value.length, 3);
     assert.equal(h.api.previewRows.value.every((row: any) => !!row.analysisId), true);
-    assert.deepEqual(clone(h.api.previewSize.value), initialSize, 'Late results must scroll inside the initially centered bounds');
+    assert.deepEqual(clone(h.api.previewSize.value), { width: 1040, maxHeight: 800 }, 'Late results retain the viewport limits while the content determines its actual height');
     assert.deepEqual(clone(h.api.viewport.value), initialViewport);
-    for (const [width, height] of [[600, 500], [600, 300], [1400, 1000], [1700, 1200]]) {
+    const multiRows = clone(h.api.previewRows.value);
+    for (const rows of [singleRows, multiRows]) for (const [width, height] of [[600, 500], [600, 300], [1400, 1000], [1700, 1200]]) {
+      h.api.previewRows.value = rows;
       const previousViewport = clone(h.api.viewport.value);
       h.context.window.innerWidth = width; h.context.window.innerHeight = height; h.api.fitFrame();
       assert.deepEqual(clone(h.api.viewport.value), { width, height });
       assert.notDeepEqual(clone(h.api.viewport.value), previousViewport, 'Every viewport change must recenter, including when dimensions remain capped');
-      assert.equal(h.api.previewSize.value.width, Math.min(860, width - 24));
-      assert.equal(h.api.previewSize.value.height, Math.min(740, height - 24));
+      assert.equal(h.api.previewSize.value.width, Math.min(rows.length > 1 ? 1040 : 860, width - 24));
+      assert.equal(h.api.previewSize.value.maxHeight, Math.max(1, height - 100));
+      assert.equal('height' in h.api.previewSize.value, false);
     }
   } finally { h.dispose(); }
 });
@@ -930,6 +1048,18 @@ test('editing a suggestion while discard confirmation is pending cannot apply a 
     h.api.previewRows.value[0].proposal.title = 'A changed proposal';
     confirmation.resolve(true); await applying;
     assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+  } finally { h.dispose(); }
+});
+
+test('unfinished tag input added during discard confirmation cannot bypass the confirmed payload snapshot', async () => {
+  const h = harness(), confirmation = deferred();
+  try {
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall()); const row = h.api.previewRows.value[0]; row.tagDraft = 'Before confirmation';
+    h.context.pendingChanges.confirm = () => confirmation.promise;
+    const applying = h.api.applySuggestions(); row.tagDraft = 'Added during confirmation';
+    confirmation.resolve(true); await applying;
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false); assert.equal(row.applied, false);
+    assert.equal(row.tagDraft, 'Added during confirmation'); assert.ok(h.api.previewTags(row).includes('Before confirmation'));
   } finally { h.dispose(); }
 });
 
@@ -1033,7 +1163,7 @@ test('the actual dialog renders composer model and reasoning controls, media car
     const setup = component.setup;
     component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
       state.previewOpen.value = true; state.configuration.value = configuration(); state.configuration.value.models[0].reasoning = { levels: ['none', 'low', 'high'], defaultEffort: 'low' }; state.selectedModelId.value = 'vision'; state.actionsOpen.value = true;
-      state.previewRows.value = [{ file: file(7), source: mediaSource(), analyses: [], analysisId: null, ready: true, fields: { title: true, description: true, tags: true }, proposal: { title: 'Chat <title>', description: 'Chat description', tags: ['Chat tag'] }, tagsText: 'Chat tag', currentTags: [], error: '', applied: false }];
+      state.previewRows.value = [{ file: file(7), source: mediaSource(), analyses: [], analysisId: null, ready: true, availableFields: ['title', 'description', 'tags'], fields: { title: true, description: true, tags: true }, proposal: { title: 'Chat <title>', description: 'Chat description', tags: ['Chat tag'] }, tagsText: 'Chat tag', tagDraft: '', expandedDescription: false, currentTags: [], error: '', applied: false }];
       state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: '**Answer**\n\n- Detail [1]', references: [reference(8)] });
       state.contextOpen.value = true;
       state.view.value.messages[0].toolCalls = [
@@ -1090,15 +1220,69 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.doesNotMatch(source, /v-model="visual"|cursor-nwse-resize|>＠ /);
     assert.match(html, /maxlength="8000"/);
     assert.match(html, /media_chat\.scope_hint/);
-    assert.match(html, /data-preview-width="860" data-preview-height="740" data-preview-key="1440:900"/);
-    assert.match(html, /<fieldset class="[^"]*flex-1 min-h-0 min-w-0 overflow-y-auto"[^>]*data-chat-adoption-preview/);
-    assert.match(html, /data-chat-direct-proposal/); assert.match(html, /media_chat.chat_suggestion/);
-    assert.match(html, /value="Chat &lt;title&gt;"/); assert.match(html, /Chat description/); assert.match(html, /value="Chat tag"/);
+    assert.match(html, /data-preview-width="860" data-preview-key="1440:900"/); assert.doesNotMatch(html, /data-preview-height=/);
+    assert.match(html, /data-chat-adoption-preview/); assert.match(html, /data-chat-preview-table/);
+    assert.match(html, /data-chat-preview-scroll/); assert.match(html, /data-chat-preview-footer/);
+    assert.match(html, /value="Chat &lt;title&gt;"/); assert.match(html, /Chat description/); assert.match(html, /Chat tag/);
     assert.doesNotMatch(source, /v-html/);
     history = true; const historyContext: any = {}; await renderToString(Vue.createSSRApp(component), historyContext);
     const historyHtml = historyContext.teleports.body;
     assert.match(historyHtml, /data-chat-history/); assert.equal((historyHtml.match(/data-chat-history-row/g) || []).length, 2);
     assert.match(historyHtml, /aria-label="media_chat.search_chats"/); assert.match(historyHtml, /role="menuitem"[^>]*>[^<]*<svg[^>]*><\/svg>media_chat.rename/);
     assert.doesNotMatch(historyHtml, /<aside|<textarea[^>]*aria-label="media_chat.question"/);
+  } finally { h.dispose(); }
+});
+
+test('the adoption table renders only requested field changes, compact media groups and relevant policies with an independent footer', async () => {
+  const h = harness(), imports: any = {}; let fixture: any[] = [];
+  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen, previewRows, previewTagCatalog, thumbnails, view, activeLibrary });</script>')).descriptor, { id: 'media-chat-preview-template', inlineTemplate: true }).content)
+    .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
+  try {
+    const ModalDialog = { props: ['width', 'height'], setup: (props: any, { slots }: any) => () => Vue.h('section', { 'data-preview-width': props.width, 'data-preview-height': props.height }, slots.default?.()) };
+    const component = runInNewContext(`${code};component`, { ...h.context, ...imports, watch() {}, onMounted() {}, onUnmounted() {}, ModalDialog });
+    const setup = component.setup;
+    component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
+      state.previewOpen.value = true; state.previewRows.value = clone(fixture); state.previewTagCatalog.value = ['Existing', 'Catalog tag'];
+      state.thumbnails.value = { 7: 'data:image/png;base64,cGhvdG83', 9: 'data:image/png;base64,cGhvdG85' }; state.view.value = emptyView(); state.activeLibrary.value = 'library-a'; context.expose(state);
+    } });
+    const render = async (rows: any[]) => { fixture = rows; const context: any = {}; await renderToString(Vue.createSSRApp(component), context); const html = context.teleports.body; return html.slice(html.lastIndexOf('<section', html.indexOf('data-chat-adoption-preview'))); };
+    await h.boot(); const tags = directProposalCall(); tags.localData.proposal.fields = { title: false, description: false, tags: true };
+    await h.api.reviewToolProposal(tags); const tagRows = clone(h.api.previewRows.value); tagRows[0].fields.tags = false; tagRows[0].tagsText = 'Existing、Catalog tag、Brand new';
+    const compact = await render(tagRows);
+    assert.match(compact, /data-preview-width="860"/);
+    assert.equal((compact.match(/data-chat-preview-field="tags"/g) || []).length, 1);
+    assert.doesNotMatch(compact, /data-chat-preview-field="(?:title|description)"/);
+    assert.equal((compact.match(/data-chat-preview-media="7"/g) || []).length, 1); assert.match(compact, /photo-7\.jpg/); assert.match(compact, /src="data:image\/png;base64,cGhvdG83"/);
+    assert.doesNotMatch(compact, /media_chat\.only_empty/); assert.match(compact, /media_chat\.create_tags/);
+    assert.match(compact, /Existing/); assert.match(compact, /Catalog tag/); assert.match(compact, /Brand new/);
+    assert.match(compact, /data-tag-state="existing"/); assert.match(compact, /data-tag-state="add"/); assert.match(compact, /data-tag-state="new"/);
+    assert.match(compact, /max-height:800px/); assert.match(compact, /<thead[^>]*sticky/);
+    const scrollIndex = compact.indexOf('data-chat-preview-scroll'), scrollStart = compact.lastIndexOf('<', scrollIndex), scrollTag = /^<([a-z]+)/.exec(compact.slice(scrollStart))![1];
+    assert.match(compact.slice(scrollStart, compact.indexOf('>', scrollStart)), /overflow-(?:y-)?auto/);
+    let depth = 0, scrollEnd = -1;
+    for (const match of compact.slice(scrollStart).matchAll(new RegExp(`<\\/?${scrollTag}\\b[^>]*>`, 'g'))) { depth += match[0].startsWith('</') ? -1 : 1; if (depth === 0) { scrollEnd = scrollStart + match.index! + match[0].length; break; } }
+    assert.ok(scrollEnd > scrollStart && compact.indexOf('data-chat-preview-footer') > scrollEnd, 'Footer actions must remain outside the scrollable table');
+
+    const multiple = directProposalCall(); multiple.localData.proposal.files.push({ ...file(9), source: mediaSource(9), analysisId: null, proposal: { title: 'Another title', description: '', tags: ['Catalog tag'] } });
+    await h.api.reviewToolProposal(multiple); const multi = await render(clone(h.api.previewRows.value));
+    assert.match(multi, /data-preview-width="1040"/);
+    assert.equal((multi.match(/data-chat-preview-media="[79]"/g) || []).length, 2);
+    assert.equal((multi.match(/data-chat-preview-field="title"/g) || []).length, 2); assert.equal((multi.match(/data-chat-preview-field="tags"/g) || []).length, 2);
+    assert.doesNotMatch(multi, /data-chat-preview-field="description"/); assert.match(multi, /photo-9\.jpg/); assert.match(multi, /src="data:image\/png;base64,cGhvdG85"/);
+    assert.match(multi, /media_chat\.only_empty/); assert.match(multi, /media_chat\.create_tags/); assert.equal(h.api.previewSelectedFieldCount.value, 4);
+
+    const description = directProposalCall(); description.localData.proposal.fields = { title: false, description: true, tags: false }; description.localData.proposal.files[0].proposal.description = 'A long description. '.repeat(60);
+    await h.api.reviewToolProposal(description); const descriptionRows = clone(h.api.previewRows.value), collapsed = await render(descriptionRows);
+    assert.equal((collapsed.match(/data-chat-preview-field="description"/g) || []).length, 1); assert.doesNotMatch(collapsed, /media_chat\.create_tags|data-chat-preview-field="(?:title|tags)"/);
+    const collapsedRows = Number(/<textarea[^>]*rows="(\d+)"/.exec(collapsed)![1]); descriptionRows[0].expandedDescription = true;
+    const expanded = await render(descriptionRows), expandedRows = Number(/<textarea[^>]*rows="(\d+)"/.exec(expanded)![1]);
+    assert.ok(expandedRows > collapsedRows, 'Expanding a long description affects its editor instead of reserving large empty space');
+
+    const failedRows = clone(h.api.previewRows.value); failedRows[0].error = 'Fixture adoption failed';
+    const failed = await render(failedRows); assert.match(failed, /Fixture adoption failed/);
+    assert.doesNotMatch(/<textarea[^>]*>/.exec(failed)![0], /disabled/);
+    const appliedRows = clone(h.api.previewRows.value); appliedRows[0].applied = true;
+    const applied = await render(appliedRows); assert.match(/<textarea[^>]*>/.exec(applied)![0], /disabled/);
   } finally { h.dispose(); }
 });

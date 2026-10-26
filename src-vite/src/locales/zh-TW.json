@@ -1,4 +1,27 @@
 {
+  "media_chat": {
+    "preview_hint": "勾選要採用的欄位，編輯後確認寫回；不變更原始檔名。",
+    "preview_select": "採用",
+    "preview_field": "欄位",
+    "preview_suggestion": "建議內容 · 可編輯",
+    "preview_select_field": "採用 {name} 的{field}",
+    "preview_segment": "選擇影片片段的建議",
+    "preview_append_tags": "標籤追加並去重",
+    "preview_catalog_unknown": "暫時無法核實標籤庫；關閉新增時，提交只追加已存在的標籤。",
+    "preview_keep_existing": "依目前策略保留既有內容",
+    "preview_expand": "展開說明",
+    "preview_collapse": "收起說明",
+    "preview_new_tag": "新增",
+    "preview_tag_skipped": "將略過",
+    "preview_existing_tag": "已有",
+    "preview_add_tag": "加入標籤，按 Enter 確認",
+    "preview_remove_tag": "移除建議標籤：{tag}",
+    "preview_invalid_tags": "最多 20 個標籤，每個不超過 64 個字元，且不能含控制字元。",
+    "preview_failed": "需要處理",
+    "preview_pending": "待確認",
+    "preview_selection": "已選 {fields} 個欄位 · {media} 項媒體",
+    "preview_close": "關閉預覽"
+  },
   "recognition_status": {
     "requesting": "正在處理任務請求",
     "queued": "已排隊",

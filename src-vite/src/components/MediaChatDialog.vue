@@ -117,29 +117,58 @@
       </div>
       <div v-for="edge in CHAT_RESIZE_EDGES" :key="edge" class="absolute z-20 touch-none select-none outline-none focus-visible:bg-primary/15" :style="resizeHandleStyle(edge)" role="button" tabindex="0" :aria-label="t('media_chat.resize_' + edge)" :data-chat-resize="edge" @pointerdown.stop="beginFrameGesture($event, 'resize', edge)" @lostpointercapture="endFrameGesture" @keydown.stop="resizeKeydown($event, edge)"></div>
     </section>
-    <ModalDialog v-if="previewOpen" :key="viewport.width + ':' + viewport.height" :title="t('media_chat.metadata_preview')" :width="previewSize.width" :height="previewSize.height" @cancel="previewOpen = false">
-      <fieldset class="text-xs space-y-3 flex-1 min-h-0 min-w-0 overflow-y-auto" :disabled="applying" data-chat-adoption-preview @keydown.esc.stop.prevent="previewOpen = false" @keydown.stop>
-        <p class="opacity-60">{{ t('media_chat.adoption_hint') }}</p>
-        <p v-if="reviewingToolProposal" class="flex items-center gap-2" role="status"><span class="loading loading-spinner loading-xs"></span>{{ t('media_chat.preparing_suggestions') }}</p>
-        <p v-if="previewError" role="alert" class="text-error whitespace-pre-wrap">{{ previewError }}</p>
-        <label class="flex gap-2"><input v-model="onlyEmpty" type="checkbox" class="checkbox checkbox-xs" />{{ t('media_chat.only_empty') }}</label>
-        <label class="flex gap-2"><input v-model="createTags" type="checkbox" class="checkbox checkbox-xs" />{{ t('media_chat.create_tags') }}</label>
-        <article v-for="row in previewRows" :key="row.file.fileId" class="border border-base-content/10 rounded-box p-3 space-y-2">
-          <strong class="break-words">{{ row.file.name }}</strong><p v-if="row.error" class="text-error whitespace-pre-wrap">{{ row.error }}</p><p v-if="row.applied" class="text-success">{{ t('media_chat.applied') }}</p>
-          <template v-if="row.ready">
-            <select v-if="row.analysisId && row.analyses.length > 1" v-model="row.analysisId" class="select select-bordered select-xs w-full" :disabled="row.applied" @change="selectPreviewAnalysis(row)"><option v-for="analysis in row.analyses" :key="analysis.id" :value="analysis.id">{{ mediaTime(analysis.start) }}–{{ mediaTime(analysis.end) }} · {{ analysis.title }}</option></select>
-            <p v-if="previewAnalysis(row)" class="text-[10px] opacity-50">{{ previewAnalysis(row).model?.model?.name }} · {{ new Date(previewAnalysis(row).createdAt).toLocaleString() }}</p>
-            <p v-else class="text-[10px] opacity-50" data-chat-direct-proposal>{{ t('media_chat.chat_suggestion') }}</p>
-            <div v-for="field in adoptionFields" :key="field" class="space-y-1">
-              <label class="flex gap-2 font-medium"><input v-model="row.fields[field]" type="checkbox" class="checkbox checkbox-xs" :disabled="row.applied || previewDismissed(row).includes(field)" />{{ t('media_chat.field_' + field) }}<span v-if="previewDismissed(row).includes(field)" class="text-warning font-normal">{{ t('media_ai.dismissed') }}</span></label>
-              <p class="opacity-50 whitespace-pre-wrap break-words">{{ t('media_chat.current_value') }}: {{ field === 'title' ? row.source?.title || '—' : field === 'description' ? row.source?.comments || '—' : row.currentTags.join('、') || '—' }}</p>
-              <input v-if="field === 'title'" v-model="row.proposal.title" class="input input-bordered input-xs w-full" maxlength="256" :disabled="row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.field_title')" />
-              <textarea v-else-if="field === 'description'" v-model="row.proposal.description" rows="3" class="textarea textarea-bordered w-full" maxlength="8000" :disabled="row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.field_description')"></textarea>
-              <input v-else v-model="row.tagsText" class="input input-bordered input-xs w-full" :disabled="row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.field_tags')" :placeholder="t('media_chat.tags_separator')" />
-            </div>
-          </template>
-        </article>
-        <div class="flex justify-end gap-2"><button class="btn btn-sm" @click="previewOpen = false">{{ t('media_chat.close') }}</button><button class="btn btn-sm btn-primary" :disabled="applying || reviewingToolProposal || !adoptionCount" @click="applySuggestions">{{ t('media_chat.apply_to_media', { count: adoptionCount }) }}</button></div>
+    <ModalDialog v-if="previewOpen" :key="viewport.width + ':' + viewport.height" :title="t('media_chat.metadata_preview')" :width="previewSize.width" @cancel="previewOpen = false">
+      <fieldset class="metadata-preview flex min-h-0 min-w-0 flex-col gap-3 text-xs" :style="{ maxHeight: previewSize.maxHeight + 'px' }" :disabled="applying" data-chat-adoption-preview @keydown.esc.stop.prevent="previewOpen = false" @keydown.stop>
+        <div class="shrink-0 space-y-2">
+          <p class="text-base-content/60">{{ t('media_chat.preview_hint') }}</p>
+          <div v-if="previewRows.length === 1" class="flex min-w-0 items-center gap-3" :data-chat-preview-media="previewRows[0].file.fileId">
+            <button class="flex min-w-0 flex-1 items-center gap-2 text-left" :title="t('media_chat.view_media', { name: previewRows[0].file.name })" @click="openFile(previewRows[0].file)"><img v-if="thumbnails[previewRows[0].file.fileId]" :src="thumbnails[previewRows[0].file.fileId]" class="size-10 shrink-0 rounded object-cover" alt="" /><IconFile v-else class="size-8 shrink-0 opacity-40" /><span class="min-w-0"><strong class="block truncate" :title="previewRows[0].file.name">{{ previewRows[0].file.name }}</strong><span class="text-[10px] opacity-50">{{ mediaSummary(previewRows[0].file) }}</span></span></button>
+            <span :class="previewRows[0].error ? 'text-error' : previewRows[0].applied ? 'text-success' : 'text-base-content/55'" role="status">{{ previewStatus(previewRows[0]) }}</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-x-5 gap-y-2" data-chat-preview-policies>
+            <label v-if="previewHasText" class="flex items-center gap-2"><input v-model="onlyEmpty" type="checkbox" class="checkbox checkbox-xs" />{{ t('media_chat.only_empty') }}</label>
+            <template v-if="previewHasTags"><span class="text-base-content/60">{{ t('media_chat.preview_append_tags') }}</span><label class="flex items-center gap-2"><input v-model="createTags" type="checkbox" class="checkbox checkbox-xs" />{{ t('media_chat.create_tags') }}</label></template>
+          </div>
+          <p v-if="reviewingToolProposal" class="flex items-center gap-2 text-base-content/60" role="status"><span class="loading loading-spinner loading-xs"></span>{{ t('media_chat.preparing_suggestions') }}</p>
+          <p v-if="previewHasTags && !reviewingToolProposal && previewTagCatalog === null" class="text-warning">{{ t('media_chat.preview_catalog_unknown') }}</p>
+          <p v-if="previewError" role="alert" class="text-error whitespace-pre-wrap">{{ previewError }}</p>
+        </div>
+        <div class="min-h-0 overflow-auto rounded-box border border-base-content/15 bg-base-100" data-chat-preview-scroll>
+          <table class="table table-xs w-full min-w-[600px] table-fixed" data-chat-preview-table>
+            <colgroup><col class="w-10" /><col class="w-20" /><col class="w-[32%]" /><col /></colgroup>
+            <thead class="sticky top-0 z-10 bg-base-200 text-base-content/65"><tr><th class="text-center"><span class="sr-only">{{ t('media_chat.preview_select') }}</span></th><th>{{ t('media_chat.preview_field') }}</th><th>{{ t('media_chat.current_value') }}</th><th>{{ t('media_chat.preview_suggestion') }}</th></tr></thead>
+            <tbody v-for="row in previewRows" :key="row.file.fileId" :data-chat-preview-group="row.file.fileId">
+              <tr v-if="previewRows.length > 1" class="bg-base-200/60"><th colspan="4" class="py-2 font-normal"><div class="flex items-center gap-3" :data-chat-preview-media="row.file.fileId"><button class="flex min-w-0 flex-1 items-center gap-2 text-left" :title="t('media_chat.view_media', { name: row.file.name })" @click="openFile(row.file)"><img v-if="thumbnails[row.file.fileId]" :src="thumbnails[row.file.fileId]" class="size-8 shrink-0 rounded object-cover" alt="" /><IconFile v-else class="size-6 shrink-0 opacity-40" /><strong class="min-w-0 truncate" :title="row.file.name">{{ row.file.name }}</strong></button><span class="shrink-0" :class="row.error ? 'text-error' : row.applied ? 'text-success' : 'text-base-content/55'" role="status">{{ previewStatus(row) }}</span></div></th></tr>
+              <tr v-if="row.analysisId && row.analyses.length > 1"><td colspan="4"><select v-model="row.analysisId" class="select select-bordered select-xs w-full" :disabled="row.applied || !row.ready" :aria-label="t('media_chat.preview_segment')" @change="selectPreviewAnalysis(row)"><option v-for="analysis in row.analyses" :key="analysis.id" :value="analysis.id">{{ mediaTime(analysis.start) }}–{{ mediaTime(analysis.end) }} · {{ analysis.title }}</option></select></td></tr>
+              <tr v-for="field in previewVisibleFields(row)" :key="field" class="align-top" :data-chat-preview-field="field" :data-preview-selected="row.fields[field]">
+                <td class="pt-3 text-center"><input v-model="row.fields[field]" type="checkbox" class="checkbox checkbox-xs" :disabled="!row.ready || row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.preview_select_field', { field: t('media_chat.field_' + field), name: row.file.name })" /></td>
+                <th class="py-3 font-medium"><span>{{ t('media_chat.field_' + field) }}</span><span v-if="previewDismissed(row).includes(field)" class="mt-1 block text-[10px] font-normal text-warning">{{ t('media_ai.dismissed') }}</span></th>
+                <td class="py-2 text-base-content/65">
+                  <div v-if="field === 'tags'" class="flex flex-wrap gap-1"><span v-for="tag in row.currentTags" :key="tag" class="badge badge-sm badge-ghost h-auto max-w-full whitespace-normal break-all py-0.5">{{ tag }}</span><span v-if="!row.currentTags.length" class="py-1 opacity-60">—</span></div>
+                  <p v-else class="whitespace-pre-wrap break-words py-1" :class="field === 'description' && !row.expandedDescription ? 'line-clamp-2' : ''">{{ (field === 'title' ? row.source?.title : row.source?.comments) || '—' }}</p>
+                  <span v-if="field !== 'tags' && onlyEmpty && (field === 'title' ? row.source?.title?.trim() : row.source?.comments?.trim())" class="mt-1 block text-[10px] text-warning">{{ t('media_chat.preview_keep_existing') }}</span>
+                </td>
+                <td class="py-2">
+                  <input v-if="field === 'title'" v-model="row.proposal.title" class="input input-bordered input-sm w-full min-w-0" maxlength="256" :disabled="!row.ready || row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.field_title')" />
+                  <div v-else-if="field === 'description'" class="space-y-1"><textarea v-model="row.proposal.description" :rows="row.expandedDescription ? 7 : 2" class="textarea textarea-bordered w-full min-w-0" maxlength="8000" :disabled="!row.ready || row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.field_description')"></textarea><button class="btn btn-xs btn-ghost" :aria-expanded="!!row.expandedDescription" @click="row.expandedDescription = !row.expandedDescription">{{ t(row.expandedDescription ? 'media_chat.preview_collapse' : 'media_chat.preview_expand') }}</button></div>
+                  <div v-else class="space-y-1">
+                    <div class="flex min-h-9 flex-wrap items-center gap-1 rounded-field border border-base-content/20 bg-base-100 p-1 focus-within:outline-2 focus-within:outline-primary" data-chat-preview-tags>
+                      <span v-for="tag in previewTags(row)" :key="previewTagKey(tag)" class="badge badge-sm h-auto max-w-full gap-1 py-1" :class="previewTagState(row, tag) === 'new' ? createTags ? 'badge-primary badge-soft' : 'badge-warning badge-soft' : 'badge-ghost'" :data-tag-state="previewTagState(row, tag)"><span class="min-w-0 whitespace-normal break-all" :class="previewTagState(row, tag) === 'new' && !createTags ? 'line-through opacity-60' : ''">{{ tag }}</span><span v-if="previewTagState(row, tag) === 'new'" class="shrink-0 text-[9px]">{{ t(createTags ? 'media_chat.preview_new_tag' : 'media_chat.preview_tag_skipped') }}</span><span v-else-if="previewTagState(row, tag) === 'existing'" class="shrink-0 text-[9px] opacity-50">{{ t('media_chat.preview_existing_tag') }}</span><button class="rounded-sm opacity-60 hover:opacity-100 focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-30" :disabled="!row.ready || row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.preview_remove_tag', { tag })" @click="removePreviewTag(row, tag)"><IconClose class="size-3" aria-hidden="true" /></button></span>
+                      <input v-model="row.tagDraft" class="h-7 min-w-20 flex-1 bg-transparent px-1 outline-none disabled:cursor-not-allowed disabled:opacity-40" :disabled="!row.ready || row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.preview_add_tag')" :placeholder="t('media_chat.preview_add_tag')" @keydown="previewTagKeydown(row, $event)" @blur="addPreviewTags(row)" />
+                    </div>
+                    <p v-if="previewTagValidation(row)" class="text-error" role="alert">{{ previewTagValidation(row) }}</p>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="row.error"><td colspan="4" class="text-error whitespace-pre-wrap break-words" role="alert">{{ row.error }}</td></tr>
+              <tr v-if="row.applied"><td colspan="4" class="text-success">{{ t('media_chat.applied') }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-base-content/10 pt-3" data-chat-preview-footer>
+          <p class="text-base-content/60" role="status">{{ t('media_chat.preview_selection', { fields: previewSelectedFieldCount, media: adoptionCount }) }}</p>
+          <div class="flex items-center gap-2"><button class="btn btn-sm" @click="previewOpen = false">{{ t('media_chat.preview_close') }}</button><button class="btn btn-sm btn-primary" :disabled="applying || reviewingToolProposal || !adoptionCount" @click="applySuggestions"><span v-if="applying" class="loading loading-spinner loading-xs"></span>{{ t('media_chat.apply_to_media', { count: adoptionCount }) }}</button></div>
+        </div>
       </fieldset>
     </ModalDialog>
   </Teleport>
@@ -153,7 +182,7 @@ import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
-import { getDragPayload, getFileThumbById, getTagsForFile } from '@/common/api';
+import { getAllTags, getDragPayload, getFileThumbById, getTagsForFile } from '@/common/api';
 import { getExternalDropPaths } from '@/common/externalDrop';
 import { getThumbnailDataUrl, getThumbUrl, isWin, isMac } from '@/common/utils';
 import { mediaTime, openMediaAiBatch, openMediaAiSettings, type MediaCapability, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
@@ -169,7 +198,7 @@ const { t, te } = useI18n(), uiStore = useUIStore();
 const root = ref<HTMLElement | null>(null), composer = ref<HTMLTextAreaElement | null>(null), messagesRoot = ref<HTMLElement | null>(null);
 const pickerSearch = ref<HTMLInputElement | null>(null), renameInput = ref<HTMLInputElement | null>(null);
 const viewport = ref({ width: window.innerWidth, height: window.innerHeight });
-const previewSize = computed(() => ({ width: Math.max(1, Math.min(860, viewport.value.width - 24)), height: Math.max(1, Math.min(740, viewport.value.height - 24)) }));
+const previewSize = computed(() => ({ width: Math.max(1, Math.min(previewRows.value.length > 1 ? 1040 : 860, viewport.value.width - 24)), maxHeight: Math.max(1, viewport.value.height - 100) }));
 const frame = ref<ChatFrame>({ x: 12, y: 12, width: 1000, height: 680 });
 const frameStyle = computed(() => ({ left: `${frame.value.x}px`, top: `${frame.value.y}px`, width: `${frame.value.width}px`, height: `${frame.value.height}px` }));
 const autoDockWindow = computed(() => config.settings.mediaChat?.autoDockWindow === true);
@@ -521,9 +550,13 @@ function openTasks(all: boolean) { previewOpen.value = false; openMediaAiBatch(a
 function openIncomingTasks() { previewOpen.value = false; openMediaAiBatch(activeLibrary.value, [...incomingIds.value], selectedModelId.value || null); }
 
 type AdoptionField = 'title' | 'description' | 'tags';
-interface PreviewRow { file: ChatCandidate; source: ChatSource | null; analyses: any[]; analysisId: string | null; ready: boolean; fields: Record<AdoptionField, boolean>; proposal: { title: string; description: string; tags: string[] }; tagsText: string; currentTags: string[]; error: string; applied: boolean }
+interface PreviewRow { file: ChatCandidate; source: ChatSource | null; analyses: any[]; analysisId: string | null; ready: boolean; availableFields: AdoptionField[]; fields: Record<AdoptionField, boolean>; proposal: { title: string; description: string; tags: string[] }; tagsText: string; tagDraft: string; currentTags: string[]; expandedDescription: boolean; error: string; applied: boolean }
 const adoptionFields: AdoptionField[] = ['title', 'description', 'tags'];
 const previewOpen = ref(false), previewRows = ref<PreviewRow[]>([]), previewError = ref(''), onlyEmpty = ref(true), createTags = ref(false), applying = ref(false);
+const previewTagCatalog = ref<string[] | null>(null);
+const previewTagCatalogKeys = computed(() => previewTagCatalog.value && new Set(previewTagCatalog.value.map(previewTagKey)));
+const previewHasText = computed(() => previewRows.value.some(row => row.availableFields.some(field => field !== 'tags')));
+const previewHasTags = computed(() => previewRows.value.some(row => row.availableFields.includes('tags')));
 let suggestionLibrary = '';
 const reviewingToolProposal = ref(false);
 const reviewedToolProposals = new Set<string>();
@@ -545,6 +578,7 @@ async function reviewToolProposal(call: ChatToolCall) {
   suggestionLibrary = libraryId;
   previewError.value = '';
   previewRows.value = [];
+  previewTagCatalog.value = null;
   previewOpen.value = true;
   reviewingToolProposal.value = true;
   for (const item of proposal.files) {
@@ -561,9 +595,15 @@ async function reviewToolProposal(call: ChatToolCall) {
       hasAnalysis: !!item.analysisId,
       sourceStamp: item.sourceStamp || '',
     };
-    previewRows.value.push({ file, source, analyses: [], analysisId: item.analysisId, ready: false, fields: { title: !!proposal.fields.title, description: !!proposal.fields.description, tags: !!proposal.fields.tags }, proposal: JSON.parse(JSON.stringify(item.proposal)), tagsText: item.proposal.tags.join('、'), currentTags: [], error: '', applied: false });
+    previewRows.value.push({ file, source, analyses: [], analysisId: item.analysisId, ready: false, availableFields: adoptionFields.filter(field => proposal.fields[field]), fields: { title: !!proposal.fields.title, description: !!proposal.fields.description, tags: !!proposal.fields.tags }, proposal: JSON.parse(JSON.stringify(item.proposal)), tagsText: item.proposal.tags.join('、'), tagDraft: '', currentTags: [], expandedDescription: false, error: '', applied: false });
   }
+  void loadThumbnails(previewRows.value.map(row => row.file));
   try {
+    if (previewHasTags.value) {
+      const tags = await getAllTags(0).catch(() => null);
+      if (!current()) return;
+      previewTagCatalog.value = Array.isArray(tags) ? tags.map((tag: { name: string }) => tag.name) : null;
+    }
     for (let index = 0; index < proposal.files.length; index++) {
       if (!current()) return;
       const item = proposal.files[index], row = previewRows.value[index], source = row.source!;
@@ -592,9 +632,41 @@ async function reviewToolProposal(call: ChatToolCall) {
 }
 function previewAnalysis(row: PreviewRow) { return row.analysisId ? row.analyses.find(item => item.id === row.analysisId) : null; }
 function previewDismissed(row: PreviewRow) { return previewAnalysis(row)?.dismissed || []; }
-function previewFields(row: PreviewRow) { const dismissed = previewDismissed(row); return { title: row.fields.title && !dismissed.includes('title'), description: row.fields.description && !dismissed.includes('description'), tags: row.fields.tags && !dismissed.includes('tags') }; }
-function previewCanApply(row: PreviewRow) { return row.ready && !!row.source && !row.error && !row.applied && (row.analysisId === null || !!previewAnalysis(row)) && Object.values(previewFields(row)).some(Boolean); }
+function previewVisibleFields(row: PreviewRow) { return row.availableFields; }
+function previewFields(row: PreviewRow) { const allowed = (field: AdoptionField) => row.availableFields.includes(field) && row.fields[field] && !previewDismissed(row).includes(field); return { title: allowed('title'), description: allowed('description'), tags: allowed('tags') }; }
+function previewTagKey(tag: string) { return tag.trim().replace(/[A-Z]/g, character => character.toLowerCase()); }
+function parsePreviewTags(text: string) {
+  const seen = new Set<string>();
+  return text.split(/[、,，;；\n]/).map(tag => tag.trim()).filter(tag => { const key = previewTagKey(tag); if (!key || seen.has(key)) return false; seen.add(key); return true; });
+}
+function previewTags(row: PreviewRow) { return parsePreviewTags(row.tagsText); }
+function pendingPreviewTags(row: PreviewRow) { return parsePreviewTags([row.tagsText, row.tagDraft || ''].join('、')); }
+function addPreviewTags(row: PreviewRow) {
+  if (!row.ready || row.applied || previewDismissed(row).includes('tags')) return;
+  row.tagsText = pendingPreviewTags(row).join('、'); row.tagDraft = '';
+}
+function removePreviewTag(row: PreviewRow, tag: string) {
+  if (!row.ready || row.applied || previewDismissed(row).includes('tags')) return;
+  row.tagsText = previewTags(row).filter(value => previewTagKey(value) !== previewTagKey(tag)).join('、');
+}
+function previewTagKeydown(row: PreviewRow, event: KeyboardEvent) {
+  if (!event.isComposing && ['Enter', ',', '，', ';', '；', '、'].includes(event.key)) { event.preventDefault(); addPreviewTags(row); }
+}
+function previewTagState(row: PreviewRow, tag: string): 'existing' | 'add' | 'new' | 'unknown' {
+  const key = previewTagKey(tag);
+  if (row.currentTags.some(value => previewTagKey(value) === key)) return 'existing';
+  if (previewTagCatalogKeys.value === null) return 'unknown';
+  return previewTagCatalogKeys.value.has(key) ? 'add' : 'new';
+}
+function previewTagValidation(row: PreviewRow) {
+  if (!previewFields(row).tags) return '';
+  const tags = pendingPreviewTags(row);
+  return tags.length > 20 || tags.some(tag => Array.from(tag).length > 64 || /[\u0000-\u001f\u007f-\u009f]/.test(tag)) ? t('media_chat.preview_invalid_tags') : '';
+}
+function previewStatus(row: PreviewRow) { return t(row.applied ? 'media_chat.applied' : row.error ? 'media_chat.preview_failed' : row.ready ? 'media_chat.preview_pending' : 'media_chat.preparing_suggestions'); }
+function previewCanApply(row: PreviewRow) { return row.ready && !!row.source && !row.error && !row.applied && !previewTagValidation(row) && (row.analysisId === null || !!previewAnalysis(row)) && Object.values(previewFields(row)).some(Boolean); }
 const adoptionCount = computed(() => previewRows.value.filter(previewCanApply).length);
+const previewSelectedFieldCount = computed(() => previewRows.value.filter(previewCanApply).reduce((count, row) => count + Object.values(previewFields(row)).filter(Boolean).length, 0));
 type MenuAction = 'attach' | 'title' | 'description' | 'tags' | 'review' | 'selected' | 'tasks' | 'all' | 'configure';
 const menuItems = computed(() => {
   const unavailable = !attachments.value.length || !canGenerateSuggestions.value || applying.value || reviewingToolProposal.value;
@@ -640,12 +712,14 @@ async function generateSuggestions(field: AdoptionField) {
   rememberDraft();
   await send();
 }
-function selectPreviewAnalysis(row: PreviewRow) { const analysis = row.analyses.find(item => item.id === row.analysisId); if (!analysis) return; row.fields = previewFields(row); row.proposal = { title: analysis.title, description: analysis.description, tags: [...analysis.tags] }; row.tagsText = analysis.tags.join('、'); }
+function selectPreviewAnalysis(row: PreviewRow) { const analysis = row.analyses.find(item => item.id === row.analysisId); if (!analysis) return; row.fields = previewFields(row); row.proposal = { title: analysis.title, description: analysis.description, tags: [...analysis.tags] }; row.tagsText = analysis.tags.join('、'); row.tagDraft = ''; }
 async function applySuggestions() {
-  if (applying.value || reviewingToolProposal.value || !adoptionCount.value || suggestionLibrary !== libConfig._libraryId) return;
+  if (applying.value || reviewingToolProposal.value || suggestionLibrary !== libConfig._libraryId) return;
+  for (const row of previewRows.value) addPreviewTags(row);
+  if (!adoptionCount.value) return;
   const libraryId = suggestionLibrary, sessionId = view.value?.session.id, epoch = toolReviewGeneration;
   const current = () => !disposed && epoch === toolReviewGeneration && libraryId === activeLibrary.value && libraryId === libConfig._libraryId && sessionId === view.value?.session.id;
-  const payloads = () => previewRows.value.filter(previewCanApply).map(row => ({ libraryId, source: JSON.parse(JSON.stringify(row.source)), analysisId: row.analysisId, options: { ...previewFields(row), proposal: { title: row.proposal.title, description: row.proposal.description, tags: [...new Set(row.tagsText.split(/[、,，;；\n]/).map(tag => tag.trim()).filter(Boolean))] }, createTags: createTags.value, onlyEmpty: onlyEmpty.value } }));
+  const payloads = () => previewRows.value.filter(previewCanApply).map(row => ({ libraryId, source: JSON.parse(JSON.stringify(row.source)), analysisId: row.analysisId, options: { ...previewFields(row), proposal: { title: row.proposal.title, description: row.proposal.description, tags: previewFields(row).tags ? pendingPreviewTags(row) : [] }, createTags: createTags.value, onlyEmpty: onlyEmpty.value } }));
   const targets = payloads(), snapshot = JSON.stringify(targets);
   if (!await pendingChanges.confirm('media-title') || !current() || snapshot !== JSON.stringify(payloads())) return;
   applying.value = true;
