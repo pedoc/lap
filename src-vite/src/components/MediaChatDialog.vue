@@ -67,9 +67,15 @@
                     <section class="min-w-0 space-y-1" data-chat-tool-arguments><h4 class="font-medium text-base-content/65">{{ t('media_chat.tool_arguments') }}</h4><pre class="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-base-100 p-2 font-mono text-[10px] leading-relaxed select-text">{{ formatToolJson(call.arguments) }}</pre></section>
                     <section class="min-w-0 space-y-1" data-chat-tool-result><h4 class="font-medium text-base-content/65">{{ t('media_chat.tool_result') }}</h4><pre v-if="call.result !== null && call.result !== undefined" class="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-base-100 p-2 font-mono text-[10px] leading-relaxed select-text">{{ formatToolJson(call.result) }}</pre><p v-else class="text-base-content/45">{{ t(call.status === 'running' ? 'media_chat.tool_awaiting_result' : 'media_chat.tool_empty_result') }}</p></section>
                     <div v-if="toolTask(call)" class="rounded-box border border-base-content/10 bg-base-100 p-2" :data-chat-tool-task="toolTask(call)!.id"><p class="flex flex-wrap items-center justify-between gap-2"><span>{{ taskStateLabel(toolTask(call)!.state) }}</span><span>{{ toolTask(call)!.completed }} / {{ toolTask(call)!.total }}</span></p><p v-if="toolTask(call)!.failed" class="mt-1 text-error">{{ t('media_chat.tool_task_failed', { count: toolTask(call)!.failed }) }}</p><p v-if="toolTaskUnrefreshed(call)" class="mt-1 text-base-content/55">{{ t('media_chat.tool_task_not_refreshed') }}</p><button class="btn btn-xs btn-ghost mt-2" @click="openTasks(false)">{{ t('media_chat.tool_view_tasks') }}</button></div>
-                    <button v-if="toolProposal(call)" class="btn btn-xs" :disabled="applying || reviewingToolProposal" :data-chat-tool-proposal="toolProposal(call)!.id" @click="reviewToolProposal(call)">{{ t('media_chat.tool_review_proposal') }}</button>
                   </div>
                 </details>
+              </div>
+              <div v-if="messageProposals(message).length" class="space-y-2">
+                <section v-for="call in messageProposals(message)" :key="toolProposal(call)!.id" class="rounded-box border border-primary/20 bg-primary/5 p-3 space-y-2" :data-chat-proposal="toolProposal(call)!.id">
+                  <div class="flex flex-wrap items-center justify-between gap-2"><strong class="font-medium">{{ t('media_chat.chat_suggestion') }}</strong><button class="btn btn-sm btn-primary" :disabled="applying || reviewingToolProposal" :data-chat-tool-proposal="toolProposal(call)!.id" @click="reviewToolProposal(call)">{{ t('media_chat.tool_review_proposal') }}</button></div>
+                  <p class="text-[11px] text-base-content/65">{{ t('media_chat.tool_proposal_count', { count: toolProposal(call)!.files.length }) }}</p>
+                  <div class="flex flex-wrap gap-1"><span v-for="field in adoptionFields.filter(field => toolProposal(call)!.fields[field])" :key="field" class="badge badge-sm badge-ghost">{{ t('media_chat.field_' + field) }}</span></div>
+                </section>
               </div>
               <div v-if="message.references.length" class="flex flex-wrap gap-2"><div v-for="(file, i) in message.references" :key="file.fileId + ':' + file.sourceStamp" class="relative group rounded-box border border-base-content/10 bg-base-100 min-w-0 max-w-64" data-chat-reference-card><button class="flex items-center gap-2 p-2 pr-8 w-full min-w-0 text-left hover:bg-base-200 rounded-box" :title="t('media_chat.view_media', { name: file.name })" @click="openFile(file)"><img v-if="thumbnails[file.fileId]" :src="thumbnails[file.fileId]" class="h-12 w-12 rounded object-cover shrink-0" alt="" /><IconFile v-else class="h-8 w-8 m-2 shrink-0 opacity-40" aria-hidden="true" /><span class="min-w-0"><span class="block truncate font-medium">[{{ i + 1 }}] {{ file.name }}</span><span class="block text-[10px] opacity-50">{{ mediaSummary(file) }}</span></span></button><button class="absolute right-1 top-1 btn btn-xs btn-square btn-ghost" :aria-label="t('media_chat.attach_again', { name: file.name })" :disabled="attachments.some(item => item.fileId === file.fileId)" @click="attachIds([file.fileId])">＋</button></div></div>
               <div v-else-if="message.role === 'user' && message.id === streamTurn?.user.id && streamTurn.media.length" class="flex flex-wrap gap-2"><button v-for="file in streamTurn.media" :key="file.fileId" class="flex min-w-0 max-w-64 items-center gap-2 rounded-box border border-base-content/10 bg-base-100 p-2 text-left hover:bg-base-200" data-chat-pending-reference :title="t('media_chat.view_media', { name: file.name })" @click="openFile(file)"><img v-if="thumbnails[file.fileId]" :src="thumbnails[file.fileId]" class="size-10 shrink-0 rounded object-cover" alt="" /><IconFile v-else class="size-6 shrink-0 opacity-40" aria-hidden="true" /><span class="truncate">{{ file.name }}</span></button></div>
@@ -294,6 +300,16 @@ function toolProposal(call: ChatToolCall): ToolProposal | null {
   if (!proposal.files.length || !proposal.files.every((file: any) => Number.isSafeInteger(file.fileId) && file.fileId > 0 && file.source?.fileId === file.fileId && (file.analysisId === null || typeof file.analysisId === 'string' && !!file.analysisId) && toolObject(file.proposal) && typeof file.proposal.title === 'string' && typeof file.proposal.description === 'string' && Array.isArray(file.proposal.tags))) return null;
   return proposal as unknown as ToolProposal;
 }
+function messageProposals(message: ChatMessage): ChatToolCall[] {
+  if (message.role !== 'assistant') return [];
+  const seen = new Set<string>();
+  return (message.toolCalls || []).filter(call => {
+    const proposal = toolProposal(call);
+    if (!proposal || seen.has(proposal.id)) return false;
+    seen.add(proposal.id);
+    return true;
+  });
+}
 function taskStateLabel(state: string) { const key = 'media_chat.task_state_' + state; return te(key) ? t(key) : state; }
 function toolResultSummary(call: ChatToolCall) {
   if (call.status === 'running') return t('media_chat.tool_status_running');
@@ -450,7 +466,10 @@ async function send() {
     if (turn?.requestId === requestId && turn.libraryId === libraryId && turn.sessionId === sessionId) { turn.closed = true; turn.finalView = next; }
     if (!next.messages.some(message => message.requestId === requestId)) restoreQuestion();
     messageGeneration++;
-    if (libraryId === activeLibrary.value && sessionId === view.value?.session.id) { view.value = snapshotView(next); await scrollMessages(); }
+    if (libraryId === activeLibrary.value && sessionId === view.value?.session.id) {
+      view.value = snapshotView(next); await scrollMessages();
+      await autoReviewToolProposal(next.messages.find(message => message.requestId === requestId && message.role === 'assistant'), libraryId, sessionId);
+    }
   } catch (reason) {
     const turn = streamTurn.value;
     if (turn?.requestId === requestId && !turn.finalView) { turn.closed = true; turn.assistant.status = 'failed'; turn.assistant.phase = 'failed'; turn.assistant.error = String(reason); }
@@ -507,11 +526,21 @@ const adoptionFields: AdoptionField[] = ['title', 'description', 'tags'];
 const previewOpen = ref(false), previewRows = ref<PreviewRow[]>([]), previewError = ref(''), onlyEmpty = ref(true), createTags = ref(false), applying = ref(false);
 let suggestionLibrary = '';
 const reviewingToolProposal = ref(false);
+const reviewedToolProposals = new Set<string>();
 let toolReviewGeneration = 0;
+async function autoReviewToolProposal(message: ChatMessage | undefined, libraryId: string, sessionId: string) {
+  if (disposed || !mediaChat.open || showHistory.value || loading.value || previewOpen.value || applying.value || reviewingToolProposal.value
+    || previewRows.value.some(row => row.ready && !row.applied)
+    || libraryId !== activeLibrary.value || libraryId !== libConfig._libraryId || sessionId !== view.value?.session.id
+    || message?.status !== 'completed') return;
+  const call = messageProposals(message).at(-1), proposal = call && toolProposal(call);
+  if (call && proposal && !reviewedToolProposals.has(`${libraryId}:${sessionId}:${proposal.id}`)) await reviewToolProposal(call);
+}
 async function reviewToolProposal(call: ChatToolCall) {
   const proposal = toolProposal(call);
   if (!proposal || applying.value || reviewingToolProposal.value || !view.value) return;
   const libraryId = activeLibrary.value, sessionId = view.value.session.id, epoch = ++toolReviewGeneration;
+  reviewedToolProposals.add(`${libraryId}:${sessionId}:${proposal.id}`);
   const current = () => !disposed && epoch === toolReviewGeneration && libraryId === activeLibrary.value && libraryId === libConfig._libraryId && sessionId === view.value?.session.id;
   suggestionLibrary = libraryId;
   previewError.value = '';
@@ -668,7 +697,7 @@ function resizeKeydown(event: KeyboardEvent, edge: ChatResizeEdge) { if (event.k
 watch(() => [mediaChat.open, mediaChat.revision], () => { if (mediaChat.open) void openEntry(); else { rememberDraft(); closePicker(); contextOpen.value = false; actionsOpen.value = false; actionSlash = null; sessionActionsOpen.value = false; historyMenuId.value = ''; cancelRename(); endFrameGesture(); previewOpen.value = false; toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; } }, { immediate: true });
 watch(() => mediaChat.open, open => { if (open && !inputRegistered) { uiStore.pushInputHandler('MediaChat'); inputRegistered = true; } else if (!open && inputRegistered) { uiStore.removeInputHandler('MediaChat'); inputRegistered = false; } }, { immediate: true });
 watch(() => libConfig._libraryId, libraryId => { if (activeLibrary.value && libraryId !== activeLibrary.value) { rememberDraft(); generation++; suggestionLibrary = ''; previewRows.value = []; previewError.value = ''; previewOpen.value = false; closeMediaChat(); } });
-watch(() => [activeLibrary.value, view.value?.session.id], () => { toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; toolTaskStates.value = {}; if (previewOpen.value) { previewOpen.value = false; previewRows.value = []; } });
+watch([() => activeLibrary.value, () => view.value?.session.id], () => { toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; toolTaskStates.value = {}; previewOpen.value = false; previewRows.value = []; });
 watch(currentToolTasks, () => { void refreshToolTasks(); });
 watch(() => [mention.value?.query, pickerQuery.value, candidateSource.value], () => { clearTimeout(candidateTimer); candidateTimer = setTimeout(() => { void loadCandidates(); }, 150); });
 watch(sessionMedia, files => { if (mediaChat.open) void loadThumbnails(files); });

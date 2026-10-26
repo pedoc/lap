@@ -61,7 +61,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,onlyEmpty,createTags,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,messageProposals,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,onlyEmpty,createTags,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
   return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage, channels,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -458,6 +458,124 @@ function directProposalCall() {
   call.localData.proposal.files[0].analysisId = null;
   return call;
 }
+
+function proposalView(requestId: string, toolCalls = [directProposalCall()], status = 'completed') {
+  const next = emptyView();
+  next.messages.push({ id: 'proposal-answer', role: 'assistant', status, phase: status, requestId, createdAt: 1, content: 'The suggestions are ready for review.', references: [], toolCalls });
+  return next;
+}
+
+test('assistant suggestion cards include only valid completed proposals and deduplicate proposal IDs', () => {
+  const h = harness();
+  try {
+    const first = directProposalCall(), duplicate = { ...directProposalCall(), callId: 'duplicate-call' };
+    const second = directProposalCall(); second.callId = 'second-call'; second.localData.proposal.id = 'proposal-b';
+    const message = proposalView('request-a', [first, duplicate, { ...directProposalCall(), status: 'running' }, { ...directProposalCall(), localData: null }, second]).messages[0];
+    assert.deepEqual(Array.from(h.api.messageProposals(message), (call: any) => call.callId), ['proposal-call', 'second-call']);
+    assert.equal(h.api.messageProposals({ ...message, role: 'user' }).length, 0);
+  } finally { h.dispose(); }
+});
+
+test('a completed foreground turn opens its latest editable proposal without adopting metadata', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); h.api.draft.value = 'Prepare a title'; const sending = h.api.send();
+    const requestId = h.api.streamTurn.value.requestId, first = directProposalCall(), latest = directProposalCall();
+    latest.callId = 'latest-call'; latest.localData.proposal.id = 'proposal-latest'; latest.localData.proposal.files[0].proposal.title = 'Latest suggested title';
+    pending.resolve(proposalView(requestId, [first, latest])); await sending;
+    assert.equal(h.api.previewOpen.value, true); assert.equal(h.api.adoptionCount.value, 1);
+    assert.equal(h.api.previewRows.value[0].proposal.title, 'Latest suggested title');
+    assert.equal(h.calls.filter(([name]) => name === 'media_ai_inspect').length, 1);
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    h.api.previewRows.value[0].proposal.title = 'Reviewed title'; await h.api.applySuggestions();
+    assert.equal(h.calls.find(([name]) => name === 'media_ai_adopt')[1].options.proposal.title, 'Reviewed title');
+  } finally { h.dispose(); }
+});
+
+test('a proposal reviewed during streaming does not reopen when the turn completes and remains manually accessible', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); h.api.draft.value = 'Prepare a title'; const sending = h.api.send(), requestId = h.api.streamTurn.value.requestId, call = directProposalCall();
+    h.channels[0].onmessage({ libraryId: 'library-a', sessionId: 'session-a', requestId, seq: 1, kind: 'tool', phase: 'preparing', toolCall: call });
+    assert.equal(h.api.messageProposals(h.api.renderedMessages.value.at(-1)).length, 1);
+    await h.api.reviewToolProposal(call); h.api.previewOpen.value = false;
+    pending.resolve(proposalView(requestId, [call])); await sending;
+    assert.equal(h.api.previewOpen.value, false);
+    assert.equal(h.calls.filter(([name]) => name === 'media_ai_inspect').length, 1);
+    await h.api.reviewToolProposal(h.api.messageProposals(h.api.view.value.messages[0])[0]);
+    assert.equal(h.api.previewOpen.value, true); assert.equal(h.api.adoptionCount.value, 1);
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+  } finally { h.dispose(); }
+});
+
+test('background, hidden, failed and cancelled turns never interrupt the user with a proposal preview', async () => {
+  for (const context of ['closed', 'history', 'session', 'library', 'failed', 'cancelled', 'preview']) {
+    const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+    try {
+      await h.boot(); h.api.draft.value = 'Prepare a title'; const sending = h.api.send(), requestId = h.api.streamTurn.value.requestId;
+      if (context === 'closed') h.mediaChat.open = false;
+      else if (context === 'history') h.api.toggleHistory();
+      else if (context === 'session') await h.api.newSession();
+      else if (context === 'library') h.libConfig._libraryId = 'library-b';
+      else if (context === 'preview') { const existing = directProposalCall(); existing.localData.proposal.id = 'existing-proposal'; await h.api.reviewToolProposal(existing); h.api.previewRows.value[0].proposal.title = 'Unconfirmed edit'; }
+      await Vue.nextTick();
+      const before = h.calls.filter(([name]) => name === 'media_ai_inspect').length;
+      pending.resolve(proposalView(requestId, undefined, context === 'failed' || context === 'cancelled' ? context : 'completed')); await sending;
+      assert.equal(h.api.previewOpen.value, context === 'preview', context);
+      assert.equal(h.calls.filter(([name]) => name === 'media_ai_inspect').length, before, context);
+      if (context === 'preview') assert.equal(h.api.previewRows.value[0].proposal.title, 'Unconfirmed edit');
+      assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false, context);
+    } finally { h.dispose(); }
+  }
+});
+
+test('a new proposal preserves unconfirmed edits after their preview is closed without another media read or adoption', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); const existing = directProposalCall(); existing.localData.proposal.id = 'existing-proposal';
+    await h.api.reviewToolProposal(existing);
+    h.api.previewRows.value[0].proposal.title = 'Unconfirmed closed title'; h.api.previewRows.value[0].tagsText = 'Unconfirmed tag'; h.api.previewOpen.value = false;
+    const edited = clone(h.api.previewRows.value), reads = h.calls.filter(([name]) => name === 'media_ai_inspect').length;
+    h.api.draft.value = 'Prepare another title'; const sending = h.api.send(), requestId = h.api.streamTurn.value.requestId;
+    pending.resolve(proposalView(requestId)); await sending;
+    assert.equal(h.api.previewOpen.value, false); assert.deepEqual(clone(h.api.previewRows.value), edited);
+    assert.equal(h.api.messageProposals(h.api.view.value.messages[0])[0].localData.proposal.id, 'proposal-a');
+    assert.equal(h.calls.filter(([name]) => name === 'media_ai_inspect').length, reads);
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+  } finally { h.dispose(); }
+});
+
+test('changing sessions clears hidden old suggestions and lets a new session open its own proposal automatically', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); const existing = directProposalCall(); existing.localData.proposal.id = 'existing-proposal';
+    await h.api.reviewToolProposal(existing); h.api.previewRows.value[0].proposal.title = 'Old session draft'; h.api.previewOpen.value = false;
+    await h.api.newSession(); const sessionId = h.api.view.value.session.id;
+    assert.notEqual(sessionId, 'session-a'); assert.equal(h.api.previewRows.value.length, 0); assert.equal(h.api.adoptionCount.value, 0);
+    h.api.draft.value = 'Prepare this session title'; const sending = h.api.send(), requestId = h.api.streamTurn.value.requestId;
+    const next = proposalView(requestId); next.session = summary(sessionId);
+    pending.resolve(next); await sending;
+    assert.equal(h.api.view.value.session.id, sessionId); assert.equal(h.api.previewOpen.value, true); assert.equal(h.api.adoptionCount.value, 1);
+    assert.equal(h.api.previewRows.value[0].proposal.title, 'Tool proposal');
+    assert.equal(h.calls.filter(([name]) => name === 'media_ai_inspect').length, 2);
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+  } finally { h.dispose(); }
+});
+
+test('restored proposals keep their review entry without opening automatically on history reads or reopening chat', async () => {
+  const h = harness();
+  try {
+    h.views.set('session-a', proposalView('saved-request')); await h.boot();
+    assert.equal(h.api.previewOpen.value, false); assert.equal(h.api.messageProposals(h.api.view.value.messages[0]).length, 1);
+    await h.api.refreshCurrent(); await h.api.selectSession('session-a');
+    assert.equal(h.api.previewOpen.value, false); assert.equal(h.calls.some(([name]) => name === 'media_ai_inspect'), false);
+    h.mediaChat.open = false; await Vue.nextTick(); await h.boot();
+    assert.equal(h.api.previewOpen.value, false);
+    await h.api.reviewToolProposal(h.api.messageProposals(h.api.view.value.messages[0])[0]);
+    assert.equal(h.api.previewOpen.value, true); assert.equal(h.api.adoptionCount.value, 1);
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+  } finally { h.dispose(); }
+});
 
 test('chat suggestions without analysis are editable and apply only the confirmed text, description and tags', async () => {
   const h = harness({ media_ai_inspect: (args: any) => ({ source: mediaSource(args.fileId), analyses: [] }) });
@@ -942,6 +1060,14 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.match(html, /data-chat-actions-menu/);
     assert.match(html, /data-chat-context-toggle/); assert.match(html, /data-chat-context-panel/);
     assert.match(html, /data-chat-tool-call="task-call"/); assert.match(html, /data-chat-tool-task="job-a"/); assert.match(html, /data-chat-tool-proposal="proposal-a"/);
+    const proposalCard = html.indexOf('data-chat-proposal="proposal-a"');
+    assert.ok(proposalCard > html.indexOf('data-chat-message="message-a"'), 'The proposal belongs beside its assistant answer');
+    let proposalDetailsDepth = 0;
+    for (const [tag] of html.slice(0, proposalCard).matchAll(/<\/?details\b[^>]*>/g)) proposalDetailsDepth += tag.startsWith('</') ? -1 : 1;
+    assert.equal(proposalDetailsDepth, 0, 'The review entry must remain visible while tool details are collapsed');
+    assert.equal((html.match(/data-chat-tool-proposal="proposal-a"/g) || []).length, 1);
+    assert.match(html.slice(proposalCard, html.indexOf('</article>', proposalCard)), /media_chat.tool_proposal_count/);
+    assert.match(html.slice(proposalCard, html.indexOf('</article>', proposalCard)), /media_chat.tool_review_proposal/);
     const infoCall = html.slice(html.indexOf('data-chat-tool-call="info-call"'), html.indexOf('data-chat-tool-call="pending-call"'));
     assert.match(infoCall, /data-chat-tool-arguments/); assert.match(infoCall, /data-chat-tool-result/);
     assert.match(infoCall, /get_media_info · info-call/);
