@@ -4,12 +4,154 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use genai::{
     Client,
     adapter::AdapterKind,
-    chat::{ChatMessage, ChatOptions, ChatRequest, ChatStream, ContentPart, ReasoningEffort},
+    chat::{
+        ChatMessage, ChatOptions, ChatRequest, ChatStream, ContentPart, MessageContent,
+        ReasoningEffort, StreamEnd, Tool, ToolCall,
+    },
     embed::EmbedOptions,
     resolver::{AuthData, Endpoint},
 };
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+pub(super) const MAX_TOOL_CALLS: usize = 12;
+pub(super) const MAX_TOOL_ARGUMENT_BYTES: usize = 32 * 1024;
+#[derive(Default)]
+struct ToolDelta {
+    id: String,
+    name: String,
+    arguments: String,
+}
+#[derive(Default)]
+pub(super) struct ToolCapture {
+    calls: BTreeMap<usize, ToolDelta>,
+    error: Option<String>,
+}
+impl ToolCapture {
+    fn frame(&mut self, frame: &str) {
+        if self.error.is_some() {
+            return;
+        }
+        if frame.trim().is_empty() || frame.trim() == "[DONE]" {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(frame) else {
+            self.error = Some("模型工具流包含无效 JSON，未执行。".into());
+            return;
+        };
+        let Some(calls) = value
+            .pointer("/choices/0/delta/tool_calls")
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        for call in calls {
+            let Some(index) = call
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|index| usize::try_from(index).ok())
+            else {
+                self.error = Some("工具调用缺少有效序号，未执行。".into());
+                return;
+            };
+            if index >= MAX_TOOL_CALLS
+                || self.calls.len() >= MAX_TOOL_CALLS && !self.calls.contains_key(&index)
+            {
+                self.error = Some("本轮工具调用已达到上限，请缩小问题后重试。".into());
+                return;
+            }
+            let delta = self.calls.entry(index).or_default();
+            for (field, target, limit) in [
+                ("id", &mut delta.id, 256usize),
+                ("/function/name", &mut delta.name, 128usize),
+            ] {
+                let value = if field.starts_with('/') {
+                    call.pointer(field)
+                } else {
+                    call.get(field)
+                };
+                if let Some(value) = value
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    if value.len() > limit
+                        || value.chars().any(char::is_control)
+                        || !target.is_empty() && target != value
+                    {
+                        self.error = Some("工具调用的名称或 ID 不一致，未执行。".into());
+                        return;
+                    }
+                    *target = value.into();
+                }
+            }
+            if let Some(arguments) = call.pointer("/function/arguments") {
+                let arguments = match arguments {
+                    Value::String(value) => value.clone(),
+                    Value::Object(_) => arguments.to_string(),
+                    Value::Null => String::new(),
+                    _ => {
+                        self.error = Some("工具参数格式无效，未执行。".into());
+                        return;
+                    }
+                };
+                if delta.arguments.len().saturating_add(arguments.len()) > MAX_TOOL_ARGUMENT_BYTES {
+                    self.error = Some("工具参数过大，未执行。".into());
+                    return;
+                }
+                delta.arguments.push_str(&arguments);
+            }
+        }
+    }
+    pub(super) fn check(&self) -> Result<(), String> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
+    pub(super) fn repair(&self, end: &mut StreamEnd) -> Result<(), String> {
+        self.check()?;
+        if self.calls.is_empty() {
+            return Ok(());
+        }
+        let mut calls = Vec::new();
+        for delta in self.calls.values() {
+            if delta.id.is_empty() || delta.name.is_empty() {
+                return Err("工具调用的名称或 ID 不完整，未执行。".into());
+            }
+            let arguments = serde_json::from_str(&delta.arguments)
+                .map_err(|_| "工具调用参数未完整结束，未执行。")?;
+            let thoughts = end
+                .captured_tool_calls()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|old| old.call_id == delta.id)
+                .and_then(|old| old.thought_signatures.clone());
+            calls.push(ToolCall {
+                call_id: delta.id.clone(),
+                fn_name: delta.name.clone(),
+                fn_arguments: arguments,
+                thought_signatures: thoughts,
+            });
+        }
+        let mut parts = end
+            .captured_content
+            .take()
+            .map(|content| content.into_parts())
+            .unwrap_or_default();
+        parts.retain(|part| !matches!(part, ContentPart::ToolCall(_)));
+        parts.extend(calls.into_iter().map(ContentPart::ToolCall));
+        end.captured_content = Some(MessageContent::from_parts(parts));
+        Ok(())
+    }
+}
+pub(super) struct ToolStream {
+    pub stream: ChatStream,
+    pub capture: Arc<Mutex<ToolCapture>>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum InputPart {
@@ -156,26 +298,44 @@ pub async fn chat_stream_with_key(
     messages: Vec<ChatMessage>,
     key: Option<String>,
 ) -> Result<ChatStream, String> {
-    let timeout = Duration::from_secs(model.provider.timeout_seconds.clamp(5, 1800));
-    let options = chat_options(model)?
-        .with_normalize_reasoning_content(false)
-        .with_stream_header_timeout(timeout)
-        .with_stream_read_timeout(timeout);
-    Ok(sdk(&model.provider, key)?
-        .exec_chat_stream(
-            &model.model.remote_id,
-            ChatRequest::new(messages).with_store(false),
-            Some(&options),
-        )
-        .await
-        .map_err(error)?
+    Ok(chat_tools_stream_with_key(model, messages, Vec::new(), key)
+        .await?
         .stream)
 }
-pub async fn chat_stream(
+pub(super) async fn chat_tools_stream_with_key(
     model: &Resolved,
     messages: Vec<ChatMessage>,
-) -> Result<ChatStream, String> {
-    chat_stream_with_key(model, messages, config::key(&model.provider)?).await
+    tools: Vec<Tool>,
+    key: Option<String>,
+) -> Result<ToolStream, String> {
+    let timeout = Duration::from_secs(model.provider.timeout_seconds.clamp(5, 1800));
+    let mut options = chat_options(model)?
+        .with_normalize_reasoning_content(false)
+        .with_capture_content(true)
+        .with_capture_tool_calls(true)
+        .with_capture_reasoning_content(true)
+        .with_stream_header_timeout(timeout)
+        .with_stream_read_timeout(timeout);
+    let mut request = ChatRequest::new(messages).with_store(false);
+    let capture = Arc::new(Mutex::new(ToolCapture::default()));
+    if !tools.is_empty() {
+        request = request.with_tools(tools);
+        // genai 0.7.0 keeps only the first tool delta in a normal SSE frame.
+        // Capture only tool fields through its public hook; keep SDK transport/reasoning unchanged.
+        // Remove after the SDK handles every delta and the batch/interleaving fixtures pass without it.
+        let sink = capture.clone();
+        options = options.with_raw_frame_fn(move |_, frame| {
+            if let Ok(mut capture) = sink.lock() {
+                capture.frame(frame.data);
+            }
+        });
+    }
+    let stream = sdk(&model.provider, key)?
+        .exec_chat_stream(&model.model.remote_id, request, Some(&options))
+        .await
+        .map_err(error)?
+        .stream;
+    Ok(ToolStream { stream, capture })
 }
 pub async fn chat(model: &Resolved, parts: Vec<ContentPart>) -> Result<String, String> {
     chat_with_key(model, parts, config::key(&model.provider)?).await
@@ -533,6 +693,88 @@ pub async fn embed_multimodal_query(model: &Resolved, text: String) -> Result<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn tool_frame(capture: &mut ToolCapture, calls: Value) {
+        capture.frame(&json!({"choices":[{"delta":{"tool_calls":calls}}]}).to_string());
+    }
+    #[test]
+    fn tool_capture_merges_all_interleaved_calls_and_preserves_sdk_non_tool_content() {
+        let mut capture = ToolCapture::default();
+        tool_frame(
+            &mut capture,
+            json!([{"index":1,"id":"b","function":{"name":"second","arguments":"{\"b\":"}},{"index":0,"id":"a","function":{"name":"first","arguments":"{\"a\":"}}]),
+        );
+        tool_frame(
+            &mut capture,
+            json!([{"index":0,"function":{"arguments":"1}"}},{"index":1,"function":{"arguments":"2}"}}]),
+        );
+        let original = vec![
+            ContentPart::ReasoningContent("visible reasoning".into()),
+            ContentPart::ThoughtSignature("signature".into()),
+            ContentPart::from_custom(json!({"type":"reasoning.encrypted","data":"opaque"}), None),
+            ContentPart::Text("preface".into()),
+        ];
+        let expected = serde_json::to_value(&original).unwrap();
+        let mut end = StreamEnd {
+            captured_content: Some(MessageContent::from_parts(original)),
+            captured_reasoning_content: Some("fallback".into()),
+            ..Default::default()
+        };
+        capture.repair(&mut end).unwrap();
+        let parts = end.captured_content.as_ref().unwrap().parts();
+        assert_eq!(serde_json::to_value(&parts[..4]).unwrap(), expected);
+        let calls = end.captured_tool_calls().unwrap();
+        assert_eq!(
+            (&calls[0].call_id, &calls[1].call_id),
+            (&"a".to_string(), &"b".to_string())
+        );
+        assert_eq!(calls[0].fn_arguments, json!({"a":1}));
+        assert_eq!(calls[1].fn_arguments, json!({"b":2}));
+        assert_eq!(end.captured_reasoning_content.as_deref(), Some("fallback"));
+    }
+    #[test]
+    fn tool_capture_rejects_missing_identity_invalid_json_and_ambiguous_deltas() {
+        let cases = [
+            json!([{"id":"a","function":{"name":"first","arguments":"{}"}}]),
+            json!([{"index":0,"function":{"name":"first","arguments":"{}"}}]),
+            json!([{"index":0,"id":"a","function":{"arguments":"{}"}}]),
+            json!([{"index":0,"id":"a","function":{"name":"first","arguments":"{"}}]),
+        ];
+        for calls in cases {
+            let mut capture = ToolCapture::default();
+            tool_frame(&mut capture, calls);
+            assert!(capture.repair(&mut StreamEnd::default()).is_err());
+        }
+        let mut malformed = ToolCapture::default();
+        malformed.frame("{invalid");
+        assert!(malformed.repair(&mut StreamEnd::default()).is_err());
+        let mut capture = ToolCapture::default();
+        tool_frame(
+            &mut capture,
+            json!([{"index":0,"id":"a","function":{"name":"first","arguments":"{}"}}]),
+        );
+        tool_frame(
+            &mut capture,
+            json!([{"index":0,"id":"other","function":{"name":"first"}}]),
+        );
+        assert!(capture.repair(&mut StreamEnd::default()).is_err());
+    }
+    #[test]
+    fn tool_capture_bounds_call_count_and_parameter_bytes_without_retaining_raw_frames() {
+        let mut count = ToolCapture::default();
+        tool_frame(&mut count,json!((0..MAX_TOOL_CALLS+1).map(|index|json!({"index":index,"id":format!("call-{index}"),"function":{"name":"read","arguments":"{}"}})).collect::<Vec<_>>()));
+        assert!(count.repair(&mut StreamEnd::default()).is_err());
+        assert_eq!(count.calls.len(), MAX_TOOL_CALLS);
+        let mut bytes = ToolCapture::default();
+        tool_frame(
+            &mut bytes,
+            json!([{"index":0,"id":"a","function":{"name":"read","arguments":"x".repeat(MAX_TOOL_ARGUMENT_BYTES+1)}}]),
+        );
+        assert!(bytes.repair(&mut StreamEnd::default()).is_err());
+        assert!(bytes.calls[&0].arguments.is_empty());
+        let mut plain = ToolCapture::default();
+        plain.frame("data is never retained");
+        assert!(plain.calls.is_empty());
+    }
     #[test]
     fn workspace_placeholders_are_storable_but_never_construct_http_clients() {
         for path in ["compatible-mode/v1", "api/v1"] {

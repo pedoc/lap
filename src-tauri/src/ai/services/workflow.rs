@@ -218,11 +218,11 @@ pub struct JobView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobItem {
-    file_id: i64,
-    state: String,
-    message: String,
+    pub(super) file_id: i64,
+    pub(super) state: String,
+    pub(super) message: String,
 }
-fn job_view(c: &rusqlite::Connection, id: &str) -> Result<JobView, String> {
+pub(super) fn job_view(c: &rusqlite::Connection, id: &str) -> Result<JobView, String> {
     let (state, created_at, message): (String, i64, String) = c
         .query_row(
             "SELECT state,created_at,message FROM media_ai_jobs WHERE id=?1",

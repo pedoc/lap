@@ -330,6 +330,25 @@ pub struct Configuration {
     pub providers: Vec<Provider>,
     pub models: Vec<Model>,
     pub roles: Roles,
+    #[serde(skip_serializing_if = "AssistantConfiguration::is_empty")]
+    pub assistant: AssistantConfiguration,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AssistantConfiguration {
+    pub system_prompt: String,
+}
+impl AssistantConfiguration {
+    fn is_empty(&self) -> bool {
+        self.system_prompt.trim().is_empty()
+    }
+    fn validate(&self) -> Result<(), String> {
+        if self.system_prompt.chars().count() > 65_536 || self.system_prompt.contains('\0') {
+            return Err("聊天助手系统提示词最多 65536 个字符，且不能包含空字符。".into());
+        }
+        Ok(())
+    }
 }
 impl Default for Configuration {
     fn default() -> Self {
@@ -339,6 +358,7 @@ impl Default for Configuration {
             providers: Vec::new(),
             models: Vec::new(),
             roles: Roles::default(),
+            assistant: AssistantConfiguration::default(),
         }
     }
 }
@@ -445,6 +465,7 @@ impl Configuration {
         self.resolve(id)
     }
     pub fn validate(&self) -> Result<(), String> {
+        self.assistant.validate()?;
         if self.version != 2 || self.providers.len() > 512 || self.models.len() > 8192 {
             return Err("模型配置版本或数量无效".into());
         }
@@ -1117,6 +1138,7 @@ mod tests {
         let mut config = Configuration {
             version: 1,
             revision: 7,
+            assistant: AssistantConfiguration::default(),
             providers: vec![Provider {
                 id: "shared".into(),
                 name: "Mixed service".into(),
@@ -1499,6 +1521,42 @@ mod tests {
             assert!(base_url(value).is_err());
         }
     }
+    #[test]
+    fn assistant_prompt_is_optional_and_preserves_legacy_configuration_shape() {
+        let legacy = serde_json::json!({"version":2,"revision":0,"providers":[],"models":[],"roles":{"media":null,"text":null,"embedding":null,"multimodalEmbedding":null}});
+        let mut config: Configuration = serde_json::from_value(legacy.clone()).unwrap();
+        config.validate().unwrap();
+        assert!(config.assistant.system_prompt.is_empty());
+        assert_eq!(serde_json::to_value(&config).unwrap(), legacy);
+        config.assistant.system_prompt = "你是我的图库助手。\n优先查询人物标注。".into();
+        let encoded = encode_config(&config).unwrap();
+        let restored: Configuration = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            restored.assistant.system_prompt,
+            config.assistant.system_prompt
+        );
+        config.assistant.system_prompt = " \n\t".into();
+        assert!(
+            serde_json::to_value(&config)
+                .unwrap()
+                .get("assistant")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn assistant_prompt_limit_counts_unicode_characters_without_limiting_newlines() {
+        let mut config = Configuration::default();
+        config.assistant.system_prompt = "图".repeat(65_536);
+        config.validate().unwrap();
+        config.assistant.system_prompt.push('图');
+        assert!(config.validate().unwrap_err().contains("65536"));
+        config.assistant.system_prompt = "隐藏\0字符".into();
+        assert!(config.validate().is_err());
+        config.assistant.system_prompt = "第一行\n第二行\t缩进".into();
+        config.validate().unwrap();
+    }
+
     #[test]
     fn keys_invalidate_receipts_without_changing_vector_space() {
         let mut a = Resolved {

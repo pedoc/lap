@@ -63,6 +63,7 @@ export interface MediaModel {
 export interface MediaConfiguration {
   version: number; revision: number; providers: MediaProvider[]; models: MediaModel[];
   roles: { media: string | null; text: string | null; embedding: string | null; multimodalEmbedding: string | null };
+  assistant?: { systemPrompt: string };
 }
 export interface MediaHit {
   fileId: number; analysisId: string; title: string; description: string; start: number; end: number; score: number;

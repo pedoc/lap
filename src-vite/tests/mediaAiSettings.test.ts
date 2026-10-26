@@ -40,7 +40,7 @@ function harness(includeCatalog = false) {
   };
   const script = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1])
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
-  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,selectedPreset,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,modelSpecification,formatTokenLimit,modelOutputLimit,useModelOutputLimit,outputLimitExceeded,customReasoning,customReasoningErrors,modelReasoning,customReasoningLevels,setReasoningLevel,addCustomReasoningLevel,setDefaultReasoning,usePublicReasoningLevels,canListModels,modelListHint,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
+  const api: any = runInNewContext(`${script}\n;({receive,draft,saved,defaultSystemPrompt,assistantSystemPrompt,resetAssistantSystemPrompt,keys,selected,filter,expandedModel,busy,dirty,error,serviceKind,visibleRoles,preferredEmbeddingProtocol,filteredProviders,provider,selectedPreset,providerModels,capabilities,selectServiceKind,addProvider,addModel,applyEmbeddingProtocol,updateOpenaiEmbeddings,embeddingModel,modelCapabilities,modelProtocol,modelSpecification,formatTokenLimit,modelOutputLimit,useModelOutputLimit,outputLimitExceeded,customReasoning,customReasoningErrors,modelReasoning,customReasoningLevels,setReasoningLevel,addCustomReasoningLevel,setDefaultReasoning,usePublicReasoningLevels,canListModels,modelListHint,modelPicker,pickerConfigured,pickerModels,pickerNewCount,syncModels,addPickerModels,removeModel,removeProvider,defaultModels,defaultModelStatus,defaultModelTitle,clearUnsupportedRoles,testModel,setOutputTokens,configureRole,queryPreset,setQueryPreset,save,load});`, context);
   api.receive(fixture());
   return { api, context, calls, dialogs };
 }
@@ -60,6 +60,22 @@ test('fetching models only offers a selection and adds exactly the checked new m
   assert.deepEqual(Array.from(h.api.draft.value.models, (m: any) => m.remoteId), ['kept', 'optional-b']);
   assert.equal(h.api.modelPicker.value, null);
   assert.equal(h.calls.some(([name]) => name === 'media_ai_save_configuration'), false);
+});
+
+test('legacy AI settings inherit the assistant prompt without dirtying services, models or embedding defaults', async () => {
+  const h = harness(), view = fixture();
+  h.api.receive({ ...view, defaultSystemPrompt: 'The current server default.' });
+  assert.equal(h.api.assistantSystemPrompt.value, ''); assert.equal(h.api.defaultSystemPrompt.value, 'The current server default.');
+  assert.equal(h.api.dirty.value, false);
+  const original = JSON.stringify({ providers: h.api.draft.value.providers, models: h.api.draft.value.models, roles: h.api.draft.value.roles });
+  h.api.assistantSystemPrompt.value = '回答使用中文。\n先读取证据再回答。';
+  assert.equal(h.api.dirty.value, true); await h.api.save();
+  const sent = h.calls.find(([name]) => name === 'media_ai_save_configuration')![1].configuration;
+  assert.equal(sent.assistant.systemPrompt, '回答使用中文。\n先读取证据再回答。');
+  assert.equal(JSON.stringify({ providers: sent.providers, models: sent.models, roles: sent.roles }), original);
+  assert.equal(h.api.dirty.value, false);
+  h.api.resetAssistantSystemPrompt(); assert.equal(h.api.assistantSystemPrompt.value, ''); assert.equal(h.api.dirty.value, true);
+  await h.api.save(); await h.api.load(); assert.equal(h.api.assistantSystemPrompt.value, ''); assert.equal(h.api.dirty.value, false);
 });
 
 test('removal clears default bindings and cannot be reselected from the saved model list', () => {
@@ -1044,6 +1060,7 @@ test('embedding models cannot acquire reasoning settings and legacy stray settin
 
 test('advanced reasoning controls render supported choices and automatic default only for generation models', async () => {
   const h = harness(), imports: any = {}, view = fixture();
+  (view.configuration as any).assistant = { systemPrompt: '<script>custom instructions</script>' };
   view.configuration.models[0].remoteId = 'gpt-6.1-sol';
   view.configuration.models[0].reasoning = { levels: ['low', 'high', 'Gateway_9'], defaultEffort: 'high' };
   const vector = { ...mediaAi.newMediaModel('provider'), id: 'reasoning-vector', remoteId: 'vector', capabilities: ['embed_text' as mediaAi.MediaCapability] };
@@ -1066,4 +1083,6 @@ test('advanced reasoning controls render supported choices and automatic default
   assert.match(html, /media_ai.reasoning_use_public/);
   assert.match(html, /media_ai.reasoning_public_default/);
   assert.doesNotMatch(html, /data-model-reasoning="reasoning-vector"/);
+  assert.match(html, /data-media-ai-assistant/); assert.match(html, /maxlength="65536"[^>]*data-media-ai-system-prompt/);
+  assert.match(html, /&lt;script&gt;custom instructions&lt;\/script&gt;/); assert.doesNotMatch(html, /<script>custom instructions/);
 });

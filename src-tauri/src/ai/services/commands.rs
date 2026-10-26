@@ -15,6 +15,7 @@ use tauri::Emitter;
 pub struct View {
     pub configuration: Configuration,
     pub keys_stored: Vec<String>,
+    pub default_system_prompt: String,
 }
 fn view() -> Result<View, String> {
     let configuration = config::load()?;
@@ -27,6 +28,7 @@ fn view() -> Result<View, String> {
     Ok(View {
         configuration,
         keys_stored,
+        default_system_prompt: super::chat::default_system_prompt().to_owned(),
     })
 }
 #[tauri::command]

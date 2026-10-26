@@ -53,13 +53,33 @@
               <p v-if="message.content" class="whitespace-pre-wrap break-words leading-relaxed select-text" data-chat-message-content>{{ message.content }}</p>
               <p v-if="message.role === 'assistant' && (message.status === 'pending' || message.status === 'failed' || message.status === 'cancelled')" class="flex items-center gap-2 text-[11px]" :class="message.status === 'failed' ? 'text-error' : 'text-base-content/50'" role="status" :data-chat-phase="message.phase || (message.status === 'pending' ? 'waiting' : message.status)"><span v-if="message.status === 'pending'" class="loading loading-dots loading-xs"></span>{{ t('media_chat.phase_' + (message.phase || (message.status === 'pending' ? 'waiting' : message.status))) }}</p>
               <p v-if="message.error" class="text-error whitespace-pre-wrap break-words">{{ message.error }}</p>
+              <div v-if="message.toolCalls?.length" class="space-y-2" data-chat-tool-calls>
+                <details v-for="call in message.toolCalls" :key="call.callId" class="rounded-box border border-base-content/10 bg-base-200/30 px-3 py-2" :data-chat-tool-call="call.callId" :data-tool-status="call.status">
+                  <summary class="flex cursor-pointer list-none items-center gap-2 text-[11px]"><span v-if="call.status === 'running'" class="loading loading-spinner loading-xs opacity-50"></span><IconFileInfo v-else class="size-3.5 shrink-0 opacity-50" aria-hidden="true" /><span class="min-w-0 flex-1 truncate">{{ toolLabel(call.name) }}</span><span class="shrink-0" :class="call.status === 'failed' ? 'text-error' : 'opacity-50'">{{ t('media_chat.tool_status_' + call.status) }}</span></summary>
+                  <div class="mt-2 space-y-2 text-[11px]">
+                    <p v-if="call.error" class="whitespace-pre-wrap break-words text-error">{{ call.error }}</p>
+                    <p v-else class="text-base-content/60">{{ toolResultSummary(call) }}</p>
+                    <div v-if="toolTask(call)" class="rounded-box border border-base-content/10 bg-base-100 p-2" :data-chat-tool-task="toolTask(call)!.id"><p class="flex flex-wrap items-center justify-between gap-2"><span>{{ taskStateLabel(toolTask(call)!.state) }}</span><span>{{ toolTask(call)!.completed }} / {{ toolTask(call)!.total }}</span></p><p v-if="toolTask(call)!.failed" class="mt-1 text-error">{{ t('media_chat.tool_task_failed', { count: toolTask(call)!.failed }) }}</p><p v-if="toolTaskUnrefreshed(call)" class="mt-1 text-base-content/55">{{ t('media_chat.tool_task_not_refreshed') }}</p><button class="btn btn-xs btn-ghost mt-2" @click="openTasks(false)">{{ t('media_chat.tool_view_tasks') }}</button></div>
+                    <button v-if="toolProposal(call)" class="btn btn-xs" :disabled="applying || reviewingToolProposal || !!suggestionJob" :data-chat-tool-proposal="toolProposal(call)!.id" @click="reviewToolProposal(call)">{{ t('media_chat.tool_review_proposal') }}</button>
+                  </div>
+                </details>
+              </div>
               <div v-if="message.references.length" class="flex flex-wrap gap-2"><div v-for="(file, i) in message.references" :key="file.fileId + ':' + file.sourceStamp" class="relative group rounded-box border border-base-content/10 bg-base-100 min-w-0 max-w-64" data-chat-reference-card><button class="flex items-center gap-2 p-2 pr-8 w-full min-w-0 text-left hover:bg-base-200 rounded-box" :title="t('media_chat.view_media', { name: file.name })" @click="openFile(file)"><img v-if="thumbnails[file.fileId]" :src="thumbnails[file.fileId]" class="h-12 w-12 rounded object-cover shrink-0" alt="" /><IconFile v-else class="h-8 w-8 m-2 shrink-0 opacity-40" aria-hidden="true" /><span class="min-w-0"><span class="block truncate font-medium">[{{ i + 1 }}] {{ file.name }}</span><span class="block text-[10px] opacity-50">{{ mediaSummary(file) }}</span></span></button><button class="absolute right-1 top-1 btn btn-xs btn-square btn-ghost" :aria-label="t('media_chat.attach_again', { name: file.name })" :disabled="attachments.some(item => item.fileId === file.fileId)" @click="attachIds([file.fileId])">＋</button></div></div>
               <div v-else-if="message.role === 'user' && message.id === streamTurn?.user.id && streamTurn.media.length" class="flex flex-wrap gap-2"><button v-for="file in streamTurn.media" :key="file.fileId" class="flex min-w-0 max-w-64 items-center gap-2 rounded-box border border-base-content/10 bg-base-100 p-2 text-left hover:bg-base-200" data-chat-pending-reference :title="t('media_chat.view_media', { name: file.name })" @click="openFile(file)"><img v-if="thumbnails[file.fileId]" :src="thumbnails[file.fileId]" class="size-10 shrink-0 rounded object-cover" alt="" /><IconFile v-else class="size-6 shrink-0 opacity-40" aria-hidden="true" /><span class="truncate">{{ file.name }}</span></button></div>
             </article>
           </div>
           <button v-if="newContent" class="absolute bottom-0 left-1/2 z-10 mb-3 -translate-x-1/2 btn btn-sm gap-2 rounded-full border-base-content/10 bg-base-100 shadow-lg" data-chat-new-content @click="scrollMessages(true)"><IconArrowDown class="size-4" aria-hidden="true" />{{ t('media_chat.new_content') }}</button>
           </div>
-          <div class="shrink-0 border-t border-base-content/10 p-3 space-y-2">
+          <div class="relative shrink-0 border-t border-base-content/10 p-3 space-y-2">
+            <div v-if="contextOpen" class="absolute bottom-full left-3 right-3 z-30 mb-2 max-h-[min(24rem,50vh)] overflow-y-auto rounded-box border border-base-content/15 bg-base-100 p-3 shadow-xl space-y-3" data-chat-context data-chat-context-panel @keydown.esc.stop.prevent="contextOpen = false" @keydown.stop>
+              <div class="flex items-center justify-between gap-2"><strong class="font-medium">{{ t('media_chat.context_tools') }}</strong><button class="btn btn-xs btn-square btn-ghost" :aria-label="t('media_chat.dismiss')" @click="contextOpen = false"><IconClose class="size-3.5" /></button></div>
+              <label class="flex items-center gap-2"><input v-model="toolsEnabled" class="checkbox checkbox-xs" type="checkbox" data-chat-tools-enabled />{{ t('media_chat.tools_enabled') }}</label><p class="text-[11px] text-base-content/55">{{ t('media_chat.tools_enabled_hint') }}</p>
+              <label class="flex items-center gap-3"><span class="shrink-0">{{ t('media_chat.tool_scope') }}</span><select v-model="toolScope" class="select select-bordered select-sm min-w-0 flex-1" :disabled="!toolsEnabled" :aria-label="t('media_chat.tool_scope')" data-chat-tool-scope><option :value="null">{{ t('media_chat.scope_auto') }} · {{ t(attachments.length ? 'media_chat.scope_references' : 'media_chat.scope_library') }}</option><option value="references">{{ t('media_chat.scope_references') }}</option><option value="library">{{ t('media_chat.scope_library') }}</option></select></label>
+              <p class="text-[11px] text-base-content/55">{{ t('media_chat.context_scope_hint') }}</p>
+              <fieldset class="space-y-2"><legend class="mb-2 font-medium">{{ t('media_chat.context_fields') }}</legend><div class="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4"><label v-for="field in CHAT_CONTEXT_FIELDS" :key="field" class="flex items-center gap-2"><input v-model="contextFields" type="checkbox" class="checkbox checkbox-xs" :value="field" :data-chat-context-field="field" />{{ t('media_chat.context_' + field) }}</label></div></fieldset>
+              <p class="text-[11px] text-base-content/55">{{ t('media_chat.context_fields_hint') }}</p>
+              <p class="text-[11px] text-base-content/55">{{ t('media_chat.context_location_hint') }}</p><p class="text-[11px] text-base-content/55">{{ t('media_chat.context_history_hint') }}</p>
+            </div>
             <div v-if="attachments.length" class="space-y-1"><span class="opacity-50">{{ t('media_chat.turn_media', { count: attachments.length }) }}</span><div class="flex gap-2 overflow-x-auto pb-1"><div v-for="file in attachments" :key="file.fileId" class="relative shrink-0 w-52 rounded-box border border-base-content/10 bg-base-200/50" data-chat-attachment-card><button class="flex gap-2 items-center p-2 pr-7 w-full min-w-0 text-left hover:bg-base-200 rounded-box" :title="t('media_chat.view_media', { name: file.name })" @click="openFile(file)"><img v-if="thumbnails[file.fileId]" :src="thumbnails[file.fileId]" class="h-12 w-12 rounded object-cover shrink-0" alt="" /><IconFile v-else class="h-8 w-8 m-2 shrink-0 opacity-40" aria-hidden="true" /><span class="min-w-0"><span class="block truncate font-medium">{{ file.name }}</span><span class="block text-[10px] opacity-50">{{ mediaSummary(file) }}</span></span></button><button type="button" class="btn btn-xs btn-square btn-ghost absolute right-0.5 top-0.5" :aria-label="t('media_chat.remove_attachment', { name: file.name })" @click="removeAttachment(file.fileId)">×</button></div></div></div>
             <p v-if="!readyModels.length" class="text-warning">{{ t('media_chat.no_ready_model') }}</p>
             <p v-else-if="selectedModelId && !readyModels.some(model => model.id === selectedModelId)" class="text-warning">{{ t('media_chat.choose_compatible_model') }}</p>
@@ -74,6 +94,7 @@
             <div class="flex flex-wrap items-center gap-2" data-chat-composer-controls>
               <div class="relative" data-chat-actions><button class="btn btn-sm btn-circle btn-ghost" :aria-label="t('media_chat.actions')" :aria-expanded="actionsOpen" @click="toggleActions">＋</button><div v-if="actionsOpen" class="absolute bottom-full left-0 mb-2 z-30 w-56 max-h-72 overflow-y-auto rounded-box border border-base-content/15 bg-base-100 shadow-xl p-1" role="menu" :aria-label="t('media_chat.actions')" data-chat-actions-menu><button v-for="(item, i) in menuItems" :key="item.id" type="button" class="block w-full rounded px-3 py-2 text-left hover:bg-base-200 disabled:opacity-40" :class="i === actionIndex ? 'bg-base-200' : ''" role="menuitem" :disabled="item.disabled" @click="runMenuAction(item.id)">{{ t('media_chat.' + item.label) }}</button></div></div>
               <select v-model="selectedModelId" class="select select-ghost select-sm min-w-0 flex-1 max-w-72" :aria-label="t('media_chat.model')"><option value="">{{ t('media_chat.choose_model') }}</option><option v-for="model in readyModels" :key="model.id" :value="model.id">{{ modelName(model) }}</option></select>
+              <button class="btn btn-sm btn-ghost gap-1.5" :aria-label="t('media_chat.context_tools')" :aria-expanded="contextOpen" :title="t('media_chat.context_tools')" data-chat-context data-chat-context-toggle @click="toggleContext"><IconFileInfo class="size-4" aria-hidden="true" /><span>{{ t('media_chat.context_tools') }}</span></button>
               <select v-if="selectedModelId" v-model="reasoningEffort" class="select select-ghost select-sm min-w-0 max-w-48" :disabled="!reasoningLevels.length" :aria-label="t('media_chat.reasoning')" data-chat-reasoning><option :value="null">{{ reasoningDefaultLabel }}</option><option v-if="defaultReasoningEffort" value="">{{ t('media_chat.reasoning_auto') }}</option><option v-for="level in reasoningLevels" :key="level" :value="level">{{ reasoningLabel(level) }}</option></select>
               <button v-if="activeRequestId" class="btn btn-sm ml-auto" @click="stopAnswer">{{ t('media_chat.stop') }}</button><button class="btn btn-sm btn-primary" :class="activeRequestId ? '' : 'ml-auto'" :disabled="!canSend" @click="send">{{ t('media_chat.send') }}</button>
             </div>
@@ -87,6 +108,7 @@
       <fieldset class="text-xs space-y-3 flex-1 min-h-0 min-w-0 overflow-y-auto" :disabled="applying" data-chat-adoption-preview @keydown.esc.stop.prevent="previewOpen = false" @keydown.stop>
         <p class="opacity-60">{{ t('media_chat.adoption_hint') }}</p>
         <p v-if="suggestionJob" role="status">{{ t('media_chat.preparing_suggestions') }} <button class="btn btn-xs" @click="openTasks(false)">{{ t('media_chat.tasks') }}</button></p>
+        <p v-if="reviewingToolProposal" class="flex items-center gap-2" role="status"><span class="loading loading-spinner loading-xs"></span>{{ t('media_chat.preparing_suggestions') }}</p>
         <p v-if="previewError" role="alert" class="text-error whitespace-pre-wrap">{{ previewError }}</p>
         <label class="flex gap-2"><input v-model="onlyEmpty" type="checkbox" class="checkbox checkbox-xs" />{{ t('media_chat.only_empty') }}</label>
         <label class="flex gap-2"><input v-model="createTags" type="checkbox" class="checkbox checkbox-xs" />{{ t('media_chat.create_tags') }}</label>
@@ -94,7 +116,7 @@
           <strong class="break-words">{{ row.file.name }}</strong><p v-if="row.error" class="text-error whitespace-pre-wrap">{{ row.error }}</p><p v-if="row.applied" class="text-success">{{ t('media_chat.applied') }}</p>
           <template v-if="row.analyses.length"><select v-if="row.analyses.length > 1" v-model="row.analysisId" class="select select-bordered select-xs w-full" :disabled="row.applied" @change="selectPreviewAnalysis(row)"><option v-for="analysis in row.analyses" :key="analysis.id" :value="analysis.id">{{ mediaTime(analysis.start) }}–{{ mediaTime(analysis.end) }} · {{ analysis.title }}</option></select><template v-for="analysis in row.analyses.filter(item => item.id === row.analysisId)" :key="analysis.id"><p class="text-[10px] opacity-50">{{ analysis.model?.model?.name }} · {{ new Date(analysis.createdAt).toLocaleString() }}</p><div v-for="field in adoptionFields" :key="field" class="space-y-1"><label class="flex gap-2 font-medium"><input v-model="row.fields[field]" type="checkbox" class="checkbox checkbox-xs" :disabled="row.applied || analysis.dismissed?.includes(field)" />{{ t('media_chat.field_' + field) }}<span v-if="analysis.dismissed?.includes(field)" class="text-warning font-normal">{{ t('media_ai.dismissed') }}</span></label><p class="opacity-50 whitespace-pre-wrap break-words">{{ t('media_chat.current_value') }}: {{ field === 'title' ? row.source?.title || '—' : field === 'description' ? row.source?.comments || '—' : row.currentTags.join('、') || '—' }}</p><input v-if="field === 'title'" v-model="row.proposal.title" class="input input-bordered input-xs w-full" maxlength="256" :disabled="row.applied || analysis.dismissed?.includes(field)" :aria-label="t('media_chat.field_title')" /><textarea v-else-if="field === 'description'" v-model="row.proposal.description" rows="3" class="textarea textarea-bordered w-full" maxlength="8000" :disabled="row.applied || analysis.dismissed?.includes(field)" :aria-label="t('media_chat.field_description')"></textarea><input v-else v-model="row.tagsText" class="input input-bordered input-xs w-full" :disabled="row.applied || analysis.dismissed?.includes(field)" :aria-label="t('media_chat.field_tags')" :placeholder="t('media_chat.tags_separator')" /></div></template></template>
         </article>
-        <div class="flex justify-end gap-2"><button class="btn btn-sm" @click="previewOpen = false">{{ t('media_chat.close') }}</button><button class="btn btn-sm btn-primary" :disabled="applying || !adoptionCount || !!suggestionJob" @click="applySuggestions">{{ t('media_chat.apply_to_media', { count: adoptionCount }) }}</button></div>
+        <div class="flex justify-end gap-2"><button class="btn btn-sm" @click="previewOpen = false">{{ t('media_chat.close') }}</button><button class="btn btn-sm btn-primary" :disabled="applying || reviewingToolProposal || !adoptionCount || !!suggestionJob" @click="applySuggestions">{{ t('media_chat.apply_to_media', { count: adoptionCount }) }}</button></div>
       </fieldset>
     </ModalDialog>
   </Teleport>
@@ -103,6 +125,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { libConfig } from '@/common/config';
@@ -111,10 +134,10 @@ import { getDragPayload, getFileThumbById, getTagsForFile } from '@/common/api';
 import { getExternalDropPaths } from '@/common/externalDrop';
 import { getThumbnailDataUrl, getThumbUrl, isWin, isMac } from '@/common/utils';
 import { mediaTime, openMediaAiBatch, openMediaAiSettings, type MediaCapability, type MediaConfiguration, type MediaModel } from '@/common/mediaAi';
-import { mediaChat, closeMediaChat, validMediaChatIds, type ChatCandidate, type ChatMessage, type ChatReference, type ChatSession, type ChatSessionView, type ChatSource, type ChatStreamEvent } from '@/common/mediaChat';
+import { mediaChat, closeMediaChat, validMediaChatIds, CHAT_CONTEXT_FIELDS, normalizeChatContextFields, type ChatCandidate, type ChatContextField, type ChatMessage, type ChatReference, type ChatSession, type ChatSessionView, type ChatSource, type ChatStreamEvent, type ChatToolCall, type ChatToolScope } from '@/common/mediaChat';
 import { openMediaChatMedia } from '@/common/mediaChatMedia';
 import { CHAT_RESIZE_EDGES, fitChatFrame, insertMediaMention, isChatNearBottom, mentionAtCaret, resizeChatFrame, slashAtCaret, type ChatFrame, type ChatResizeEdge, type MentionRange } from '@/common/mediaChatUi';
-import { IconAdd, IconArrowDown, IconClose, IconFile, IconHistory, IconLeft, IconMore, IconRename, IconSearch, IconSettings, IconTrash } from '@/common/icons';
+import { IconAdd, IconArrowDown, IconClose, IconFile, IconFileInfo, IconHistory, IconLeft, IconMore, IconRename, IconSearch, IconSettings, IconTrash } from '@/common/icons';
 import { pendingChanges } from '@/common/pendingChanges';
 import ModalDialog from './ModalDialog.vue';
 
@@ -135,6 +158,7 @@ const renameTarget = ref<{ libraryId: string; sessionId: string } | null>(null),
 const nearBottom = ref(true), newContent = ref(false);
 let scrollRevision = 0;
 const reasoningEffort = ref<string | null>(null), actionsOpen = ref(false), actionIndex = ref(0);
+const contextOpen = ref(false), toolsEnabled = ref(true), toolScope = ref<ChatToolScope | null>(null), contextFields = ref<ChatContextField[]>(normalizeChatContextFields(undefined));
 let actionSlash: number | null = null;
 const request = ref<{ id: string; sessionId: string; libraryId: string } | null>(null);
 const sending = computed(() => !!request.value);
@@ -149,9 +173,20 @@ const renderedMessages = computed(() => {
   const saved = messages.find(message => message.requestId === turn.requestId && message.role === 'assistant');
   return [...previous, user, saved ? { ...saved, ...turn.assistant, id: saved.id, references: saved.references, error: turn.assistant.error || saved.error } : turn.assistant];
 });
+type ToolTaskSummary = { id: string; state: string; completed: number; total: number; failed: number };
+const toolTaskStates = ref<Record<string, { callId: string; task: ToolTaskSummary; missing: boolean }>>({});
+const currentToolTasks = computed(() => {
+  const tasks = new Map<string, { call: ChatToolCall; task: ToolTaskSummary }>();
+  for (const message of renderedMessages.value) for (const call of message.toolCalls || []) {
+    const task = toolTaskSnapshot(call);
+    if (task) tasks.set(task.id, { call, task });
+  }
+  return tasks;
+});
+let toolTaskReadGeneration = 0, toolTaskLoading: { epoch: number; libraryId: string; sessionId: string } | null = null, offToolTasks: (() => void) | undefined;
 const thumbnails = ref<Record<number, string>>({});
 const mention = ref<MentionRange | null>(null), pickerOpen = ref(false), pickerQuery = ref(''), candidateSource = ref<'session' | 'library'>('library'), candidates = ref<ChatCandidate[]>([]), candidateIndex = ref(0), candidateLoading = ref(false), dragOver = ref(false);
-const drafts = new Map<string, { text: string; attachments: ChatCandidate[]; modelId: string; reasoningEffort: string | null; revision: number }>();
+const drafts = new Map<string, { text: string; attachments: ChatCandidate[]; modelId: string; reasoningEffort: string | null; toolsEnabled: boolean; toolScope: ChatToolScope | null; contextFields: ChatContextField[]; revision: number }>();
 let draftRevision = 0;
 let disposed = false, generation = 0, candidateGeneration = 0, messageGeneration = 0, sessionListGeneration = 0, picking = false, inputRegistered = false, candidateTimer: ReturnType<typeof setTimeout> | undefined;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -180,16 +215,74 @@ const canGenerateSuggestions = computed(() => !!configuration.value?.models.some
 const canSend = computed(() => !loading.value && !sending.value && !activeRequestId.value && !!view.value && !!draft.value.trim() && draft.value.length <= 8000 && attachments.value.length <= 16 && readyModels.value.some(model => model.id === selectedModelId.value) && activeLibrary.value === libConfig._libraryId);
 const modelName = (model: MediaModel) => `${configuration.value?.providers.find(provider => provider.id === model.providerId)?.name || ''} / ${model.name || model.remoteId}`;
 function key() { return `${activeLibrary.value}:${view.value?.session.id || ''}`; }
-function rememberDraft() { if (view.value) drafts.set(key(), { text: draft.value, attachments: [...attachments.value], modelId: selectedModelId.value, reasoningEffort: reasoningEffort.value, revision: draftRevision }); }
+function rememberDraft() { if (view.value) drafts.set(key(), { text: draft.value, attachments: [...attachments.value], modelId: selectedModelId.value, reasoningEffort: reasoningEffort.value, toolsEnabled: toolsEnabled.value, toolScope: toolScope.value, contextFields: [...contextFields.value], revision: draftRevision }); }
 function restoreDraft() {
   const saved = drafts.get(key());
   draft.value = saved?.text || ''; attachments.value = saved?.attachments || []; visual.value = true;
   selectedModelId.value = saved?.modelId || view.value?.session.modelId || '';
   if (!selectedModelId.value || !readyModels.value.some(model => model.id === selectedModelId.value)) selectedModelId.value = readyModels.value.find(model => model.id === configuration.value?.roles[attachments.value.length ? 'media' : 'text'])?.id || readyModels.value[0]?.id || '';
   reasoningEffort.value = saved?.reasoningEffort ?? null; normalizeReasoningChoice();
-  closePicker(); actionsOpen.value = false; cancelRename(); sessionActionsOpen.value = false; historyMenuId.value = '';
+  toolScope.value = saved?.toolScope ?? null;
+  toolsEnabled.value = saved?.toolsEnabled ?? true;
+  contextFields.value = normalizeChatContextFields(saved?.contextFields);
+  closePicker(); actionsOpen.value = false; contextOpen.value = false; cancelRename(); sessionActionsOpen.value = false; historyMenuId.value = '';
 }
 function mediaSummary(file: ChatCandidate | ChatReference) { if ('source' in file) return file.fileType === 2 ? `${mediaTime(file.start)}–${mediaTime(file.end)}` : `${file.source.width} × ${file.source.height}`; return file.fileType === 2 ? mediaTime(file.duration) : `${file.width} × ${file.height}`; }
+const toolNames = ['search_media', 'get_media_info', 'get_media_content', 'start_media_task', 'get_media_task', 'propose_metadata'];
+function toolLabel(name: string) { return toolNames.includes(name) ? t('media_chat.tool_' + name) : name; }
+function toolObject(value: unknown): Record<string, any> | null { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null; }
+function toolTaskSnapshot(call: ChatToolCall): ToolTaskSummary | null {
+  const task = toolObject(toolObject(call.localData)?.task ?? toolObject(call.result)?.task);
+  return task && typeof task.id === 'string' && typeof task.state === 'string' ? task as ToolTaskSummary : null;
+}
+function toolTask(call: ChatToolCall): ToolTaskSummary | null {
+  const snapshot = toolTaskSnapshot(call);
+  if (!snapshot) return null;
+  const latest = currentToolTasks.value.get(snapshot.id), state = toolTaskStates.value[snapshot.id];
+  return latest ? state?.callId === latest.call.callId ? state.task : latest.task : snapshot;
+}
+function toolTaskUnrefreshed(call: ChatToolCall) {
+  const task = toolTaskSnapshot(call), latest = task && currentToolTasks.value.get(task.id);
+  return !!(task && latest && toolTaskStates.value[task.id]?.callId === latest.call.callId && toolTaskStates.value[task.id].missing);
+}
+async function refreshToolTasks(changedTaskId?: string) {
+  const libraryId = activeLibrary.value, sessionId = view.value?.session.id;
+  if (disposed || !mediaChat.open || !sessionId || libraryId !== libConfig._libraryId || toolTaskLoading?.libraryId === libraryId && toolTaskLoading.sessionId === sessionId) return;
+  const tasks = [...currentToolTasks.value.values()].filter(({ call, task }) => task.id === changedTaskId || ['queued', 'pending', 'preparing', 'waiting', 'running'].includes(toolTask(call)?.state || ''));
+  if (!tasks.length) return;
+  const epoch = ++toolTaskReadGeneration;
+  toolTaskLoading = { epoch, libraryId, sessionId };
+  const current = () => !disposed && mediaChat.open && epoch === toolTaskReadGeneration && libraryId === activeLibrary.value && libraryId === libConfig._libraryId && sessionId === view.value?.session.id;
+  try {
+    const jobs = await invoke<ToolTaskSummary[]>('media_ai_jobs', { libraryId });
+    if (!current()) return;
+    for (const { call, task } of tasks) {
+      if (currentToolTasks.value.get(task.id)?.call.callId !== call.callId) continue;
+      const next = jobs.find(job => job.id === task.id);
+      toolTaskStates.value[task.id] = { callId: call.callId, task: next || toolTask(call) || task, missing: !next };
+    }
+  } catch {
+    if (current()) for (const { call, task } of tasks) toolTaskStates.value[task.id] = { callId: call.callId, task: toolTask(call) || task, missing: true };
+  } finally { if (toolTaskLoading?.epoch === epoch) toolTaskLoading = null; }
+}
+interface ToolProposalFile extends Partial<ChatCandidate> { fileId: number; source: ChatSource; analysisId: string; proposal: { title: string; description: string; tags: string[] } }
+interface ToolProposal { id: string; fields: Record<AdoptionField, boolean>; files: ToolProposalFile[] }
+function toolProposal(call: ChatToolCall): ToolProposal | null {
+  const proposal = toolObject(toolObject(call.localData)?.proposal);
+  if (call.status !== 'completed' || !proposal || typeof proposal.id !== 'string' || !Array.isArray(proposal.files) || !toolObject(proposal.fields)) return null;
+  if (!proposal.files.every((file: any) => Number.isSafeInteger(file.fileId) && file.fileId > 0 && file.source?.fileId === file.fileId && typeof file.analysisId === 'string' && toolObject(file.proposal) && typeof file.proposal.title === 'string' && typeof file.proposal.description === 'string' && Array.isArray(file.proposal.tags))) return null;
+  return proposal as unknown as ToolProposal;
+}
+function taskStateLabel(state: string) { const key = 'media_chat.task_state_' + state; return te(key) ? t(key) : state; }
+function toolResultSummary(call: ChatToolCall) {
+  if (call.status === 'running') return t('media_chat.tool_status_running');
+  const result = toolObject(call.result), task = toolTask(call), proposal = toolProposal(call);
+  if (result?.status && ['ambiguous', 'index_missing', 'denied', 'analysis_missing'].includes(result.status)) return t('media_chat.tool_result_' + result.status);
+  if (task) return t('media_chat.tool_task_progress', { completed: task.completed || 0, total: task.total || 0 });
+  if (proposal) return t('media_chat.tool_proposal_count', { count: proposal.files.length });
+  if (Array.isArray(result?.items)) return t('media_chat.tool_result_items', { count: result.items.length });
+  return t('media_chat.tool_status_' + call.status);
+}
 async function openFile(file: ChatCandidate | ChatReference) { const libraryId = activeLibrary.value; try { if (libraryId !== libConfig._libraryId) return; if (await openMediaChatMedia(libraryId, file.fileId, 'start' in file && file.fileType === 2 ? file.start : undefined)) closeMediaChat(); } catch (reason) { if (libraryId === activeLibrary.value) error.value = String(reason); } }
 async function refreshSessions(libraryId = activeLibrary.value) {
   const epoch = ++sessionListGeneration;
@@ -287,8 +380,8 @@ async function loadThumbnails(files: ChatCandidate[]) {
   await Promise.all(files.slice(0, 60).filter(file => !thumbnails.value[file.fileId]).map(async file => { try { const url = isWin ? getThumbnailDataUrl(await getFileThumbById(file.fileId, 128, false), '', false, 128) : getThumbUrl(file.fileId, false, 128); if (!disposed && libraryId === activeLibrary.value && url) thumbnails.value[file.fileId] = url; } catch { /* The name remains usable without a thumbnail. */ } }));
 }
 function closePicker() { mention.value = null; pickerOpen.value = false; candidateGeneration++; }
-function openPicker() { actionsOpen.value = false; mention.value = null; pickerOpen.value = true; pickerQuery.value = ''; candidateSource.value = sessionMedia.value.length ? 'session' : 'library'; void loadCandidates(); void nextTick(() => pickerSearch.value?.focus()); }
-function updateMention() { const caret = composer.value?.selectionStart ?? draft.value.length; mention.value = mentionAtCaret(draft.value, caret); if (mention.value) { pickerOpen.value = false; actionsOpen.value = false; } else { const slash = slashAtCaret(draft.value, caret); if (slash !== null) { closePicker(); actionsOpen.value = true; actionSlash = slash; actionIndex.value = 0; } else if (actionSlash !== null) { actionsOpen.value = false; actionSlash = null; } } }
+function openPicker() { actionsOpen.value = false; contextOpen.value = false; mention.value = null; pickerOpen.value = true; pickerQuery.value = ''; candidateSource.value = sessionMedia.value.length ? 'session' : 'library'; void loadCandidates(); void nextTick(() => pickerSearch.value?.focus()); }
+function updateMention() { const caret = composer.value?.selectionStart ?? draft.value.length; mention.value = mentionAtCaret(draft.value, caret); if (mention.value) { pickerOpen.value = false; actionsOpen.value = false; contextOpen.value = false; } else { const slash = slashAtCaret(draft.value, caret); if (slash !== null) { closePicker(); contextOpen.value = false; actionsOpen.value = true; actionSlash = slash; actionIndex.value = 0; } else if (actionSlash !== null) { actionsOpen.value = false; actionSlash = null; } } }
 function composerKeyup(event: KeyboardEvent) { if (!['Escape', 'Enter', 'Tab', 'ArrowUp', 'ArrowDown'].includes(event.key)) updateMention(); }
 async function loadCandidates() {
   const epoch = ++candidateGeneration, libraryId = activeLibrary.value, query = mention.value?.query || pickerQuery.value;
@@ -313,13 +406,14 @@ function candidateKeydown(event: KeyboardEvent) {
   return false;
 }
 function composerKeydown(event: KeyboardEvent) { if (event.isComposing) return; if ((mention.value || pickerOpen.value) && candidateKeydown(event)) return; if (actionsOpen.value && actionKeydown(event)) return; if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); } }
-function dialogKeydown(event: KeyboardEvent) { if (event.key === 'Escape' && uiStore.isInputActive('MediaChat')) { event.preventDefault(); if (previewOpen.value) previewOpen.value = false; else if (renaming.value) cancelRename(); else if (mention.value || pickerOpen.value) closePicker(); else if (actionsOpen.value) { actionsOpen.value = false; actionSlash = null; } else if (sessionActionsOpen.value || historyMenuId.value) { sessionActionsOpen.value = false; historyMenuId.value = ''; } else if (showHistory.value) toggleHistory(); else closeMediaChat(); } }
+function dialogKeydown(event: KeyboardEvent) { if (event.key === 'Escape' && uiStore.isInputActive('MediaChat')) { event.preventDefault(); if (previewOpen.value) previewOpen.value = false; else if (renaming.value) cancelRename(); else if (mention.value || pickerOpen.value) closePicker(); else if (contextOpen.value) contextOpen.value = false; else if (actionsOpen.value) { actionsOpen.value = false; actionSlash = null; } else if (sessionActionsOpen.value || historyMenuId.value) { sessionActionsOpen.value = false; historyMenuId.value = ''; } else if (showHistory.value) toggleHistory(); else closeMediaChat(); } }
 async function send() {
   if (!canSend.value || !view.value) return;
   const libraryId = activeLibrary.value, sessionId = view.value.session.id, question = draft.value, refs = attachments.value.map(file => ({ fileId: file.fileId, start: null })), modelId = selectedModelId.value, effort = reasoningEffort.value, requestId = crypto.randomUUID();
+  const scope = toolScope.value, fields = [...contextFields.value], useTools = toolsEnabled.value;
   const createdAt = Date.now(), media = attachments.value.map(file => ({ ...file }));
-  const base = { modelId, modelName: selectedModel.value?.name || selectedModel.value?.remoteId || '', visual: refs.length > 0, reasoningEffort: effort, references: [], error: null, requestId, createdAt, reasoningContent: '' };
-  rememberDraft(); request.value = { id: requestId, sessionId, libraryId }; error.value = ''; closePicker(); actionsOpen.value = false;
+  const base = { modelId, modelName: selectedModel.value?.name || selectedModel.value?.remoteId || '', visual: refs.length > 0, reasoningEffort: effort, references: [], error: null, requestId, createdAt, reasoningContent: '', toolCalls: [] };
+  rememberDraft(); request.value = { id: requestId, sessionId, libraryId }; error.value = ''; closePicker(); actionsOpen.value = false; contextOpen.value = false;
   streamTurn.value = { libraryId, sessionId, requestId, seq: 0, closed: false, cancelRequested: false, registeredCancelSent: false, media,
     user: { ...base, id: `local-user-${requestId}`, role: 'user', status: 'completed', phase: 'completed', content: question },
     assistant: { ...base, id: `local-assistant-${requestId}`, role: 'assistant', status: 'pending', phase: 'preparing', content: '' },
@@ -329,7 +423,7 @@ async function send() {
   void scrollMessages(true);
   const channel = new Channel<ChatStreamEvent>(); channel.onmessage = receiveStreamEvent;
   try {
-    const next = await invoke<ChatSessionView>('media_chat_send', { libraryId, sessionId, modelId, question, references: refs, visual: refs.length > 0, reasoningEffort: effort, requestId, onEvent: channel });
+    const next = await invoke<ChatSessionView>('media_chat_send', { libraryId, sessionId, modelId, question, references: refs, visual: refs.length > 0, reasoningEffort: effort, toolsEnabled: useTools, scope, contextFields: fields, requestId, onEvent: channel });
     if (disposed) return;
     const turn = streamTurn.value;
     if (turn?.requestId === requestId && turn.libraryId === libraryId && turn.sessionId === sessionId) { turn.closed = true; turn.finalView = next; }
@@ -352,6 +446,11 @@ function receiveStreamEvent(event: ChatStreamEvent) {
   turn.seq = event.seq; turn.assistant.phase = event.phase; messageGeneration++;
   if (event.kind === 'text_delta' && event.delta) turn.assistant.content += event.delta;
   else if (event.kind === 'reasoning_delta' && event.delta) turn.assistant.reasoningContent += event.delta;
+  else if (event.kind === 'tool' && event.toolCall) {
+    const calls = [...(turn.assistant.toolCalls || [])], index = calls.findIndex(call => call.callId === event.toolCall!.callId);
+    if (index < 0) calls.push(event.toolCall); else calls[index] = event.toolCall;
+    turn.assistant.toolCalls = calls;
+  }
   if (event.phase === 'completed' || event.phase === 'failed' || event.phase === 'cancelled') { turn.closed = true; turn.assistant.status = event.phase; }
   // The first valid frame confirms registration; an earlier cancellation may have been a no-op.
   if (turn.cancelRequested && !turn.registeredCancelSent && !turn.closed) {
@@ -385,6 +484,59 @@ interface PreviewRow { file: ChatCandidate; source: ChatSource | null; analyses:
 const adoptionFields: AdoptionField[] = ['title', 'description', 'tags'];
 const previewOpen = ref(false), previewRows = ref<PreviewRow[]>([]), previewError = ref(''), onlyEmpty = ref(true), createTags = ref(false), applying = ref(false);
 const suggestionJob = ref(''); let suggestionLibrary = '', suggestionModelId = '', refreshingSuggestions = false;
+const reviewingToolProposal = ref(false);
+let toolReviewGeneration = 0;
+async function reviewToolProposal(call: ChatToolCall) {
+  const proposal = toolProposal(call);
+  if (!proposal || applying.value || reviewingToolProposal.value || suggestionJob.value || !view.value) return;
+  const libraryId = activeLibrary.value, sessionId = view.value.session.id, epoch = ++toolReviewGeneration;
+  const current = () => !disposed && epoch === toolReviewGeneration && libraryId === activeLibrary.value && libraryId === libConfig._libraryId && sessionId === view.value?.session.id;
+  suggestionLibrary = libraryId;
+  previewError.value = '';
+  previewRows.value = [];
+  previewOpen.value = true;
+  reviewingToolProposal.value = true;
+  for (const item of proposal.files) {
+    const source: ChatSource = JSON.parse(JSON.stringify(item.source));
+    const file: ChatCandidate = {
+      fileId: item.fileId,
+      name: item.name || source.path.split(/[\\/]/).pop() || String(item.fileId),
+      folderPath: source.path.replace(/[\\/][^\\/]*$/, ''),
+      fileType: item.fileType || source.kind,
+      width: item.width ?? source.width,
+      height: item.height ?? source.height,
+      duration: item.duration ?? source.duration,
+      cloudOnly: source.cloudOnly,
+      hasAnalysis: true,
+      sourceStamp: item.sourceStamp || '',
+    };
+    previewRows.value.push({ file, source, analyses: [], analysisId: '', fields: { title: !!proposal.fields.title, description: !!proposal.fields.description, tags: !!proposal.fields.tags }, proposal: JSON.parse(JSON.stringify(item.proposal)), tagsText: item.proposal.tags.join('、'), currentTags: [], error: '', applied: false });
+  }
+  try {
+    for (let index = 0; index < proposal.files.length; index++) {
+      if (!current()) return;
+      const item = proposal.files[index], row = previewRows.value[index], source = row.source!;
+      try {
+        const [inspected, tags] = await Promise.all([
+          invoke<{ source: ChatSource; analyses: any[] }>('media_ai_inspect', { libraryId, fileId: item.fileId }),
+          getTagsForFile(item.fileId),
+        ]);
+        if (!current()) return;
+        const keys: Array<keyof ChatSource> = ['fileId', 'path', 'modified', 'size', 'orientation', 'kind', 'width', 'height', 'duration', 'title', 'comments', 'cloudOnly'];
+        const sameTags = (a: number[], b: number[]) => JSON.stringify([...a].sort((x, y) => x - y)) === JSON.stringify([...b].sort((x, y) => x - y));
+        if (!keys.every(key => inspected.source[key] === source[key]) || !sameTags(inspected.source.tagIds, source.tagIds) || !inspected.analyses.some(analysis => analysis.id === item.analysisId)) {
+          row.error = t('media_chat.tool_proposal_stale');
+          continue;
+        }
+        row.analyses = inspected.analyses;
+        row.analysisId = item.analysisId;
+        row.currentTags = (tags || []).map((tag: any) => tag.name);
+      } catch (reason) {
+        if (current()) row.error = String(reason);
+      }
+    }
+  } finally { if (epoch === toolReviewGeneration) reviewingToolProposal.value = false; }
+}
 function previewFields(row: PreviewRow) { const dismissed = row.analyses.find(item => item.id === row.analysisId)?.dismissed || []; return { title: row.fields.title && !dismissed.includes('title'), description: row.fields.description && !dismissed.includes('description'), tags: row.fields.tags && !dismissed.includes('tags') }; }
 const adoptionCount = computed(() => previewRows.value.filter(row => !row.applied && row.analysisId && Object.values(previewFields(row)).some(Boolean)).length);
 type MenuAction = 'attach' | 'title' | 'description' | 'tags' | 'review' | 'selected' | 'tasks' | 'all' | 'configure';
@@ -401,8 +553,9 @@ const menuItems = computed(() => {
   items.push({ id: 'tasks', label: 'tasks', disabled: false }, { id: 'all', label: 'all_media_tasks', disabled: false }, { id: 'configure', label: 'configure', disabled: false });
   return items;
 });
-function toggleActions() { const opening = !actionsOpen.value; closePicker(); actionSlash = null; actionsOpen.value = opening; actionIndex.value = 0; }
-function dismissActionsOutside(event: PointerEvent) { const target = event.target as HTMLElement; if (!target?.closest('[data-chat-actions]')) { actionsOpen.value = false; actionSlash = null; } if (!target?.closest('[data-chat-session-menu]')) { sessionActionsOpen.value = false; historyMenuId.value = ''; } }
+function toggleContext() { const opening = !contextOpen.value; closePicker(); actionsOpen.value = false; actionSlash = null; contextOpen.value = opening; }
+function toggleActions() { const opening = !actionsOpen.value; closePicker(); contextOpen.value = false; actionSlash = null; actionsOpen.value = opening; actionIndex.value = 0; }
+function dismissActionsOutside(event: PointerEvent) { const target = event.target as HTMLElement; if (!target?.closest('[data-chat-context]')) contextOpen.value = false; if (!target?.closest('[data-chat-actions]')) { actionsOpen.value = false; actionSlash = null; } if (!target?.closest('[data-chat-session-menu]')) { sessionActionsOpen.value = false; historyMenuId.value = ''; } }
 async function runMenuAction(id: MenuAction) {
   const item = menuItems.value.find(item => item.id === id); if (!item || item.disabled) return;
   if (actionSlash !== null && draft.value[actionSlash] === '/') draft.value = draft.value.slice(0, actionSlash) + draft.value.slice(actionSlash + 1);
@@ -452,7 +605,7 @@ async function refreshSuggestions() {
   } finally { refreshingSuggestions = false; }
 }
 async function applySuggestions() {
-  if (applying.value || !adoptionCount.value || suggestionLibrary !== libConfig._libraryId) return;
+  if (applying.value || reviewingToolProposal.value || !adoptionCount.value || suggestionLibrary !== libConfig._libraryId) return;
   const libraryId = suggestionLibrary;
   const payloads = () => previewRows.value.filter(row => !row.applied && row.analysisId && Object.values(previewFields(row)).some(Boolean)).map(row => ({ libraryId, source: JSON.parse(JSON.stringify(row.source)), analysisId: row.analysisId, options: { ...previewFields(row), proposal: { title: row.proposal.title, description: row.proposal.description, tags: [...new Set(row.tagsText.split(/[、,，;；\n]/).map(tag => tag.trim()).filter(Boolean))] }, createTags: createTags.value, onlyEmpty: onlyEmpty.value } }));
   const targets = payloads(), snapshot = JSON.stringify(targets);
@@ -478,14 +631,40 @@ function beginFrameGesture(event: PointerEvent, mode: 'move' | 'resize', edge?: 
 function moveFrameGesture(event: PointerEvent) { if (!gesture || event.pointerId !== gesture.pointerId) return; const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y; frame.value = gesture.mode === 'move' ? fitChatFrame({ ...gesture.frame, x: gesture.frame.x + dx, y: gesture.frame.y + dy }, viewport.value) : resizeChatFrame(gesture.frame, gesture.edge || 'se', dx, dy, viewport.value); }
 function endFrameGesture(event?: PointerEvent | Event) { if (!gesture || event && 'pointerId' in event && event.pointerId !== gesture.pointerId) return; const old = gesture; gesture = undefined; if (old.target.hasPointerCapture?.(old.pointerId)) old.target.releasePointerCapture(old.pointerId); window.removeEventListener('pointermove', moveFrameGesture); window.removeEventListener('pointerup', endFrameGesture); window.removeEventListener('pointercancel', endFrameGesture); window.removeEventListener('blur', endFrameGesture); saveFrame(); }
 function resizeKeydown(event: KeyboardEvent, edge: ChatResizeEdge) { if (event.key === 'Escape') { endFrameGesture(); return; } if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); const step = event.shiftKey ? 16 : 8; frame.value = resizeChatFrame(frame.value, edge, event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0, event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0, viewport.value); saveFrame(); }
-watch(() => [mediaChat.open, mediaChat.revision], () => { if (mediaChat.open) void openEntry(); else { rememberDraft(); closePicker(); actionsOpen.value = false; actionSlash = null; sessionActionsOpen.value = false; historyMenuId.value = ''; cancelRename(); endFrameGesture(); previewOpen.value = false; } }, { immediate: true });
+watch(() => [mediaChat.open, mediaChat.revision], () => { if (mediaChat.open) void openEntry(); else { rememberDraft(); closePicker(); contextOpen.value = false; actionsOpen.value = false; actionSlash = null; sessionActionsOpen.value = false; historyMenuId.value = ''; cancelRename(); endFrameGesture(); previewOpen.value = false; toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; } }, { immediate: true });
 watch(() => mediaChat.open, open => { if (open && !inputRegistered) { uiStore.pushInputHandler('MediaChat'); inputRegistered = true; } else if (!open && inputRegistered) { uiStore.removeInputHandler('MediaChat'); inputRegistered = false; } }, { immediate: true });
 watch(() => libConfig._libraryId, libraryId => { if (activeLibrary.value && libraryId !== activeLibrary.value) { rememberDraft(); generation++; suggestionJob.value = ''; suggestionLibrary = ''; previewRows.value = []; previewError.value = ''; previewOpen.value = false; closeMediaChat(); } });
+watch(() => [activeLibrary.value, view.value?.session.id], () => { toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; toolTaskStates.value = {}; if (previewOpen.value && !suggestionJob.value) { previewOpen.value = false; previewRows.value = []; } });
+watch(currentToolTasks, () => { void refreshToolTasks(); });
 watch(() => [mention.value?.query, pickerQuery.value, candidateSource.value], () => { clearTimeout(candidateTimer); candidateTimer = setTimeout(() => { void loadCandidates(); }, 150); });
 watch(sessionMedia, files => { if (mediaChat.open) void loadThumbnails(files); });
 watch([selectedModelId, reasoningLevels, defaultReasoningEffort], normalizeReasoningChoice, { flush: 'sync' });
-watch([draft, attachments, selectedModelId, reasoningEffort], () => { draftRevision++; rememberDraft(); }, { deep: true, flush: 'sync' });
-watch(() => { const messages = renderedMessages.value, last = messages.at(-1); return [messages.length, last?.content, last?.reasoningContent, last?.phase, last?.status]; }, () => { if (mediaChat.open && !showHistory.value) void scrollMessages(); });
-onMounted(() => { try { const stored = localStorage.getItem('lap.media-chat.window'); frame.value = fitChatFrame(stored ? JSON.parse(stored) : {}, { width: window.innerWidth, height: window.innerHeight }); } catch { /* Use the initial frame. */ } fitFrame(); window.addEventListener('resize', fitFrame); window.addEventListener('pointerdown', dismissActionsOutside); refreshTimer = setInterval(() => { if (suggestionJob.value) void refreshSuggestions().catch(reason => { previewError.value = String(reason); }); if (mediaChat.open && activeRequestId.value && request.value?.id !== activeRequestId.value) void refreshCurrent().catch(reason => { error.value = String(reason); }); }, 1500); });
-onUnmounted(() => { disposed = true; generation++; candidateGeneration++; clearInterval(refreshTimer); clearTimeout(candidateTimer); endFrameGesture(); saveFrame(); window.removeEventListener('resize', fitFrame); window.removeEventListener('pointerdown', dismissActionsOutside); if (inputRegistered) uiStore.removeInputHandler('MediaChat'); });
+watch([draft, attachments, selectedModelId, reasoningEffort, toolsEnabled, toolScope, contextFields], () => { draftRevision++; rememberDraft(); }, { deep: true, flush: 'sync' });
+watch(() => { const messages = renderedMessages.value, last = messages.at(-1); return [messages.length, last?.content, last?.reasoningContent, last?.phase, last?.status, last?.toolCalls]; }, () => { if (mediaChat.open && !showHistory.value) void scrollMessages(); });
+onMounted(() => {
+  try {
+    const stored = localStorage.getItem('lap.media-chat.window');
+    frame.value = fitChatFrame(stored ? JSON.parse(stored) : {}, { width: window.innerWidth, height: window.innerHeight });
+  } catch { /* Use the initial frame. */ }
+  fitFrame();
+  window.addEventListener('resize', fitFrame);
+  window.addEventListener('pointerdown', dismissActionsOutside);
+  void listen<{ libraryId: string; jobId: string }>('media-ai-progress', event => {
+    if (event.payload.libraryId === activeLibrary.value && currentToolTasks.value.has(event.payload.jobId)) void refreshToolTasks(event.payload.jobId);
+  }).then(stop => { if (disposed) stop(); else offToolTasks = stop; }).catch(() => {});
+  refreshTimer = setInterval(() => {
+    if (suggestionJob.value) void refreshSuggestions().catch(reason => { previewError.value = String(reason); });
+    if (mediaChat.open) void refreshToolTasks();
+    if (mediaChat.open && activeRequestId.value && request.value?.id !== activeRequestId.value) void refreshCurrent().catch(reason => { error.value = String(reason); });
+  }, 1500);
+});
+onUnmounted(() => {
+  disposed = true; generation++; candidateGeneration++;
+  offToolTasks?.();
+  clearInterval(refreshTimer); clearTimeout(candidateTimer);
+  endFrameGesture(); saveFrame();
+  window.removeEventListener('resize', fitFrame);
+  window.removeEventListener('pointerdown', dismissActionsOutside);
+  if (inputRegistered) uiStore.removeInputHandler('MediaChat');
+});
 </script>

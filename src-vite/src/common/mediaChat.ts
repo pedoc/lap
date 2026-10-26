@@ -21,9 +21,23 @@ export interface ChatSession {
   runningRequestId: string | null;
 }
 export type ChatPhase = 'queued' | 'preparing' | 'waiting' | 'thinking' | 'responding' | 'completed' | 'failed' | 'cancelled';
+export type ChatToolScope = 'references' | 'library';
+export const CHAT_CONTEXT_FIELDS = ['file', 'tags', 'people', 'objects', 'ocr', 'exif', 'analysis', 'location'] as const;
+export type ChatContextField = typeof CHAT_CONTEXT_FIELDS[number];
+export const DEFAULT_CHAT_CONTEXT_FIELDS: readonly ChatContextField[] = CHAT_CONTEXT_FIELDS.filter(field => field !== 'location');
+export function normalizeChatContextFields(value: unknown): ChatContextField[] {
+  return Array.isArray(value) ? CHAT_CONTEXT_FIELDS.filter(field => value.includes(field)) : [...DEFAULT_CHAT_CONTEXT_FIELDS];
+}
+export interface ChatToolCall {
+  callId: string; name: string; arguments: Record<string, unknown>;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  result: unknown | null; localData: unknown | null; error: string | null;
+  createdAt: number; completedAt: number | null;
+}
 export interface ChatStreamEvent {
   libraryId: string; sessionId: string; requestId: string; seq: number;
-  kind: 'status' | 'text_delta' | 'reasoning_delta'; phase: ChatPhase; delta: string | null;
+  kind: 'status' | 'text_delta' | 'reasoning_delta' | 'tool'; phase: ChatPhase; delta: string | null;
+  toolCall?: ChatToolCall | null;
 }
 export interface ChatMessage {
   id: string; role: 'user' | 'assistant'; status: 'pending' | 'completed' | 'failed' | 'cancelled';
@@ -31,6 +45,7 @@ export interface ChatMessage {
   reasoningEffort: string | null;
   reasoningContent: string; phase: ChatPhase;
   references: ChatReference[]; error: string | null; requestId: string | null; createdAt: number;
+  toolCalls?: ChatToolCall[];
 }
 export interface ChatSessionView { session: ChatSession; messages: ChatMessage[] }
 export interface ChatSendReference { fileId: number; start?: number | null }

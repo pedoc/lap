@@ -101,6 +101,16 @@
           <div v-else class="p-3 opacity-60">{{ t('media_ai.empty_services') }}</div>
         </div>
         </div>
+        <details v-if="serviceKind === 'llm'" class="rounded-box border border-base-content/10 p-3" data-media-ai-assistant>
+          <summary class="cursor-pointer font-medium">{{ t('media_ai.chat_assistant') }}<span class="ml-2 text-[10px] font-normal opacity-50">{{ t(assistantSystemPrompt.trim() ? 'media_ai.assistant_prompt_custom' : 'media_ai.assistant_prompt_default') }}</span></summary>
+          <div class="mt-3 space-y-2">
+            <label class="block" for="media-ai-assistant-prompt">{{ t('media_ai.assistant_system_prompt') }}</label>
+            <textarea id="media-ai-assistant-prompt" v-model="assistantSystemPrompt" class="textarea textarea-bordered w-full leading-relaxed" rows="6" maxlength="65536" :placeholder="t('media_ai.assistant_prompt_placeholder')" :aria-label="t('media_ai.assistant_system_prompt')" data-media-ai-system-prompt></textarea>
+            <p class="opacity-60">{{ t('media_ai.assistant_prompt_hint') }}</p>
+            <div class="flex items-center gap-2"><button type="button" class="btn btn-xs btn-ghost" :disabled="busy || !assistantSystemPrompt" @click="resetAssistantSystemPrompt">{{ t('media_ai.assistant_prompt_reset') }}</button><span class="text-[10px] opacity-50">{{ t('media_ai.assistant_prompt_save_hint') }}</span></div>
+            <details v-if="defaultSystemPrompt"><summary class="cursor-pointer opacity-60">{{ t('media_ai.assistant_prompt_view_default') }}</summary><p class="mt-2 whitespace-pre-wrap break-words rounded-box bg-base-200/50 p-3 leading-relaxed select-text" data-media-ai-default-system-prompt>{{ defaultSystemPrompt }}</p></details>
+          </div>
+        </details>
         <div class="flex gap-2 items-center"><button class="btn btn-sm btn-primary" :disabled="busy || !dirty" @click="save">{{ t('media_ai.save') }}</button><button class="btn btn-sm" :disabled="busy" @click="reload">{{ t('media_ai.reload') }}</button><span v-if="dirty" class="text-warning">{{ t('media_ai.unsaved') }}</span></div>
     </template>
     </fieldset>
@@ -134,6 +144,12 @@ import { REASONING_LEVELS, normalizeModelReasoning, reasoningLevelError, modelRe
 const { t } = useI18n();
 const draft = ref<MediaConfiguration | null>(null), baseline = ref('null'), keys = ref<Record<string, string>>({}), storedKeys = ref<string[]>([]);
 const saved = ref<MediaConfiguration | null>(null);
+const defaultSystemPrompt = ref('');
+const assistantSystemPrompt = computed({
+  get: () => draft.value?.assistant?.systemPrompt || '',
+  set: (value: string) => { if (draft.value) draft.value.assistant = { systemPrompt: value }; },
+});
+function resetAssistantSystemPrompt() { assistantSystemPrompt.value = ''; }
 const selected = ref(''), filter = ref(''), expandedModel = ref(''), busy = ref(false), loading = ref(false), error = ref(''), message = ref('');
 const serviceKind = ref<MediaServiceKind>('llm');
 const preferredEmbeddingProtocol = ref<EmbeddingProtocol>('openai_text'), settingsRoot = ref<HTMLElement | null>(null);
@@ -243,7 +259,18 @@ function preferredProvider() {
   return candidates.find(p => !isBuiltinService(p) && p.enabled)?.id || candidates.find(p => p.enabled)?.id
     || candidates.find(p => saved.value?.providers.some(original => original.id === p.id))?.id || candidates[0]?.id || '';
 }
-function receive(view: any) { if (disposed) return; saved.value = clone(view.configuration); draft.value = clone(view.configuration); appendBuiltinServices(draft.value!, key => t('media_ai.' + key)); storedKeys.value = view.keysStored; keys.value = {}; customReasoning.value = {}; customReasoningErrors.value = {}; baseline.value = JSON.stringify(draft.value); if (!provider.value) selected.value = preferredProvider(); }
+function receive(view: any) {
+  if (disposed) return;
+  const configuration = clone(view.configuration) as MediaConfiguration;
+  configuration.assistant = { systemPrompt: configuration.assistant?.systemPrompt || '' };
+  saved.value = clone(configuration);
+  draft.value = clone(configuration);
+  defaultSystemPrompt.value = typeof view.defaultSystemPrompt === 'string' ? view.defaultSystemPrompt : '';
+  appendBuiltinServices(draft.value!, key => t('media_ai.' + key));
+  storedKeys.value = view.keysStored; keys.value = {}; customReasoning.value = {}; customReasoningErrors.value = {};
+  baseline.value = JSON.stringify(draft.value);
+  if (!provider.value) selected.value = preferredProvider();
+}
 function selectServiceKind(kind: MediaServiceKind) { serviceKind.value = kind; selected.value = preferredProvider(); filter.value = ''; }
 function updateOpenaiEmbeddings(p: MediaProvider) {
   if (p.kind !== 'llm' || !draft.value) return;

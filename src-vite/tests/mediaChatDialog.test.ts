@@ -8,6 +8,7 @@ import { renderToString } from 'vue/server-renderer';
 import { createI18n } from 'vue-i18n';
 import * as Vue from 'vue';
 import * as ui from '../src/common/mediaChatUi.ts';
+import { CHAT_CONTEXT_FIELDS, normalizeChatContextFields } from '../src/common/mediaChat.ts';
 
 const source = readFileSync(new URL('../src/components/MediaChatDialog.vue', import.meta.url), 'utf8');
 const body = stripTypeScriptTypes(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '');
@@ -28,15 +29,16 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
   const mediaChat = Vue.reactive({ open: false, libraryId: 'library-a', fileIds: [] as number[], revision: 0 });
   const libConfig = Vue.reactive({ _libraryId: 'library-a' });
   const handlers: string[] = [], context: any = {
-    ...Vue, ...ui, crypto, setTimeout, clearTimeout, setInterval, clearInterval,
+    ...Vue, ...ui, CHAT_CONTEXT_FIELDS, normalizeChatContextFields, crypto, setTimeout, clearTimeout, setInterval, clearInterval,
     Channel: class { onmessage: any; constructor() { channels.push(this); } },
+    listen: async () => () => {},
     mediaChat, libConfig, closeMediaChat: () => { mediaChat.open = false; }, validMediaChatIds: (values: number[]) => [...new Set(values.filter(id => Number.isSafeInteger(id) && id > 0))],
     useI18n: () => i18n || ({ t: (key: string) => key, te: () => false }),
     useUIStore: () => ({ pushInputHandler: (id: string) => handlers.push(id), removeInputHandler: (id: string) => { const i = handlers.indexOf(id); if (i >= 0) handlers.splice(i, 1); }, isInputActive: (id: string) => handlers.at(-1) === id }),
     onMounted: (fn: any) => mounts.push(fn), onUnmounted: (fn: any) => unmounts.push(fn),
     getFileThumbById: async () => '', getTagsForFile: async () => [{ name: 'Existing' }], getThumbnailDataUrl: () => '', getThumbUrl: () => '', getDragPayload: async () => ({ filePaths: [] }), getExternalDropPaths: () => [], isWin: false, isMac: false,
     mediaTime: (value: number) => String(value), openMediaAiSettings() {}, openMediaAiBatch: (...args: any[]) => calls.push(['batch', args]), pendingChanges: { confirm: async () => true }, ask: async () => true,
-    ...Object.fromEntries(['IconAdd', 'IconArrowDown', 'IconClose', 'IconFile', 'IconHistory', 'IconLeft', 'IconMore', 'IconRename', 'IconSearch', 'IconSettings', 'IconTrash'].map(name => [name, () => Vue.h('svg')])), openMediaChatMedia: async (...args: any[]) => { calls.push(['open-media', args]); return true; },
+    ...Object.fromEntries(['IconAdd', 'IconArrowDown', 'IconClose', 'IconFile', 'IconFileInfo', 'IconHistory', 'IconLeft', 'IconMore', 'IconRename', 'IconSearch', 'IconSettings', 'IconTrash'].map(name => [name, () => Vue.h('svg')])), openMediaChatMedia: async (...args: any[]) => { calls.push(['open-media', args]); return true; },
     window: { innerWidth: 1440, innerHeight: 900, addEventListener: (name: string, listener: any) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(listener); }, removeEventListener: (name: string, listener: any) => listeners.get(name)?.delete(listener) },
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
     invoke: async (name: string, args: any) => {
@@ -55,7 +57,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
   return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage, channels,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -166,6 +168,28 @@ test('reasoning labels translate known levels and leave custom levels untouched 
     assert.equal(h.api.reasoningLabel('custom-ultra'), 'custom-ultra');
     assert.deepEqual(diagnostics, []);
   } finally { console.warn = warn; console.error = error; h.dispose(); i18n.dispose(); }
+});
+
+test('tool scope and information permissions are scoped to drafts and snapshotted when sending, with location off by default', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); assert.equal(h.api.toolScope.value, null); assert.equal(h.api.contextFields.value.includes('location'), false); assert.equal(h.api.toolsEnabled.value, true);
+    assert.equal(h.api.contextFields.value.length, 7);
+    h.api.toolScope.value = 'library'; h.api.contextFields.value = ['file', 'tags']; h.api.toolsEnabled.value = false;
+    await h.api.newSession(); assert.equal(h.api.toolScope.value, null); assert.equal(h.api.contextFields.value.includes('location'), false);
+    await h.api.selectSession('session-a'); assert.equal(h.api.toolScope.value, 'library'); assert.deepEqual(Array.from(h.api.contextFields.value), ['file', 'tags']); assert.equal(h.api.toolsEnabled.value, false);
+    h.api.draft.value = 'Find photos'; const run = h.api.send();
+    const sent = h.calls.find(([name]) => name === 'media_chat_send')[1];
+    h.api.toolScope.value = 'references'; h.api.contextFields.value.push('location'); h.api.draft.value = 'Next turn'; h.api.toolsEnabled.value = true;
+    assert.equal(sent.scope, 'library'); assert.deepEqual(sent.contextFields, ['file', 'tags']);
+    assert.equal(sent.toolsEnabled, false);
+    assert.equal(Object.hasOwn(sent, 'localData'), false); assert.equal(Object.hasOwn(sent, 'toolCalls'), false);
+    pending.resolve(emptyView()); await run;
+    assert.equal(h.api.draft.value, 'Next turn'); assert.equal(h.api.toolScope.value, 'references'); assert.equal(h.api.contextFields.value.includes('location'), true);
+    h.api.toggleContext(); assert.equal(h.api.contextOpen.value, true); h.api.toggleActions(); assert.equal(h.api.contextOpen.value, false);
+    assert.deepEqual(normalizeChatContextFields(['location', 'unknown', 'location']), ['location']);
+    assert.deepEqual(normalizeChatContextFields([]), []);
+  } finally { h.dispose(); }
 });
 
 test('media cards navigate on their primary action, respect cancelled navigation and keep reattachment separate', async () => {
@@ -323,6 +347,107 @@ test('a channel shows an immediate optimistic turn, accepts only ordered matchin
     channel.onmessage(event(6, 'text_delta', 'responding', 'after-final'));
     assert.equal(h.api.renderedMessages.value.at(-1).content, 'Visible answer');
   } finally { h.dispose(); }
+});
+
+test('native tool events upsert a stable call and authoritative history keeps tool results and newly added media references', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); h.api.draft.value = 'Search and inspect'; const run = h.api.send(), turn = h.api.streamTurn.value;
+    const call = { callId: 'call-a', name: 'search_media', arguments: { query: 'beach' }, status: 'running', result: null, localData: null, error: null, createdAt: 1, completedAt: null };
+    const event = (seq: number, toolCall: any, extra = {}) => ({ libraryId: 'library-a', sessionId: 'session-a', requestId: turn.requestId, seq, kind: 'tool', phase: 'waiting', delta: null, toolCall, ...extra });
+    h.channels[0].onmessage(event(1, call)); assert.equal(h.api.renderedMessages.value.at(-1).toolCalls[0].status, 'running');
+    const completed = { ...call, status: 'completed', result: { status: 'ok', items: [{ fileId: 7 }] }, completedAt: 2 };
+    h.channels[0].onmessage(event(2, completed)); h.channels[0].onmessage(event(2, call));
+    h.channels[0].onmessage(event(3, { ...call, callId: 'foreign' }, { sessionId: 'other-session' }));
+    assert.equal(turn.assistant.toolCalls.length, 1); assert.equal(turn.assistant.toolCalls[0].status, 'completed');
+    assert.equal(h.api.toolResultSummary(completed), 'media_chat.tool_result_items');
+    const final = emptyView(); final.messages.push({ ...clone(turn.user), id: 'saved-user' }, { ...clone(turn.assistant), id: 'saved-assistant', status: 'completed', phase: 'completed', content: 'Found [1]', references: [reference(7)] });
+    pending.resolve(final); await run;
+    assert.equal(h.api.renderedMessages.value.at(-1).toolCalls[0].callId, 'call-a'); assert.equal(h.api.renderedMessages.value.at(-1).references[0].fileId, 7);
+    assert.equal(h.api.toolResultSummary({ ...completed, result: { status: 'index_missing' } }), 'media_chat.tool_result_index_missing');
+  } finally { h.dispose(); }
+});
+
+function proposalCall() {
+  return { callId: 'proposal-call', name: 'propose_metadata', arguments: {}, status: 'completed', result: { status: 'ok', proposalId: 'proposal-a' }, localData: { proposal: { id: 'proposal-a', fields: { title: true, description: false, tags: true }, files: [{ ...file(7), source: mediaSource(7), analysisId: 'analysis-7', proposal: { title: 'Tool proposal', description: 'Suggestion', tags: ['Suggested'] } }] } }, error: null, createdAt: 1, completedAt: 2 };
+}
+
+test('tool metadata suggestions load real analyses into the editable adoption preview and write only after confirmation', async () => {
+  const h = harness();
+  try {
+    await h.boot(); const call = proposalCall(); await h.api.reviewToolProposal(call);
+    assert.equal(h.api.previewOpen.value, true); assert.equal(h.api.adoptionCount.value, 1);
+    const row = h.api.previewRows.value[0]; assert.equal(row.analysisId, 'analysis-7'); assert.equal(row.proposal.title, 'Tool proposal');
+    assert.equal(row.analyses[0].title, 'Suggested', 'Tool suggestions must not fabricate an analysis record');
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    row.proposal.title = 'Reviewed title'; row.tagsText = 'first、second'; await h.api.applySuggestions();
+    const sent = h.calls.find(([name]) => name === 'media_ai_adopt')[1];
+    assert.equal(sent.analysisId, 'analysis-7'); assert.equal(sent.options.proposal.title, 'Reviewed title'); assert.deepEqual(sent.options.proposal.tags, ['first', 'second']);
+    assert.equal(call.localData.proposal.files[0].proposal.title, 'Tool proposal');
+  } finally { h.dispose(); }
+});
+
+test('a multi-file tool proposal stays fully visible and cannot be applied while later files are still loading', async () => {
+  const pending = deferred(), h = harness({ media_ai_inspect: (args: any) => args.fileId === 9 ? pending.promise : { source: mediaSource(7), analyses: [{ id: 'analysis-7', title: 'Real', description: '', tags: [] }] } });
+  try {
+    await h.boot(); const call = proposalCall(); call.localData.proposal.files.push({ ...file(9), source: mediaSource(9), analysisId: 'analysis-9', proposal: { title: 'Second', description: '', tags: [] } });
+    const review = h.api.reviewToolProposal(call); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.api.previewRows.value.length, 2); assert.equal(h.api.reviewingToolProposal.value, true); assert.equal(h.api.adoptionCount.value, 1);
+    await h.api.applySuggestions(); assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    pending.resolve({ source: mediaSource(9), analyses: [{ id: 'analysis-9', title: 'Real second', description: '', tags: [] }] }); await review;
+    assert.equal(h.api.reviewingToolProposal.value, false); assert.equal(h.api.adoptionCount.value, 2);
+  } finally { h.dispose(); }
+});
+
+function taskCall() {
+  return { callId: 'task-call', name: 'start_media_task', arguments: {}, status: 'completed', result: { task: { id: 'job-known', state: 'running', total: 2, completed: 0, failed: 0 } }, localData: null, error: null, createdAt: 1, completedAt: 2 };
+}
+function addTaskMessage(h: any, call: any) { h.api.view.value.messages.push({ id: 'task-message', role: 'assistant', status: 'completed', content: '', references: [], toolCalls: [call] }); }
+
+test('known task cards overlay live application progress without changing the stored tool result or polling after completion', async () => {
+  const pending = deferred(), h = harness({ media_ai_jobs: () => pending.promise });
+  try {
+    await h.boot(); const call = taskCall(), original = JSON.stringify(call); addTaskMessage(h, call); await Vue.nextTick();
+    assert.equal(h.calls.filter(([name]) => name === 'media_ai_jobs').length, 1);
+    pending.resolve([{ id: 'job-known', state: 'finished', total: 2, completed: 2, failed: 0 }]); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.api.toolTask(call).state, 'finished'); assert.equal(h.api.toolTask(call).completed, 2); assert.equal(JSON.stringify(call), original);
+    const before = h.calls.filter(([name]) => name === 'media_ai_jobs').length;
+    await h.api.refreshToolTasks(); assert.equal(h.calls.filter(([name]) => name === 'media_ai_jobs').length, before);
+  } finally { h.dispose(); }
+});
+
+test('a task absent from the recent list keeps its last state and late task reads cannot update another session or library', async () => {
+  const missing = harness({ media_ai_jobs: () => [] });
+  try {
+    await missing.boot(); const call = taskCall(); addTaskMessage(missing, call); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(missing.api.toolTask(call).state, 'running'); assert.equal(missing.api.toolTaskUnrefreshed(call), true);
+  } finally { missing.dispose(); }
+  for (const change of ['library', 'session']) {
+    const pending = deferred(), h = harness({ media_ai_jobs: () => pending.promise });
+    try {
+      await h.boot(); const call = taskCall(); addTaskMessage(h, call); await Vue.nextTick();
+      if (change === 'library') h.libConfig._libraryId = 'library-b'; else await h.api.newSession();
+      pending.resolve([{ id: 'job-known', state: 'finished', total: 2, completed: 2, failed: 0 }]); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(h.api.toolTask(call).state, 'running'); assert.equal(h.api.toolTaskUnrefreshed(call), false);
+    } finally { h.dispose(); }
+  }
+});
+
+test('stale or late tool proposals cannot be applied to changed media, another session or another library', async () => {
+  const stale = harness({ media_ai_inspect: () => ({ source: mediaSource(), analyses: [] }) });
+  try { await stale.boot(); await stale.api.reviewToolProposal(proposalCall()); assert.equal(stale.api.adoptionCount.value, 0); assert.equal(stale.api.previewRows.value[0].error, 'media_chat.tool_proposal_stale'); }
+  finally { stale.dispose(); }
+  for (const change of ['library', 'session']) {
+    const pending = deferred(), h = harness({ media_ai_inspect: () => pending.promise });
+    try {
+      await h.boot(); const review = h.api.reviewToolProposal(proposalCall());
+      if (change === 'library') h.libConfig._libraryId = 'library-b';
+      else await h.api.newSession();
+      pending.resolve({ source: mediaSource(), analyses: [{ id: 'analysis-7', title: 'Real', description: '', tags: [] }] }); await review; await Vue.nextTick();
+      assert.equal(h.api.previewOpen.value, false); assert.equal(h.api.adoptionCount.value, 0);
+      assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    } finally { h.dispose(); }
+  }
 });
 
 test('cancelled and failed authoritative turns retain partial text without becoming completed answers', async () => {
@@ -612,7 +737,7 @@ test('unmatched external files are never imported or represented as fabricated g
 
 test('the actual dialog renders composer model and reasoning controls, media cards, eight resize handles and a compact action menu', async () => {
   const h = harness(), imports: any = {}; let history = false;
-  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen, view, attachments, configuration, selectedModelId, actionsOpen, showHistory, sessions, historyMenuId });</script>')).descriptor, { id: 'media-chat-template', inlineTemplate: true }).content)
+  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen, view, attachments, configuration, selectedModelId, actionsOpen, showHistory, sessions, historyMenuId, contextOpen, contextFields });</script>')).descriptor, { id: 'media-chat-template', inlineTemplate: true }).content)
     .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
   try {
@@ -622,6 +747,8 @@ test('the actual dialog renders composer model and reasoning controls, media car
     component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
       state.previewOpen.value = true; state.configuration.value = configuration(); state.configuration.value.models[0].reasoning = { levels: ['none', 'low', 'high'], defaultEffort: 'low' }; state.selectedModelId.value = 'vision'; state.actionsOpen.value = true;
       state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: 'Answer', references: [reference(8)] });
+      state.contextOpen.value = true;
+      state.view.value.messages[0].toolCalls = [{ callId: 'task-call', name: 'start_media_task', arguments: {}, status: 'completed', result: { task: { id: 'job-a', state: 'running', total: 2, completed: 1, failed: 0 } }, localData: null, error: null, createdAt: 1, completedAt: 2 }, proposalCall()];
       state.view.value.messages.unshift({ id: 'question-a', role: 'user', status: 'completed', createdAt: 1, content: 'Question', references: [] });
       state.showHistory.value = history; state.sessions.value = [summary(), summary('session-b')]; state.historyMenuId.value = history ? 'session-b' : '';
       context.expose(state);
@@ -635,6 +762,10 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.match(html, /value="none"/); assert.match(html, /value="low"/); assert.match(html, /value="high"/);
     assert.match(html, /data-chat-attachment-card/); assert.match(html, /data-chat-reference-card/);
     assert.match(html, /data-chat-actions-menu/);
+    assert.match(html, /data-chat-context-toggle/); assert.match(html, /data-chat-context-panel/);
+    assert.match(html, /data-chat-tool-call="task-call"/); assert.match(html, /data-chat-tool-task="job-a"/); assert.match(html, /data-chat-tool-proposal="proposal-a"/);
+    const location = html.match(/<input[^>]*data-chat-context-field="location"[^>]*>/)![0]; assert.doesNotMatch(location, /checked/);
+    assert.doesNotMatch(html, /sourceStamp|"analysisId"|"arguments"/);
     assert.match(html, /ml-auto w-fit[^>]+data-chat-role="user"/); assert.match(html, /mr-auto w-full[^>]+data-chat-role="assistant"/);
     assert.doesNotMatch(html, /<aside|data-chat-reasoning-summary|data-chat-history-row/);
     assert.ok(html.indexOf('data-chat-composer-controls') > html.indexOf('<textarea'));
