@@ -13,20 +13,21 @@
     <div 
       v-if="showToolbar"
       id="responsiveDiv"
+      ref="toolbarRef"
       data-viewer-toolbar
       :class="computedToolbarClass"
       :style="toolbarSpaceStyle"
       data-tauri-drag-region
     >
       <!-- App Icon + Title (left side, ImageViewer on Windows) -->
-      <div v-if="showDesktopWindowControls && mode === 2 && showWindowControlsBar" class="absolute left-0 top-0 h-10 flex items-center px-3 select-none" data-tauri-drag-region>
+      <div v-if="showDesktopWindowControls && mode === 2 && showWindowControlsBar" ref="windowTitleRef" class="absolute left-0 top-0 h-10 flex items-center px-3 select-none" data-tauri-drag-region>
         <img :src="iconLogo" class="w-5 h-5 mr-2 rounded" data-tauri-drag-region />
         <span class="text-nowrap text-sm text-base-content/70 overflow-hidden whitespace-pre text-ellipsis" :style="{ maxWidth: `${filenameMaxWidth}px` }" :title="mediaNameTooltip(file)" data-tauri-drag-region>
           {{ mediaDisplayName(file) || $t('image_viewer.title') }}
         </span>
       </div>
-      <div ref="buttonsRef" class="viewer-toolbar-actions flex max-w-full flex-wrap items-center justify-center gap-1 py-1">
-        <div role="group" :aria-label="t('viewer_toolbar.browse')" class="flex shrink-0 items-center gap-1">
+      <div ref="buttonsRef" class="viewer-toolbar-actions flex max-w-full flex-nowrap items-center justify-center gap-1 py-1">
+        <div ref="toolbarStartRef" role="group" :aria-label="t('viewer_toolbar.browse')" class="flex shrink-0 items-center gap-1">
         <TButton
           :icon="IconPrev"
           :disabled="fileIndex <= 0 || isSlideShow || !canInteract"
@@ -75,119 +76,19 @@
           </ContextMenu>
         </div>
         </div>
-        <div v-if="toolbarLayout.zoom" role="group" :aria-label="t('viewer_toolbar.zoom')" class="flex shrink-0 items-center gap-1 border-l border-base-content/15 pl-1">
-        <TButton
-          :icon="IconZoomOut"
-          :disabled="fileIndex < 0 || imageScale <= imageMinScale || isSlideShow || !canInteract"
-          :tooltip="$t('image_viewer.toolbar.zoom_out')"
-          :shortcut="shortcut('view.zoomOut')"
-          @click="handleZoomOut"
-        />
-        <TButton
-          :icon="IconZoomIn"
-          :disabled="fileIndex < 0 || imageScale >= imageMaxScale || isSlideShow || !canInteract"
-          :tooltip="$t('image_viewer.toolbar.zoom_in')"
-          :shortcut="shortcut('view.zoomIn')"
-          @click="handleZoomIn" 
-        />
-        <TButton
-          :icon="!isZoomFit ? IconZoomFit : IconZoomActual"
-          :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-          :tooltip="!isZoomFit ? $t('image_viewer.toolbar.zoom_fit') : $t('image_viewer.toolbar.zoom_actual')"
-          :shortcut="shortcut('view.zoomFit')"
-          @click="$emit('update:isZoomFit', !isZoomFit)"
-        />
-        </div>
-        <div v-if="showExtraIcons" role="group" :aria-label="t('viewer_toolbar.organize')" class="flex shrink-0 items-center gap-1 border-l border-base-content/15 pl-1">
-          <TButton
-            :icon="file?.is_favorite ? IconHeartFilled : IconHeart"
-            :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-            :selected="file?.is_favorite && !isSlideShow"
-            :tooltip="file?.is_favorite ? $t('menu.meta.unfavorite') : $t('menu.meta.favorite')"
-            :shortcut="shortcut('meta.favorite')"
-            @click="$emit('item-action', { action: 'favorite', index: fileIndex })"
-          />
-          <ContextMenu
-            :menuItems="ratingMenuItems"
-            :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-            @open-change="handleMenuOpenChange"
-            @click.stop
-          >
-            <template #trigger="{ toggle }">
-              <TButton
-                :icon="Number(file?.rating || 0) > 0 ? IconStarFilled : IconStar"
-                :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-                :selected="Number(file?.rating || 0) > 0 && !isSlideShow"
-                :tooltip="$t('rating.title')"
-                :shortcut="ratingShortcutLabel"
-                @click.stop="toggle"
-              />
-            </template>
+        <div v-for="(item, index) in toolbarSplit.visible" :key="item.id" class="viewer-toolbar-item flex shrink-0 items-center" :class="toolbarGroupClass(item, index, toolbarActions)" :data-viewer-toolbar-action="item.id" :data-toolbar-group="item.group">
+          <ContextMenu v-if="item.children?.length" :menuItems="item.children" :disabled="toolbarActionDisabled(item)" @open-change="handleMenuOpenChange" @click.stop>
+            <template #trigger="{ toggle }"><TButton :icon="item.icon || IconMore" :selected="item.selected" :iconStyle="item.iconStyle" :tooltip="item.label" :shortcut="item.shortcut" :disabled="toolbarActionDisabled(item)" @click.stop="toggle" /></template>
           </ContextMenu>
-          <ContextMenu
-            :menuItems="cullingMenuItems"
-            :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-            @open-change="handleMenuOpenChange"
-            @click.stop
-          >
-            <template #trigger="{ toggle }">
-              <TButton
-                :icon="Number(file?.culling_flag ?? file?.cullingFlag ?? 0) === 1 ? IconFlagFilled : Number(file?.culling_flag ?? file?.cullingFlag ?? 0) === 2 ? IconFlagOff : IconFlag"
-                :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-                :selected="Number(file?.culling_flag ?? file?.cullingFlag ?? 0) > 0 && !isSlideShow"
-                :tooltip="$t('culling.title')"
-                @click.stop="toggle"
-              />
-            </template>
-          </ContextMenu>
-          <TButton
-            :icon="IconTag"
-            :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-            :selected="file?.has_tags && !isSlideShow"
-            :tooltip="$t('menu.meta.tag')"
-            :shortcut="shortcut('meta.tag')"
-            @click="$emit('item-action', { action: 'tag', index: fileIndex })"
-          />
-          <TButton
-            :icon="IconBookmark"
-            :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-            :selected="file?.has_collections && !isSlideShow"
-            :tooltip="$t('menu.meta.collection')"
-            :shortcut="shortcut('meta.collection')"
-            @click="$emit('item-action', { action: 'add-to-collection', index: fileIndex })"
-          />
-          <TButton
-            :icon="IconComment"
-            :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-            :selected="!!file?.comments && !isSlideShow"
-            :tooltip="$t('menu.meta.comment')"
-            :shortcut="shortcut('meta.comment')"
-            @click="$emit('item-action', { action: 'comment', index: fileIndex })"
-          />
-          <TButton
-            :icon="IconRotate"
-            :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-            :iconStyle="{ transform: `rotate(${file?.rotate ?? 0}deg)`, transition: 'transform 0.3s' }"
-            :selected="(file?.rotate ?? 0) % 360 !== 0 && !isSlideShow"
-            :tooltip="$t('menu.meta.rotate')"
-            :shortcut="shortcut('meta.rotate')"
-            @click="$emit('item-action', { action: 'rotate', index: fileIndex })"
-          />
+          <div v-else class="relative">
+            <TButton :icon="item.icon || IconMore" :selected="item.selected" :iconStyle="item.iconStyle" :tooltip="item.label" :shortcut="item.shortcut" :disabled="toolbarActionDisabled(item)" @click="runToolbarAction(item)" />
+            <IconRefresh v-if="isRepeatToolbarAction(item)" class="pointer-events-none absolute bottom-0.5 right-0.5 size-2.5 rounded-full bg-base-100" aria-hidden="true" />
+          </div>
         </div>
-        <div v-if="isImageMedia" role="group" :aria-label="t('viewer_toolbar.overlays')" class="flex shrink-0 items-center gap-1 border-l border-base-content/15 pl-1">
-          <template v-if="toolbarLayout.overlays">
-            <span class="px-1 text-[10px] text-base-content/50">{{ t('viewer_toolbar.overlays_short') }}</span>
-            <button v-for="overlay in overlayControls" :key="overlay.key" type="button" class="btn btn-sm btn-ghost btn-square border-0 shadow-none" :class="overlay.selected ? 'text-primary bg-primary/10' : 'text-base-content/70'" :data-viewer-overlay="overlay.key" :aria-label="overlay.label" :title="overlay.label" :aria-pressed="overlay.selected" :disabled="!canUseOverlays" @click.stop="toggleOverlay(overlay.key)"><component :is="overlay.icon" class="size-5" /></button>
-          </template>
-          <ContextMenu v-else :menuItems="overlayMenuItems" :disabled="!canUseOverlays" @open-change="handleMenuOpenChange" @click.stop>
-            <template #trigger="{ toggle }"><button type="button" data-viewer-overlay-menu class="btn btn-sm btn-ghost btn-square border-0 shadow-none" :aria-label="t('viewer_toolbar.overlays')" :title="t('viewer_toolbar.overlays')" :disabled="!canUseOverlays" @click.stop="toggle"><IconPersonSearch class="size-5" /></button></template>
-          </ContextMenu>
-        </div>
-        <div v-if="toolbarLayout.files" role="group" :aria-label="t('viewer_toolbar.files')" class="flex shrink-0 items-center gap-1 border-l border-base-content/15 pl-1">
-          <TButton :icon="IconImageEdit" :disabled="!canUseOverlays" :tooltip="$t('menu.file.edit_image')" @click="$emit('item-action', { action: 'edit', index: fileIndex })" />
-          <TButton :icon="IconPhotoSearch" :disabled="!canUseOverlays" :tooltip="$t('menu.file.find_similar_images')" @click="$emit('item-action', { action: 'search-similar', index: fileIndex })" />
-          <TButton :icon="IconFolder" :disabled="fileIndex < 0 || !canInteract" :tooltip="isMac ? $t('menu.file.reveal_in_finder') : $t('menu.file.reveal_in_file_explorer')" @click="$emit('item-action', { action: 'reveal', index: fileIndex })" />
-        </div>
+        <ContextMenu v-if="toolbarSplit.overflow.length" :menuItems="toolbarOverflowMenu" :disabled="fileIndex < 0 || isSlideShow || !canInteract" @open-change="handleMenuOpenChange" @click.stop>
+          <template #trigger="{ toggle }"><TButton :icon="IconMore" data-viewer-more :tooltip="t('viewer_toolbar.more')" :disabled="fileIndex < 0 || isSlideShow || !canInteract" @click.stop="toggle" /></template>
+        </ContextMenu>
+        <div ref="toolbarEndRef" class="flex shrink-0 items-center gap-1" role="group" :aria-label="t('viewer_toolbar.files')">
         <TButton
           v-if="mode === 2"
           :icon="IconFileInfo"
@@ -214,13 +115,6 @@
             @click="$emit('item-action', { action: 'toggle-sync-viewport' })"
           />
         </template>
-        <ContextMenu
-          ref="contextMenuRef"
-          :menuItems="toolbarMenuItems"
-          :disabled="fileIndex < 0 || isSlideShow || !canInteract"
-          @open-change="handleMenuOpenChange"
-          @click.stop
-        ><template #trigger="{ toggle }"><TButton :icon="IconMore" data-viewer-more :tooltip="t('viewer_toolbar.more')" :disabled="fileIndex < 0 || isSlideShow || !canInteract" @click.stop="toggle" /></template></ContextMenu>
         <IconSeparator v-if="mode !== 2" class="t-icon-size-sm text-base-content/30" />
         <TButton
           :icon="!isFullScreen ? IconFullScreen : IconRestoreScreen"
@@ -241,11 +135,19 @@
           :disabled="!canInteract"
           @click.stop="$emit('close')"
         />
+        </div>
+      </div>
+      <div class="pointer-events-none fixed left-0 top-0 size-px overflow-hidden invisible" aria-hidden="true" inert>
+        <div ref="toolbarMeasureRef" class="flex w-max flex-nowrap items-center gap-1">
+          <div v-for="(item, index) in toolbarActions" :key="item.id" class="viewer-toolbar-item flex shrink-0 items-center" :class="toolbarGroupClass(item, index, toolbarActions)" :data-toolbar-measure="item.id"><TButton :icon="item.icon || IconMore" disabled /></div>
+          <div data-toolbar-measure-more><TButton :icon="IconMore" disabled /></div>
+        </div>
       </div>
     </div>
+    <ContextMenu ref="contextMenuRef" class="absolute size-0" :menuItems="singleFileMenuItems" :disabled="fileIndex < 0 || isSlideShow || !canInteract" @open-change="handleMenuOpenChange"><template #trigger><span class="hidden"></span></template></ContextMenu>
 
     <!-- Window Control Buttons (top-right) -->
-    <div v-if="showWindowControlsBar && showWindowControls && showDesktopWindowControls" class="absolute top-0 right-0 z-90 flex items-center" @mousedown.stop>
+    <div v-if="showWindowControlsBar && showWindowControls && showDesktopWindowControls" ref="windowControlsRef" class="absolute top-0 right-0 z-90 flex items-center" @mousedown.stop>
       <IconWinMinus 
         class="p-3 w-12 h-10 text-base-content/70 hover:text-base-content hover:bg-base-100 transition-colors duration-300 cursor-pointer" 
         @click.stop="minimizeWindow" 
@@ -485,7 +387,7 @@ import { createMediaChatPointerDrag, isMediaChatDragSurface } from '@/common/med
 import { useUIStore } from '@/stores/uiStore';
 import { objectEditActive } from '@/common/objectEditing';
 import { useToast } from '@/common/toast';
-import { viewerToolbarLayout } from '@/common/viewerToolbar';
+import { getViewerFileMenu, getViewerToolbarActions, splitViewerToolbarActions, VIEWER_WINDOW_FILE_ACTIONS, type ViewerToolbarAction } from '@/common/viewerToolbar';
 import { ocrShowBoxes } from '@/common/ocr';
 import { showObjectBoxes } from '@/common/objects';
 import { isWin, isMac, isLinux, getSlideShowInterval } from '@/common/utils';
@@ -538,9 +440,7 @@ import {
   IconPersonSearch,
   IconFileSearch,
   IconBox,
-  IconImageEdit,
-  IconPhotoSearch,
-  IconFolder,
+  IconRefresh,
 } from '@/common/icons';
 import ContextMenu from '@/components/ContextMenu.vue';
 import iconLogo from '@/assets/images/icon.png';
@@ -779,6 +679,11 @@ const hasOpenMenu = ref(false);
 const containerWidth = ref(0);
 const buttonsRef = ref<HTMLElement | null>(null);
 const buttonsWidth = ref(0);
+const toolbarRef = ref<HTMLElement | null>(null), toolbarStartRef = ref<HTMLElement | null>(null), toolbarEndRef = ref<HTMLElement | null>(null), toolbarMeasureRef = ref<HTMLElement | null>(null);
+const windowTitleRef = ref<HTMLElement | null>(null), windowControlsRef = ref<HTMLElement | null>(null);
+const toolbarStartWidth = ref(108), toolbarEndWidth = ref(144), toolbarGap = ref(4), toolbarMoreWidth = ref(36);
+const toolbarActionWidths = ref<Record<string, number>>({}), toolbarFloatingPadding = ref(16), toolbarLogoWidth = ref(48), toolbarWindowControlsWidth = ref(144);
+let observedToolbarElements: HTMLElement[] = [];
 const rawControlsWidth = ref(0);
 const rawControlsHovered = ref(false);
 let observedRawControls: HTMLElement | null = null;
@@ -796,7 +701,7 @@ function measureRawControls() {
   if (!rawControlsWidth.value) rawControlsHovered.value = false;
 }
 
-onUpdated(measureRawControls);
+onUpdated(scheduleToolbarMeasurement);
 
 function handleRawControlsHover(e: MouseEvent) {
   rawControlsHovered.value = !!(e.target as Element)?.closest('[data-raw-preview-controls]');
@@ -804,7 +709,7 @@ function handleRawControlsHover(e: MouseEvent) {
 }
 const filenameMaxWidth = computed(() => {
   if (containerWidth.value > 0 && buttonsWidth.value > 0) {
-    const val = (containerWidth.value / 2) - (buttonsWidth.value / 2) - 100;
+    const val = (containerWidth.value - toolbarReservedWidth.value - buttonsWidth.value) / 2 - 4;
     return Math.max(0, val);
   }
   return 200; // Fallback
@@ -812,18 +717,10 @@ const filenameMaxWidth = computed(() => {
 const isImageMedia = computed(() => [1, 3].includes(Number(props.file?.file_type)));
 const canUseOverlays = computed(() => isImageMedia.value && props.fileIndex >= 0 && props.canInteract && !props.isSlideShow);
 const toolbarReservedWidth = computed(() => showDesktopWindowControls && props.mode === 2 && showWindowControlsBar.value
-  ? 48 + (props.showWindowControls ? 144 : 0) : 16);
+  ? toolbarLogoWidth.value + (props.showWindowControls ? toolbarWindowControlsWidth.value : 8)
+  : isFullScreen.value || props.mode !== 2 && !config.mediaViewer.isPinned ? 16 : 0);
 const toolbarSpaceStyle = computed(() => showDesktopWindowControls && props.mode === 2 && showWindowControlsBar.value
-  ? { paddingLeft: '48px', paddingRight: props.showWindowControls ? '144px' : '8px' } : undefined);
-const toolbarLayout = computed(() => viewerToolbarLayout(
-  containerWidth.value - toolbarReservedWidth.value,
-  6 + (props.mode === 2 ? 1 : 0) + (props.mode !== 2 && !isFullScreen.value ? 1 : 0)
-    + (isFullScreen.value || (props.mode === 0 && config.mediaViewer.isPinned) ? 1 : 0)
-    + (props.mode === 2 && props.showSyncViewportControl ? 1 : 0) + (isImageMedia.value ? 1 : 0)
-    + (props.isSlideShow ? 2 : 0),
-  isImageMedia.value,
-));
-const showExtraIcons = computed(() => toolbarLayout.value.metadata);
+  ? { paddingLeft: `${toolbarLogoWidth.value}px`, paddingRight: `${props.showWindowControls ? toolbarWindowControlsWidth.value : 8}px` } : undefined);
 const overlayControls = computed(() => [
   { key: 'faces', icon: IconPersonSearch, label: t('viewer_toolbar.faces'), selected: config.settings.face.showBoxes !== false },
   { key: 'ocr', icon: IconFileSearch, label: t('viewer_toolbar.ocr'), selected: ocrShowBoxes.value },
@@ -835,10 +732,9 @@ function toggleOverlay(key: string) {
   if (key === 'ocr') ocrShowBoxes.value = !ocrShowBoxes.value;
   if (key === 'objects') showObjectBoxes.value = !showObjectBoxes.value;
 }
-const overlayMenuItems = computed(() => overlayControls.value.map(control => ({
-  label: `${control.selected ? '✓ ' : ''}${control.label}`, icon: control.icon,
-  action: () => toggleOverlay(control.key),
-})));
+const toolbarAvailableWidth = computed(() => Math.max(0, containerWidth.value - toolbarReservedWidth.value
+  - (isFullScreen.value || props.mode !== 2 && !config.mediaViewer.isPinned ? toolbarFloatingPadding.value : 0)
+  - toolbarStartWidth.value - toolbarEndWidth.value - toolbarGap.value));
 // Window control state (Windows + ImageViewer mode)
 const showDesktopWindowControls = isWin || isLinux;
 // Preview owns its fullscreen session; the standalone viewer delegates to its window.
@@ -957,13 +853,23 @@ const toggleMaximizeWindow = () => {
 const closeWindow = () => desktopAppWindow?.close();
 const shortcutPlatform: ShortcutPlatform = isMac ? 'mac' : (isLinux ? 'linux' : 'windows');
 const shortcut = (actionId: ShortcutActionId) => getShortcutLabel(actionId, shortcutPlatform);
-const ratingShortcutLabel = computed(() => {
-  const first = shortcut('meta.rating.clear');
-  const last = shortcut('meta.rating.five');
-  return first && last ? `${first}-${last}` : '';
-});
 const effectiveSlideShowIntervalIndex = computed(() => {
   return props.slideShowIntervalIndex ?? config.settings.slideShowInterval;
+});
+const slideShowIntervalOptions = [1, 3, 5, 10, 15, 30];
+const slideShowIntervalMenuItems = computed(() => {
+  const currentInterval = getSlideShowInterval(effectiveSlideShowIntervalIndex.value);
+  return slideShowIntervalOptions.map((seconds, index) => ({
+    label: `${seconds}s`,
+    icon: currentInterval === seconds ? IconDot : null,
+    action: () => {
+      if (props.slideShowIntervalIndex !== null) {
+        emit('update:slideShowIntervalIndex', index);
+      } else {
+        config.settings.slideShowInterval = index;
+      }
+    },
+  }));
 });
 const currentSlideShowIntervalLabel = computed(() => `${getSlideShowInterval(effectiveSlideShowIntervalIndex.value)}s`);
 const slideShowTransitionMode = computed(() => Number(config.settings.slideShowTransition ?? 0));
@@ -1002,86 +908,6 @@ const viewBackgroundMenuItems = computed(() => {
 //   const rating = Number(props.file?.rating || 0);
 //   return rating > 0 ? `${localeMsg.value.rating.title}: ${rating}` : localeMsg.value.rating.title;
 // });
-const ratingMenuItems = computed(() => {
-  const rating = Number(props.file?.rating || 0);
-  return [
-    {
-      label: localeMsg.value.rating.clear_rating,
-      icon: IconStar,
-      shortcut: shortcut('meta.rating.clear'),
-      action: () => emit('item-action', { action: 'rating-0', index: props.fileIndex }),
-    },
-    { label: '-', action: null },
-    {
-      label: localeMsg.value.rating.five_stars,
-      icon: rating === 5 ? IconStarFilled : IconStar,
-      shortcut: shortcut('meta.rating.five'),
-      action: () => emit('item-action', { action: 'rating-5', index: props.fileIndex }),
-    },
-    {
-      label: localeMsg.value.rating.four_stars,
-      icon: rating === 4 ? IconStarFilled : IconStar,
-      shortcut: shortcut('meta.rating.four'),
-      action: () => emit('item-action', { action: 'rating-4', index: props.fileIndex }),
-    },
-    {
-      label: localeMsg.value.rating.three_stars,
-      icon: rating === 3 ? IconStarFilled : IconStar,
-      shortcut: shortcut('meta.rating.three'),
-      action: () => emit('item-action', { action: 'rating-3', index: props.fileIndex }),
-    },
-    {
-      label: localeMsg.value.rating.two_stars,
-      icon: rating === 2 ? IconStarFilled : IconStar,
-      shortcut: shortcut('meta.rating.two'),
-      action: () => emit('item-action', { action: 'rating-2', index: props.fileIndex }),
-    },
-    {
-      label: localeMsg.value.rating.one_star,
-      icon: rating === 1 ? IconStarFilled : IconStar,
-      shortcut: shortcut('meta.rating.one'),
-      action: () => emit('item-action', { action: 'rating-1', index: props.fileIndex }),
-    },
-  ];
-});
-
-const cullingMenuItems = computed(() => [
-  {
-    label: localeMsg.value.culling.picks,
-    icon: Number(props.file?.culling_flag ?? props.file?.cullingFlag ?? 0) === 1 ? IconFlagFilled : IconFlag,
-    shortcut: shortcut('meta.culling.pick'),
-    action: () => emit('item-action', { action: 'culling-pick', index: props.fileIndex }),
-  },
-  {
-    label: localeMsg.value.culling.rejected,
-    icon: Number(props.file?.culling_flag ?? props.file?.cullingFlag ?? 0) === 2 ? IconFlagFilled : IconFlagOff,
-    shortcut: shortcut('meta.culling.reject'),
-    action: () => emit('item-action', { action: 'culling-reject', index: props.fileIndex }),
-  },
-  {
-    label: localeMsg.value.culling.unreviewed,
-    icon: Number(props.file?.culling_flag ?? props.file?.cullingFlag ?? 0) === 0 ? IconFlagFilled : IconFlag,
-    shortcut: shortcut('meta.culling.unreviewed'),
-    action: () => emit('item-action', { action: 'culling-unreviewed', index: props.fileIndex }),
-  },
-]);
-
-const slideShowIntervalOptions = [1, 3, 5, 10, 15, 30];
-const slideShowIntervalMenuItems = computed(() => {
-  const currentInterval = getSlideShowInterval(effectiveSlideShowIntervalIndex.value);
-  return slideShowIntervalOptions.map((seconds, index) => ({
-    label: `${seconds}s`,
-    icon: currentInterval === seconds ? IconDot : null,
-    action: () => {
-      if (props.slideShowIntervalIndex !== null) {
-        emit('update:slideShowIntervalIndex', index);
-      } else {
-        config.settings.slideShowInterval = index;
-      }
-    },
-  }));
-});
-
 type StatusBadge = {
   key: string;
   icon?: Component;
@@ -1174,6 +1000,49 @@ const showWindowControlsBar = computed(() => {
 let resizeObserver: ResizeObserver | null = null;
 let toolbarResizeFrame: number | null = null;
 let pendingContainerWidth: number | undefined, pendingButtonsWidth: number | undefined;
+function syncToolbarObservers() {
+  const elements = [buttonsRef.value, toolbarStartRef.value, toolbarEndRef.value, toolbarMeasureRef.value, windowTitleRef.value, windowControlsRef.value].filter((element): element is HTMLElement => !!element);
+  for (const element of observedToolbarElements) if (!elements.includes(element)) resizeObserver?.unobserve(element);
+  for (const element of elements) if (!observedToolbarElements.includes(element)) resizeObserver?.observe(element);
+  observedToolbarElements = elements;
+}
+function measureToolbarGeometry() {
+  syncToolbarObservers();
+  const style = buttonsRef.value ? getComputedStyle(buttonsRef.value) : null;
+  const gap = Number.parseFloat(style?.columnGap || '') || 0;
+  toolbarGap.value = gap;
+  toolbarStartWidth.value = toolbarStartRef.value?.getBoundingClientRect().width || 0;
+  toolbarEndWidth.value = toolbarEndRef.value?.getBoundingClientRect().width || 0;
+  const widths: Record<string, number> = {};
+  for (const element of toolbarMeasureRef.value?.querySelectorAll<HTMLElement>('[data-toolbar-measure]') || []) {
+    const itemStyle = getComputedStyle(element);
+    widths[element.dataset.toolbarMeasure!] = element.getBoundingClientRect().width + (Number.parseFloat(itemStyle.marginLeft) || 0) + (Number.parseFloat(itemStyle.marginRight) || 0) + gap;
+  }
+  if (JSON.stringify(widths) !== JSON.stringify(toolbarActionWidths.value)) toolbarActionWidths.value = widths;
+  const more = toolbarMeasureRef.value?.querySelector<HTMLElement>('[data-toolbar-measure-more]');
+  toolbarMoreWidth.value = (more?.getBoundingClientRect().width || 32) + gap;
+  const toolbarStyle = toolbarRef.value ? getComputedStyle(toolbarRef.value) : null;
+  toolbarFloatingPadding.value = (Number.parseFloat(toolbarStyle?.paddingLeft || '') || 0) + (Number.parseFloat(toolbarStyle?.paddingRight || '') || 0);
+  if (windowControlsRef.value) toolbarWindowControlsWidth.value = windowControlsRef.value.getBoundingClientRect().width;
+  if (windowTitleRef.value) {
+    const titleStyle = getComputedStyle(windowTitleRef.value), logo = windowTitleRef.value.querySelector('img');
+    const logoStyle = logo ? getComputedStyle(logo) : null;
+    toolbarLogoWidth.value = (Number.parseFloat(titleStyle.paddingLeft) || 0) + (Number.parseFloat(titleStyle.paddingRight) || 0)
+      + (logo?.getBoundingClientRect().width || 0) + (Number.parseFloat(logoStyle?.marginRight || '') || 0);
+  }
+}
+function scheduleToolbarMeasurement() {
+  if (previewDisposed || toolbarResizeFrame !== null) return;
+  toolbarResizeFrame = requestAnimationFrame(() => {
+    toolbarResizeFrame = null;
+    if (previewDisposed) return;
+    if (pendingContainerWidth !== undefined) containerWidth.value = pendingContainerWidth;
+    if (pendingButtonsWidth !== undefined) buttonsWidth.value = pendingButtonsWidth;
+    pendingContainerWidth = pendingButtonsWidth = undefined;
+    measureRawControls();
+    measureToolbarGeometry();
+  });
+}
 
 onMounted(() => {
   resizeObserver = new ResizeObserver((entries) => {
@@ -1184,22 +1053,13 @@ onMounted(() => {
         pendingButtonsWidth = entry.contentRect.width;
       }
     }
-    // Group changes resize the observed buttons; commit outside this observer delivery.
-    if (toolbarResizeFrame === null) toolbarResizeFrame = requestAnimationFrame(() => {
-      toolbarResizeFrame = null;
-      if (pendingContainerWidth !== undefined) containerWidth.value = pendingContainerWidth;
-      if (pendingButtonsWidth !== undefined) buttonsWidth.value = pendingButtonsWidth;
-      pendingContainerWidth = pendingButtonsWidth = undefined;
-      measureRawControls();
-    });
+    scheduleToolbarMeasurement();
   });
 
   if (containerRef.value) {
     resizeObserver.observe(containerRef.value);
   }
-  if (buttonsRef.value) {
-    resizeObserver.observe(buttonsRef.value);
-  }
+  scheduleToolbarMeasurement();
   // Restore on opening Quick Preview. Merely mounting the embedded filmstrip
   // pane (including at app startup) must not take over the main window.
   if (props.mode === 0 && config.mediaViewer.isFullScreen) {
@@ -1217,6 +1077,7 @@ onBeforeUnmount(() => {
   if (resizeObserver) {
     resizeObserver.disconnect();
   }
+  observedToolbarElements = [];
 });
 
 function toggleToolbarPin() {
@@ -1511,46 +1372,56 @@ async function refreshOriginalAccess() {
 watch(() => [props.file, props.file?.file_path, libConfig._libraryId], refreshOriginalAccess, { immediate: true });
 
 const selectedFile = computed(() => props.file);
-
-const singleFileMenuItems = computed(() => {
-  if (props.mode === 2) return [];
-
-  return useFileMenuItems(
+const fileMenuItems = computed(() => useFileMenuItems(
     selectedFile,
     localeMsg,
     isMac,
     t,
     (action) => emit('item-action', { action, index: props.fileIndex })
-  ).value;
+  ).value);
+const singleFileMenuItems = computed(() => getViewerFileMenu(fileMenuItems.value, props.mode === 2 ? VIEWER_WINDOW_FILE_ACTIONS : undefined));
+function toolbarSelected(id: string) {
+  if (props.isSlideShow) return false;
+  if (id === 'favorite') return !!props.file?.is_favorite;
+  if (id === 'rating') return Number(props.file?.rating || 0) > 0;
+  if (id === 'culling') return Number(props.file?.culling_flag ?? props.file?.cullingFlag ?? 0) > 0;
+  if (id === 'tag') return !!props.file?.has_tags;
+  if (id === 'add-to-collection') return !!props.file?.has_collections;
+  if (id === 'comment') return !!props.file?.comments;
+  if (id === 'rotate') return Number(props.file?.rotate || 0) % 360 !== 0;
+  return id === 'toggle-face-boxes' && config.settings.face.showBoxes !== false;
+}
+const toolbarActions = computed<ViewerToolbarAction[]>(() => {
+  const zoom: ViewerToolbarAction[] = [
+    { id: 'viewer-zoom-out', group: 'zoom', label: t('image_viewer.toolbar.zoom_out'), icon: IconZoomOut, disabled: props.imageScale <= props.imageMinScale, shortcut: shortcut('view.zoomOut'), action: handleZoomOut },
+    { id: 'viewer-zoom-in', group: 'zoom', label: t('image_viewer.toolbar.zoom_in'), icon: IconZoomIn, disabled: props.imageScale >= props.imageMaxScale, shortcut: shortcut('view.zoomIn'), action: handleZoomIn },
+    { id: 'viewer-zoom-fit', group: 'zoom', label: t(props.isZoomFit ? 'image_viewer.toolbar.zoom_actual' : 'image_viewer.toolbar.zoom_fit'), icon: props.isZoomFit ? IconZoomActual : IconZoomFit, shortcut: shortcut('view.zoomFit'), action: () => emit('update:isZoomFit', !props.isZoomFit) },
+  ];
+  const overlays: ViewerToolbarAction[] = isImageMedia.value ? overlayControls.value.slice(1).map(control => ({ id: `viewer-overlay-${control.key}`, group: 'overlays', label: control.label, icon: control.icon, selected: control.selected, disabled: !canUseOverlays.value, action: () => toggleOverlay(control.key) })) : [];
+  const files = getViewerToolbarActions(fileMenuItems.value, { allowedActions: props.mode === 2 ? VIEWER_WINDOW_FILE_ACTIONS : undefined }).map(item => ({
+    ...item, selected: toolbarSelected(item.id),
+    ...(item.id === 'rotate' ? { iconStyle: { transform: `rotate(${props.file?.rotate ?? 0}deg)`, transition: 'transform 0.3s' } } : {}),
+  }));
+  return [...zoom, ...overlays, ...files];
 });
-const toolbarMenuItems = computed(() => {
-  const hidden = [];
-  if (!toolbarLayout.value.zoom) hidden.push(
-    { label: t('image_viewer.toolbar.zoom_out'), icon: IconZoomOut, disabled: props.imageScale <= props.imageMinScale, action: handleZoomOut },
-    { label: t('image_viewer.toolbar.zoom_in'), icon: IconZoomIn, disabled: props.imageScale >= props.imageMaxScale, action: handleZoomIn },
-    { label: t(props.isZoomFit ? 'image_viewer.toolbar.zoom_actual' : 'image_viewer.toolbar.zoom_fit'), icon: IconZoomFit, action: () => emit('update:isZoomFit', !props.isZoomFit) },
-  );
-  if (isImageMedia.value) hidden.push({ label: t('viewer_toolbar.overlays'), icon: IconPersonSearch, children: overlayMenuItems.value });
-  const files = useFileMenuItems(selectedFile, localeMsg, isMac, t,
-    (action) => emit('item-action', { action, index: props.fileIndex })).value;
-  return [...hidden, ...(hidden.length ? [{ label: '-', action: null }] : []), ...files];
+const toolbarSplit = computed(() => splitViewerToolbarActions(toolbarActions.value, toolbarAvailableWidth.value, toolbarActionWidths.value, toolbarMoreWidth.value));
+const toolbarOverflowMenu = computed(() => {
+  const menu: any[] = [];
+  for (const item of toolbarSplit.value.overflow) {
+    if (menu.length && menu.at(-1).group !== item.group) menu.push({ label: '-', action: null });
+    menu.push(item);
+  }
+  return menu;
 });
+function toolbarActionDisabled(item: ViewerToolbarAction) { return props.fileIndex < 0 || props.isSlideShow || !props.canInteract || !!item.disabled; }
+function runToolbarAction(item: ViewerToolbarAction) { if (!toolbarActionDisabled(item)) item.action?.(); }
+function toolbarGroupClass(item: ViewerToolbarAction, index: number, items: ViewerToolbarAction[]) { return index === 0 || items[index - 1]?.group !== item.group ? 'border-l border-base-content/15 pl-1 ml-1' : ''; }
+function isRepeatToolbarAction(item: ViewerToolbarAction) { return ['rerecognize-objects', 'rerecognize-text', 'redetect-faces', 'regenerate-thumbnails', 'refresh-file-info'].includes(item.id); }
 </script>
 
 <style scoped>
 /* Disable text selection while dragging */
 * {
   user-select: none;
-}
- 
-@media (max-width: 600px) {
-  #responsiveDiv {
-    visibility: hidden;
-  }
-}
-@media (min-width: 600px) {
-  #responsiveDiv {
-    visibility: visible;
-  }
 }
 </style>

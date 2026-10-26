@@ -7,7 +7,6 @@ import { DEFAULT_PLATFORM, getShortcutLabel, ShortcutActionId } from '@/common/s
 import {
   IconMonitor,
   IconPrint,
-  IconRefresh,
   IconHeart,
   IconStar,
   IconStarFilled,
@@ -31,6 +30,12 @@ import {
   IconSplitOn,
   IconSplitOn4,
   IconCollage,
+  IconBox,
+  IconFolder,
+  IconFolderCog,
+  IconHide,
+  IconPhoto,
+  IconFileInfo,
 } from '@/common/icons';
 
 const OPEN_IN_APP_LABELS = {
@@ -67,6 +72,7 @@ export const useFileMenuItems = (
     const apps = kind ? config.externalAppsFor(kind) : [];
     const defaultApp = kind ? config.defaultExternalApp(kind) : null;
     return {
+      id: 'open-external-app',
       label: menuLabel(OPEN_IN_APP_LABELS.generic),
       icon: markRaw(IconExternal),
       children: [
@@ -105,6 +111,7 @@ export const useFileMenuItems = (
       ...(albums.length
         ? [
             {
+              id: 'smart-album-include', icon: markRaw(IconFolderCog),
               label: translate('smart_albums.include'),
               children: albums.map((row) => ({
                 label: row.path,
@@ -115,8 +122,8 @@ export const useFileMenuItems = (
         : []),
       ...(current && config.main.sidebarIndex === SIDEBAR.SMART_ALBUM && libConfig.activePane !== 'collection'
         ? [
-            { label: translate('smart_albums.exclude'), action: () => update(current.node.id, 'exclude') },
-            { label: translate('smart_albums.reset'), action: () => update(current.node.id, 'reset') },
+            { id: 'smart-album-exclude', icon: markRaw(IconFolderCog), label: translate('smart_albums.exclude'), action: () => update(current.node.id, 'exclude') },
+            { id: 'smart-album-reset', icon: markRaw(IconFolderCog), label: translate('smart_albums.reset'), action: () => update(current.node.id, 'reset') },
           ]
         : []),
     ];
@@ -170,13 +177,13 @@ export const useFileMenuItems = (
       { ...externalAppMenu(externalAppKind), disabled: unavailable || kind === 'mixed' },
       {
         label: translate('thumbnail_rebuild.title'),
-        icon: markRaw(IconRefresh),
+        icon: markRaw(IconPhoto),
         disabled: unavailable || kind !== 'image' || selectionCount === 0,
         action: createAction('regenerate-thumbnails'),
       },
       {
         label: localeMsg.value.menu.file.refresh_file_info,
-        icon: markRaw(IconRefresh),
+        icon: markRaw(IconFileInfo),
         disabled: unavailable || selectionCount === 0,
         action: createAction('refresh-file-info'),
       },
@@ -198,7 +205,7 @@ export const useFileMenuItems = (
       || (f.file_type === 3 && f.media_subtype === 'raw_jpeg_pair' && f.live_photo_video_path);
     const unavailable = isOriginalUnavailable(f);
     const items: any[] = [
-      {label:translate('media_lifecycle.hide'),action:createAction('hide-media')},
+      {label:translate('media_lifecycle.hide'),icon:markRaw(IconHide),action:createAction('hide-media')},
       ...smartAlbumMenu(),
       {
         label: localeMsg.value.menu.file.view_in_new_window,
@@ -228,6 +235,7 @@ export const useFileMenuItems = (
         action: createAction('favorite')
       },
       {
+        id: 'rating',
         label: localeMsg.value.rating.title,
         icon: markRaw(Number(f.rating || 0) > 0 ? IconStarFilled : IconStar),
         submenuOpenDelay: 200,
@@ -272,6 +280,7 @@ export const useFileMenuItems = (
         ]
       },
       {
+        id: 'culling',
         label: localeMsg.value.culling.title,
         icon: markRaw(
           Number(f.culling_flag ?? f.cullingFlag ?? 0) === 1
@@ -341,6 +350,7 @@ export const useFileMenuItems = (
       },
 
       {
+        id: 'move-copy', icon: markRaw(IconFileArrowRight),
         label: translate('menu.file.move_copy'),
         children: [
           {
@@ -362,6 +372,7 @@ export const useFileMenuItems = (
       },
       {
         label: isMac ? localeMsg.value.menu.file.reveal_in_finder : localeMsg.value.menu.file.reveal_in_file_explorer,
+        icon: markRaw(IconFolder),
         shortcut: shortcut('file.reveal'),
         action: createAction('reveal')
       },
@@ -374,9 +385,9 @@ export const useFileMenuItems = (
         action: createAction('search-similar')
       },
       {
-        label: translate('objects.recognize'), icon: markRaw(IconFileSearch), disabled: !isImage, action: createAction('recognize-objects'),
+        label: translate('objects.recognize'), icon: markRaw(IconBox), disabled: !isImage, action: createAction('recognize-objects'),
       },
-      { label: translate('objects.reidentify'), icon: markRaw(IconFileSearch), disabled: !isImage, action: createAction('rerecognize-objects'),
+      { label: translate('objects.reidentify'), icon: markRaw(IconBox), disabled: !isImage, action: createAction('rerecognize-objects'),
       },
       {
         label: translate('ocr.recognize'), icon: markRaw(IconFileSearch), disabled: !isImage, action: createAction('recognize-text'),
@@ -406,16 +417,17 @@ export const useFileMenuItems = (
       { label: "-", action: null },
       {
         label: translate('thumbnail_rebuild.title'),
-        icon: markRaw(IconRefresh),
+        icon: markRaw(IconPhoto),
         disabled: !isImage,
         action: createAction('regenerate-thumbnails'),
       },
       {
         label: localeMsg.value.menu.file.refresh_file_info,
-        icon: markRaw(IconRefresh),
+        icon: markRaw(IconFileInfo),
         action: createAction('refresh-file-info')
       },
       {
+        id: 'set-as', icon: markRaw(IconPhoto),
         label: localeMsg.value.menu.file.set_as,
         hidden: !canSetAlbumCover && !canSetDesktopWallpaper,
         children: [

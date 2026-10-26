@@ -162,6 +162,7 @@ let openRequestId = 0;
 // Remove event listener when the component is destroyed
 onBeforeUnmount(() => {
   openRequestId++;
+  if (isDropDown.value) emit('open-change', false);
   document.removeEventListener('mousedown', handleClickOutside, { capture: true });
   document.removeEventListener('keydown', handleKeyDown);
   cancelSubmenuClose();
@@ -215,6 +216,7 @@ const open = async (x, y) => {
   isDropDown.value = true;
 
   await nextTick(); // Ensure menu is rendered before measuring
+  if (openRequestId !== requestId || !menu.value) return;
 
   const menuRect = menu.value.getBoundingClientRect();
   
