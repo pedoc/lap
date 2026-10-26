@@ -103,7 +103,7 @@ fn require_idle<T>(
     drop(similar_guard);
     drop(index_guard);
     drop(face_guard);
-    let _lane=super::vision_jobs::try_claim(Task::Semantic)?;
+    let _lane=super::vision_jobs::try_claim_exclusive()?;
     operation()
 }
 #[tauri::command]

@@ -441,7 +441,7 @@ const getMenuItemsForFolder = async (folder: any) => {
       label: t('objects.recognize_folder'), icon: IconRefresh, disabled: unavailable || folder.is_excluded_from_search,
       action: async () => {
         if (disposed || libraryId !== libConfig._libraryId) return;
-        try { await startObjectIndex({ folderId: Number(folder.id) }); toast.success(t('objects.started')); }
+        try { const receipt = await startObjectIndex({ folderId: Number(folder.id) }); if (libraryId === libConfig._libraryId) toast.success(t(receipt?.queued ? 'recognition_status.queued_started' : 'objects.started')); }
         catch (e) { if (libraryId === libConfig._libraryId) toast.error(String(e)); }
       },
     },
@@ -449,7 +449,7 @@ const getMenuItemsForFolder = async (folder: any) => {
       label: t('ocr.recognize_folder'), icon: IconRefresh, disabled: unavailable || folder.is_excluded_from_search,
       action: async () => {
         if (disposed || libraryId !== libConfig._libraryId) return;
-        try { await startOcr({ folderId: Number(folder.id) }); toast.success(t('ocr.task_started')); }
+        try { const receipt = await startOcr({ folderId: Number(folder.id) }); if (libraryId === libConfig._libraryId) toast.success(t(receipt?.queued ? 'recognition_status.queued_started' : 'ocr.task_started')); }
         catch (e) { if (libraryId === libConfig._libraryId) toast.error(String(e)); }
       },
     },

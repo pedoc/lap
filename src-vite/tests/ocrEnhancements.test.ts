@@ -7,7 +7,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
-import { ocrSelectionRect, ocrAutomationReady, ocrSourceLineIndex, ocrManualAdditions } from '../src/common/ocrUi.ts';
+import { ocrSelectionRect, ocrSelectionIds, ocrAutomationReady, ocrSourceLineIndex, ocrManualAdditions } from '../src/common/ocrUi.ts';
 import { annotationEditorPosition } from '../src/common/annotationUi.ts';
 const read=(name:string)=>readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');
 const locale=JSON.parse(readFileSync(new URL('../src/locales/zh-CN.json',import.meta.url),'utf8'));
@@ -43,6 +43,25 @@ test('changing photo cancels region extraction and cannot restore a stale result
   const pending=h.api.recognize([0,0,1,1]);h.ctx.props.fileId=8;await tick();
   assert.ok(h.calls.some(([name])=>name==='cancel_ocr_extraction'));resolve({document:{text:'private',lines:[]}});await pending;
   assert.equal(h.api.output.value,null);assert.equal(h.ctx.ocrBusy.value,false);h.dispose();
+});
+test('waiting regional OCR permits whole-photo submission and cancels only its own request without clearing submission busy',async()=>{
+  let finishRegion:any,finishStart:any;
+  const h=regionHarness((name:string)=>name==='extract_ocr_region'?new Promise(resolve=>finishRegion=resolve):name==='start_ocr_index'?new Promise(resolve=>finishStart=resolve):Promise.resolve({status:{running:true,jobId:'whole-photo'}}));
+  const source=stripTypeScriptTypes(readFileSync(new URL('../src/common/ocr.ts',import.meta.url),'utf8'))
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'').replace(/^export /gm,'').replace('const ocrBusy = ref(false);','const ocrBusy = sharedBusy;');
+  const full=runInNewContext(`${source};({startOcr})`,{...h.ctx,sharedBusy:h.ctx.ocrBusy,ocrSelectionIds});
+  const region=h.api.recognize([0,0,1,1]);
+  assert.equal(h.api.busy.value,true);assert.equal(h.ctx.ocrBusy.value,false);
+  await h.api.recognize([.1,.1,.5,.5]);assert.equal(h.calls.filter(([name])=>name==='extract_ocr_region').length,1);
+  const whole=full.startOcr({fileIds:[9]});assert.equal(h.ctx.ocrBusy.value,true);
+  h.api.close();
+  const extraction=h.calls.find(([name])=>name==='extract_ocr_region')[1],cancel=h.calls.find(([name])=>name==='cancel_ocr_extraction')[1];
+  assert.deepEqual(JSON.parse(JSON.stringify(cancel)),{libraryId:'library-a',requestId:extraction.requestId});
+  finishRegion({document:{text:'stale',lines:[]}});await region;
+  assert.equal(h.ctx.ocrBusy.value,true,'a regional completion cannot release another submission');
+  assert.equal(h.api.output.value,null);
+  finishStart({jobId:'whole-photo',queued:true,priority:'interactive'});await whole;
+  assert.equal(h.ctx.ocrBusy.value,false);assert.equal(h.calls.some(([name])=>name==='cancel_ocr_index'),false);h.dispose();
 });
 test('hiding media removes temporary extraction text immediately',async()=>{
   const h=regionHarness();await h.mount();await h.api.recognize([0,0,1,1]);assert.ok(h.api.output.value);
@@ -177,6 +196,8 @@ test('automatic OCR is opt-in, scope-aware, idle-coordinated and never retries a
   assert.equal(ocrAutomationReady(base,'library-a'),true);
   for(const value of [{...base,modelInstalled:false},{...base,pending:0},{...base,status:{running:true}},{...base,automation:{...base.automation,enabled:false}},{...base,automation:{...base.automation,paused:true}},{...base,automation:{...base.automation,scope:{libraryId:'other',folderId:7}}},{...base,status:{automatic:true,error:'failed',automationRevision:'r1'}}])assert.equal(ocrAutomationReady(value,'library-a'),false);
   assert.equal(ocrAutomationReady(base,'library-a',true),false);assert.equal(ocrAutomationReady(base,null),false);
+  assert.equal(ocrAutomationReady({...base,status:{queued:true}},'library-a'),false);
+  assert.equal(ocrAutomationReady({...base,status:{queuedJobs:1}},'library-a'),false);
 });
 function automationHarness(){
   const mounted:any[]=[],unmount:any[]=[],callbacks:any={},calls:any[]=[],intervals:any[]=[];let now=10000,refreshes=0;

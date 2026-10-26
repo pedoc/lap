@@ -15,7 +15,7 @@ export function normalizeObjectState(value: unknown): ObjectState {
 export function objectAutomationReady(view: any, libraryId: string, mediaIndexing = false) {
   const policy = view?.automation;
   return !!libraryId && !mediaIndexing && view?.automationHasLocalPending !== false && !!view?.modelInstalled && Number(view?.pending) > 0 &&
-    !view?.status?.running && !!policy?.enabled && !policy.paused &&
+    !view?.status?.running && !view?.status?.queued && !(Number(view?.status?.queuedJobs) > 0) && !!policy?.enabled && !policy.paused &&
     (!policy.scope || policy.scope.libraryId === libraryId);
 }
 export function objectClassName(
@@ -169,6 +169,7 @@ export function validateObjectScope(options: {
 
 export function objectTaskPhase(status: any) {
   if (status?.running && status?.stopping) return 'stopping';
+  if (status?.queued) return 'queued';
   const phases = [
     'selecting',
     'preparing',
@@ -191,6 +192,8 @@ export function objectTaskPhase(status: any) {
 export function objectTaskProgress(status: any) {
   const count = (value: unknown) => Number.isFinite(Number(value)) ? Math.max(0, Math.floor(Number(value))) : 0;
   const total = count(status?.total);
+  if (status?.queued)
+    return { key: 'recognition_status.queued', args: {}, value: undefined, max: Math.max(1, total) };
   if (status?.phase === 'selecting' || (status?.phase === 'preparing' && !total))
     return { key: 'objects.preparation_selecting', args: {}, value: undefined, max: 1 };
   if (status?.phase === 'preparing') {

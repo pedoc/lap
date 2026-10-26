@@ -240,6 +240,7 @@ mod tests {
     fn fixture() -> (Connection, face_jobs::SourceImage) {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT); CREATE TABLE afiles(id INTEGER PRIMARY KEY,width INTEGER,height INTEGER,modified_at INTEGER,size INTEGER,has_faces INTEGER,name TEXT); INSERT INTO afiles VALUES(1,100,100,10,100,2,'original.jpg'),(2,100,100,10,100,1,'other.jpg'); CREATE TABLE persons(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,cover_face_id INTEGER,thumbnail BLOB,created_at INTEGER); CREATE TABLE faces(id INTEGER PRIMARY KEY AUTOINCREMENT,file_id INTEGER,bbox TEXT,embedding BLOB,person_id INTEGER,created_at INTEGER); INSERT INTO persons VALUES(7,'Alice',11,NULL,0);").unwrap();
+        c.execute_batch("CREATE TABLE afolders(id INTEGER PRIMARY KEY,path TEXT); INSERT INTO afolders VALUES(1,'/photos'); ALTER TABLE afiles ADD COLUMN folder_id INTEGER NOT NULL DEFAULT 1; ALTER TABLE afiles ADD COLUMN file_type INTEGER NOT NULL DEFAULT 1;").unwrap();
         let json = serde_json::to_string(&bbox(60.)).unwrap();
         c.execute(
             "INSERT INTO faces VALUES(11,2,?1,X'0000803f00000000',7,0)",
@@ -251,7 +252,7 @@ mod tests {
             c,
             face_jobs::SourceImage {
                 id: 1,
-                path: "unused-original.jpg".into(),
+                path: "/photos/original.jpg".into(),
                 width: 100,
                 height: 100,
                 modified_at: Some(10),

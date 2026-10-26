@@ -249,6 +249,26 @@ test('reopening Person restores a hidden active run without cancelling the backe
   }
   assert.equal(state.counts().disposals, 8);
 });
+test('Person keeps a newer job visible when an older job finishes or sends clustering events', async () => {
+  const job = (id: string) => ({ library_id: 'library-a', job_id: id, current: 1, total: 8, faces_found: 2, phase: 'indexing' });
+  let snapshot: any = [true, job('background')];
+  const state = faceProgressHarness({ query: async () => snapshot }), h = state.mount();
+  try {
+    await flush();
+    snapshot = [true, job('manual')];
+    await state.dispatch('progress', job('manual'));
+    await state.dispatch('finished', { library_id: 'library-a', job_id: 'background' });
+    assert.equal((h.vm as any).isIndexing, true);
+    assert.ok(h.button('task_progress.hide'));
+    await state.dispatch('cluster', { library_id: 'library-a', job_id: 'background', phase: 'graph', current: 7, total: 8 });
+    assert.equal((h.vm as any).isIndexing, true);
+    snapshot = [true, job('next')];
+    await state.dispatch('finished', { library_id: 'library-a', job_id: 'manual', queued_jobs: 1 });
+    assert.equal((h.vm as any).isIndexing, true);
+    await state.dispatch('progress', job('manual'));
+    assert.equal((h.vm as any).isIndexing, true);
+  } finally { h.unmount(); }
+});
 
 test('a delayed Person status query cannot restore a run after switching libraries', async () => {
   let resolve!: (value: any) => void;

@@ -135,3 +135,27 @@ test('listeners which finish registering after unmount are immediately removed a
   waiting.forEach(registration => registration.resolve()); await boot;
   assert.equal(removed.length, 3); assert.equal(h.calls.length, 0); assert.equal(h.timers.size, 0);
 });
+
+test('queued face jobs follow the authoritative active job and old events cannot clear or rewind its progress', async () => {
+  const job = (id: string, current: number) => ({ ...progress('A', current), job_id: id, queued_jobs: 1, priority_queued_jobs: 1 });
+  let snapshot: any = [true, job('background', 4)];
+  const h = harness({ read: () => snapshot });
+  try {
+    await h.boot();
+    snapshot = [true, { ...job('manual', 0), priority: 'interactive' }];
+    h.event('face_index_progress', snapshot[1]); await tick();
+    assert.equal(h.api.progress.value.job_id, 'manual');
+    h.event('cluster_progress', { library_id: 'A', job_id: 'background', phase: 'graph', current: 3, total: 4 });
+    h.event('face_index_finished', { library_id: 'A', job_id: 'background', failed: 8 }); await tick();
+    assert.equal(h.api.running.value, true);
+    assert.equal(h.api.progress.value.job_id, 'manual');
+    assert.equal(h.api.result.value, null);
+    assert.equal(h.api.cluster.value, null);
+    snapshot = [true, { ...job('next', 1), queued_jobs: 0, priority_queued_jobs: 0 }];
+    h.event('face_index_finished', { library_id: 'A', job_id: 'manual', queued_jobs: 1 }); await tick();
+    assert.equal(h.api.running.value, true);
+    assert.equal(h.api.progress.value.job_id, 'next');
+    h.event('face_index_progress', job('manual', 7));
+    assert.equal(h.api.progress.value.job_id, 'next');
+  } finally { h.dispose(); }
+});

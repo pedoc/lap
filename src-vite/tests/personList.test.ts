@@ -41,7 +41,11 @@ test('scan UI is non-blocking and batch refresh does not reset navigation', () =
 });
 test('incremental grouping publishes scoped results during the image loop', () => {
   const face = readFileSync(new URL('../../src-tauri/src/t_face.rs', import.meta.url), 'utf8');
-  assert.ok(face.indexOf('publish_people(&result)') < face.indexOf('// 4. Clustering'));
+  const worker = face.slice(face.indexOf('fn run_face_job('), face.indexOf('fn process_face_source('));
+  const loop = worker.slice(worker.indexOf('for source in files {'), worker.lastIndexOf('let result = cluster_face_job('));
+  assert.match(loop, /if grouping\.due\(/);
+  assert.match(loop, /publish_people\(app, job, &result\)/);
+  assert.ok(loop.indexOf('drop(lane)') < loop.indexOf('cluster_face_job('));
   assert.ok(face.includes('"previousPersonIds":result.person_ids'));
   assert.ok(face.includes('"fileIds":result.file_ids'));
 });

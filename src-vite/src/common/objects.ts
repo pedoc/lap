@@ -107,7 +107,7 @@ export function useObjects() {
     ]) {
       void listen(name, (event: any) => {
         if (name === 'object-job-progress') {
-          acceptObjectProgress(event.payload);
+          if (event.payload?.libraryId === libConfig._libraryId && !acceptObjectProgress(event.payload)) scheduleRefresh();
           return;
         }
         const library = event.payload?.libraryId || event.payload?.library_id;
@@ -189,7 +189,7 @@ export async function startObjectIndex(
       resumeFailed: !!options.resumeFailed,
     });
     if (libraryId === libConfig._libraryId) {
-      if (objectView.value && objectView.value.status?.jobId !== status.jobId)
+      if (!status.queued && objectView.value && !objectView.value.status?.running && objectView.value.status?.jobId !== status.jobId)
         objectView.value = { ...objectView.value, status };
       sequence++;
       pending = null;

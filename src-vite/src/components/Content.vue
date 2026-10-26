@@ -4636,8 +4636,8 @@ async function recognizeSelectedText(force = false) {
     if (!files.length || files.some(file => ![1, 3].includes(Number(file.file_type)))) throw new Error(t('ocr.select_photos'));
     if (force && !await ask(t('ocr.reidentify_confirm'), { kind: 'warning' })) return;
     if (libraryId !== libConfig._libraryId) return;
-    await startOcr({ fileIds: files.map(file => Number(file.id)), force });
-    toast.success(t('ocr.task_started'));
+    const receipt = await startOcr({ fileIds: files.map(file => Number(file.id)), force });
+    if (libraryId === libConfig._libraryId) toast.success(t(receipt?.queued ? 'recognition_status.priority_queued' : 'ocr.task_started'));
   } catch (e) { if (libraryId === libConfig._libraryId) toast.error(String(e)); }
 }
 async function recognizeSelectedObjects(force = false) {
@@ -4648,7 +4648,7 @@ async function recognizeSelectedObjects(force = false) {
     if (files.some(isOriginalUnavailable)) throw new Error(t('face_actions.offline'));
     if(force && !await ask(t('objects.rebuild_confirm'),{kind:'warning'}))return;
     if(libraryId!==libConfig._libraryId)return;
-    await startObjectIndex({fileIds:ids,force});toast.success(t('objects.started'));
+    const receipt = await startObjectIndex({fileIds:ids,force});if(libraryId===libConfig._libraryId)toast.success(t(receipt?.queued?'recognition_status.priority_queued':'objects.started'));
   } catch(error:any){toast.error(error?.message||String(error));}
 }
 async function rebuildSelectedThumbnails() {
@@ -4671,8 +4671,8 @@ async function detectSelectedFaces(force = false) {
     if (libraryId !== libConfig._libraryId) return;
     config.setFaceEnabled(true);
     config.settings.face.showBoxes = true;
-    await indexFaces(ids, force, libraryId);
-    toast.info(t('face_actions.started', { count: ids.length }));
+    const receipt = await indexFaces(ids, force, libraryId);
+    if (libraryId === libConfig._libraryId) toast.info(t(receipt?.queued ? 'recognition_status.priority_queued' : 'face_actions.started', { count: ids.length }));
   } catch (error: any) { toast.error(error?.message || String(error)); }
 }
 function handleItemAction(payload: { action: string, index: number }) {

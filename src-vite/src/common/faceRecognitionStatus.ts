@@ -10,11 +10,12 @@ export function useFaceRecognitionStatus() {
   let disposed = false, ready = false, generation = 0, sequence = 0, awaitingIdle = false;
   let listenerError = '';
   let restoreDiagnostic = true;
+  const finishedJobs = new Set<string>();
   let pending: Promise<void> | null = null, timer: ReturnType<typeof setInterval> | undefined;
   const stops: Array<() => void> = [];
   const matches = (payload: any) => !disposed && !!libConfig._libraryId && payload?.library_id === libConfig._libraryId;
   function acceptProgress(next: any) {
-    if (!running.value) {
+    if (!running.value || next.job_id && next.job_id !== progress.value?.job_id) {
       result.value = null;
       cluster.value = null;
       progress.value = next;
@@ -38,7 +39,7 @@ export function useFaceRecognitionStatus() {
           if (!matches(snapshot[1])) return;
           error.value = listenerError;
           // Finished is emitted before the backend drops its running guard.
-          if (!awaitingIdle) acceptProgress(snapshot[1]);
+          if (snapshot[1]?.job_id ? !finishedJobs.has(snapshot[1].job_id) : !awaitingIdle) acceptProgress(snapshot[1]);
         } else {
           if (restoreDiagnostic && faceDiagnosticState.report?.library_id === libraryId) result.value = faceDiagnosticState.report;
           restoreDiagnostic = false;
@@ -55,6 +56,7 @@ export function useFaceRecognitionStatus() {
   }
   stops.push(watch(() => [libConfig._libraryId, config.settings.ai?.faceProfile, config.settings.ai?.faceModel], (next, previous) => {
     generation++; sequence++; pending = null; awaitingIdle = false;
+    finishedJobs.clear();
     restoreDiagnostic = next[0] !== previous?.[0];
     running.value = false; progress.value = null; cluster.value = null; result.value = null; error.value = listenerError;
     void refresh();
@@ -63,16 +65,26 @@ export function useFaceRecognitionStatus() {
     const handlers: Record<string, (event: any) => void> = {
       face_index_progress: event => {
         if (!matches(event.payload)) return;
+        if (event.payload.job_id && finishedJobs.has(event.payload.job_id)) return;
+        if (event.payload.job_id && progress.value?.job_id && event.payload.job_id !== progress.value.job_id) {
+          sequence++; pending = null; void refresh(); return;
+        }
         sequence++;
         acceptProgress(event.payload);
       },
       face_index_finished: event => {
         if (!matches(event.payload)) return;
+        if (event.payload.job_id) finishedJobs.add(event.payload.job_id);
+        if (event.payload.job_id && progress.value?.job_id && event.payload.job_id !== progress.value.job_id) {
+          sequence++; pending = null; void refresh(); return;
+        }
         sequence++;
-        running.value = false; result.value = event.payload; cluster.value = null; error.value = listenerError; awaitingIdle = true; restoreDiagnostic = false;
+        running.value = Number(event.payload.queued_jobs) > 0; result.value = event.payload; cluster.value = null; error.value = listenerError; awaitingIdle = true; restoreDiagnostic = false;
+        if (event.payload.job_id) { pending = null; void refresh(); }
       },
       cluster_progress: event => {
         if (!matches(event.payload) || !running.value) return;
+        if (event.payload.job_id && event.payload.job_id !== progress.value?.job_id) return;
         sequence++;
         cluster.value = event.payload;
       },

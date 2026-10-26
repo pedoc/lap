@@ -1475,7 +1475,7 @@ async function recognizeViewerObjects(force = false) {
     if(isOriginalUnavailable(target))throw new Error(t('face_actions.offline'));
     if(force&&!await ask(t('objects.rebuild_confirm'),{kind:'warning'}))return;
     if(libraryId!==libConfig._libraryId)return;
-    await startObjectIndex({fileIds:ids,force});toast.info(t('objects.started'));
+    const receipt = await startObjectIndex({fileIds:ids,force});if(libraryId===libConfig._libraryId)toast.info(t(receipt?.queued?'recognition_status.priority_queued':'objects.started'));
   } catch(error:any){toast.error(error?.message||String(error));}
 }
 async function recognizeViewerText(force = false) {
@@ -1485,8 +1485,8 @@ async function recognizeViewerText(force = false) {
     if (!target || ![1, 3].includes(Number(target.file_type))) throw new Error(t('ocr.select_photos'));
     if (force && !await ask(t('ocr.reidentify_confirm'), { kind: 'warning' })) return;
     if (libraryId !== libConfig._libraryId) return;
-    await startOcr({ fileIds: [Number(target.id)], force });
-    toast.info(t('ocr.task_started'));
+    const receipt = await startOcr({ fileIds: [Number(target.id)], force });
+    if (libraryId === libConfig._libraryId) toast.info(t(receipt?.queued ? 'recognition_status.priority_queued' : 'ocr.task_started'));
   } catch (error: any) { if (libraryId === libConfig._libraryId) toast.error(error?.message || String(error)); }
 }
 async function detectViewerFaces(force = false) {
@@ -1498,8 +1498,8 @@ async function detectViewerFaces(force = false) {
     if (force && !await ask(t('face_actions.redetect_confirm'), { kind: 'warning' })) return;
     if (libraryId !== libConfig._libraryId) return;
     config.setFaceEnabled(true); config.settings.face.showBoxes = true;
-    await indexFaces(ids, force, libraryId);
-    toast.info(t('face_actions.started', { count: ids.length }));
+    const receipt = await indexFaces(ids, force, libraryId);
+    if (libraryId === libConfig._libraryId) toast.info(t(receipt?.queued ? 'recognition_status.priority_queued' : 'face_actions.started', { count: ids.length }));
   } catch (error: any) { toast.error(error?.message || String(error)); }
 }
 const handleItemAction = async (payload: { action: string }) => {

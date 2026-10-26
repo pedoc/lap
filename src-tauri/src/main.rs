@@ -122,14 +122,7 @@ async fn main() {
             std::sync::Mutex::new(false),
         )))
         .manage(t_face::FaceIndexProgressState(std::sync::Arc::new(
-            std::sync::Mutex::new(t_face::FaceIndexProgress {
-                current: 0,
-                total: 0,
-                faces_found: 0,
-                phase: "indexing".to_string(),
-                library_id: String::new(),
-                scope: "library".into(),
-            }),
+            std::sync::Mutex::new(t_face::FaceIndexProgress::default()),
         )))
         .manage(t_dedup::DedupState::default())
         .manage(t_similar::SimilarState::default())

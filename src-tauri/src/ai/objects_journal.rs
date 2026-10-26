@@ -271,6 +271,9 @@ pub fn recover(
     failed: bool,
 ) -> Result<Recovery, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "Invalid object task ID")?;
+    if super::objects_jobs::registered_status(library, id).is_some_and(|status| status.running) {
+        return Err("Wait for this object task to stop before continuing it".into());
+    }
     let record = load(c, id, library)?;
     if record.profile != profile {
         return Err(format!(
@@ -353,12 +356,21 @@ pub fn list(
             }
             status.completed = status.succeeded + status.failed + status.skipped;
         }
-        let known = live.job_id == id;
-        let active = known && live.running;
+        let snapshot = if live.job_id == id {
+            Some(live.clone())
+        } else {
+            super::objects_jobs::registered_status(library, &id)
+        };
+        let known = snapshot.is_some();
+        let active = snapshot.as_ref().is_some_and(|status| status.running);
         status.historical = !known;
-        if known {
+        if let Some(live) = snapshot {
             status.phase = live.phase.clone();
             status.running = live.running;
+            status.queued = live.queued;
+            status.priority = live.priority.clone();
+            status.queued_jobs = live.queued_jobs;
+            status.priority_queued_jobs = live.priority_queued_jobs;
             status.stopping = live.stopping;
             status.cancelled = live.cancelled;
             status.error = live.error.clone();
@@ -368,6 +380,7 @@ pub fn list(
                 status.cancelled = false;
             }
             status.running = false;
+            status.queued = false;
             status.stopping = false;
         }
         let compatible = record.profile == profile;
@@ -395,6 +408,44 @@ pub fn list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_selected_task_keeps_its_own_ledger_and_does_not_interrupt_background_progress() {
+        let mut c = db();
+        let background = status();
+        begin(
+            &mut c,
+            &background,
+            &Request::default(),
+            "p",
+            "m",
+            "M",
+            None,
+        )
+        .unwrap();
+        plan(&mut c, &background.job_id, &[1, 2], || Ok(())).unwrap();
+        let mut selected = status();
+        selected.priority = "interactive".into();
+        selected.queued = true;
+        let request = Request {
+            file_ids: Some(vec![2]),
+            force: true,
+            ..Default::default()
+        };
+        begin(&mut c, &selected, &request, "p", "m", "M", None).unwrap();
+        plan(&mut c, &selected.job_id, &[2], || Ok(())).unwrap();
+        mark(&c, &selected.job_id, 2, "succeeded").unwrap();
+        mark(&c, &background.job_id, 2, "skipped").unwrap();
+        assert_eq!(
+            item_ids(&c, &background.job_id, "pending").unwrap(),
+            vec![1]
+        );
+        assert_eq!(
+            item_ids(&c, &selected.job_id, "succeeded").unwrap(),
+            vec![2]
+        );
+        assert!(load(&c, &selected.job_id, "A").unwrap().request.force);
+        assert!(!load(&c, &background.job_id, "A").unwrap().request.force);
+    }
     #[test]
     fn planning_progress_is_bounded_and_cancellation_rolls_back_unfinished_plans() {
         use std::sync::atomic::{AtomicBool, Ordering};

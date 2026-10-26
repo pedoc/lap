@@ -405,9 +405,11 @@ pub fn is_database_corrupted() -> bool {
 #[tauri::command]
 pub async fn switch_library(app_handle: tauri::AppHandle, id: String) -> Result<(), String> {
     use tauri::Manager;
-    if *app_handle.state::<t_face::FaceIndexingStatus>().0.lock().map_err(|e|e.to_string())? {
-        return Err("Stop face indexing before switching libraries".into());
-    }
+    let _recognition_admission = crate::ai::vision_jobs::pause_admission();
+    let current_library = t_config::current_library_id()?;
+    crate::ai::ocr::cancel_all(&current_library);
+    crate::ai::objects_jobs::cancel_all(&current_library);
+    t_face::cancel_all(&current_library);
     let scan_admission=t_utils::block_album_scans();
     {
         let cancellation=app_handle.state::<IndexCancellation>().0.clone();
@@ -422,7 +424,21 @@ pub async fn switch_library(app_handle: tauri::AppHandle, id: String) -> Result<
     // create_db's returned error itself rather than re-reading the process-global flag afterwards
     // (which a concurrent switch could resolve against a different library).
     let corrupted = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
-        let _guard = FILE_REFRESH_LIBRARY_LOCK.write().map_err(|e| e.to_string())?;
+        // New requests from another window may arrive while scans are stopping.
+        // Cancel them before retrying the writer instead of waiting for a whole AI batch.
+        let _guard = loop {
+            let current = t_config::current_library_id()?;
+            crate::ai::ocr::cancel_all(&current);
+            crate::ai::objects_jobs::cancel_all(&current);
+            t_face::cancel_all(&current);
+            match FILE_REFRESH_LIBRARY_LOCK.try_write() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => return Err(error.to_string()),
+            }
+        };
         t_config::switch_library(&id)?;
         t_utils::clear_album_accessibility();
         t_sqlite::clear_conn_pool();
@@ -3634,9 +3650,15 @@ pub fn index_faces(
     file_ids: Option<Vec<i64>>,
     force: Option<bool>,
     library_id: Option<String>,
-) -> Result<(), String> {
-    let _configuration = FILE_REFRESH_LIBRARY_LOCK.try_read().map_err(|_| "AI configuration or library is changing; retry after it finishes")?;
-    if library_id.as_deref().is_some_and(|id| crate::t_config::current_library_id().ok().as_deref() != Some(id)) {
+) -> Result<t_face::FaceIndexProgress, String> {
+    crate::ai::vision_jobs::ensure_admission()?;
+    let _configuration = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "AI configuration or library is changing; retry after it finishes")?;
+    if library_id
+        .as_deref()
+        .is_some_and(|id| crate::t_config::current_library_id().ok().as_deref() != Some(id))
+    {
         return Err("Library changed; reload the image selection".into());
     }
     let scope = crate::ai::face_jobs::FaceScope::new(file_ids, force.unwrap_or(false))?;
@@ -3667,9 +3689,15 @@ pub fn get_face_stats() -> Result<t_face::FaceStats, String> {
 
 /// cancel face indexing
 #[tauri::command]
-pub fn cancel_face_index(state: State<t_face::FaceIndexCancellation>) -> Result<(), String> {
-    *state.0.lock().unwrap() = true;
-
+pub fn cancel_face_index(
+    state: State<t_face::FaceIndexCancellation>,
+    job_id: Option<String>,
+    library_id: Option<String>,
+) -> Result<(), String> {
+    t_face::cancel_jobs(job_id.as_deref(), library_id.as_deref())?;
+    if job_id.is_none() {
+        *state.0.lock().map_err(|e| e.to_string())? = true;
+    }
     Ok(())
 }
 
@@ -3682,17 +3710,8 @@ pub fn reset_faces() -> Result<(), String> {
 
 /// check if face indexing is running, return (is_running, progress)
 #[tauri::command]
-pub fn is_face_indexing(
-    status_state: State<t_face::FaceIndexingStatus>,
-    progress_state: State<t_face::FaceIndexProgressState>,
-) -> Result<(bool, Option<t_face::FaceIndexProgress>), String> {
-    let is_running = *status_state.0.lock().unwrap();
-    let progress = if is_running {
-        Some(progress_state.0.lock().unwrap().clone())
-    } else {
-        None
-    };
-    Ok((is_running, progress))
+pub fn is_face_indexing() -> Result<(bool, Option<t_face::FaceIndexProgress>), String> {
+    t_face::indexing_snapshot()
 }
 
 /// get all persons with face counts
@@ -3792,6 +3811,11 @@ pub async fn confirm_face_detection(
     tauri::async_runtime::spawn_blocking(move||{
         use crate::ai::capabilities::{FaceDetector,FaceEmbedder};
         crate::ai::face_confirmation::validate(&request)?;
+        let _lane=crate::ai::vision_jobs::claim_priority(crate::ai::types::Task::Face,crate::ai::vision_jobs::Priority::Interactive,||{
+            if t_config::current_library_id()?!=request.library_id {return Err("FACE_CONFIRM_STALE: Library changed; reopen the report".into());}
+            if crate::ai::settings::active(crate::ai::types::Task::Face)?.profile()!=request.profile {return Err("FACE_CONFIRM_STALE: Face model changed; reopen the report".into());}
+            Ok(())
+        })?;
         let _guard=FILE_REFRESH_LIBRARY_LOCK.try_write().map_err(|_|"FACE_CONFIRM_BUSY: Finish running inference or library operations before confirming a face")?;
         if t_config::current_library_id()?!=request.library_id {return Err("FACE_CONFIRM_STALE: Library changed; reopen the report".into());}
         let model=crate::ai::settings::active(crate::ai::types::Task::Face)?;

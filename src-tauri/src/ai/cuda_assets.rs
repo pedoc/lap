@@ -656,22 +656,32 @@ pub async fn test_cuda_runtime(app_handle: AppHandle) -> Result<Status, String> 
     tauri::async_runtime::spawn_blocking(move || {
         // Keep ownership in the worker: closing Settings must not release the
         // busy state or installation lock while CUDA libraries are loading.
-        let mut probed = false;
         let result = (|| {
-            let _lane = super::vision_jobs::try_claim(super::types::Task::Detection)?;
-            probed = true;
+            use tauri::Manager;
+            let _library = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
+                .try_write()
+                .map_err(|_| "Wait for recognition and library tasks before testing CUDA")?;
+            if super::ocr::is_running()
+                || super::objects_jobs::is_running()
+                || *app_handle
+                    .state::<crate::t_face::FaceIndexingStatus>()
+                    .0
+                    .lock()
+                    .map_err(|error| error.to_string())?
+            {
+                return Err("Wait for queued recognition tasks before testing CUDA".to_owned());
+            }
+            let _lane = super::vision_jobs::try_claim_exclusive()?;
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             let result = super::cuda::probe();
             #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
             let result: Result<std::collections::BTreeMap<String, u64>, String> =
                 Err("CUDA component is unsupported on this platform".into());
             *PROBE.lock().map_err(|e| e.to_string())? = Some(result.clone());
+            super::runtime::refresh();
             result
         })();
         drop(checking);
-        if probed {
-            super::runtime::refresh();
-        }
         let _ = super::commands::changed(&app_handle);
         drop(lock);
         result?;

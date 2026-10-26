@@ -1,19 +1,47 @@
 //! Explicit, resumable local OCR indexing. Derived text never changes originals.
 use super::{adapters::ocr::PaddleOcr, types::Task};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use serde::Serialize;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use tauri::{AppHandle, Emitter, Manager};
 
-static JOB: Mutex<Option<Arc<Job>>> = Mutex::new(None);
-pub(crate) fn try_inference() -> Result<super::vision_jobs::Lease, String> {
-    if super::objects_jobs::is_running() {
-        return Err("Object recognition is queued or running; wait or stop it first".into());
+static JOBS: Mutex<VecDeque<Arc<Job>>> = Mutex::new(VecDeque::new());
+static BACKEND: Mutex<Option<(String, u64, PaddleOcr)>> = Mutex::new(None);
+// Callers hold the OCR lane before taking the shared model cache.
+pub(crate) fn with_backend<T>(
+    model: &super::types::ResolvedModel,
+    run: impl FnOnce(&mut PaddleOcr) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut cache = match BACKEND.lock() {
+        Ok(cache) => cache,
+        Err(error) => {
+            let mut cache = error.into_inner();
+            *cache = None;
+            BACKEND.clear_poison();
+            cache
+        }
+    };
+    let key = model.session_key();
+    let generation = super::runtime::generation();
+    if !cache
+        .as_ref()
+        .is_some_and(|(loaded, version, _)| loaded == &key && *version == generation)
+    {
+        *cache = None;
+        *cache = Some((key, generation, PaddleOcr::new(model)?));
     }
-    super::vision_jobs::try_claim(Task::Ocr)
+    run(&mut cache.as_mut().ok_or("OCR backend is unavailable")?.2)
+}
+pub(crate) fn release_backend_if_idle() {
+    if let Ok(mut cache) = BACKEND.lock() {
+        if !is_running() {
+            *cache = None;
+        }
+    }
 }
 struct Job {
     automatic: bool,
@@ -21,6 +49,8 @@ struct Job {
     automation_revision: Option<String>,
     cancel: AtomicBool,
     status: Mutex<Status>,
+    registration: Option<super::vision_jobs::RequestRegistration>,
+    selected_sources: Option<BTreeMap<i64, String>>,
 }
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +58,10 @@ pub struct Status {
     pub library_id: String,
     pub job_id: String,
     pub running: bool,
+    pub queued: bool,
+    pub priority: String,
+    pub queued_jobs: usize,
+    pub priority_queued_jobs: usize,
     pub stopping: bool,
     pub total: usize,
     pub completed: usize,
@@ -60,11 +94,12 @@ pub struct View {
 }
 pub fn is_running() -> bool {
     super::vision_jobs::running(Task::Ocr)
-        || JOB
+        || super::ocr_extract::is_running()
+        || JOBS
             .lock()
-            .map(|j| {
-                j.as_ref()
-                    .is_some_and(|j| j.status.lock().is_ok_and(|s| s.running))
+            .map(|jobs| {
+                jobs.iter()
+                    .any(|j| j.status.lock().is_ok_and(|s| s.running))
             })
             .unwrap_or(true)
 }
@@ -79,17 +114,12 @@ fn check_automatic(job: &Job, library: &str) -> Result<(), String> {
     }
     Ok(())
 }
-pub fn is_automatic_running() -> bool {
-    JOB.lock()
-        .map(|slot| {
-            slot.as_ref()
-                .is_some_and(|job| job.automatic && job.status.lock().is_ok_and(|s| s.running))
-        })
-        .unwrap_or(false)
-}
 pub fn yield_automatic() {
-    let job = JOB.lock().ok().and_then(|slot| slot.clone());
-    if let Some(job) = job.filter(|job| job.automatic) {
+    let jobs = JOBS
+        .lock()
+        .map(|jobs| jobs.iter().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for job in jobs.into_iter().filter(|job| job.automatic) {
         if let Ok(mut status) = job.status.lock() {
             if status.running {
                 job.cancel.store(true, Ordering::SeqCst);
@@ -97,6 +127,19 @@ pub fn yield_automatic() {
             }
         }
     }
+}
+pub fn cancel_all(library: &str) {
+    if let Ok(jobs) = JOBS.lock() {
+        for job in jobs.iter() {
+            if let Ok(mut status) = job.status.lock() {
+                if status.library_id == library && status.running {
+                    job.cancel.store(true, Ordering::SeqCst);
+                    status.stopping = true;
+                }
+            }
+        }
+    }
+    super::ocr_extract::cancel_all(library);
 }
 pub fn ensure_schema(c: &Connection) -> Result<(), String> {
     c.execute_batch("CREATE TABLE IF NOT EXISTS ocr_index (
@@ -171,21 +214,105 @@ pub(crate) fn check_library(library: &str) -> Result<(), String> {
     super::media::check_library(library)
 }
 fn current_status(library: &str) -> Status {
-    JOB.lock()
-        .ok()
-        .and_then(|j| {
-            j.as_ref().and_then(|j| {
-                j.status
-                    .lock()
-                    .ok()
-                    .filter(|s| s.library_id == library)
-                    .map(|s| s.clone())
-            })
+    let active = super::vision_jobs::active_or_next_request(Task::Ocr);
+    project_statuses(job_statuses(library), active.as_deref()).unwrap_or(Status {
+        library_id: library.into(),
+        ..Default::default()
+    })
+}
+fn job_statuses(library: &str) -> Vec<Status> {
+    JOBS.lock()
+        .map(|jobs| {
+            jobs.iter()
+                .filter_map(|job| {
+                    job.status
+                        .lock()
+                        .ok()
+                        .filter(|s| s.library_id == library)
+                        .map(|s| s.clone())
+                })
+                .collect()
         })
-        .unwrap_or(Status {
-            library_id: library.into(),
-            ..Default::default()
+        .unwrap_or_default()
+}
+fn project_statuses(mut rows: Vec<Status>, active: Option<&str>) -> Option<Status> {
+    let owner = active.map(str::to_owned).or_else(|| {
+        rows.iter()
+            .find(|s| s.running && s.priority == "interactive")
+            .or_else(|| rows.iter().find(|s| s.running))
+            .map(|s| s.job_id.clone())
+    });
+    let active = owner.as_deref();
+    let queued = rows
+        .iter()
+        .filter(|s| s.running && Some(s.job_id.as_str()) != active)
+        .count();
+    let priority_queued = rows
+        .iter()
+        .filter(|s| s.running && s.priority == "interactive" && Some(s.job_id.as_str()) != active)
+        .count();
+    for status in &mut rows {
+        status.queued = status.running && Some(status.job_id.as_str()) != active;
+        status.queued_jobs = queued;
+        status.priority_queued_jobs = priority_queued;
+    }
+    rows.iter()
+        .find(|s| s.running && Some(s.job_id.as_str()) == active)
+        .or_else(|| {
+            rows.iter()
+                .find(|s| s.running && s.priority == "interactive")
         })
+        .or_else(|| rows.iter().find(|s| s.running))
+        .or_else(|| rows.last())
+        .cloned()
+}
+fn receipt(library: &str, id: &str) -> Result<Status, String> {
+    let active = super::vision_jobs::active_or_next_request(Task::Ocr);
+    let rows = job_statuses(library);
+    project_receipt(rows, active.as_deref(), id)
+}
+fn project_receipt(rows: Vec<Status>, active: Option<&str>, id: &str) -> Result<Status, String> {
+    let projection = project_statuses(rows.clone(), active);
+    let mut row = rows
+        .into_iter()
+        .find(|s| s.job_id == id)
+        .ok_or("OCR job is unavailable")?;
+    row.queued = row.running
+        && !projection
+            .as_ref()
+            .is_some_and(|status| !status.queued && status.job_id == id);
+    if let Some(status) = projection {
+        row.queued_jobs = status.queued_jobs;
+        row.priority_queued_jobs = status.priority_queued_jobs;
+    }
+    Ok(row)
+}
+fn publish_progress(app: &AppHandle, library: &str) {
+    let _ = app.emit("ocr-index-progress", current_status(library));
+}
+fn finish_job(job: &Arc<Job>) {
+    if let Some(registration) = &job.registration {
+        registration.release();
+    }
+    if let Ok(mut jobs) = JOBS.lock() {
+        if let Some(index) = jobs.iter().position(|item| Arc::ptr_eq(item, job)) {
+            if let Some(job) = jobs.remove(index) {
+                jobs.push_back(job);
+            }
+        }
+        let mut finished = jobs
+            .iter()
+            .filter(|job| job.status.lock().is_ok_and(|s| !s.running))
+            .count();
+        jobs.retain(|job| {
+            if finished > 32 && job.status.lock().is_ok_and(|s| !s.running) {
+                finished -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    }
 }
 // One aggregate scan per refresh, rather than one whole-library scan per tab.
 fn coverage_on(c: &Connection, profile: &str) -> Result<(i64, i64, i64, i64, i64), String> {
@@ -206,10 +333,34 @@ fn view_on(c: &Connection, library: &str) -> Result<View, String> {
     let (eligible, indexed, failed, with_text, without_text) = coverage_on(c, &profile)?;
     let automation = super::ocr_auto::load();
     let local_pending = (|| -> Result<bool, String> {
-        let Ok(policy) = &automation else { return Ok(false) };
-        if !policy.enabled || policy.scope.as_ref().is_some_and(|s| s.library_id != library) { return Ok(false); }
-        let folder = policy.scope.as_ref().map(|s| folder_scope(c, s.folder_id)).transpose()?;
-        Ok(!target_ids_with_options(c, &profile, false, false, None, folder, &AtomicBool::new(false), true, Some(1))?.is_empty())
+        let Ok(policy) = &automation else {
+            return Ok(false);
+        };
+        if !policy.enabled
+            || policy
+                .scope
+                .as_ref()
+                .is_some_and(|s| s.library_id != library)
+        {
+            return Ok(false);
+        }
+        let folder = policy
+            .scope
+            .as_ref()
+            .map(|s| folder_scope(c, s.folder_id))
+            .transpose()?;
+        Ok(!target_ids_with_options(
+            c,
+            &profile,
+            false,
+            false,
+            None,
+            folder,
+            &AtomicBool::new(false),
+            true,
+            Some(1),
+        )?
+        .is_empty())
     })();
     let local_pending_error = local_pending.as_ref().err().cloned();
     let has_local_pending = local_pending.unwrap_or(false);
@@ -250,10 +401,16 @@ pub async fn cancel_ocr_index(
     job_id: String,
 ) -> Result<(), String> {
     check_library(&library_id)?;
-    let job = JOB
+    let job = JOBS
         .lock()
         .map_err(|e| e.to_string())?
-        .clone()
+        .iter()
+        .find(|job| {
+            job.status
+                .lock()
+                .is_ok_and(|s| s.library_id == library_id && s.job_id == job_id)
+        })
+        .cloned()
         .ok_or("No OCR job")?;
     let mut status = job.status.lock().map_err(|e| e.to_string())?;
     if status.library_id != library_id || status.job_id != job_id {
@@ -278,6 +435,7 @@ pub async fn start_ocr_index(
     folder_id: Option<i64>,
     automation_revision: Option<String>,
 ) -> Result<Status, String> {
+    super::vision_jobs::ensure_admission()?;
     let retry_failed = retry_failed.unwrap_or(false);
     if force && retry_failed {
         return Err("Choose either rebuild or retry failed photos".into());
@@ -291,19 +449,18 @@ pub async fn start_ocr_index(
         }
     }
     tauri::async_runtime::spawn_blocking(move||{
+        super::vision_jobs::ensure_admission()?;
         let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
         check_library(&library_id)?;
-        if super::objects_jobs::is_running(){return Err("Stop object recognition before starting OCR".into());}
         let automatic=automation_revision.is_some();
+        let interactive = !automatic && file_ids.is_some();
         let policy=automation_revision.as_ref().map(|revision|super::ocr_auto::authorized(revision,&library_id)).transpose()?;
         if automatic && (force||retry_failed||file_ids.is_some()||folder_id.is_some()){return Err("Automatic OCR may only process its configured pending scope".into());}
         if automatic {
-            if *app_handle.state::<crate::t_face::FaceIndexingStatus>().0.lock().map_err(|e|e.to_string())?
-                || !app_handle.state::<crate::t_cmds::IndexCancellation>().0.lock().map_err(|e|e.to_string())?.is_empty()
+            if !app_handle.state::<crate::t_cmds::IndexCancellation>().0.lock().map_err(|e|e.to_string())?.is_empty()
                 || app_handle.state::<crate::t_similar::SimilarState>().status.lock().map_err(|e|e.to_string())?.is_scanning { return Err("Another media task is running".into()); }
         }
         let folder_id=policy.as_ref().and_then(|p|p.scope.as_ref().map(|scope|scope.folder_id)).or(folder_id);
-        let lease=try_inference()?;
         let model=super::settings::active(Task::Ocr)?;
         if let Err(error)=super::assets::verify(&model.definition) {
             if automatic {let _=super::ocr_auto::pause_with_error(&error);let _=app_handle.emit("ocr-automation-changed",());}return Err(error);
@@ -319,24 +476,62 @@ pub async fn start_ocr_index(
             super::ocr_auto::authorized(automation_revision.as_deref().unwrap_or(""),&library_id)?;
             Some(ids)
         } else {file_ids};
-        let mut slot=JOB.lock().map_err(|e|e.to_string())?;
-        if slot.as_ref().is_some_and(|j|j.status.lock().is_ok_and(|s|s.running)){return Err("An OCR job is already running".into());}
-        let initial=Status {automatic,automation_revision,scope:scope.into(),scope_name:folder.as_ref().map(|(_,path)|path.clone()),library_id:library_id.clone(),job_id:uuid::Uuid::new_v4().to_string(),running:true,..Default::default()};
-        let job=Arc::new(Job {automatic,batch_size,automation_revision:initial.automation_revision.clone(),cancel:AtomicBool::new(false),status:Mutex::new(initial.clone())});*slot=Some(job.clone());drop(slot);
-        drop(lease);
+        let selected_sources = if interactive {
+            Some(capture_sources(&*crate::t_sqlite::open_conn()?,file_ids.as_deref().unwrap_or_default(),|| {
+                super::vision_jobs::ensure_admission()?;
+                check_library(&library_id)
+            })?)
+        } else { None };
+        let mut jobs=JOBS.lock().map_err(|e|e.to_string())?;
+        let active = jobs.iter().filter_map(|j|j.status.lock().ok().map(|s|s.clone())).filter(|s|s.running).collect::<Vec<_>>();
+        if active.len() >= 32 { return Err("Too many queued OCR requests; wait for a task to finish".into()); }
+        if !interactive && active.iter().any(|s|s.library_id == library_id && s.priority == "normal") { return Err("An OCR background task is already queued or running".into()); }
+        let initial=Status {automatic,automation_revision,scope:scope.into(),scope_name:folder.as_ref().map(|(_,path)|path.clone()),library_id:library_id.clone(),job_id:uuid::Uuid::new_v4().to_string(),running:true,queued:true,priority:if interactive {"interactive"}else{"normal"}.into(),..Default::default()};
+        let registration = super::vision_jobs::register_request(Task::Ocr,if interactive {super::vision_jobs::Priority::Interactive} else {super::vision_jobs::Priority::Normal},&initial.job_id)?;
+        let job=Arc::new(Job {automatic,batch_size,automation_revision:initial.automation_revision.clone(),cancel:AtomicBool::new(false),status:Mutex::new(initial.clone()),registration:Some(registration),selected_sources});jobs.push_back(job.clone());drop(jobs);
+        let initial = receipt(&library_id, &initial.job_id)?;
+        publish_progress(&app_handle, &library_id);
         tauri::async_runtime::spawn_blocking(move||{
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||run(&app_handle,&library_id,&model,force,retry_failed,file_ids,folder, &job)));
-            if let Ok(mut status)=job.status.lock() {
-                status.running=false;status.stopping=false;
+            {
+                let mut status=job.status.lock().unwrap_or_else(|error|error.into_inner());
+                status.running=false;status.queued=false;status.stopping=false;
                 status.cancelled=job.cancel.load(Ordering::SeqCst)||check_library(&library_id).is_err();
                 status.error=if status.cancelled { None } else { match result {Ok(Ok(()))=>None,Ok(Err(error))=>Some(error),Err(_)=>Some("OCR worker stopped unexpectedly; completed results are saved. Retry the remaining photos".into())} };
             }
+            job.status.clear_poison();
+            finish_job(&job);
+            release_backend_if_idle();
+            publish_progress(&app_handle, &library_id);
             let fatal=if job.automatic {job.status.lock().ok().and_then(|status|status.error.clone())}else{None};
             if let Some(error)=fatal { let _=super::ocr_auto::pause_with_error(&error); let _=app_handle.emit("ocr-automation-changed",()); }
             let _=app_handle.emit("ocr-index-updated",serde_json::json!({"libraryId":library_id,"finished":true}));
         });
         Ok(initial)
     }).await.map_err(|e|e.to_string())?
+}
+fn capture_sources(
+    c: &Connection,
+    ids: &[i64],
+    check: impl Fn() -> Result<(), String>,
+) -> Result<BTreeMap<i64, String>, String> {
+    ids.iter()
+        .map(|id| {
+            check()?;
+            let key = super::media::source_optional_on(c, *id)?
+                .map(|source| source.stamp_key())
+                .transpose()?
+                .unwrap_or_default();
+            Ok((*id, key))
+        })
+        .collect()
+}
+fn source_matches(c: &Connection, id: i64, expected: &str) -> Result<bool, String> {
+    Ok(super::media::source_optional_on(c, id)?
+        .map(|source| source.stamp_key())
+        .transpose()?
+        .as_deref()
+        == Some(expected))
 }
 fn run(
     app: &AppHandle,
@@ -348,6 +543,7 @@ fn run(
     folder: Option<(i64, String)>,
     job: &Job,
 ) -> Result<(), String> {
+    super::vision_jobs::ensure_admission()?;
     let c = {
         let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .read()
@@ -357,6 +553,17 @@ fn run(
     };
     super::profiles::ensure_on(&c, Task::Ocr, &model.profile())?;
     let profile = model.profile();
+    let (job_id, priority) = {
+        let status = job.status.lock().map_err(|e| e.to_string())?;
+        (
+            status.job_id.clone(),
+            if status.priority == "interactive" {
+                super::vision_jobs::Priority::Interactive
+            } else {
+                super::vision_jobs::Priority::Normal
+            },
+        )
+    };
     let targets = target_ids_with_options(
         &c,
         &profile,
@@ -374,23 +581,65 @@ fn run(
     }
     let check = || {
         check_library(library)?;
-        check_automatic(job,library)?;
-        if job.cancel.load(Ordering::SeqCst){return Err("OCR stopped; completed results are saved. Resume to process the remainder".into());}
+        check_automatic(job, library)?;
+        if job.cancel.load(Ordering::SeqCst) {
+            return Err(
+                "OCR stopped; completed results are saved. Resume to process the remainder".into(),
+            );
+        }
+        if super::settings::active(Task::Ocr)?.profile() != profile {
+            return Err(
+                "OCR model changed while the request was queued; retry with the current model"
+                    .into(),
+            );
+        }
         Ok(())
     };
-    let mut backend = {let _lane=super::vision_jobs::claim(Task::Ocr,&check)?;PaddleOcr::new(model)?};
+    let sources = match &job.selected_sources {
+        Some(sources) => sources.clone(),
+        None => capture_sources(&c, &targets, &check)?,
+    };
     for id in targets {
+        let _lane = super::vision_jobs::claim_job(Task::Ocr, priority, &job_id, &check)?;
+        publish_progress(app, library);
+        super::vision_jobs::ensure_admission()?;
         let _guard = crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK
             .read()
             .map_err(|e| e.to_string())?;
         check()?;
-        let row=c.query_row(&format!("SELECT b.path || '/' || a.name,a.modified_at,a.size,a.width,a.height,COALESCE(a.e_orientation,1) {} AND a.id=?1",base()),[id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,i64>(2)?,r.get::<_,u64>(3)?,r.get::<_,u64>(4)?,r.get::<_,i32>(5)?))).optional().map_err(|e|e.to_string())?;
-        let Some((path, modified, size, width, height, orientation)) = row else {
-            let mut s = job.status.lock().map_err(|e| e.to_string())?;
-            s.completed += 1;
-            continue;
+        let expected = sources.get(&id).map(String::as_str).unwrap_or_default();
+        let source = match super::media::source_optional_on(&c, id)? {
+            Some(source) if source.stamp_key()? == expected => source,
+            _ => {
+                job.status.lock().map_err(|e| e.to_string())?.completed += 1;
+                continue;
+            }
         };
-        let _lane=super::vision_jobs::claim(Task::Ocr,&check)?;
+        if !force
+            && target_ids_with_options(
+                &c,
+                &profile,
+                false,
+                retry_failed,
+                Some(vec![id]),
+                None,
+                &job.cancel,
+                job.automatic,
+                None,
+            )?
+            .is_empty()
+        {
+            job.status.lock().map_err(|e| e.to_string())?.completed += 1;
+            continue;
+        }
+        let super::media::Source {
+            path,
+            modified,
+            size,
+            width,
+            height,
+            orientation,
+        } = source;
         let mut process = (|| {
             if width.saturating_mul(height) > 80_000_000 {
                 return Err("Image exceeds 80 megapixel OCR decoding limit".into());
@@ -401,21 +650,24 @@ fn run(
                     "Source file changed since its last scan; rescan this album before OCR".into(),
                 );
             }
-            let image = crate::t_image::load_oriented_image_blocking(
-                &path,
-                orientation,
-            )?;
+            let image = crate::t_image::load_oriented_image_blocking(&path, orientation)?;
             check()?;
-            super::ocr_orientation::recognize(&mut backend, model, &image, None, &check)
+            with_backend(model, |backend| {
+                super::ocr_orientation::recognize(backend, model, &image, None, &check)
+            })
         })();
         match crate::t_utils::FileInfo::new(&path) {
             Ok(after) if after.modified==modified && after.file_size==size => {},
             _ => process=Err("Source changed or became unavailable during OCR; rescan the album and retry this photo".into()),
         }
         check()?; // Cancellation is not an OCR failure; never stamp it as indexed.
+        if !source_matches(&c, id, expected)? {
+            job.status.lock().map_err(|e| e.to_string())?.completed += 1;
+            continue;
+        }
         if process.is_err() && super::media::defer_cloud_original(&c, id, &path)? {
-            job.status.lock().map_err(|e|e.to_string())?.completed += 1;
-            let _ = app.emit("ocr-index-progress", job.status.lock().map_err(|e|e.to_string())?.clone());
+            job.status.lock().map_err(|e| e.to_string())?.completed += 1;
+            publish_progress(app, library);
             continue;
         }
         let (text, document, error) = match &process {
@@ -436,11 +688,12 @@ fn run(
                 ),
             ),
         };
-        // Single guarded SQL statement: source identity / visibility cannot change between check and insert.
-        let valid = store_result(
+        // The same write transaction verifies the accepted source identity and commits its result.
+        let valid = store_result_for_source(
             &c,
             id,
             &profile,
+            expected,
             modified,
             size,
             &text,
@@ -457,12 +710,34 @@ fn run(
             }
         }
         drop(status);
+        publish_progress(app, library);
         let _ = app.emit(
             "ocr-index-updated",
             serde_json::json!({"libraryId":library,"fileId":id}),
         );
     }
     Ok(())
+}
+#[allow(clippy::too_many_arguments)]
+fn store_result_for_source(
+    c: &Connection,
+    id: i64,
+    profile: &str,
+    expected: &str,
+    modified: Option<i64>,
+    size: i64,
+    text: &str,
+    document: Option<&str>,
+    error: Option<&str>,
+) -> Result<bool, String> {
+    let tx = rusqlite::Transaction::new_unchecked(c, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    if !source_matches(&tx, id, expected)? {
+        return Ok(false);
+    }
+    let written = store_result(&tx, id, profile, modified, size, text, document, error)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(written)
 }
 fn store_result(
     c: &Connection,
@@ -529,7 +804,11 @@ fn target_ids_with_options(
     limit: Option<usize>,
 ) -> Result<Vec<i64>, String> {
     // Snapshot IDs only. Page source rows lazily, never retain a whole library's paths / decoded pixels.
-    let mut query = format!("SELECT a.id {} AND {}", base(), super::media::local_originals());
+    let mut query = format!(
+        "SELECT a.id {} AND {}",
+        base(),
+        super::media::local_originals()
+    );
     if only_pending {
         query.push_str(" AND ");
         query.push_str(&workspace_condition("pending").replace(
@@ -689,15 +968,300 @@ pub async fn get_ocr_summaries(
 mod tests {
     use super::*;
     #[test]
+    fn queued_ocr_retains_early_path_and_orientation_and_cannot_overwrite_a_reused_id() {
+        let c = db();
+        let sources = capture_sources(&c, &[1], || Ok(())).unwrap();
+        let expected = sources.get(&1).unwrap();
+        assert!(source_matches(&c, 1, expected).unwrap());
+        store_result(
+            &c,
+            1,
+            "model-a",
+            Some(10),
+            20,
+            "previous result",
+            Some("{}"),
+            None,
+        )
+        .unwrap();
+        for statement in [
+            "UPDATE afiles SET name='replacement.jpg' WHERE id=1",
+            "UPDATE afiles SET name='photo.jpg',e_orientation=6 WHERE id=1",
+            "UPDATE afiles SET e_orientation=1,modified_at=11 WHERE id=1",
+            "UPDATE afiles SET modified_at=10,size=21 WHERE id=1",
+        ] {
+            c.execute(statement, []).unwrap();
+            assert!(!source_matches(&c, 1, expected).unwrap());
+            assert!(
+                !store_result_for_source(
+                    &c,
+                    1,
+                    "model-a",
+                    expected,
+                    Some(10),
+                    20,
+                    "stale queued result",
+                    Some("{}"),
+                    None
+                )
+                .unwrap()
+            );
+            assert_eq!(
+                c.query_row("SELECT text FROM ocr_index WHERE file_id=1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap(),
+                "previous result"
+            );
+        }
+        c.execute_batch("DELETE FROM afiles WHERE id=1; INSERT INTO afiles(id,folder_id,file_type,width,height,modified_at,size,name) VALUES(1,1,1,100,100,10,20,'reused.jpg');").unwrap();
+        assert!(!source_matches(&c, 1, expected).unwrap());
+        assert!(
+            !store_result_for_source(
+                &c,
+                1,
+                "model-a",
+                expected,
+                Some(10),
+                20,
+                "wrong photo",
+                None,
+                None
+            )
+            .unwrap()
+        );
+        assert_eq!(sources.len(), 1);
+        assert!(!sources.contains_key(&2));
+    }
+    #[test]
+    fn ocr_source_commit_keeps_unchanged_sources_atomic_and_rejects_late_identity_changes() {
+        let c = db();
+        let expected = capture_sources(&c, &[1], || Ok(()))
+            .unwrap()
+            .remove(&1)
+            .unwrap();
+        assert!(
+            store_result_for_source(
+                &c,
+                1,
+                "model-a",
+                &expected,
+                Some(10),
+                20,
+                "saved",
+                Some("{}"),
+                None
+            )
+            .unwrap()
+        );
+        c.execute("UPDATE afolders SET path='/new-location' WHERE id=1", [])
+            .unwrap();
+        assert!(
+            !store_result_for_source(
+                &c,
+                1,
+                "model-a",
+                &expected,
+                Some(10),
+                20,
+                "stale",
+                Some("{}"),
+                None
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            c.query_row("SELECT text FROM ocr_index WHERE file_id=1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+            "saved"
+        );
+    }
+    #[test]
+    fn idle_receipts_start_immediately_and_only_same_type_owners_queue_them() {
+        let selected = Status {
+            job_id: "selected".into(),
+            running: true,
+            queued: true,
+            priority: "interactive".into(),
+            ..Default::default()
+        };
+        // An idle OCR lane stays idle even when another task type owns its own lane.
+        let idle = project_receipt(vec![selected.clone()], None, "selected").unwrap();
+        assert!(!idle.queued);
+        assert_eq!((idle.queued_jobs, idle.priority_queued_jobs), (0, 0));
+        let region = project_receipt(vec![selected.clone()], Some(""), "selected").unwrap();
+        assert!(region.queued);
+        assert_eq!((region.queued_jobs, region.priority_queued_jobs), (1, 1));
+        assert!(
+            project_receipt(vec![selected.clone()], Some("roi:preparing"), "selected")
+                .unwrap()
+                .queued
+        );
+        let background = Status {
+            job_id: "background".into(),
+            running: true,
+            priority: "normal".into(),
+            ..Default::default()
+        };
+        let queued =
+            project_receipt(vec![background, selected], Some("background"), "selected").unwrap();
+        assert!(queued.queued);
+        assert_eq!((queued.queued_jobs, queued.priority_queued_jobs), (1, 1));
+    }
+    #[test]
+    fn projection_preserves_the_owner_then_runs_interactive_requests_in_order() {
+        let rows = vec![
+            Status {
+                job_id: "background".into(),
+                running: true,
+                priority: "normal".into(),
+                completed: 7,
+                ..Default::default()
+            },
+            Status {
+                job_id: "selected-1".into(),
+                running: true,
+                priority: "interactive".into(),
+                ..Default::default()
+            },
+            Status {
+                job_id: "selected-2".into(),
+                running: true,
+                priority: "interactive".into(),
+                ..Default::default()
+            },
+        ];
+        let current = project_statuses(rows.clone(), Some("background")).unwrap();
+        assert_eq!(current.job_id, "background");
+        assert_eq!(current.completed, 7);
+        assert!(!current.queued);
+        assert_eq!((current.queued_jobs, current.priority_queued_jobs), (2, 2));
+        let queued = project_statuses(rows.clone(), None).unwrap();
+        assert_eq!(queued.job_id, "selected-1");
+        assert!(!queued.queued);
+        assert_eq!((queued.queued_jobs, queued.priority_queued_jobs), (2, 1));
+        let mut restored = rows;
+        restored[1].running = false;
+        restored[2].running = false;
+        assert_eq!(
+            project_statuses(restored.clone(), None).unwrap().job_id,
+            "background"
+        );
+        restored[0].running = false;
+        let done = project_statuses(restored, None).unwrap();
+        assert_eq!(done.job_id, "selected-2");
+        assert!(!done.queued);
+        assert_eq!(done.queued_jobs, 0);
+    }
+    #[test]
+    fn background_snapshot_skips_a_photo_completed_by_a_selected_request() {
+        let c = db();
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            target_ids_with_options(
+                &c,
+                "model-a",
+                false,
+                false,
+                Some(vec![1]),
+                None,
+                &cancel,
+                false,
+                None
+            )
+            .unwrap(),
+            vec![1]
+        );
+        store_result(
+            &c,
+            1,
+            "model-a",
+            Some(10),
+            20,
+            "selected result",
+            Some("{}"),
+            None,
+        )
+        .unwrap();
+        assert!(
+            target_ids_with_options(
+                &c,
+                "model-a",
+                false,
+                false,
+                Some(vec![1]),
+                None,
+                &cancel,
+                false,
+                None
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(
+            target_ids_with_options(
+                &c,
+                "model-a",
+                true,
+                false,
+                Some(vec![1]),
+                None,
+                &cancel,
+                false,
+                None
+            )
+            .unwrap(),
+            vec![1]
+        );
+        c.execute("UPDATE afiles SET modified_at=11 WHERE id=1", [])
+            .unwrap();
+        assert_eq!(
+            target_ids_with_options(
+                &c,
+                "model-a",
+                false,
+                false,
+                Some(vec![1]),
+                None,
+                &cancel,
+                false,
+                None
+            )
+            .unwrap(),
+            vec![1]
+        );
+    }
+    #[test]
     fn cloud_or_pending_originals_are_not_enqueued_as_ocr_failures() {
         let c = db();
         c.execute_batch("UPDATE afiles SET cloud_only=1 WHERE id=1; UPDATE afiles SET metadata_pending=1 WHERE id=2;").unwrap();
         let cancel = AtomicBool::new(false);
-        assert!(target_ids_with_options(&c,"model-a",true,false,None,None,&cancel,false,None).unwrap().is_empty());
+        assert!(
+            target_ids_with_options(&c, "model-a", true, false, None, None, &cancel, false, None)
+                .unwrap()
+                .is_empty()
+        );
         // Availability must not change the existing browse/coverage contract.
-        assert_eq!(coverage_on(&c,"model-a").unwrap().0,2);
-        c.execute_batch("UPDATE afiles SET cloud_only=0 WHERE id=1;").unwrap();
-        assert_eq!(target_ids_with_options(&c,"model-a",false,false,None,None,&cancel,true,Some(1)).unwrap(),vec![1]);
+        assert_eq!(coverage_on(&c, "model-a").unwrap().0, 2);
+        c.execute_batch("UPDATE afiles SET cloud_only=0 WHERE id=1;")
+            .unwrap();
+        assert_eq!(
+            target_ids_with_options(
+                &c,
+                "model-a",
+                false,
+                false,
+                None,
+                None,
+                &cancel,
+                true,
+                Some(1)
+            )
+            .unwrap(),
+            vec![1]
+        );
     }
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -710,12 +1274,14 @@ mod tests {
             INSERT INTO afiles(id,folder_id,file_type,width,height,live_photo_video_id,modified_at,size) VALUES(1,1,1,100,100,NULL,10,20),(2,1,1,100,100,NULL,10,20);
             INSERT INTO ai_index_profiles VALUES('ocr','model-a');").unwrap();
         ensure_schema(&c).unwrap();
-        c.execute_batch("ALTER TABLE afiles ADD COLUMN cloud_only INTEGER NOT NULL DEFAULT 0; ALTER TABLE afiles ADD COLUMN metadata_pending INTEGER NOT NULL DEFAULT 0;").unwrap();
+        c.execute_batch("ALTER TABLE afiles ADD COLUMN cloud_only INTEGER NOT NULL DEFAULT 0; ALTER TABLE afiles ADD COLUMN metadata_pending INTEGER NOT NULL DEFAULT 0; ALTER TABLE afiles ADD COLUMN name TEXT NOT NULL DEFAULT 'photo.jpg'; ALTER TABLE afiles ADD COLUMN e_orientation INTEGER NOT NULL DEFAULT 1;").unwrap();
         c
     }
     #[test]
     fn automatic_checkpoints_reject_stale_policy_without_affecting_manual_jobs() {
         let mut job = Job {
+            registration: None,
+            selected_sources: None,
             automatic: true,
             batch_size: Some(20),
             automation_revision: Some("stale-revision".into()),

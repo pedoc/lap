@@ -192,6 +192,12 @@
   },
   "recognition_status": {
     "requesting": "正在处理任务请求",
+    "queued": "已排队",
+    "queued_started": "已排队，将在当前任务完成后处理。",
+    "priority_queued": "已优先排队，将在当前图片处理完成后处理。",
+    "queued_jobs": "本类型已排队 {count} 项任务",
+    "priority_queue": "其中 {count} 项手动任务优先处理，当前图片完成后执行。",
+    "priority_processing": "当前手动任务优先处理。",
     "attention": "需要留意",
     "failed": "识别失败 {count} 项",
     "open_details": "点击进入对应功能，查看详情与任务操作。"
@@ -697,6 +703,7 @@
     "preparation_progress": "已准备 {prepared} / {total} 张 · 尚未开始识别",
     "preparation_loading": "正在加载模型，首次加载可能需要一些时间；尚未开始逐张识别。",
     "phase_waiting": "等待推理资源",
+    "phase_queued": "已排队",
     "phase_indexing": "识别中",
     "phase_finished": "已结束",
     "progress": "{completed} / {total} · 成功 {succeeded} · 失败 {failed} · 跳过 {skipped}",

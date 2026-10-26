@@ -67,7 +67,7 @@ export async function startOcr(options: { force?: boolean; retryFailed?: boolean
   ocrBusy.value = true; ocrError.value = '';
   try {
     const status = await invoke('start_ocr_index', { libraryId, force: !!options.force, retryFailed: !!options.retryFailed, fileIds, folderId: options.folderId ?? null });
-    if (libraryId === libConfig._libraryId) { sequence++; pending = null; await refreshOcr(); }
+    if (libraryId === libConfig._libraryId) { sequence++; pending = null; void refreshOcr(); }
     return status;
   } catch (e) { if (libraryId === libConfig._libraryId) ocrError.value = String(e); throw e; }
   finally { ocrBusy.value = false; }

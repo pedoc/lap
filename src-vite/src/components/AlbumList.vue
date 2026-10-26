@@ -865,7 +865,7 @@ const getMoreMenuItems = async (album: any) => {
         if (libraryId !== libConfig._libraryId) return;
         try {
           const folder = await fetchFolder(album.path, false, config.settings.folderSort);
-          if (libraryId === libConfig._libraryId && folder?.id > 0) { await startObjectIndex({ folderId: Number(folder.id) }); useToast().success(t('objects.started')); }
+          if (libraryId === libConfig._libraryId && folder?.id > 0) { const receipt = await startObjectIndex({ folderId: Number(folder.id) }); if (libraryId === libConfig._libraryId) useToast().success(t(receipt?.queued ? 'recognition_status.queued_started' : 'objects.started')); }
         } catch (e) { if (libraryId === libConfig._libraryId) useToast().error(String(e)); }
       },
     },
@@ -875,7 +875,7 @@ const getMoreMenuItems = async (album: any) => {
         if (libraryId !== libConfig._libraryId) return;
         try {
           const folder = await fetchFolder(album.path, false, config.settings.folderSort);
-          if (libraryId === libConfig._libraryId && folder?.id > 0) { await startOcr({ folderId: Number(folder.id) }); useToast().success(t('ocr.task_started')); }
+          if (libraryId === libConfig._libraryId && folder?.id > 0) { const receipt = await startOcr({ folderId: Number(folder.id) }); if (libraryId === libConfig._libraryId) useToast().success(t(receipt?.queued ? 'recognition_status.queued_started' : 'ocr.task_started')); }
         } catch (e) { if (libraryId === libConfig._libraryId) useToast().error(String(e)); }
       },
     },

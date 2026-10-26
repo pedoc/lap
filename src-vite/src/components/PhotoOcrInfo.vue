@@ -8,7 +8,7 @@
       </button>
       <template v-if="expanded">
         <button class="btn btn-xs" :disabled="busy || !result?.indexed" @click="openEditor">{{ t('ocr.edit_title') }}</button>
-        <button class="btn btn-xs" :disabled="busy || taskBusy || taskView?.status.running" @click="recognize">{{ t(processing ? 'ocr.recognizing' : result?.indexed ? 'ocr.reidentify' : 'ocr.recognize') }}</button>
+        <button class="btn btn-xs" :disabled="busy || taskBusy" @click="recognize">{{ t(processing ? (queued ? 'recognition_status.queued' : 'ocr.recognizing') : result?.indexed ? 'ocr.reidentify' : 'ocr.recognize') }}</button>
       </template>
     </div>
     <Transition @before-enter="onBeforeEnter" @enter="onEnter" @after-enter="onAfterEnter" @leave="onLeave">
@@ -20,6 +20,7 @@
     <p v-if="result?.annotation" class="text-xs text-primary">{{ result.annotation.source?.lines?.length ? t('ocr.edit_provenance', { model: result.annotation.modelName }) : t('ocr.manual_only') }}</p>
     <details v-if="result?.annotation" class="text-xs opacity-60"><summary class="cursor-pointer">{{ t('ocr.current_model_result') }}</summary><p class="whitespace-pre-wrap select-text">{{ result.modelDocument?.text || t('ocr.not_indexed') }}</p></details>
     <p class="text-xs opacity-50">{{ t('ocr.photo_hint') }}</p>
+    <p v-if="processing && queued" class="text-xs text-primary" aria-live="polite">{{ t('recognition_status.priority_queued') }}</p>
     <p v-if="result?.document?.rotationDegrees || result?.document?.deskewDegrees" class="text-xs opacity-60">{{ t('ocr.rotation_applied', { rotation: result.document.rotationDegrees || 0, tilt: result.document.deskewDegrees || 0 }) }}</p>
     <p v-if="error || result?.error" role="alert" class="text-xs text-error whitespace-pre-wrap">{{ error || result.error }}</p>
     <p v-else-if="!result?.indexed" class="text-xs opacity-50">{{ t('ocr.not_indexed') }}</p>
@@ -60,7 +61,7 @@ function toggleExpanded() {
   config.infoPanel ||= {};
   config.infoPanel.showOcr = !expanded.value;
 }
-const { view: taskView, busy: taskBusy } = useOcr();
+const { busy: taskBusy } = useOcr();
 const copied = ref(false), editor = ref<any>();
 function openEditor() { if (result.value?.document) editor.value = { fileId:Number(props.file.id),libraryId:libConfig._libraryId,result:JSON.parse(JSON.stringify(result.value)) }; }
 async function editorSaved() { editor.value = undefined; ocrFocus.value = null; await refresh(); }
@@ -73,7 +74,7 @@ function focusLine(line: number) {
   emit('focus-line', ocrFocus.value);
 }
 const supported = computed(() => [1, 3].includes(Number(props.file?.file_type)));
-const result = ref<any>(null), error = ref(''), busy = ref(false), processing = ref(false);
+const result = ref<any>(null), error = ref(''), busy = ref(false), processing = ref(false), queued = ref(false);
 let generation = 0, sequence = 0, disposed = false;
 const listeners: Array<() => void> = [];
 async function refresh() {
@@ -87,11 +88,11 @@ async function refresh() {
 async function recognize() {
   const fileId = Number(props.file?.id), libraryId = libConfig._libraryId, scope = generation;
   busy.value = true; error.value = '';
-  try { await startOcr({ fileIds: [fileId], force: true }); if (scope === generation) processing.value = true; }
+  try { const status = await startOcr({ fileIds: [fileId], force: true }); if (scope === generation) { processing.value = true; queued.value = !!status?.queued; } }
   catch (e) { if (scope === generation) error.value = String(e); }
   finally { if (scope === generation) { busy.value = false; await refresh(); } }
 }
-watch(() => [libConfig._libraryId, props.file?.id, props.file?.modified_at, config.settings.ai?.ocrProfile], () => { generation++; result.value = null; error.value = ''; copied.value = false; busy.value = false; processing.value = false; void refresh(); }, { immediate: true });
+watch(() => [libConfig._libraryId, props.file?.id, props.file?.modified_at, config.settings.ai?.ocrProfile], () => { generation++; result.value = null; error.value = ''; copied.value = false; busy.value = false; processing.value = false; queued.value = false; void refresh(); }, { immediate: true });
 onMounted(async () => {
   for (const name of ['ocr-index-updated', 'ocr-annotations-changed', 'ai-configuration-changed', 'media-lifecycle-changed', 'files-deleted']) {
     const off = await listen(name, (e: any) => {

@@ -10,7 +10,7 @@
       <div class="flex flex-col items-center text-base-content/70">
         <IconUpdate class="w-4 h-4 mb-1 animate-spin" />
         <span class="text-sm text-center">
-          {{ indexProgress.phase === 'clustering' 
+          {{ indexProgress.queued ? $t('recognition_status.queued') : indexProgress.phase === 'clustering'
             ? $t('face_index.clustering') 
             : $t('face_index.indexing', { current: indexProgress.current.toLocaleString(), total: indexProgress.total.toLocaleString() }) 
           }}
@@ -275,7 +275,7 @@ function hideFaceProgress() { faceProgressHidden.value = true; }
 watch(isIndexing, (running, wasRunning) => {
   if (running && !wasRunning) faceProgressHidden.value = false;
 }, { flush: 'sync' });
-const indexProgress = ref({
+const indexProgress = ref<any>({
   current: 0,
   total: 0,
   faces_found: 0,
@@ -322,6 +322,18 @@ let unlistenProgress: (() => void) | null = null;
 let unlistenFinished: (() => void) | null = null;
 let unlistenCluster: (() => void) | null = null;
 let unlistenPeople: (() => void) | null = null;
+const finishedFaceJobs = new Set<string>();
+let faceStatusSequence = 0;
+async function restoreFaceStatus() {
+  const libraryId = libConfig._libraryId, profile = config.settings.ai?.faceProfile, request = ++faceStatusSequence;
+  const [running, progress] = await isFaceIndexing();
+  if (!isPersonMounted || libraryId !== libConfig._libraryId || profile !== config.settings.ai?.faceProfile || request !== faceStatusSequence) return;
+  if (running && progress?.library_id === libraryId && !finishedFaceJobs.has(progress.job_id)) {
+    if (progress.job_id !== indexProgress.value.job_id) clusterProgress.value = { phase: '', current: 0, total: 0 };
+    isIndexing.value = true;
+    indexProgress.value = progress;
+  } else if (!running) isIndexing.value = false;
+}
 const faceToast = useToast();
 onMounted(async () => {
   const stop = await listen('face-person-changed', async (event: any) => {
@@ -437,24 +449,19 @@ const getMoreMenuItems = () => [
 ];
 
 onMounted(async () => {
-  const libraryId = libConfig._libraryId;
   loadPersons();
   checkFaceStats();
   
   // Check if indexing is already running and restore progress
-  const [isRunning, progress] = await isFaceIndexing();
+  await restoreFaceStatus();
   if (!isPersonMounted) return;
-  
-  if (libraryId === libConfig._libraryId && isRunning && (!progress?.library_id || progress.library_id === libraryId)) {
-    isIndexing.value = true;
-    if (progress) {
-      indexProgress.value = progress;
-    }
-  }
   
   // Set up event listeners for face indexing progress
   const stopProgress = await listenFaceIndexProgress((event: any) => {
     if (!isPersonMounted || (event.payload.library_id && event.payload.library_id !== libConfig._libraryId)) return;
+    if (event.payload.job_id && finishedFaceJobs.has(event.payload.job_id)) return;
+    if (event.payload.job_id && indexProgress.value.job_id && event.payload.job_id !== indexProgress.value.job_id) { void restoreFaceStatus(); return; }
+    faceStatusSequence++;
     isIndexing.value = true; // Show overlay when receiving progress events
     indexProgress.value = event.payload;
   });
@@ -463,9 +470,13 @@ onMounted(async () => {
   
   const stopFinished = await listenFaceIndexFinished((event: any) => {
     if (!isPersonMounted || (event.payload.library_id && event.payload.library_id !== libConfig._libraryId)) return;
-    isIndexing.value = false;
-    indexProgress.value = { current: 0, total: 0, faces_found: 0, phase: 'indexing' };
+    if (event.payload.job_id) finishedFaceJobs.add(event.payload.job_id);
+    if (event.payload.job_id && indexProgress.value.job_id && event.payload.job_id !== indexProgress.value.job_id) { void restoreFaceStatus(); return; }
+    faceStatusSequence++;
+    isIndexing.value = Number(event.payload.queued_jobs) > 0;
+    if (!isIndexing.value) indexProgress.value = { current: 0, total: 0, faces_found: 0, phase: 'indexing' };
     clusterProgress.value = { phase: '', current: 0, total: 0 };
+    if (event.payload.job_id) void restoreFaceStatus();
     schedulePeopleRefresh(); // Keep row objects, selection and scroll after the final batch.
     checkFaceStats();
   });
@@ -475,11 +486,13 @@ onMounted(async () => {
   // Listen for detailed clustering progress
   unlistenCluster = await listenClusterProgress((event: any) => {
     if (event.payload.library_id && event.payload.library_id !== libConfig._libraryId) return;
+    if (event.payload.job_id && (event.payload.job_id !== indexProgress.value.job_id || finishedFaceJobs.has(event.payload.job_id))) return;
     clusterProgress.value = event.payload;
   });
 });
 
 watch(() => libConfig._libraryId, () => {
+  faceStatusSequence++; finishedFaceJobs.clear();
   isIndexing.value = false;
   faceProgressHidden.value = false;
   if (isPersonMounted) { void loadPersons(true, true); void checkFaceStats(); }
@@ -703,7 +716,9 @@ async function clickIndexFaces() {
   
   isIndexing.value = true;
   try {
-    await indexFaces();
+    const receipt = await indexFaces();
+    if (receipt?.queued) faceToast.info(t(receipt.priority === 'interactive' ? 'recognition_status.priority_queued' : 'recognition_status.queued_started'));
+    await restoreFaceStatus();
     await loadPersons();
     await checkFaceStats();
   } catch (e) {
@@ -714,7 +729,7 @@ async function clickIndexFaces() {
 
 // Cancel face indexing
 async function clickCancelIndex() {
-  await cancelFaceIndex();
+  await cancelFaceIndex(indexProgress.value.job_id ?? null);
 }
 
 // Reset faces

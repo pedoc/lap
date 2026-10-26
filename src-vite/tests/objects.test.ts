@@ -269,6 +269,51 @@ test('a delayed initial start reply cannot overwrite a newer preparation status'
   requests[1].resolve({ status: latest });
   await tick();
 });
+test('a queued object receipt preserves the active progress until the authoritative projection changes', async () => {
+  const requests: Array<{ name: string; resolve: (value: any) => void }> = [];
+  const api = commonModule('objects', {
+    ...Vue, validateObjectScope, libConfig: { _libraryId: 'A' },
+    invoke: (name: string) => new Promise(resolve => requests.push({ name, resolve })),
+  }, 'objectView,objectBusy,startObjectIndex');
+  api.objectView.value = { status: { jobId: 'background', running: true, completed: 56, total: 100 } };
+  const start = api.startObjectIndex({ fileIds: [7] });
+  requests[0].resolve({ jobId: 'manual', running: true, queued: true, priority: 'interactive', completed: 0 });
+  const receipt = await start;
+  assert.equal(receipt.queued, true);
+  assert.equal(api.objectBusy.value, false);
+  assert.equal(api.objectView.value.status.jobId, 'background');
+  assert.equal(api.objectView.value.status.completed, 56);
+  requests[1].resolve({ status: { jobId: 'manual', running: true, queued: false, priority: 'interactive', completed: 0, total: 1 } });
+  await tick();
+  assert.equal(api.objectView.value.status.jobId, 'manual');
+});
+test('photo object recognition remains available during background work and reports a queued manual request', async () => {
+  const ctx = context();
+  ctx.useObjects = () => ({ view: Vue.ref({ status: { running: true } }), busy: Vue.ref(false), start: async () => ({ queued: true, priority: 'interactive' }) });
+  const html = await renderToString(Vue.createSSRApp(component('PhotoObjectInfo', ctx), { file: ctx.props.file }));
+  const action = [...html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map(match => match[0]).find(button => button.includes(t('objects.reidentify')));
+  assert.ok(action); assert.doesNotMatch(action, /disabled/);
+  const h = script('PhotoObjectInfo', ctx, 'recognize,actionNotice');
+  await h.api.recognize();
+  assert.match(h.api.actionNotice.value, /已优先排队.*当前图片/);
+  h.dispose();
+});
+test('another object job progress event refreshes the active projection instead of replacing it with that event', async () => {
+  const mounted: any[] = [], timers: any[] = [], events: any = {}, reads: any[] = [];
+  const api = commonModule('objects', {
+    ...Vue, libConfig: { _libraryId: 'A' }, config: { settings: { ai: {} } },
+    onMounted: (callback: any) => mounted.push(callback), onBeforeUnmount() {}, watch: () => () => {},
+    listen: async (name: string, callback: any) => { events[name] = callback; return () => {}; },
+    setInterval: () => 1, setTimeout: (callback: any) => { timers.push(callback); return 1; },
+    invoke: async () => { reads.push(true); return { status: { jobId: 'manual', running: true, completed: 0 } }; },
+  }, 'objectView,useObjects');
+  api.objectView.value = { status: { jobId: 'background', running: true, completed: 56 } };
+  api.useObjects(); mounted[0](); await tick();
+  events['object-job-progress']({ payload: { libraryId: 'A', jobId: 'manual', running: true, completed: 1 } });
+  assert.equal(api.objectView.value.status.completed, 56);
+  assert.equal(timers.length, 1); timers[0](); await tick();
+  assert.equal(reads.length, 1); assert.equal(api.objectView.value.status.jobId, 'manual');
+});
 test('object start and stop stay usable while coverage refresh is pending', async () => {
   const requests: Array<{ name: string; args: any; resolve: (value: any) => void }> = [];
   const ctx = {
@@ -371,6 +416,8 @@ test('automatic detection only schedules pending photos in the authorized librar
   assert.equal(objectHelpers.objectAutomationReady(view, 'A', true), false);
   assert.equal(objectHelpers.objectAutomationReady({ ...view, modelInstalled: false }, 'A', false), false);
   assert.equal(objectHelpers.objectAutomationReady({ ...view, status: { running: true } }, 'A', false), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, status: { queued: true } }, 'A', false), false);
+  assert.equal(objectHelpers.objectAutomationReady({ ...view, status: { queuedJobs: 1 } }, 'A', false), false);
   assert.equal(objectHelpers.objectAutomationReady({ ...view, automation: { ...view.automation, paused: true } }, 'A', false), false);
   assert.equal(objectHelpers.objectAutomationReady({ ...view, automation: { ...view.automation, enabled: false } }, 'A', false), false);
   view.automation.scope = { libraryId: 'B', folderId: 12 };

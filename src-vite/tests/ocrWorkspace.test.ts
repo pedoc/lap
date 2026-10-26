@@ -206,10 +206,11 @@ test('filmstrip keeps the current photo when indexing removes it from the select
 test('standalone viewer recognizes exactly the active comparison pane, never every open photo',async()=>{
   const source=readFileSync(new URL('../src/views/ImageViewer.vue',import.meta.url),'utf8');
   const start=source.indexOf('async function recognizeViewerText('),end=source.indexOf('async function detectViewerFaces(',start);
-  const calls:any[]=[];const library={_libraryId:'library-a'};
-  const context:any={libConfig:library,getActiveFilePane:()=> 'right',getFileInfoByPane:(pane:string)=>({id:pane==='right'?9:7,file_type:1}),ask:async()=>true,startOcr:async(options:any)=>calls.push(options),t:translate,toast:{info(){},error(){}}};
+  const calls:any[]=[],messages:string[]=[];const library={_libraryId:'library-a'};
+  const context:any={libConfig:library,getActiveFilePane:()=> 'right',getFileInfoByPane:(pane:string)=>({id:pane==='right'?9:7,file_type:1}),ask:async()=>true,startOcr:async(options:any)=>{calls.push(options);return{queued:true,priority:'interactive'};},t:translate,toast:{info(message:string){messages.push(message);},error(){}}};
   const fn=runInNewContext(`(${stripTypeScriptTypes(source.slice(start,end))})`,context);await fn();
   assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{fileIds:[9],force:false}]);
+  assert.match(messages[0],/已优先排队.*当前图片/);
   context.ask=async()=>{library._libraryId='other';return true;};await fn(true);assert.equal(calls.length,1);
   assert.match(source,/case 'recognize-text': await recognizeViewerText\(\)/);
   assert.match(source,/case 'rerecognize-text': await recognizeViewerText\(true\)/);

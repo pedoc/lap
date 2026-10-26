@@ -1,4 +1,16 @@
 {
+  "recognition_status": {
+    "requesting": "正在處理任務請求",
+    "queued": "已排隊",
+    "queued_started": "已排隊，將在目前任務完成後處理。",
+    "priority_queued": "已優先排隊，將在目前圖片處理完成後處理。",
+    "queued_jobs": "本類型已排隊 {count} 項任務",
+    "priority_queue": "其中 {count} 項手動任務優先處理，目前圖片完成後執行。",
+    "priority_processing": "目前手動任務優先處理。",
+    "attention": "需要留意",
+    "failed": "辨識失敗 {count} 項",
+    "open_details": "點擊進入對應功能，查看詳情與任務操作。"
+  },
   "scan_tracking": {
     "video_index_missing_hint": "影片缺少可讀取的 MOV/MP4 索引，可能未完整下載、複製中斷或未正常儲存。請從 iCloud 或原裝置重新取得完整副本後再重試；重複重試無法補回缺失內容。",
     "state_retrying": "正在重試失敗項",
@@ -257,6 +269,7 @@
     "preparation_loading": "正在載入模型，首次載入可能需要一些時間；尚未開始逐張識別。",
     "phase_waiting": "等待推理資源",
     "phase_indexing": "識別中",
+    "phase_queued": "已排隊",
     "phase_finished": "已結束",
     "progress": "{completed} / {total} · 成功 {succeeded} · 失敗 {failed} · 跳過 {skipped}",
     "saved": "已停止，完成的結果已儲存。可在任務記錄中復原原清單的未完成部分。",

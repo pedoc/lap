@@ -58,6 +58,7 @@ for (const name of ['OcrIndexPanel', 'PhotoOcrInfo']) {
   });
   test(`${name} compiles and renders its actual template`, async () => {
     const h = harness(name); const { descriptor } = parse(h.source); const imports: any = {};
+    if (name === 'PhotoOcrInfo') h.ctx.useOcr = () => ({ busy: Vue.ref(false), view: Vue.ref({ status: { running: true } }) });
     const code = stripTypeScriptTypes(compileScript(descriptor, { id: name, inlineTemplate: true }).content)
       .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_m, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
       .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
@@ -65,6 +66,10 @@ for (const name of ['OcrIndexPanel', 'PhotoOcrInfo']) {
     const html = await renderToString(Vue.createSSRApp(component, { file: { id: 7, file_type: 1 } }));
     assert.match(html, name === 'OcrIndexPanel' ? /ocr.process_pending/ : /ocr.recognize/);
     assert.doesNotMatch(html, /undefined/);
+    if (name === 'PhotoOcrInfo') {
+      const action = html.match(/<button\b[^>]*>\s*ocr.recognize\s*<\/button>/)?.[0];
+      assert.ok(action); assert.doesNotMatch(action, /disabled/);
+    }
   });
 }
 test('OCR panel does not run expensive coverage queries for every indexed photo event', async () => {
@@ -74,6 +79,23 @@ test('OCR panel does not run expensive coverage queries for every indexed photo 
 test('OCR stop uses current library and exact job ID', async () => {
   const h = harness('OcrIndexPanel'); h.api.view.value = { status: { jobId: 'job-1' } }; await h.api.stop();
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0])), ['cancel_ocr_index', { libraryId: 'A', jobId: 'job-1' }]);
+});
+test('queued OCR submission releases controls and retains active progress while its status refresh is pending', async () => {
+  const reads: Array<{ name: string; resolve: (value: any) => void }> = [];
+  const source = stripTypeScriptTypes(readFileSync(new URL('../src/common/ocr.ts', import.meta.url), 'utf8'))
+    .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace(/^export /gm, '');
+  const api = runInNewContext(`${source};({ocrView,ocrBusy,startOcr})`, {
+    ...Vue, ocrSelectionIds, libConfig: { _libraryId: 'A' },
+    invoke: (name: string) => new Promise(resolve => reads.push({ name, resolve })),
+  });
+  api.ocrView.value = { status: { jobId: 'background', running: true, completed: 56, total: 100 } };
+  const start = api.startOcr({ fileIds: [7] });
+  reads[0].resolve({ jobId: 'manual', running: true, queued: true, priority: 'interactive' });
+  assert.equal((await start).queued, true);
+  assert.equal(api.ocrBusy.value, false);
+  assert.equal(api.ocrView.value.status.completed, 56);
+  reads[1].resolve({ status: { jobId: 'background', running: true, completed: 57, queuedJobs: 1 } });
+  await tick(); assert.equal(api.ocrView.value.status.completed, 57);
 });
 test('photo OCR template escapes recognized text and displays per-line confidence', async () => {
   const h = harness('PhotoOcrInfo'); const { descriptor } = parse(h.source); const imports: any = {};

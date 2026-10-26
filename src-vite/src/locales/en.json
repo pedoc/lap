@@ -192,6 +192,12 @@
   },
   "recognition_status": {
     "requesting": "Processing task request",
+    "queued": "Queued",
+    "queued_started": "Queued to run after the current task finishes.",
+    "priority_queued": "Queued with priority. Processing starts after the current photo finishes.",
+    "queued_jobs": "{count} tasks queued for this recognition type",
+    "priority_queue": "{count} manual tasks have priority after the current photo finishes.",
+    "priority_processing": "The current manual task has priority.",
     "attention": "Needs attention",
     "failed": "Recognition failed for {count} items",
     "open_details": "Open this workspace for details and task actions."
@@ -697,6 +703,7 @@
     "preparation_progress": "Prepared {prepared} / {total} photos · recognition has not started yet",
     "preparation_loading": "Loading the model; the first load may take a while. Photo recognition has not started yet.",
     "phase_waiting": "Waiting for inference resources",
+    "phase_queued": "Queued",
     "phase_indexing": "Recognizing",
     "phase_finished": "Finished",
     "progress": "{completed} / {total} · {succeeded} succeeded · {failed} failed · {skipped} skipped",

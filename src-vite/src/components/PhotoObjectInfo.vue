@@ -20,7 +20,7 @@
       <button
         v-if="expanded"
         class="btn btn-xs btn-ghost"
-        :disabled="taskBusy || view?.status.running || busy"
+        :disabled="taskBusy || busy"
         @click="recognize"
       >
         {{ t(result?.indexed ? 'objects.reidentify' : 'objects.recognize') }}
@@ -28,6 +28,7 @@
     </div>
     <Transition @before-enter="onBeforeEnter" @enter="onEnter" @after-enter="onAfterEnter" @leave="onLeave">
     <div v-show="expanded" class="pl-4 space-y-3 overflow-hidden" data-info-section-content="objects">
+    <p v-if="actionNotice" class="text-xs text-primary" aria-live="polite">{{ actionNotice }}</p>
     <p v-if="loading" class="text-xs opacity-60">{{ t('objects.loading') }}</p>
     <p
       v-if="error || actionError || result?.error"
@@ -236,6 +237,7 @@ const supported = computed(() =>
   editing = computed(() => objectEditActive(Number(props.file?.id)));
 const busy = ref(false),
   actionError = ref(''),
+  actionNotice = ref(''),
   reviewOpen = ref(false),
   accepted = ref<string[]>([]);
 const name = (label: any) => objectClassName(label, t);
@@ -268,6 +270,7 @@ watch(
   ],
   () => {
     actionError.value = '';
+    actionNotice.value = '';
     busy.value = false;
     reviewOpen.value = false;
     accepted.value = [];
@@ -370,7 +373,9 @@ async function recognize() {
       profile !== config.settings.ai?.detectionProfile
     )
       return;
-    await start({ fileIds: [fileId], force });
+    const receipt = await start({ fileIds: [fileId], force });
+    if (libraryId === libConfig._libraryId && fileId === Number(props.file.id) && profile === config.settings.ai?.detectionProfile)
+      actionNotice.value = t(receipt?.queued ? 'recognition_status.priority_queued' : 'objects.started');
   } catch (e) {
     if (libraryId === libConfig._libraryId && fileId === Number(props.file.id))
       actionError.value = String(e);

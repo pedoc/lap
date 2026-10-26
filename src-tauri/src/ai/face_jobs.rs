@@ -96,6 +96,32 @@ pub fn selected_images(
     images.retain(|image| scope.force || !image.scanned);
     Ok((images, cached))
 }
+/// Recheck after acquiring the face lane: a selected job may have finished this image while we waited.
+pub fn needs_inference(
+    conn: &Connection,
+    image: &SourceImage,
+    force: bool,
+) -> Result<bool, String> {
+    let actual = conn.query_row(
+        "SELECT f.path || '/' || a.name,a.width,a.height,a.modified_at,a.size,COALESCE(a.has_faces,0) FROM afiles a JOIN afolders f ON f.id=a.folder_id WHERE a.id=?1 AND a.file_type IN (1,3)",
+        [image.id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, Option<i64>>(3)?, row.get::<_, i64>(4)?, row.get::<_, i64>(5)?)),
+    ).optional().map_err(|e| e.to_string())?;
+    let Some((path, width, height, modified_at, size, scanned)) = actual else {
+        return Err(
+            "Source image is missing or unsupported; old face records were retained".into(),
+        );
+    };
+    if path != image.path
+        || width != image.width
+        || height != image.height
+        || modified_at != image.modified_at
+        || size != image.size
+    {
+        return Err("Source image changed during face inference; result discarded".into());
+    }
+    Ok(force || scanned == 0)
+}
 /// Match the browser/preview orientation, rather than detecting unrotated EXIF JPEG pixels.
 pub fn decode_image(bytes: &[u8]) -> Result<image::DynamicImage, String> {
     use image::ImageDecoder;
@@ -145,17 +171,7 @@ pub fn replace_scanned_reported(
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| e.to_string())?;
     let result = (|| {
-        let actual = conn
-            .query_row(
-                "SELECT modified_at,size FROM afiles WHERE id=?1",
-                [image.id],
-                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?)),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if actual != Some((image.modified_at, image.size)) {
-            return Err("Source image changed during face inference; result discarded".into());
-        }
+        needs_inference(conn, image, true)?;
         let old = {
             let mut statement = conn
                 .prepare("SELECT id,bbox,annotation_id FROM faces WHERE file_id=?1 ORDER BY id")
@@ -338,6 +354,50 @@ mod tests {
         assert!(FaceScope::new(Some(vec![0]), false).is_err());
         assert!(FaceScope::new(None, true).is_err());
         assert!(FaceScope::new(Some(vec![1; 10001]), false).is_err());
+    }
+    #[test]
+    fn waiting_background_images_recheck_manual_completion_and_force_stays_explicit() {
+        let c = db();
+        let source = selected_images(&c, &FaceScope::new(None, false).unwrap())
+            .unwrap()
+            .0
+            .remove(0);
+        assert!(needs_inference(&c, &source, false).unwrap());
+        replace_scanned(&c, &source, &[]).unwrap();
+        assert!(!needs_inference(&c, &source, false).unwrap());
+        assert!(needs_inference(&c, &source, true).unwrap());
+    }
+    #[test]
+    fn a_queued_source_cannot_change_path_dimensions_or_revision_before_commit() {
+        for change in [
+            "UPDATE afiles SET name='changed.jpg' WHERE id=1",
+            "UPDATE afiles SET width=200 WHERE id=1",
+            "UPDATE afiles SET height=200 WHERE id=1",
+            "UPDATE afiles SET modified_at=11 WHERE id=1",
+            "UPDATE afiles SET size=101 WHERE id=1",
+            "UPDATE afiles SET file_type=2 WHERE id=1",
+            "DELETE FROM afiles WHERE id=1",
+        ] {
+            let c = db();
+            c.execute(
+                "INSERT INTO faces VALUES(11,1,?1,X'01020304',7,0)",
+                [bbox(0.)],
+            )
+            .unwrap();
+            let source = selected_images(&c, &FaceScope::new(Some(vec![1]), true).unwrap())
+                .unwrap()
+                .0
+                .remove(0);
+            c.execute_batch(change).unwrap();
+            assert!(needs_inference(&c, &source, false).is_err(), "{change}");
+            assert!(replace_scanned(&c, &source, &[]).is_err(), "{change}");
+            assert_eq!(
+                c.query_row("SELECT person_id FROM faces WHERE id=11", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                7
+            );
+        }
     }
     #[test]
     fn selection_is_deduplicated_and_does_not_include_other_images() {

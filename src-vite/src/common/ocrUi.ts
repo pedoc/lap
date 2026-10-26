@@ -93,7 +93,7 @@ export function ocrSelectionRect(start: { x: number; y: number }, end: { x: numb
 
 export function ocrAutomationReady(view: any, libraryId: string | null, mediaIndexing = false) {
   const policy = view?.automation;
-  return Boolean(libraryId && policy?.enabled && !policy.paused && view.automationHasLocalPending !== false && view.modelInstalled && view.pending > 0 && !view.status?.running && !mediaIndexing
+  return Boolean(libraryId && policy?.enabled && !policy.paused && view.automationHasLocalPending !== false && view.modelInstalled && view.pending > 0 && !view.status?.running && !view.status?.queued && !(Number(view.status?.queuedJobs) > 0) && !mediaIndexing
     && (!policy.scope || policy.scope.libraryId === libraryId)
     && !(view.status?.automatic && view.status?.error && view.status.automationRevision === policy.revision));
 }

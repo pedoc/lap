@@ -11,14 +11,61 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
-static SESSIONS: Mutex<BTreeMap<u64, Session>> = Mutex::new(BTreeMap::new());
+type SessionEntry<T> = Arc<Mutex<Option<T>>>;
+type SessionMap<T> = Mutex<BTreeMap<u64, SessionEntry<T>>>;
+static SESSIONS: SessionMap<Session> = Mutex::new(BTreeMap::new());
 static NEXT: AtomicU64 = AtomicU64::new(1);
 static RUNTIME: OnceLock<PathBuf> = OnceLock::new();
 static LIBRARIES: Mutex<Vec<libloading::Library>> = Mutex::new(Vec::new());
+fn session_entry<T>(sessions: &SessionMap<T>, id: u64) -> Result<SessionEntry<T>, String> {
+    sessions
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "CUDA session was closed".into())
+}
+fn with_session<T, R>(
+    entry: &SessionEntry<T>,
+    operation: impl FnOnce(&mut T) -> Result<R, String>,
+) -> Result<R, String> {
+    let mut session = entry.lock().map_err(|e| e.to_string())?;
+    operation(session.as_mut().ok_or("CUDA session was closed")?)
+}
+fn close_session<T>(sessions: &SessionMap<T>, id: u64) -> Result<Option<T>, String> {
+    let entry = sessions.lock().map_err(|e| e.to_string())?.remove(&id);
+    match entry {
+        Some(entry) => {
+            // A failed run may poison its own session, but cleanup must still release it.
+            let mut session = entry.lock().unwrap_or_else(|e| e.into_inner());
+            Ok(session.take())
+        }
+        None => Ok(None),
+    }
+}
+fn initialize_once<T>(
+    runtime: &OnceLock<PathBuf>,
+    libraries: &Mutex<T>,
+    path: PathBuf,
+    load: impl FnOnce(&mut T, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut libraries = libraries.lock().map_err(|e| e.to_string())?;
+    if let Some(current) = runtime.get() {
+        return if current == &path {
+            Ok(())
+        } else {
+            Err("CUDA runtime changed; restart Lap before loading another runtime".into())
+        };
+    }
+    load(&mut libraries, &path)?;
+    runtime
+        .set(path)
+        .map_err(|_| "CUDA runtime was initialized concurrently".to_string())
+}
 fn initialize(root: &str) -> Result<(), String> {
     if !Path::new(root).is_absolute() {
         return Err("CUDA runtime requires an absolute component directory".into());
@@ -26,52 +73,43 @@ fn initialize(root: &str) -> Result<(), String> {
     let path = Path::new(root)
         .canonicalize()
         .map_err(|e| format!("CUDA runtime directory: {e}"))?;
-    if let Some(current) = RUNTIME.get() {
-        return if current == &path {
-            Ok(())
-        } else {
-            Err("CUDA runtime changed; restart Lap before loading another runtime".into())
-        };
-    }
-    let mut libraries = LIBRARIES.lock().map_err(|e| e.to_string())?;
-    #[cfg(target_os = "windows")]
-    for name in [
-        "cudart64_12.dll",
-        "cublasLt64_12.dll",
-        "cublas64_12.dll",
-        "cufft64_11.dll",
-        "curand64_10.dll",
-        "nvrtc-builtins64_128.dll",
-        "nvrtc64_120_0.dll",
-        "cudnn_graph64_9.dll",
-        "cudnn_ops64_9.dll",
-        "cudnn_adv64_9.dll",
-        "cudnn_cnn64_9.dll",
-        "cudnn_engines_precompiled64_9.dll",
-        "cudnn_engines_runtime_compiled64_9.dll",
-        "cudnn_heuristic64_9.dll",
-        "cudnn64_9.dll",
-        "onnxruntime.dll",
-    ] {
-        let file = path.join(name);
-        if !file.is_file() {
-            return Err(format!("CUDA dependency is missing: {name}"));
+    initialize_once(&RUNTIME, &LIBRARIES, path, |libraries, path| {
+        #[cfg(target_os = "windows")]
+        for name in [
+            "cudart64_12.dll",
+            "cublasLt64_12.dll",
+            "cublas64_12.dll",
+            "cufft64_11.dll",
+            "curand64_10.dll",
+            "nvrtc-builtins64_128.dll",
+            "nvrtc64_120_0.dll",
+            "cudnn_graph64_9.dll",
+            "cudnn_ops64_9.dll",
+            "cudnn_adv64_9.dll",
+            "cudnn_cnn64_9.dll",
+            "cudnn_engines_precompiled64_9.dll",
+            "cudnn_engines_runtime_compiled64_9.dll",
+            "cudnn_heuristic64_9.dll",
+            "cudnn64_9.dll",
+            "onnxruntime.dll",
+        ] {
+            let file = path.join(name);
+            if !file.is_file() {
+                return Err(format!("CUDA dependency is missing: {name}"));
+            }
+            // Resolve dependencies from this immutable component directory, not CWD/PATH.
+            let library = unsafe {
+                libloading::os::windows::Library::load_with_flags(&file, 0x00000100 | 0x00001000)
+            }
+            .map_err(|e| format!("Cannot load CUDA dependency {name}: {e}"))?;
+            libraries.push(library.into());
         }
-        // Resolve dependencies from this immutable component directory, not CWD/PATH.
-        let library = unsafe {
-            libloading::os::windows::Library::load_with_flags(&file, 0x00000100 | 0x00001000)
-        }
-        .map_err(|e| format!("Cannot load CUDA dependency {name}: {e}"))?;
-        libraries.push(library.into());
-    }
-    ort::init_from(path.join("onnxruntime.dll").to_string_lossy())
-        .with_name("Lap CUDA")
-        .commit()
-        .map_err(|e| e.to_string())?;
-    RUNTIME
-        .set(path)
-        .map_err(|_| "CUDA runtime was initialized concurrently".to_string())?;
-    Ok(())
+        ort::init_from(path.join("onnxruntime.dll").to_string_lossy())
+            .with_name("Lap CUDA")
+            .commit()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
 }
 fn builder(
     device: i32,
@@ -229,7 +267,7 @@ fn execute(message: Message, payload: &[u8]) -> Result<(Message, Vec<u8>), Strin
             SESSIONS
                 .lock()
                 .map_err(|e| e.to_string())?
-                .insert(id, session);
+                .insert(id, Arc::new(Mutex::new(Some(session))));
             Ok((
                 Message {
                     op: "opened".into(),
@@ -248,32 +286,27 @@ fn execute(message: Message, payload: &[u8]) -> Result<(Message, Vec<u8>), Strin
                 .iter()
                 .map(|d| tensors::materialize(d, payload).map(|value| (d.name.clone(), value)))
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut sessions = SESSIONS.lock().map_err(|e| e.to_string())?;
-            let session = sessions
-                .get_mut(&message.session)
-                .ok_or("CUDA session was closed")?;
-            let output = session.run(inputs).map_err(|e| e.to_string())?;
-            let mut data = Vec::new();
-            let mut descriptors = Vec::new();
-            for (name, value) in output.iter() {
-                descriptors.push(tensors::append(name, &value, &mut data)?);
-            }
-            Ok((
-                Message {
-                    op: "result".into(),
-                    tensors: descriptors,
-                    ..Default::default()
-                },
-                data,
-            ))
+            let entry = session_entry(&SESSIONS, message.session)?;
+            with_session(&entry, |session| {
+                let output = session.run(inputs).map_err(|e| e.to_string())?;
+                let mut data = Vec::new();
+                let mut descriptors = Vec::new();
+                for (name, value) in output.iter() {
+                    descriptors.push(tensors::append(name, &value, &mut data)?);
+                }
+                Ok((
+                    Message {
+                        op: "result".into(),
+                        tensors: descriptors,
+                        ..Default::default()
+                    },
+                    data,
+                ))
+            })
         }
         "close" => {
             let mut operators = BTreeMap::new();
-            if let Some(mut session) = SESSIONS
-                .lock()
-                .map_err(|e| e.to_string())?
-                .remove(&message.session)
-            {
+            if let Some(mut session) = close_session(&SESSIONS, message.session)? {
                 operators = self::operators(&mut session);
             }
             Ok((
@@ -346,6 +379,18 @@ pub unsafe extern "C" fn lap_cuda_free(buffer: Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        sync::{Barrier, TryLockError, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
+    const WAIT: Duration = Duration::from_secs(5);
+    fn fake_sessions() -> Arc<SessionMap<usize>> {
+        Arc::new(Mutex::new(BTreeMap::from([
+            (1, Arc::new(Mutex::new(Some(0)))),
+            (2, Arc::new(Mutex::new(Some(0)))),
+        ])))
+    }
     fn request(message: Message) -> Message {
         let packet = lap_ai_runtime_wire::encode(&message, &[]).unwrap();
         let buffer = unsafe { lap_cuda_call(packet.as_ptr(), packet.len()) };
@@ -381,5 +426,179 @@ mod tests {
             ..Default::default()
         });
         assert!(message.error.unwrap().contains("absolute"));
+    }
+    #[test]
+    fn different_sessions_enter_inference_together() {
+        let sessions = fake_sessions();
+        let (entered, arrivals) = mpsc::channel();
+        let mut releases = Vec::new();
+        let mut workers = Vec::new();
+        for id in [1, 2] {
+            let sessions = sessions.clone();
+            let entered = entered.clone();
+            let (release, resume) = mpsc::channel();
+            releases.push(release);
+            workers.push(thread::spawn(move || {
+                let entry = session_entry(&sessions, id)?;
+                with_session(&entry, |session| {
+                    entered.send(id).map_err(|e| e.to_string())?;
+                    resume.recv_timeout(WAIT).map_err(|e| e.to_string())?;
+                    *session += 1;
+                    Ok(())
+                })
+            }));
+        }
+        let first = arrivals.recv_timeout(WAIT);
+        let second = arrivals.recv_timeout(WAIT);
+        for release in releases {
+            let _ = release.send(());
+        }
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        let mut entered = [first.unwrap(), second.unwrap()];
+        entered.sort();
+        assert_eq!(entered, [1, 2]);
+    }
+    #[test]
+    fn the_same_session_keeps_one_inference_owner() {
+        let sessions = fake_sessions();
+        let entry = session_entry(&sessions, 1).unwrap();
+        let first_entry = entry.clone();
+        let (entered, arrival) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let first = thread::spawn(move || {
+            with_session(&first_entry, |session| {
+                entered.send(()).map_err(|e| e.to_string())?;
+                resume.recv_timeout(WAIT).map_err(|e| e.to_string())?;
+                *session += 1;
+                Ok(())
+            })
+        });
+        arrival.recv_timeout(WAIT).unwrap();
+        let (attempted, attempting) = mpsc::channel();
+        let second_entry = entry.clone();
+        let second = thread::spawn(move || {
+            attempted.send(()).unwrap();
+            with_session(&second_entry, |session| {
+                *session += 1;
+                Ok(())
+            })
+        });
+        attempting.recv_timeout(WAIT).unwrap();
+        let locked = matches!(entry.try_lock(), Err(TryLockError::WouldBlock));
+        let _ = release.send(());
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+        assert!(locked);
+        assert_eq!(with_session(&entry, |session| Ok(*session)).unwrap(), 2);
+    }
+    #[test]
+    fn closing_waits_for_its_run_without_blocking_other_sessions() {
+        let sessions = fake_sessions();
+        let stale = session_entry(&sessions, 1).unwrap();
+        let running = stale.clone();
+        let (entered, arrival) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let run = thread::spawn(move || {
+            with_session(&running, |session| {
+                entered.send(()).map_err(|e| e.to_string())?;
+                resume.recv_timeout(WAIT).map_err(|e| e.to_string())?;
+                *session += 1;
+                Ok(())
+            })
+        });
+        arrival.recv_timeout(WAIT).unwrap();
+        let closing = sessions.clone();
+        let (closed, closing_result) = mpsc::channel();
+        let close = thread::spawn(move || {
+            closed.send(close_session(&closing, 1)).unwrap();
+        });
+        let other_sessions = sessions.clone();
+        let (finished, other_result) = mpsc::channel();
+        let other = thread::spawn(move || {
+            let result = (|| {
+                let deadline = Instant::now() + WAIT;
+                while session_entry(&other_sessions, 1).is_ok() {
+                    if Instant::now() > deadline {
+                        return Err("Session was not removed before waiting for its run".into());
+                    }
+                    thread::yield_now();
+                }
+                with_session(&session_entry(&other_sessions, 2)?, |session| {
+                    *session += 1;
+                    Ok(*session)
+                })
+            })();
+            finished.send(result).unwrap();
+        });
+        let other_finished = other_result.recv_timeout(WAIT);
+        let still_running = matches!(closing_result.try_recv(), Err(mpsc::TryRecvError::Empty));
+        let _ = release.send(());
+        run.join().unwrap().unwrap();
+        close.join().unwrap();
+        other.join().unwrap();
+        assert_eq!(other_finished.unwrap().unwrap(), 1);
+        assert!(still_running);
+        assert_eq!(closing_result.recv_timeout(WAIT).unwrap().unwrap(), Some(1));
+        assert!(
+            with_session(&stale, |_| Ok(()))
+                .unwrap_err()
+                .contains("closed")
+        );
+        assert_eq!(close_session(&sessions, 1).unwrap(), None);
+    }
+    #[test]
+    fn failed_inference_only_poisons_its_session_and_cleanup_still_releases_it() {
+        let sessions = fake_sessions();
+        let entry = session_entry(&sessions, 1).unwrap();
+        let failure = std::panic::catch_unwind(|| {
+            let _: Result<(), String> = with_session(&entry, |_| panic!("fake inference failed"));
+        });
+        assert!(failure.is_err());
+        assert!(with_session(&entry, |_| Ok(())).is_err());
+        assert_eq!(
+            with_session(&session_entry(&sessions, 2).unwrap(), |session| Ok(
+                *session
+            ))
+            .unwrap(),
+            0
+        );
+        assert_eq!(close_session(&sessions, 1).unwrap(), Some(0));
+        assert!(entry.lock().unwrap_err().into_inner().is_none());
+    }
+    #[test]
+    fn concurrent_initialization_loads_one_runtime_and_rejects_changes() {
+        let runtime = Arc::new(OnceLock::new());
+        let libraries = Arc::new(Mutex::new(Vec::new()));
+        let start = Arc::new(Barrier::new(3));
+        let path = std::env::temp_dir().join("lap-cuda-initialization-test");
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let runtime = runtime.clone();
+            let libraries = libraries.clone();
+            let start = start.clone();
+            let path = path.clone();
+            workers.push(thread::spawn(move || {
+                start.wait();
+                initialize_once(&runtime, &libraries, path, |libraries, _| {
+                    libraries.push(());
+                    Ok(())
+                })
+            }));
+        }
+        start.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(runtime.get(), Some(&path));
+        assert_eq!(libraries.lock().unwrap().len(), 1);
+        assert!(
+            initialize_once(&runtime, &libraries, path.join("other"), |_, _| {
+                panic!("An initialized runtime must not be loaded again")
+            })
+            .unwrap_err()
+            .contains("runtime changed")
+        );
     }
 }

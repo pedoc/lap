@@ -13,7 +13,6 @@ struct Bridge {
     _library: libloading::Library,
     call: Call,
     free: Free,
-    gate: Mutex<()>,
 }
 static BRIDGE: Mutex<Option<Arc<Bridge>>> = Mutex::new(None);
 pub fn bridge_path() -> Option<PathBuf> {
@@ -50,14 +49,12 @@ fn bridge() -> Result<Arc<Bridge>, String> {
         _library: library,
         call,
         free,
-        gate: Mutex::new(()),
     });
     *state = Some(bridge.clone());
     Ok(bridge)
 }
 impl Bridge {
     fn invoke(&self, message: Message, payload: &[u8]) -> Result<(Message, Vec<u8>), String> {
-        let _gate = self.gate.lock().map_err(|e| e.to_string())?;
         let request = lap_ai_runtime_wire::encode(&message, payload)?;
         let result = unsafe { (self.call)(request.as_ptr(), request.len()) };
         if result.data.is_null() {

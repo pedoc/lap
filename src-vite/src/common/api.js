@@ -2021,9 +2021,9 @@ export async function indexFaces(fileIds = null, force = false, libraryId = libC
 }
 
 // cancel face indexing
-export async function cancelFaceIndex() {
+export async function cancelFaceIndex(jobId = null) {
   try {
-    await invoke('cancel_face_index');
+    await invoke('cancel_face_index', { jobId });
   } catch (error) {
     console.error('Failed to cancel face index:', error);
   }

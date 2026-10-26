@@ -6,8 +6,8 @@
     <p v-if="view && !view.modelInstalled" class="text-xs text-warning">{{ t('ocr.download_first') }}</p>
     <template v-if="view?.status.jobId">
       <p class="text-xs opacity-70 break-all">{{ t('ocr.scope_' + (view.status.scope || 'library')) }}<span v-if="view.status.scopeName"> · {{ view.status.scopeName }}</span></p>
-      <progress v-if="view.status.running" class="progress progress-primary w-full" :value="view.status.completed" :max="Math.max(1, view.status.total)"></progress>
-      <p class="text-xs" aria-live="polite">{{ view.status.running && !view.status.total ? t('ocr.preparing') : t('ocr.progress', view.status) }}</p>
+      <progress v-if="view.status.running" class="progress progress-primary w-full" :value="view.status.queued ? undefined : view.status.completed" :max="Math.max(1, view.status.total)"></progress>
+      <p class="text-xs" aria-live="polite">{{ view.status.queued ? t('recognition_status.queued') : view.status.running && !view.status.total ? t('ocr.preparing') : t('ocr.progress', view.status) }}</p>
       <p v-if="view.status.cancelled" class="text-xs opacity-60">{{ t(view.status.automatic && !view.automation?.paused ? 'ocr.auto_yielded' : 'ocr.stopped_saved') }}</p>
     </template>
     <div v-if="error || view?.status.error" role="alert" class="text-xs text-error whitespace-pre-wrap break-words">{{ error || view.status.error }}</div>

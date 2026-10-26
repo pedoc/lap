@@ -46,6 +46,19 @@ test('OCR progress, stopping and running failures show current counters and acti
   state = indicator({ status: { running: true, completed: 3, failed: 1, total: 8 } }, '', false, 'ocr');
   assert.equal(state.tone, 'warning'); assert.equal(state.progress.value, 3); assert.match(state.title, /识别中.*需要留意/);
 });
+test('recognition queues expose their own counts and manual priority without clearing active progress or raising warnings', () => {
+  for (const task of ['ocr', 'objects']) {
+    const state = indicator({ status: { running: true, phase: 'indexing', completed: 56, total: 100, queuedJobs: 2, priorityQueuedJobs: 1 } }, '', false, task);
+    assert.equal(state.tone, 'running'); assert.equal(state.progress.value, 56);
+    assert.match(state.lines.join(' '), /已排队 2 项任务.*1 项手动任务优先/);
+    const queued = indicator({ status: { running: true, queued: true, completed: 0, total: 1, priority: 'interactive' } }, '', false, task);
+    assert.equal(queued.tone, 'running'); assert.equal(queued.progress.value, undefined);
+    assert.match(queued.title, /已排队/);
+  }
+  const state = face({ running: true, progress: { job_id: 'manual', current: 1, total: 5, priority: 'interactive', queued_jobs: 2, priority_queued_jobs: 1 } });
+  assert.equal(state.progress.value, 1);
+  assert.match(state.lines.join(' '), /已排队 2 项任务.*1 项手动任务优先/);
+});
 
 test('historical interruption, unresolved failures and current-library automation errors keep a yellow dot', () => {
   const stopped = indicator({ status: { running: false, historical: true, phase: 'interrupted', completed: 56, succeeded: 56, total: 17065 } });

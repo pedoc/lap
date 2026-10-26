@@ -73,14 +73,14 @@ async function finish(event: PointerEvent) {
 }
 async function recognize(region: number[]) {
   const libraryId = libConfig._libraryId, fileId = props.fileId, scope = generation, requestId = crypto.randomUUID();
-  if (ocrBusy.value) { error.value = t('ocr.region_busy'); return; }
+  if (busy.value || ocrBusy.value) { error.value = t('ocr.region_busy'); return; }
   output.value = null; selected.value = [];
-  request = { libraryId, requestId }; busy.value = true; ocrBusy.value = true; error.value = ''; copied.value = false;
+  request = { libraryId, requestId }; busy.value = true; error.value = ''; copied.value = false;
   try {
     const result: any = await invoke('extract_ocr_region', { libraryId, fileId, requestId, region, previewAspect: props.width / props.height, rotation: rotation.value === 'model' ? null : rotation.value });
     if (!disposed && scope === generation) { output.value = result.document; extractedContext = {profile:result.profile,sourceVersion:result.sourceVersion}; selected.value = result.document.lines.map(() => true); }
   } catch (e) { if (!disposed && scope === generation) error.value = String(e); }
-  finally { ocrBusy.value = false; if (request?.requestId === requestId) request = null; if (scope === generation) busy.value = false; }
+  finally { if (request?.requestId === requestId) request = null; if (scope === generation) busy.value = false; }
 }
 async function copy(onlySelected: boolean) {
   try { await navigator.clipboard.writeText(onlySelected ? output.value.lines.filter((_: any,index: number) => selected.value[index]).map((line: any) => line.text).join('\n') : output.value.text); copied.value = true; }

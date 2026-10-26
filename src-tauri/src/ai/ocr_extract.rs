@@ -2,16 +2,39 @@
 #[cfg(test)]
 use super::media::Source;
 use super::media::source_on;
-use super::{
-    adapters::ocr::{Document, PaddleOcr},
-    types::Task,
-};
+use super::{adapters::ocr::Document, types::Task};
 use serde::Serialize;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-static CANCEL: Mutex<Option<(String, String, Arc<AtomicBool>)>> = Mutex::new(None);
+static CANCEL: Mutex<Vec<(String, String, Arc<AtomicBool>)>> = Mutex::new(Vec::new());
+struct RequestGuard {
+    id: String,
+    registration: super::vision_jobs::RequestRegistration,
+}
+impl Drop for RequestGuard {
+    fn drop(&mut self) {
+        if let Ok(mut requests) = CANCEL.lock() {
+            requests.retain(|(_, id, _)| id != &self.id);
+        }
+        self.registration.release();
+        super::ocr::release_backend_if_idle();
+    }
+}
+pub(crate) fn is_running() -> bool {
+    CANCEL
+        .lock()
+        .map(|requests| !requests.is_empty())
+        .unwrap_or(true)
+}
+pub(crate) fn cancel_all(library: &str) {
+    if let Ok(requests) = CANCEL.lock() {
+        for (_, _, cancel) in requests.iter().filter(|(owner, _, _)| owner == library) {
+            cancel.store(true, Ordering::SeqCst);
+        }
+    }
+}
 pub(crate) fn crop_pixels(rect: [f64; 4], width: u32, height: u32) -> Result<[u32; 4], String> {
     let [x, y, w, h] = rect;
     if width == 0
@@ -58,7 +81,12 @@ pub struct Extraction {
 }
 #[tauri::command]
 pub async fn cancel_ocr_extraction(library_id: String, request_id: String) -> Result<(), String> {
-    if let Some((library, id, cancel)) = CANCEL.lock().map_err(|e| e.to_string())?.as_ref() {
+    if let Some((library, id, cancel)) = CANCEL
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .find(|(library, id, _)| library == &library_id && id == &request_id)
+    {
         if *library == library_id && *id == request_id {
             cancel.store(true, Ordering::SeqCst);
         }
@@ -74,6 +102,7 @@ pub async fn extract_ocr_region(
     preview_aspect: f64,
     rotation: Option<String>,
 ) -> Result<Extraction, String> {
+    super::vision_jobs::ensure_admission()?;
     crop_pixels(region, 1000, 1000)?;
     if file_id <= 0
         || uuid::Uuid::parse_str(&request_id).is_err()
@@ -82,35 +111,66 @@ pub async fn extract_ocr_region(
     {
         return Err("Invalid OCR extraction request".into());
     }
+    super::ocr::check_library(&library_id)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let lane_id = format!("roi:{request_id}");
+    let registration = {
+        let mut requests = CANCEL.lock().map_err(|e| e.to_string())?;
+        if requests.len() >= 32 {
+            return Err("Too many queued OCR extractions".into());
+        }
+        if requests.iter().any(|(_, id, _)| id == &request_id) {
+            return Err("OCR extraction request ID was already used".into());
+        }
+        let registration = super::vision_jobs::register_request(
+            Task::Ocr,
+            super::vision_jobs::Priority::Interactive,
+            &lane_id,
+        )?;
+        requests.push((library_id.clone(), request_id.clone(), cancel.clone()));
+        registration
+    };
     tauri::async_runtime::spawn_blocking(move|| {
-        let _lease=super::ocr::try_inference()?;
-        let cancel=Arc::new(AtomicBool::new(false));
-        *CANCEL.lock().map_err(|e|e.to_string())?=Some((library_id.clone(),request_id,cancel.clone()));
+        let _request = RequestGuard { id:request_id, registration };
         let check=|| { super::ocr::check_library(&library_id)?; if cancel.load(Ordering::SeqCst) { return Err("OCR extraction cancelled".into()); } Ok(()) };
-        let (source,model,image)={
+        let (source,model)={
+            super::vision_jobs::ensure_admission()?;
             let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
             check()?;
             let source=source_on(&*crate::t_sqlite::open_conn()?,file_id)?;
             let model=super::settings::active(Task::Ocr)?;
             super::assets::verify(&model.definition)?;
-            let image=source.load()?;
-            (source,model,image)
+            (source,model)
+        };
+        let queued_check = || {
+            check()?;
+            source.verify()?;
+            if super::settings::active(Task::Ocr)?.session_key() != model.session_key() { return Err("OCR model changed while the extraction was queued; retry".into()); }
+            Ok(())
+        };
+        let _lease=super::vision_jobs::claim_job(Task::Ocr,super::vision_jobs::Priority::Interactive,&lane_id,&queued_check)?;
+        let image = {
+            super::vision_jobs::ensure_admission()?;
+            let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
+            queued_check()?;
+            source.load()?
         };
         if ((image.width() as f64/image.height() as f64)/preview_aspect-1.).abs()>0.02 { return Err("Preview proportions differ from the OCR source; switch to a matching preview before selecting a region".into()); }
         let [x,y,w,h]=crop_pixels(region,image.width(),image.height())?;
         check()?;
-        let mut backend=PaddleOcr::new(&model)?;
-        let mut document=super::ocr_orientation::recognize(&mut backend,&model,&image.crop_imm(x,y,w,h),rotation.as_deref(),&check)?;
+        let mut document=super::ocr::with_backend(&model,|backend|super::ocr_orientation::recognize(backend,&model,&image.crop_imm(x,y,w,h),rotation.as_deref(),&check))?;
         document=restore_crop(document,[x,y,w,h],(image.width(),image.height()));
+        super::vision_jobs::ensure_admission()?;
         let _guard=crate::t_cmds::FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e|e.to_string())?;
         check()?; source.verify()?;
         let current=source_on(&*crate::t_sqlite::open_conn()?,file_id)?;
-        if current.path!=source.path || current.modified!=source.modified || current.size!=source.size { return Err("Photo changed during extraction; retry".into()); }
+        if current.stamp_key()?!=source.stamp_key()? { return Err("Photo changed during extraction; retry".into()); }
         Ok(Extraction{document,profile:model.profile(),source_version:source.stamp_key()?})
     }).await.map_err(|e|e.to_string())?
 }
 #[cfg(test)]
 mod tests {
+    use super::super::adapters::ocr::PaddleOcr;
     use super::*;
     #[test]
     fn region_boxes_return_to_original_coordinates_without_touching_an_index() {
