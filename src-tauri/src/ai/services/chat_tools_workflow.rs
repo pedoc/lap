@@ -17,7 +17,7 @@ pub(super) fn definitions() -> Vec<Tool> {
     vec![
         tool(
             "start_media_task",
-            "启动明确媒体的理解或向量索引任务，不修改标题、说明或标签。operations可组合understand/index_text/index_visual。没有有效分析时先understand再index_text。返回后台任务ID，不等待GPU任务完成。",
+            "仅在用户需要后台媒体理解或向量索引时启动任务，不修改标题、说明或标签。operations可组合understand/index_text/index_visual。没有有效分析时先understand再index_text。聊天中已有的标题/说明/标签建议直接用propose_metadata提交，不需要先启动理解任务。返回后台任务ID，不等待GPU任务完成。",
             json!({"type":"object","properties":{"file_ids":ids,"operations":{"type":"array","items":{"type":"string","enum":["understand","index_text","index_visual"]},"minItems":1,"maxItems":3}},"required":["file_ids","operations"],"additionalProperties":false}),
         ),
         tool(
@@ -27,7 +27,7 @@ pub(super) fn definitions() -> Vec<Tool> {
         ),
         tool(
             "propose_metadata",
-            "为明确媒体准备标题/说明/标签的可编辑建议预览，不直接写回。默认使用已有有效分析，可提供proposals调整建议；缺少分析会返回analysis_missing，需要先完成理解任务。用户在应用中确认后才会采用。",
+            "将聊天生成或用户指定的标题/说明/标签提交为可编辑建议预览，不直接写回。请在proposals中为每个file_id提供fields内所有字段的值，无需已有媒体理解记录或额外任务；已有分析仅在未提供完整建议时作为可选来源。缺少建议返回proposal_missing，应根据本轮对话、画面或资料补齐proposals。用户在应用中确认后才会采用，收到pending_confirmation不能声称已写入。",
             json!({"type":"object","properties":{"file_ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"maxItems":16},"fields":{"type":"array","items":{"type":"string","enum":["title","description","tags"]},"minItems":1,"maxItems":3},"proposals":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"file_id":{"type":"integer","minimum":1},"title":{"type":"string","maxLength":256},"description":{"type":"string","maxLength":8000},"tags":{"type":"array","maxItems":20,"items":{"type":"string","maxLength":64}}},"required":["file_id"],"additionalProperties":false}}},"required":["file_ids","fields"],"additionalProperties":false}),
         ),
     ]
@@ -197,18 +197,40 @@ fn proposal_on(
     }
     let mut files = Vec::new();
     let mut missing = Vec::new();
+    let selected = store::Adoption {
+        title: args.fields.iter().any(|field| field == "title"),
+        description: args.fields.iter().any(|field| field == "description"),
+        tags: args.fields.iter().any(|field| field == "tags"),
+        ..Default::default()
+    };
     for source in sources {
-        let analyses = store::analyses(c, &source)?;
-        let Some(analysis) = analyses.first() else {
-            missing.push(source.file_id);
-            continue;
-        };
-        let mut proposal = analysis.text.clone();
-        if let Some(edit) = args
+        let edit = args
             .proposals
             .iter()
-            .find(|edit| edit.file_id == source.file_id)
-        {
+            .find(|edit| edit.file_id == source.file_id);
+        let direct = edit.is_some_and(|edit| {
+            (!selected.title || edit.title.is_some())
+                && (!selected.description || edit.description.is_some())
+                && (!selected.tags || edit.tags.is_some())
+        });
+        let analyses = if direct {
+            vec![]
+        } else {
+            store::analyses(c, &source)?
+        };
+        let analysis = analyses.first();
+        if !direct && analysis.is_none() {
+            missing.push(source.file_id);
+            continue;
+        }
+        let mut proposal = analysis
+            .map(|analysis| analysis.text.clone())
+            .unwrap_or(AnalysisText {
+                title: String::new(),
+                description: String::new(),
+                tags: vec![],
+            });
+        if let Some(edit) = edit {
             if let Some(value) = &edit.title {
                 proposal.title = value.clone();
             }
@@ -219,18 +241,21 @@ fn proposal_on(
                 proposal.tags = value.clone();
             }
         }
-        let proposal =
-            AnalysisText::parse(&serde_json::to_string(&proposal).map_err(|_| "建议无法编码")?)?;
+        let proposal = if direct {
+            store::validate_proposal(&proposal, &selected)?
+        } else {
+            AnalysisText::parse(&serde_json::to_string(&proposal).map_err(|_| "建议无法编码")?)?
+        };
         let name = Path::new(&source.path)
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "媒体".into());
-        files.push(json!({"fileId":source.file_id,"name":name,"fileType":source.kind,"width":source.width,"height":source.height,"duration":source.duration,"source":source,"analysisId":analysis.id,"proposal":proposal,
+        files.push(json!({"fileId":source.file_id,"name":name,"fileType":source.kind,"width":source.width,"height":source.height,"duration":source.duration,"source":source,"analysisId":analysis.map(|analysis| &analysis.id),"proposal":proposal,
             "analyses":analyses.iter().take(1).map(|analysis|json!({"id":analysis.id,"segment":analysis.segment,"start":analysis.start,"end":analysis.end,"title":analysis.text.title,"description":analysis.text.description,"tags":analysis.text.tags,"dismissed":analysis.dismissed,"createdAt":analysis.created_at})).collect::<Vec<_>>() }));
     }
     if !missing.is_empty() {
         return Ok(ToolOutput {
-            json: json!({"status":"analysis_missing","fileIds":missing,"message":"请先完成媒体理解，再准备可采用的资料建议。"}),
+            json: json!({"status":"proposal_missing","fileIds":missing,"fields":args.fields,"message":"请在proposals中为每项媒体补齐fields指定的建议内容，可直接使用本轮对话、画面和已提供资料，无需先启动媒体理解任务。"}),
             references: vec![],
             parts: vec![],
             local: None,
@@ -406,16 +431,13 @@ mod tests {
         assert_eq!(store::source(&c, 1).unwrap().title, source.title);
         let proposal =
             serde_json::from_value(local["proposal"]["files"][0]["proposal"].clone()).unwrap();
-        let analysis_id = local["proposal"]["files"][0]["analysisId"]
-            .as_str()
-            .unwrap();
+        assert!(local["proposal"]["files"][0]["analysisId"].is_null());
         c.execute("UPDATE afiles SET title='人工更新' WHERE id=1", [])
             .unwrap();
         assert!(
-            store::adopt(
+            store::adopt_proposal(
                 &mut c,
                 &source,
-                analysis_id,
                 &store::Adoption {
                     proposal: Some(proposal),
                     title: true,
@@ -430,7 +452,99 @@ mod tests {
         );
     }
     #[test]
-    fn proposals_report_missing_analysis_and_reject_scope_and_unrequested_fields() {
+    fn explicit_chat_proposals_do_not_need_analysis_or_start_background_jobs() {
+        let (mut c, _dir) = store::tests::fixture();
+        let source = store::source(&c, 1).unwrap();
+        let args = ProposalArgs {
+            file_ids: vec![1],
+            fields: vec!["title".into(), "tags".into()],
+            proposals: vec![ProposalEdit {
+                file_id: 1,
+                title: Some("七个人，一段青春".into()),
+                description: None,
+                tags: Some(vec!["集体合影".into(), "青春纪念".into()]),
+            }],
+        };
+        let out = proposal_on(&c, &args, &context(), "chat-direct").unwrap();
+        assert_eq!(out.json["status"], "pending_confirmation");
+        let local = out.local.unwrap();
+        let file = &local["proposal"]["files"][0];
+        assert!(file["analysisId"].is_null());
+        assert_eq!(file["proposal"]["description"], "");
+        assert_eq!(store::source(&c, 1).unwrap(), source);
+        assert!(store::analyses(&c, &source).unwrap().is_empty());
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM media_ai_jobs", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        store::adopt_proposal(
+            &mut c,
+            &source,
+            &store::Adoption {
+                title: true,
+                tags: true,
+                create_tags: true,
+                proposal: Some(serde_json::from_value(file["proposal"].clone()).unwrap()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let current = store::source(&c, 1).unwrap();
+        assert_eq!(current.title.as_deref(), Some("七个人，一段青春"));
+        assert_eq!(current.comments, source.comments);
+        assert_eq!(current.tag_ids.len(), 2);
+        assert!(store::analyses(&c, &current).unwrap().is_empty());
+    }
+    #[test]
+    fn analysis_is_an_optional_fallback_and_incomplete_chat_values_request_content() {
+        let (mut c, _dir) = store::tests::fixture();
+        let source = store::source(&c, 1).unwrap();
+        let mut args = ProposalArgs {
+            file_ids: vec![1],
+            fields: vec!["title".into(), "tags".into()],
+            proposals: vec![ProposalEdit {
+                file_id: 1,
+                title: Some("聊天标题".into()),
+                description: None,
+                tags: None,
+            }],
+        };
+        let missing = proposal_on(&c, &args, &context(), "partial").unwrap();
+        assert_eq!(missing.json["status"], "proposal_missing");
+        assert!(
+            missing.json["message"]
+                .as_str()
+                .unwrap()
+                .contains("无需先启动媒体理解")
+        );
+        store::put_analysis(
+            &mut c,
+            &source,
+            0,
+            0.,
+            0.,
+            AnalysisText {
+                title: "旧标题".into(),
+                description: "已有说明".into(),
+                tags: vec!["湖泊".into()],
+            },
+            &store::tests::model("analysis"),
+        )
+        .unwrap();
+        let out = proposal_on(&c, &args, &context(), "fallback").unwrap();
+        let file = &out.local.as_ref().unwrap()["proposal"]["files"][0];
+        assert!(file["analysisId"].as_str().is_some());
+        assert_eq!(file["proposal"]["title"], "聊天标题");
+        assert_eq!(file["proposal"]["tags"], json!(["湖泊"]));
+        args.proposals[0].tags = Some(vec!["新建议".into()]);
+        let direct = proposal_on(&c, &args, &context(), "complete").unwrap();
+        assert!(direct.local.unwrap()["proposal"]["files"][0]["analysisId"].is_null());
+    }
+    #[test]
+    fn proposals_request_explicit_values_without_requiring_analysis_and_reject_scope_and_unrequested_fields()
+     {
         let (c, _dir) = store::tests::fixture();
         let mut args = ProposalArgs {
             file_ids: vec![1],
@@ -439,7 +553,7 @@ mod tests {
         };
         assert_eq!(
             proposal_on(&c, &args, &context(), "call").unwrap().json["status"],
-            "analysis_missing"
+            "proposal_missing"
         );
         args.proposals.push(ProposalEdit {
             file_id: 1,

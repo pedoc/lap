@@ -61,7 +61,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,refreshSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,suggestionJob,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,previewRows,selectPreviewAnalysis,applySuggestions,adoptionCount,onlyEmpty,createTags,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
   return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage, channels,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -90,7 +90,7 @@ test('restored history keeps a viewer context separate until the user explicitly
   } finally { h.dispose(); }
 });
 
-test('chat accepts declared image capability without a probe receipt while structured suggestions and permissions remain checked', async () => {
+test('chat and metadata suggestions accept declared image capability without JSON probes while permissions remain checked', async () => {
   const h = harness({ media_chat_send: async () => emptyView() });
   try {
     await h.boot();
@@ -104,7 +104,7 @@ test('chat accepts declared image capability without a probe receipt while struc
     assert.deepEqual(Array.from(h.api.readyModels.value, (model: any) => model.id), ['vision', 'image']);
     assert.equal(h.api.selectedModelId.value, 'vision');
     assert.equal(h.api.canSend.value, true, 'A video receipt must not hide a declared image model');
-    assert.equal(h.api.canGenerateSuggestions.value, false, 'Ordinary chat must not bypass structured analysis checks');
+    assert.equal(h.api.canGenerateSuggestions.value, true, 'Chat suggestions do not depend on background structured analysis probes');
     await h.api.send();
     assert.equal(h.calls.find(([name]) => name === 'media_chat_send')[1].modelId, 'vision');
     h.api.selectedModelId.value = 'image';
@@ -453,6 +453,69 @@ function proposalCall() {
   return { callId: 'proposal-call', name: 'propose_metadata', arguments: {}, status: 'completed', result: { status: 'ok', proposalId: 'proposal-a' }, localData: { proposal: { id: 'proposal-a', fields: { title: true, description: false, tags: true }, files: [{ ...file(7), source: mediaSource(7), analysisId: 'analysis-7', proposal: { title: 'Tool proposal', description: 'Suggestion', tags: ['Suggested'] } }] } }, error: null, createdAt: 1, completedAt: 2 };
 }
 
+function directProposalCall() {
+  const call: any = proposalCall();
+  call.localData.proposal.files[0].analysisId = null;
+  return call;
+}
+
+test('chat suggestions without analysis are editable and apply only the confirmed text, description and tags', async () => {
+  const h = harness({ media_ai_inspect: (args: any) => ({ source: mediaSource(args.fileId), analyses: [] }) });
+  try {
+    await h.boot(); const call = directProposalCall(); call.localData.proposal.fields.description = true;
+    await h.api.reviewToolProposal(call);
+    const row = h.api.previewRows.value[0];
+    assert.equal(row.ready, true); assert.equal(row.analysisId, null); assert.equal(row.analyses.length, 0);
+    assert.equal(h.api.adoptionCount.value, 1);
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_start_job' || name === 'media_ai_adopt'), false);
+    assert.equal(h.api.onlyEmpty.value, true); assert.equal(h.api.createTags.value, false);
+    h.api.onlyEmpty.value = false; h.api.createTags.value = true;
+    row.proposal.title = 'Reviewed chat title'; row.proposal.description = 'Reviewed description'; row.tagsText = 'first、second、first';
+    await h.api.applySuggestions();
+    const sent = h.calls.find(([name]) => name === 'media_ai_adopt')[1];
+    assert.equal(sent.analysisId, null);
+    assert.deepEqual(sent.options.proposal, { title: 'Reviewed chat title', description: 'Reviewed description', tags: ['first', 'second'] });
+    assert.equal(sent.options.onlyEmpty, false); assert.equal(sent.options.createTags, true); assert.equal(row.applied, true);
+    assert.equal(call.localData.proposal.files[0].proposal.title, 'Tool proposal');
+  } finally { h.dispose(); }
+});
+
+test('direct suggestions remain unavailable when media snapshots change or inspection fails', async () => {
+  for (const inspect of [
+    () => ({ source: { ...mediaSource(), title: 'Changed elsewhere' }, analyses: [] }),
+    () => ({ source: { ...mediaSource(), tagIds: [9] }, analyses: [] }),
+    () => { throw new Error('Fixture inspection failure'); },
+  ]) {
+    const h = harness({ media_ai_inspect: inspect });
+    try {
+      await h.boot(); await h.api.reviewToolProposal(directProposalCall());
+      const row = h.api.previewRows.value[0];
+      assert.equal(row.ready, false); assert.ok(row.error); assert.equal(h.api.adoptionCount.value, 0);
+      await h.api.applySuggestions();
+      assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt' || name === 'media_ai_start_job'), false);
+    } finally { h.dispose(); }
+  }
+});
+
+test('direct suggestions wait for media reads and confirmation cannot cross to another session with the same payload', async () => {
+  const pending = deferred(), confirmation = deferred();
+  let reads = 0;
+  const h = harness({ media_ai_inspect: () => ++reads === 1 ? pending.promise : { source: mediaSource(), analyses: [] } });
+  try {
+    await h.boot(); const review = h.api.reviewToolProposal(directProposalCall());
+    assert.equal(h.api.previewRows.value[0].ready, false); assert.equal(h.api.adoptionCount.value, 0);
+    await h.api.applySuggestions(); assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    pending.resolve({ source: mediaSource(), analyses: [] }); await review;
+    assert.equal(h.api.adoptionCount.value, 1);
+    h.context.pendingChanges.confirm = () => confirmation.promise;
+    const applying = h.api.applySuggestions();
+    await h.api.newSession(); await h.api.reviewToolProposal(directProposalCall());
+    confirmation.resolve(true); await applying;
+    assert.equal(h.api.adoptionCount.value, 1, 'The new session keeps its unconfirmed suggestion');
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+  } finally { h.dispose(); }
+});
+
 test('tool metadata suggestions load real analyses into the editable adoption preview and write only after confirmation', async () => {
   const h = harness();
   try {
@@ -518,10 +581,10 @@ test('stale or late tool proposals cannot be applied to changed media, another s
   const stale = harness({ media_ai_inspect: () => ({ source: mediaSource(), analyses: [] }) });
   try { await stale.boot(); await stale.api.reviewToolProposal(proposalCall()); assert.equal(stale.api.adoptionCount.value, 0); assert.equal(stale.api.previewRows.value[0].error, 'media_chat.tool_proposal_stale'); }
   finally { stale.dispose(); }
-  for (const change of ['library', 'session']) {
+  for (const change of ['library', 'session']) for (const createCall of [proposalCall, directProposalCall]) {
     const pending = deferred(), h = harness({ media_ai_inspect: () => pending.promise });
     try {
-      await h.boot(); const review = h.api.reviewToolProposal(proposalCall());
+      await h.boot(); const review = h.api.reviewToolProposal(createCall());
       if (change === 'library') h.libConfig._libraryId = 'library-b';
       else await h.api.newSession();
       pending.resolve({ source: mediaSource(), analyses: [{ id: 'analysis-7', title: 'Real', description: '', tags: [] }] }); await review; await Vue.nextTick();
@@ -611,27 +674,33 @@ test('delayed Markdown DOM updates follow only the visible conversation and pres
   } finally { h.dispose(); }
 });
 
-test('metadata suggestions use the selected model and editable proposals require a separate per-file adoption', async () => {
+test('metadata shortcuts reuse the selected chat model and do not start background analysis or adopt automatically', async () => {
+  const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
+  try {
+    await h.boot(); await h.api.attachIds([7]); h.api.selectedModelId.value = 'image'; h.api.draft.value = 'Preserve this instruction';
+    const run = h.api.generateSuggestions('title');
+    const sent = h.calls.find(([name]) => name === 'media_chat_send')[1];
+    assert.equal(sent.modelId, 'image'); assert.equal(sent.toolsEnabled, true);
+    assert.equal(sent.question, 'Preserve this instruction\n\nmedia_chat.suggestion_prompt');
+    assert.deepEqual(sent.references, [{ fileId: 7, start: null }]);
+    assert.equal(h.api.canGenerateSuggestions.value, false, 'An active chat request disables duplicate shortcut submissions');
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_start_job'), false);
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    pending.resolve(emptyView()); await run;
+    h.api.openTasks(false);
+    assert.deepEqual(clone(h.calls.at(-1)), ['batch', ['library-a', [7], 'image']]);
+  } finally { h.dispose(); }
+});
+
+test('metadata shortcuts keep tools disabled when the user disabled them', async () => {
   const h = harness();
   try {
-    await h.boot(); await h.api.attachIds([7]); await h.api.generateSuggestions('title');
-    const start = h.calls.find(([name]) => name === 'media_ai_start_job')[1];
-    assert.equal(start.options.modelId, 'vision');
-    assert.deepEqual(start.options.adopt, { title: false, description: false, tags: false, createTags: false, onlyEmpty: true });
-    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
-    await h.api.refreshSuggestions();
-    const row = h.api.previewRows.value[0];
-    assert.equal(row.proposal.title, 'Suggested');
-    row.proposal.title = 'Edited title'; row.tagsText = 'one，two、one'; row.fields.tags = true;
-    await h.api.applySuggestions();
-    const adoption = h.calls.find(([name]) => name === 'media_ai_adopt')[1];
-    assert.equal(adoption.analysisId, 'analysis-7');
-    assert.equal(adoption.source.fileId, 7);
-    assert.deepEqual(adoption.options.proposal, { title: 'Edited title', description: 'Description', tags: ['one', 'two'] });
-    assert.equal(adoption.options.description, false);
-    assert.equal(row.applied, true);
-    h.api.openTasks(false);
-    assert.deepEqual(clone(h.calls.at(-1)), ['batch', ['library-a', [7], 'vision']]);
+    await h.boot(); await h.api.attachIds([7]); h.api.toolsEnabled.value = false; h.api.draft.value = 'Keep draft';
+    assert.equal(h.api.canGenerateSuggestions.value, false);
+    for (const field of ['title', 'description', 'tags']) await h.api.generateSuggestions(field);
+    assert.equal(h.api.toolsEnabled.value, false); assert.equal(h.api.draft.value, 'Keep draft');
+    assert.equal(h.calls.some(([name]) => name === 'media_chat_send' || name === 'media_ai_start_job'), false);
+    assert.equal(h.api.menuItems.value.filter((item: any) => ['title', 'description', 'tags'].includes(item.id)).every((item: any) => item.disabled), true);
   } finally { h.dispose(); }
 });
 
@@ -674,7 +743,7 @@ test('dismissed suggestion fields stay unselectable and are excluded from adopti
   const analysis = (id: string, segment: number, dismissed: string[]) => ({ id, segment, start: segment * 60, end: (segment + 1) * 60, title: id, description: 'Description', tags: ['Tag'], dismissed, createdAt: 10, model: { model: { id: 'vision' } } });
   const h = harness({ media_ai_inspect: () => ({ source: mediaSource(), analyses: [analysis('first', 0, ['title', 'tags']), analysis('second', 1, ['description'])] }) });
   try {
-    await h.boot(); await h.api.attachIds([7]); await h.api.generateSuggestions('title'); await h.api.refreshSuggestions();
+    await h.boot(); const call = proposalCall(); call.localData.proposal.files[0].analysisId = 'first'; await h.api.reviewToolProposal(call);
     const row = h.api.previewRows.value[0];
     assert.equal(row.fields.title, false);
     row.fields.title = true; row.fields.tags = true;
@@ -699,9 +768,9 @@ test('metadata preview keeps its initial size while results load and fits small 
   try {
     await h.boot(); h.api.fitFrame();
     assert.deepEqual(clone(h.api.previewSize.value), { width: 860, height: 740 });
-    await h.api.attachIds([7, 8, 9]); await h.api.generateSuggestions('title');
+    const call = proposalCall(); call.localData.proposal.files = [7, 8, 9].map(id => ({ ...file(id), source: mediaSource(id), analysisId: `analysis-${id}`, proposal: { title: 'Suggested', description: 'Description', tags: [] } }));
     const initialSize = clone(h.api.previewSize.value), initialViewport = clone(h.api.viewport.value);
-    await h.api.refreshSuggestions();
+    await h.api.reviewToolProposal(call);
     assert.equal(h.api.previewRows.value.length, 3);
     assert.equal(h.api.previewRows.value.every((row: any) => !!row.analysisId), true);
     assert.deepEqual(clone(h.api.previewSize.value), initialSize, 'Late results must scroll inside the initially centered bounds');
@@ -717,29 +786,27 @@ test('metadata preview keeps its initial size while results load and fits small 
   } finally { h.dispose(); }
 });
 
-test('completed suggestion items select only fresh analyses from the model captured when the job started', async () => {
+test('direct chat suggestions are not replaced by cached analyses or a newly selected model', async () => {
   const analysis = (id: string, modelId: string, createdAt: number) => ({ id, segment: 0, start: 0, end: 0, title: id, description: 'Description', tags: [], createdAt, model: { model: { id: modelId, name: modelId } } });
   const h = harness({
     media_ai_jobs: () => [{ id: 'job-a', state: 'finished', createdAt: 10, items: [{ fileId: 7, state: 'complete', message: '' }] }],
     media_ai_inspect: () => ({ source: mediaSource(), analyses: [analysis('other-model', 'text', 20), analysis('old-model', 'vision', 5), analysis('fresh-selected', 'vision', 12)] }),
   });
   try {
-    await h.boot(); await h.api.attachIds([7]); await h.api.generateSuggestions('description');
-    assert.equal(h.calls.find(([name]) => name === 'media_ai_start_job')[1].options.force, true);
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall());
     h.api.selectedModelId.value = 'text';
-    await h.api.refreshSuggestions();
     const row = h.api.previewRows.value[0];
     assert.equal(row.error, '');
-    assert.deepEqual(Array.from(row.analyses, (item: any) => item.id), ['fresh-selected']);
-    assert.equal(row.analysisId, 'fresh-selected');
-    assert.equal(row.proposal.title, 'fresh-selected');
+    assert.equal(row.ready, true); assert.equal(row.analysisId, null);
+    assert.equal(row.proposal.title, 'Tool proposal');
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_start_job'), false);
   } finally { h.dispose(); }
 });
 
 test('editing a suggestion while discard confirmation is pending cannot apply a different proposal implicitly', async () => {
   const h = harness(), confirmation = deferred();
   try {
-    await h.boot(); await h.api.attachIds([7]); await h.api.generateSuggestions('title'); await h.api.refreshSuggestions();
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall());
     h.context.pendingChanges.confirm = () => confirmation.promise;
     const applying = h.api.applySuggestions();
     h.api.previewRows.value[0].proposal.title = 'A changed proposal';
@@ -839,7 +906,7 @@ test('unmatched external files are never imported or represented as fabricated g
 
 test('the actual dialog renders composer model and reasoning controls, media cards, eight resize handles and a compact action menu', async () => {
   const h = harness(), imports: any = {}; let history = false;
-  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen, view, attachments, configuration, selectedModelId, actionsOpen, showHistory, sessions, historyMenuId, contextOpen, contextFields });</script>')).descriptor, { id: 'media-chat-template', inlineTemplate: true }).content)
+  const code = stripTypeScriptTypes(compileScript(parse(source.replace('</script>', 'defineExpose({ previewOpen, previewRows, view, attachments, configuration, selectedModelId, actionsOpen, showHistory, sessions, historyMenuId, contextOpen, contextFields });</script>')).descriptor, { id: 'media-chat-template', inlineTemplate: true }).content)
     .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
   try {
@@ -848,6 +915,7 @@ test('the actual dialog renders composer model and reasoning controls, media car
     const setup = component.setup;
     component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
       state.previewOpen.value = true; state.configuration.value = configuration(); state.configuration.value.models[0].reasoning = { levels: ['none', 'low', 'high'], defaultEffort: 'low' }; state.selectedModelId.value = 'vision'; state.actionsOpen.value = true;
+      state.previewRows.value = [{ file: file(7), source: mediaSource(), analyses: [], analysisId: null, ready: true, fields: { title: true, description: true, tags: true }, proposal: { title: 'Chat <title>', description: 'Chat description', tags: ['Chat tag'] }, tagsText: 'Chat tag', currentTags: [], error: '', applied: false }];
       state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: '**Answer**\n\n- Detail [1]', references: [reference(8)] });
       state.contextOpen.value = true;
       state.view.value.messages[0].toolCalls = [
@@ -898,6 +966,8 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.match(html, /media_chat\.scope_hint/);
     assert.match(html, /data-preview-width="860" data-preview-height="740" data-preview-key="1440:900"/);
     assert.match(html, /<fieldset class="[^"]*flex-1 min-h-0 min-w-0 overflow-y-auto"[^>]*data-chat-adoption-preview/);
+    assert.match(html, /data-chat-direct-proposal/); assert.match(html, /media_chat.chat_suggestion/);
+    assert.match(html, /value="Chat &lt;title&gt;"/); assert.match(html, /Chat description/); assert.match(html, /value="Chat tag"/);
     assert.doesNotMatch(source, /v-html/);
     history = true; const historyContext: any = {}; await renderToString(Vue.createSSRApp(component), historyContext);
     const historyHtml = historyContext.teleports.body;

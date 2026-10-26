@@ -67,7 +67,7 @@
                     <section class="min-w-0 space-y-1" data-chat-tool-arguments><h4 class="font-medium text-base-content/65">{{ t('media_chat.tool_arguments') }}</h4><pre class="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-base-100 p-2 font-mono text-[10px] leading-relaxed select-text">{{ formatToolJson(call.arguments) }}</pre></section>
                     <section class="min-w-0 space-y-1" data-chat-tool-result><h4 class="font-medium text-base-content/65">{{ t('media_chat.tool_result') }}</h4><pre v-if="call.result !== null && call.result !== undefined" class="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-base-100 p-2 font-mono text-[10px] leading-relaxed select-text">{{ formatToolJson(call.result) }}</pre><p v-else class="text-base-content/45">{{ t(call.status === 'running' ? 'media_chat.tool_awaiting_result' : 'media_chat.tool_empty_result') }}</p></section>
                     <div v-if="toolTask(call)" class="rounded-box border border-base-content/10 bg-base-100 p-2" :data-chat-tool-task="toolTask(call)!.id"><p class="flex flex-wrap items-center justify-between gap-2"><span>{{ taskStateLabel(toolTask(call)!.state) }}</span><span>{{ toolTask(call)!.completed }} / {{ toolTask(call)!.total }}</span></p><p v-if="toolTask(call)!.failed" class="mt-1 text-error">{{ t('media_chat.tool_task_failed', { count: toolTask(call)!.failed }) }}</p><p v-if="toolTaskUnrefreshed(call)" class="mt-1 text-base-content/55">{{ t('media_chat.tool_task_not_refreshed') }}</p><button class="btn btn-xs btn-ghost mt-2" @click="openTasks(false)">{{ t('media_chat.tool_view_tasks') }}</button></div>
-                    <button v-if="toolProposal(call)" class="btn btn-xs" :disabled="applying || reviewingToolProposal || !!suggestionJob" :data-chat-tool-proposal="toolProposal(call)!.id" @click="reviewToolProposal(call)">{{ t('media_chat.tool_review_proposal') }}</button>
+                    <button v-if="toolProposal(call)" class="btn btn-xs" :disabled="applying || reviewingToolProposal" :data-chat-tool-proposal="toolProposal(call)!.id" @click="reviewToolProposal(call)">{{ t('media_chat.tool_review_proposal') }}</button>
                   </div>
                 </details>
               </div>
@@ -114,16 +114,26 @@
     <ModalDialog v-if="previewOpen" :key="viewport.width + ':' + viewport.height" :title="t('media_chat.metadata_preview')" :width="previewSize.width" :height="previewSize.height" @cancel="previewOpen = false">
       <fieldset class="text-xs space-y-3 flex-1 min-h-0 min-w-0 overflow-y-auto" :disabled="applying" data-chat-adoption-preview @keydown.esc.stop.prevent="previewOpen = false" @keydown.stop>
         <p class="opacity-60">{{ t('media_chat.adoption_hint') }}</p>
-        <p v-if="suggestionJob" role="status">{{ t('media_chat.preparing_suggestions') }} <button class="btn btn-xs" @click="openTasks(false)">{{ t('media_chat.tasks') }}</button></p>
         <p v-if="reviewingToolProposal" class="flex items-center gap-2" role="status"><span class="loading loading-spinner loading-xs"></span>{{ t('media_chat.preparing_suggestions') }}</p>
         <p v-if="previewError" role="alert" class="text-error whitespace-pre-wrap">{{ previewError }}</p>
         <label class="flex gap-2"><input v-model="onlyEmpty" type="checkbox" class="checkbox checkbox-xs" />{{ t('media_chat.only_empty') }}</label>
         <label class="flex gap-2"><input v-model="createTags" type="checkbox" class="checkbox checkbox-xs" />{{ t('media_chat.create_tags') }}</label>
         <article v-for="row in previewRows" :key="row.file.fileId" class="border border-base-content/10 rounded-box p-3 space-y-2">
           <strong class="break-words">{{ row.file.name }}</strong><p v-if="row.error" class="text-error whitespace-pre-wrap">{{ row.error }}</p><p v-if="row.applied" class="text-success">{{ t('media_chat.applied') }}</p>
-          <template v-if="row.analyses.length"><select v-if="row.analyses.length > 1" v-model="row.analysisId" class="select select-bordered select-xs w-full" :disabled="row.applied" @change="selectPreviewAnalysis(row)"><option v-for="analysis in row.analyses" :key="analysis.id" :value="analysis.id">{{ mediaTime(analysis.start) }}–{{ mediaTime(analysis.end) }} · {{ analysis.title }}</option></select><template v-for="analysis in row.analyses.filter(item => item.id === row.analysisId)" :key="analysis.id"><p class="text-[10px] opacity-50">{{ analysis.model?.model?.name }} · {{ new Date(analysis.createdAt).toLocaleString() }}</p><div v-for="field in adoptionFields" :key="field" class="space-y-1"><label class="flex gap-2 font-medium"><input v-model="row.fields[field]" type="checkbox" class="checkbox checkbox-xs" :disabled="row.applied || analysis.dismissed?.includes(field)" />{{ t('media_chat.field_' + field) }}<span v-if="analysis.dismissed?.includes(field)" class="text-warning font-normal">{{ t('media_ai.dismissed') }}</span></label><p class="opacity-50 whitespace-pre-wrap break-words">{{ t('media_chat.current_value') }}: {{ field === 'title' ? row.source?.title || '—' : field === 'description' ? row.source?.comments || '—' : row.currentTags.join('、') || '—' }}</p><input v-if="field === 'title'" v-model="row.proposal.title" class="input input-bordered input-xs w-full" maxlength="256" :disabled="row.applied || analysis.dismissed?.includes(field)" :aria-label="t('media_chat.field_title')" /><textarea v-else-if="field === 'description'" v-model="row.proposal.description" rows="3" class="textarea textarea-bordered w-full" maxlength="8000" :disabled="row.applied || analysis.dismissed?.includes(field)" :aria-label="t('media_chat.field_description')"></textarea><input v-else v-model="row.tagsText" class="input input-bordered input-xs w-full" :disabled="row.applied || analysis.dismissed?.includes(field)" :aria-label="t('media_chat.field_tags')" :placeholder="t('media_chat.tags_separator')" /></div></template></template>
+          <template v-if="row.ready">
+            <select v-if="row.analysisId && row.analyses.length > 1" v-model="row.analysisId" class="select select-bordered select-xs w-full" :disabled="row.applied" @change="selectPreviewAnalysis(row)"><option v-for="analysis in row.analyses" :key="analysis.id" :value="analysis.id">{{ mediaTime(analysis.start) }}–{{ mediaTime(analysis.end) }} · {{ analysis.title }}</option></select>
+            <p v-if="previewAnalysis(row)" class="text-[10px] opacity-50">{{ previewAnalysis(row).model?.model?.name }} · {{ new Date(previewAnalysis(row).createdAt).toLocaleString() }}</p>
+            <p v-else class="text-[10px] opacity-50" data-chat-direct-proposal>{{ t('media_chat.chat_suggestion') }}</p>
+            <div v-for="field in adoptionFields" :key="field" class="space-y-1">
+              <label class="flex gap-2 font-medium"><input v-model="row.fields[field]" type="checkbox" class="checkbox checkbox-xs" :disabled="row.applied || previewDismissed(row).includes(field)" />{{ t('media_chat.field_' + field) }}<span v-if="previewDismissed(row).includes(field)" class="text-warning font-normal">{{ t('media_ai.dismissed') }}</span></label>
+              <p class="opacity-50 whitespace-pre-wrap break-words">{{ t('media_chat.current_value') }}: {{ field === 'title' ? row.source?.title || '—' : field === 'description' ? row.source?.comments || '—' : row.currentTags.join('、') || '—' }}</p>
+              <input v-if="field === 'title'" v-model="row.proposal.title" class="input input-bordered input-xs w-full" maxlength="256" :disabled="row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.field_title')" />
+              <textarea v-else-if="field === 'description'" v-model="row.proposal.description" rows="3" class="textarea textarea-bordered w-full" maxlength="8000" :disabled="row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.field_description')"></textarea>
+              <input v-else v-model="row.tagsText" class="input input-bordered input-xs w-full" :disabled="row.applied || previewDismissed(row).includes(field)" :aria-label="t('media_chat.field_tags')" :placeholder="t('media_chat.tags_separator')" />
+            </div>
+          </template>
         </article>
-        <div class="flex justify-end gap-2"><button class="btn btn-sm" @click="previewOpen = false">{{ t('media_chat.close') }}</button><button class="btn btn-sm btn-primary" :disabled="applying || reviewingToolProposal || !adoptionCount || !!suggestionJob" @click="applySuggestions">{{ t('media_chat.apply_to_media', { count: adoptionCount }) }}</button></div>
+        <div class="flex justify-end gap-2"><button class="btn btn-sm" @click="previewOpen = false">{{ t('media_chat.close') }}</button><button class="btn btn-sm btn-primary" :disabled="applying || reviewingToolProposal || !adoptionCount" @click="applySuggestions">{{ t('media_chat.apply_to_media', { count: adoptionCount }) }}</button></div>
       </fieldset>
     </ModalDialog>
   </Teleport>
@@ -221,7 +231,7 @@ const defaultReasoningEffort = computed(() => selectedModel.value?.reasoning?.de
 function reasoningLabel(level: string) { const key = `media_chat.reasoning_level_${level}`; return te(key) ? t(key) : level; }
 const reasoningDefaultLabel = computed(() => defaultReasoningEffort.value ? t('media_chat.reasoning_model_default', { level: reasoningLabel(defaultReasoningEffort.value) }) : t('media_chat.reasoning_auto'));
 function normalizeReasoningChoice() { if (reasoningEffort.value === '' && !defaultReasoningEffort.value || reasoningEffort.value !== null && reasoningEffort.value !== '' && !reasoningLevels.value.includes(reasoningEffort.value)) reasoningEffort.value = null; }
-const canGenerateSuggestions = computed(() => !!configuration.value?.models.some(model => model.id === selectedModelId.value && modelReady(model, true) && [...chatCapabilities(true), 'json' as const].every(cap => model.capabilities.includes(cap) && !!model.tested[cap])));
+const canGenerateSuggestions = computed(() => toolsEnabled.value && !loading.value && !sending.value && !activeRequestId.value && !!view.value && activeLibrary.value === libConfig._libraryId && readyModels.value.some(model => model.id === selectedModelId.value));
 const canSend = computed(() => !loading.value && !sending.value && !activeRequestId.value && !!view.value && !!draft.value.trim() && draft.value.length <= 8000 && attachments.value.length <= 16 && readyModels.value.some(model => model.id === selectedModelId.value) && activeLibrary.value === libConfig._libraryId);
 const modelName = (model: MediaModel) => `${configuration.value?.providers.find(provider => provider.id === model.providerId)?.name || ''} / ${model.name || model.remoteId}`;
 function key() { return `${activeLibrary.value}:${view.value?.session.id || ''}`; }
@@ -276,19 +286,19 @@ async function refreshToolTasks(changedTaskId?: string) {
     if (current()) for (const { call, task } of tasks) toolTaskStates.value[task.id] = { callId: call.callId, task: toolTask(call) || task, missing: true };
   } finally { if (toolTaskLoading?.epoch === epoch) toolTaskLoading = null; }
 }
-interface ToolProposalFile extends Partial<ChatCandidate> { fileId: number; source: ChatSource; analysisId: string; proposal: { title: string; description: string; tags: string[] } }
+interface ToolProposalFile extends Partial<ChatCandidate> { fileId: number; source: ChatSource; analysisId: string | null; proposal: { title: string; description: string; tags: string[] } }
 interface ToolProposal { id: string; fields: Record<AdoptionField, boolean>; files: ToolProposalFile[] }
 function toolProposal(call: ChatToolCall): ToolProposal | null {
   const proposal = toolObject(toolObject(call.localData)?.proposal);
   if (call.status !== 'completed' || !proposal || typeof proposal.id !== 'string' || !Array.isArray(proposal.files) || !toolObject(proposal.fields)) return null;
-  if (!proposal.files.every((file: any) => Number.isSafeInteger(file.fileId) && file.fileId > 0 && file.source?.fileId === file.fileId && typeof file.analysisId === 'string' && toolObject(file.proposal) && typeof file.proposal.title === 'string' && typeof file.proposal.description === 'string' && Array.isArray(file.proposal.tags))) return null;
+  if (!proposal.files.length || !proposal.files.every((file: any) => Number.isSafeInteger(file.fileId) && file.fileId > 0 && file.source?.fileId === file.fileId && (file.analysisId === null || typeof file.analysisId === 'string' && !!file.analysisId) && toolObject(file.proposal) && typeof file.proposal.title === 'string' && typeof file.proposal.description === 'string' && Array.isArray(file.proposal.tags))) return null;
   return proposal as unknown as ToolProposal;
 }
 function taskStateLabel(state: string) { const key = 'media_chat.task_state_' + state; return te(key) ? t(key) : state; }
 function toolResultSummary(call: ChatToolCall) {
   if (call.status === 'running') return t('media_chat.tool_status_running');
   const result = toolObject(call.result), task = toolTask(call), proposal = toolProposal(call);
-  if (result?.status && ['ambiguous', 'index_missing', 'denied', 'analysis_missing'].includes(result.status)) return t('media_chat.tool_result_' + result.status);
+  if (result?.status && ['ambiguous', 'index_missing', 'denied', 'analysis_missing', 'proposal_missing'].includes(result.status)) return t('media_chat.tool_result_' + result.status);
   if (task) return t('media_chat.tool_task_progress', { completed: task.completed || 0, total: task.total || 0 });
   if (proposal) return t('media_chat.tool_proposal_count', { count: proposal.files.length });
   if (Array.isArray(result?.items)) return t('media_chat.tool_result_items', { count: result.items.length });
@@ -492,15 +502,15 @@ function openTasks(all: boolean) { previewOpen.value = false; openMediaAiBatch(a
 function openIncomingTasks() { previewOpen.value = false; openMediaAiBatch(activeLibrary.value, [...incomingIds.value], selectedModelId.value || null); }
 
 type AdoptionField = 'title' | 'description' | 'tags';
-interface PreviewRow { file: ChatCandidate; source: ChatSource | null; analyses: any[]; analysisId: string; fields: Record<AdoptionField, boolean>; proposal: { title: string; description: string; tags: string[] }; tagsText: string; currentTags: string[]; error: string; applied: boolean }
+interface PreviewRow { file: ChatCandidate; source: ChatSource | null; analyses: any[]; analysisId: string | null; ready: boolean; fields: Record<AdoptionField, boolean>; proposal: { title: string; description: string; tags: string[] }; tagsText: string; currentTags: string[]; error: string; applied: boolean }
 const adoptionFields: AdoptionField[] = ['title', 'description', 'tags'];
 const previewOpen = ref(false), previewRows = ref<PreviewRow[]>([]), previewError = ref(''), onlyEmpty = ref(true), createTags = ref(false), applying = ref(false);
-const suggestionJob = ref(''); let suggestionLibrary = '', suggestionModelId = '', refreshingSuggestions = false;
+let suggestionLibrary = '';
 const reviewingToolProposal = ref(false);
 let toolReviewGeneration = 0;
 async function reviewToolProposal(call: ChatToolCall) {
   const proposal = toolProposal(call);
-  if (!proposal || applying.value || reviewingToolProposal.value || suggestionJob.value || !view.value) return;
+  if (!proposal || applying.value || reviewingToolProposal.value || !view.value) return;
   const libraryId = activeLibrary.value, sessionId = view.value.session.id, epoch = ++toolReviewGeneration;
   const current = () => !disposed && epoch === toolReviewGeneration && libraryId === activeLibrary.value && libraryId === libConfig._libraryId && sessionId === view.value?.session.id;
   suggestionLibrary = libraryId;
@@ -519,10 +529,10 @@ async function reviewToolProposal(call: ChatToolCall) {
       height: item.height ?? source.height,
       duration: item.duration ?? source.duration,
       cloudOnly: source.cloudOnly,
-      hasAnalysis: true,
+      hasAnalysis: !!item.analysisId,
       sourceStamp: item.sourceStamp || '',
     };
-    previewRows.value.push({ file, source, analyses: [], analysisId: '', fields: { title: !!proposal.fields.title, description: !!proposal.fields.description, tags: !!proposal.fields.tags }, proposal: JSON.parse(JSON.stringify(item.proposal)), tagsText: item.proposal.tags.join('、'), currentTags: [], error: '', applied: false });
+    previewRows.value.push({ file, source, analyses: [], analysisId: item.analysisId, ready: false, fields: { title: !!proposal.fields.title, description: !!proposal.fields.description, tags: !!proposal.fields.tags }, proposal: JSON.parse(JSON.stringify(item.proposal)), tagsText: item.proposal.tags.join('、'), currentTags: [], error: '', applied: false });
   }
   try {
     for (let index = 0; index < proposal.files.length; index++) {
@@ -536,24 +546,29 @@ async function reviewToolProposal(call: ChatToolCall) {
         if (!current()) return;
         const keys: Array<keyof ChatSource> = ['fileId', 'path', 'modified', 'size', 'orientation', 'kind', 'width', 'height', 'duration', 'title', 'comments', 'cloudOnly'];
         const sameTags = (a: number[], b: number[]) => JSON.stringify([...a].sort((x, y) => x - y)) === JSON.stringify([...b].sort((x, y) => x - y));
-        if (!keys.every(key => inspected.source[key] === source[key]) || !sameTags(inspected.source.tagIds, source.tagIds) || !inspected.analyses.some(analysis => analysis.id === item.analysisId)) {
+        if (!keys.every(key => inspected.source[key] === source[key]) || !sameTags(inspected.source.tagIds, source.tagIds) || item.analysisId !== null && !inspected.analyses.some(analysis => analysis.id === item.analysisId)) {
           row.error = t('media_chat.tool_proposal_stale');
           continue;
         }
         row.analyses = inspected.analyses;
         row.analysisId = item.analysisId;
+        row.fields = previewFields(row);
         row.currentTags = (tags || []).map((tag: any) => tag.name);
+        row.ready = true;
       } catch (reason) {
         if (current()) row.error = String(reason);
       }
     }
   } finally { if (epoch === toolReviewGeneration) reviewingToolProposal.value = false; }
 }
-function previewFields(row: PreviewRow) { const dismissed = row.analyses.find(item => item.id === row.analysisId)?.dismissed || []; return { title: row.fields.title && !dismissed.includes('title'), description: row.fields.description && !dismissed.includes('description'), tags: row.fields.tags && !dismissed.includes('tags') }; }
-const adoptionCount = computed(() => previewRows.value.filter(row => !row.applied && row.analysisId && Object.values(previewFields(row)).some(Boolean)).length);
+function previewAnalysis(row: PreviewRow) { return row.analysisId ? row.analyses.find(item => item.id === row.analysisId) : null; }
+function previewDismissed(row: PreviewRow) { return previewAnalysis(row)?.dismissed || []; }
+function previewFields(row: PreviewRow) { const dismissed = previewDismissed(row); return { title: row.fields.title && !dismissed.includes('title'), description: row.fields.description && !dismissed.includes('description'), tags: row.fields.tags && !dismissed.includes('tags') }; }
+function previewCanApply(row: PreviewRow) { return row.ready && !!row.source && !row.error && !row.applied && (row.analysisId === null || !!previewAnalysis(row)) && Object.values(previewFields(row)).some(Boolean); }
+const adoptionCount = computed(() => previewRows.value.filter(previewCanApply).length);
 type MenuAction = 'attach' | 'title' | 'description' | 'tags' | 'review' | 'selected' | 'tasks' | 'all' | 'configure';
 const menuItems = computed(() => {
-  const unavailable = !attachments.value.length || !!suggestionJob.value || !canGenerateSuggestions.value || applying.value;
+  const unavailable = !attachments.value.length || !canGenerateSuggestions.value || applying.value || reviewingToolProposal.value;
   const items: Array<{ id: MenuAction; label: string; disabled: boolean }> = [
     { id: 'attach', label: 'attach', disabled: false },
     { id: 'title', label: 'fill_title', disabled: unavailable },
@@ -590,40 +605,22 @@ function actionKeydown(event: KeyboardEvent) {
   return false;
 }
 async function generateSuggestions(field: AdoptionField) {
-  if (!attachments.value.length || !canGenerateSuggestions.value || suggestionJob.value || applying.value) return;
-  suggestionLibrary = activeLibrary.value; suggestionJob.value = 'preparing'; previewOpen.value = true; previewError.value = ''; previewRows.value = attachments.value.map(file => ({ file: { ...file }, source: null, analyses: [], analysisId: '', fields: { title: field === 'title', description: field === 'description', tags: field === 'tags' }, proposal: { title: '', description: '', tags: [] }, tagsText: '', currentTags: [], error: '', applied: false }));
-  const libraryId = suggestionLibrary; suggestionModelId = selectedModelId.value;
-  try { const jobId = await invoke<string>('media_ai_start_job', { libraryId, fileIds: previewRows.value.map(row => row.file.fileId), options: { modelId: suggestionModelId || null, indexOnly: false, index: false, visualOnly: false, visualIndex: false, force: true, adopt: { title: false, description: false, tags: false, createTags: false, onlyEmpty: true } } }); if (libraryId === activeLibrary.value && libraryId === libConfig._libraryId) suggestionJob.value = jobId; }
-  catch (reason) { previewError.value = String(reason); suggestionJob.value = ''; }
+  if (!attachments.value.length || !canGenerateSuggestions.value || applying.value || reviewingToolProposal.value) return;
+  const prompt = t('media_chat.suggestion_prompt', { field: t('media_chat.field_' + field) });
+  draft.value = [draft.value.trim(), prompt].filter(Boolean).join('\n\n');
+  rememberDraft();
+  await send();
 }
 function selectPreviewAnalysis(row: PreviewRow) { const analysis = row.analyses.find(item => item.id === row.analysisId); if (!analysis) return; row.fields = previewFields(row); row.proposal = { title: analysis.title, description: analysis.description, tags: [...analysis.tags] }; row.tagsText = analysis.tags.join('、'); }
-async function refreshSuggestions() {
-  if (!suggestionJob.value || suggestionJob.value === 'preparing' || refreshingSuggestions || suggestionLibrary !== libConfig._libraryId) return;
-  refreshingSuggestions = true;
-  try {
-  const jobId = suggestionJob.value, libraryId = suggestionLibrary, rows = previewRows.value;
-  const jobs = await invoke<any[]>('media_ai_jobs', { libraryId }); const job = jobs.find(item => item.id === jobId);
-  if (jobId !== suggestionJob.value || libraryId !== activeLibrary.value) return;
-  if (!job || job.state === 'running') return;
-  const failed = new Map<number, string>((job.items || []).filter((item: any) => item.state === 'failed' || item.message).map((item: any) => [Number(item.fileId), item.message || t('media_chat.suggestion_unavailable')]));
-  const unfinished = new Set<number>((job.items || []).filter((item: any) => ['pending', 'running'].includes(item.state)).map((item: any) => Number(item.fileId)));
-  for (const row of rows) {
-    if (failed.has(row.file.fileId)) { row.error = failed.get(row.file.fileId)!; continue; }
-    if (unfinished.has(row.file.fileId)) { row.error = t('media_chat.suggestion_unavailable'); continue; }
-    try { const inspected: any = await invoke('media_ai_inspect', { libraryId, fileId: row.file.fileId }); if (libraryId !== libConfig._libraryId || jobId !== suggestionJob.value) return; row.source = inspected.source; row.analyses = [...inspected.analyses].filter((analysis: any) => analysis.model?.model?.id === suggestionModelId && analysis.createdAt >= (job.createdAt || 0)).sort((a: any, b: any) => a.segment - b.segment || b.createdAt - a.createdAt); row.analysisId = row.analyses[0]?.id || ''; row.currentTags = ((await getTagsForFile(row.file.fileId)) || []).map((tag: any) => String(tag.name || tag.tag_name || '')).filter(Boolean); selectPreviewAnalysis(row); if (!row.analysisId) row.error = t('media_chat.suggestion_unavailable'); }
-    catch (reason) { row.error = String(reason); }
-  }
-  if (jobId === suggestionJob.value) suggestionJob.value = '';
-  } finally { refreshingSuggestions = false; }
-}
 async function applySuggestions() {
   if (applying.value || reviewingToolProposal.value || !adoptionCount.value || suggestionLibrary !== libConfig._libraryId) return;
-  const libraryId = suggestionLibrary;
-  const payloads = () => previewRows.value.filter(row => !row.applied && row.analysisId && Object.values(previewFields(row)).some(Boolean)).map(row => ({ libraryId, source: JSON.parse(JSON.stringify(row.source)), analysisId: row.analysisId, options: { ...previewFields(row), proposal: { title: row.proposal.title, description: row.proposal.description, tags: [...new Set(row.tagsText.split(/[、,，;；\n]/).map(tag => tag.trim()).filter(Boolean))] }, createTags: createTags.value, onlyEmpty: onlyEmpty.value } }));
+  const libraryId = suggestionLibrary, sessionId = view.value?.session.id, epoch = toolReviewGeneration;
+  const current = () => !disposed && epoch === toolReviewGeneration && libraryId === activeLibrary.value && libraryId === libConfig._libraryId && sessionId === view.value?.session.id;
+  const payloads = () => previewRows.value.filter(previewCanApply).map(row => ({ libraryId, source: JSON.parse(JSON.stringify(row.source)), analysisId: row.analysisId, options: { ...previewFields(row), proposal: { title: row.proposal.title, description: row.proposal.description, tags: [...new Set(row.tagsText.split(/[、,，;；\n]/).map(tag => tag.trim()).filter(Boolean))] }, createTags: createTags.value, onlyEmpty: onlyEmpty.value } }));
   const targets = payloads(), snapshot = JSON.stringify(targets);
-  if (!await pendingChanges.confirm('media-title') || libraryId !== libConfig._libraryId || snapshot !== JSON.stringify(payloads())) return;
+  if (!await pendingChanges.confirm('media-title') || !current() || snapshot !== JSON.stringify(payloads())) return;
   applying.value = true;
-  try { for (const target of targets) { if (libraryId !== libConfig._libraryId) break; const row = previewRows.value.find(row => row.analysisId === target.analysisId && row.file.fileId === target.source.fileId); if (!row) break; try { await invoke('media_ai_adopt', target); row.applied = true; row.error = ''; } catch (reason) { row.error = String(reason); } } }
+  try { for (const target of targets) { if (!current()) break; const row = previewRows.value.find(row => row.analysisId === target.analysisId && row.file.fileId === target.source.fileId); if (!row) break; try { await invoke('media_ai_adopt', target); row.applied = true; row.error = ''; } catch (reason) { row.error = String(reason); } } }
   finally { applying.value = false; }
 }
 
@@ -670,8 +667,8 @@ function endFrameGesture(event?: PointerEvent | Event) { if (!gesture || event &
 function resizeKeydown(event: KeyboardEvent, edge: ChatResizeEdge) { if (event.key === 'Escape') { endFrameGesture(); return; } if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); const step = event.shiftKey ? 16 : 8, initial = frame.value; frame.value = resizeChatFrame(initial, edge, event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0, event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0, viewport.value); if (autoDockWindow.value) updateDockAfterGesture('resize', initial); saveFrame(); }
 watch(() => [mediaChat.open, mediaChat.revision], () => { if (mediaChat.open) void openEntry(); else { rememberDraft(); closePicker(); contextOpen.value = false; actionsOpen.value = false; actionSlash = null; sessionActionsOpen.value = false; historyMenuId.value = ''; cancelRename(); endFrameGesture(); previewOpen.value = false; toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; } }, { immediate: true });
 watch(() => mediaChat.open, open => { if (open && !inputRegistered) { uiStore.pushInputHandler('MediaChat'); inputRegistered = true; } else if (!open && inputRegistered) { uiStore.removeInputHandler('MediaChat'); inputRegistered = false; } }, { immediate: true });
-watch(() => libConfig._libraryId, libraryId => { if (activeLibrary.value && libraryId !== activeLibrary.value) { rememberDraft(); generation++; suggestionJob.value = ''; suggestionLibrary = ''; previewRows.value = []; previewError.value = ''; previewOpen.value = false; closeMediaChat(); } });
-watch(() => [activeLibrary.value, view.value?.session.id], () => { toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; toolTaskStates.value = {}; if (previewOpen.value && !suggestionJob.value) { previewOpen.value = false; previewRows.value = []; } });
+watch(() => libConfig._libraryId, libraryId => { if (activeLibrary.value && libraryId !== activeLibrary.value) { rememberDraft(); generation++; suggestionLibrary = ''; previewRows.value = []; previewError.value = ''; previewOpen.value = false; closeMediaChat(); } });
+watch(() => [activeLibrary.value, view.value?.session.id], () => { toolReviewGeneration++; reviewingToolProposal.value = false; toolTaskReadGeneration++; toolTaskLoading = null; toolTaskStates.value = {}; if (previewOpen.value) { previewOpen.value = false; previewRows.value = []; } });
 watch(currentToolTasks, () => { void refreshToolTasks(); });
 watch(() => [mention.value?.query, pickerQuery.value, candidateSource.value], () => { clearTimeout(candidateTimer); candidateTimer = setTimeout(() => { void loadCandidates(); }, 150); });
 watch(sessionMedia, files => { if (mediaChat.open) void loadThumbnails(files); });
@@ -694,7 +691,6 @@ onMounted(() => {
     if (event.payload.libraryId === activeLibrary.value && currentToolTasks.value.has(event.payload.jobId)) void refreshToolTasks(event.payload.jobId);
   }).then(stop => { if (disposed) stop(); else offToolTasks = stop; }).catch(() => {});
   refreshTimer = setInterval(() => {
-    if (suggestionJob.value) void refreshSuggestions().catch(reason => { previewError.value = String(reason); });
     if (mediaChat.open) void refreshToolTasks();
     if (mediaChat.open && activeRequestId.value && request.value?.id !== activeRequestId.value) void refreshCurrent().catch(reason => { error.value = String(reason); });
   }, 1500);

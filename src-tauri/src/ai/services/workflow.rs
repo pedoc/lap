@@ -761,11 +761,12 @@ pub fn media_ai_adopt(
     app: tauri::AppHandle,
     library_id: String,
     source: MediaSource,
-    analysis_id: String,
+    analysis_id: Option<String>,
     options: Adoption,
 ) -> Result<(), String> {
-    store::db(&library_id, |c| {
-        store::adopt(c, &source, &analysis_id, &options)
+    store::db(&library_id, |c| match analysis_id.as_deref() {
+        Some(analysis_id) => store::adopt(c, &source, analysis_id, &options),
+        None => store::adopt_proposal(c, &source, &options),
     })?;
     notify_metadata(&app, &library_id, source.file_id);
     Ok(())

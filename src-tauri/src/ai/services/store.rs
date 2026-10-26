@@ -455,10 +455,58 @@ pub struct Adoption {
     pub create_tags: bool,
     pub only_empty: bool,
 }
+pub fn validate_proposal(text: &AnalysisText, options: &Adoption) -> Result<AnalysisText, String> {
+    if options.title && text.title.trim().is_empty()
+        || options.description && text.description.trim().is_empty()
+        || text.title.chars().count() > 256
+        || text.description.chars().count() > 8000
+        || text.tags.len() > 20
+        || text.title.chars().any(char::is_control)
+        || text
+            .description
+            .chars()
+            .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
+        || text.tags.iter().any(|tag| {
+            tag.trim().is_empty() || tag.chars().count() > 64 || tag.chars().any(char::is_control)
+        })
+    {
+        return Err("建议字段为空、含无效字符或超过长度限制，请修改后重试。".into());
+    }
+    let mut tags = Vec::new();
+    for tag in &text.tags {
+        let tag = tag.trim();
+        if !tags
+            .iter()
+            .any(|old: &String| old.eq_ignore_ascii_case(tag))
+        {
+            tags.push(tag.to_owned());
+        }
+    }
+    Ok(AnalysisText {
+        title: text.title.trim().into(),
+        description: text.description.trim().into(),
+        tags,
+    })
+}
 pub fn adopt(
     c: &mut Connection,
     src: &MediaSource,
     analysis_id: &str,
+    options: &Adoption,
+) -> Result<(), String> {
+    adopt_with_analysis(c, src, Some(analysis_id), options)
+}
+pub fn adopt_proposal(
+    c: &mut Connection,
+    src: &MediaSource,
+    options: &Adoption,
+) -> Result<(), String> {
+    adopt_with_analysis(c, src, None, options)
+}
+fn adopt_with_analysis(
+    c: &mut Connection,
+    src: &MediaSource,
+    analysis_id: Option<&str>,
     options: &Adoption,
 ) -> Result<(), String> {
     let tx = c
@@ -466,28 +514,48 @@ pub fn adopt(
         .map_err(sql_error)?;
     let current = source(&tx, src.file_id)?;
     if current.stamp() != src.stamp() {
-        return Err("媒体已变化，请重新理解".into());
+        return Err("媒体已变化，请刷新建议后重试。".into());
     }
-    let analysis = analyses(&tx, &current)?
-        .into_iter()
-        .find(|a| a.id == analysis_id)
-        .ok_or("建议已失效，请刷新")?;
+    let analysis = analysis_id
+        .map(|id| {
+            analyses(&tx, &current)?
+                .into_iter()
+                .find(|a| a.id == id)
+                .ok_or_else(|| "建议已失效，请刷新".to_owned())
+        })
+        .transpose()?;
     if options.title && current.title != src.title
         || options.description && current.comments != src.comments
         || options.tags && current.tag_ids != src.tag_ids
     {
         return Err("资料已被其他操作修改，请刷新后重新采用。".into());
     }
-    let proposal = options
-        .proposal
+    let text = if let Some(analysis) = &analysis {
+        options
+            .proposal
+            .as_ref()
+            .map(|proposal| {
+                AnalysisText::parse(
+                    &serde_json::to_string(proposal).map_err(|_| "编辑后的建议无效")?,
+                )
+            })
+            .transpose()?
+            .unwrap_or_else(|| analysis.text.clone())
+    } else {
+        validate_proposal(
+            options
+                .proposal
+                .as_ref()
+                .ok_or("请提供待采用的资料建议。")?,
+            options,
+        )?
+    };
+    let dismissed = analysis
         .as_ref()
-        .map(|proposal| {
-            AnalysisText::parse(&serde_json::to_string(proposal).map_err(|_| "编辑后的建议无效")?)
-        })
-        .transpose()?;
-    let text = proposal.as_ref().unwrap_or(&analysis.text);
+        .map(|analysis| analysis.dismissed.as_slice())
+        .unwrap_or(&[]);
     if options.title
-        && !analysis.dismissed.contains(&"title".into())
+        && !dismissed.contains(&"title".into())
         && (!options.only_empty
             || current
                 .title
@@ -499,7 +567,7 @@ pub fn adopt(
         crate::t_media_title::set_on(&tx, src.file_id, Some(&text.title), src.title.as_deref())?;
     }
     if options.description
-        && !analysis.dismissed.contains(&"description".into())
+        && !dismissed.contains(&"description".into())
         && (!options.only_empty
             || current
                 .comments
@@ -514,7 +582,7 @@ pub fn adopt(
         )
         .map_err(sql_error)?;
     }
-    if options.tags && !analysis.dismissed.contains(&"tags".into()) {
+    if options.tags && !dismissed.contains(&"tags".into()) {
         for name in &text.tags {
             let mut tag: Option<i64> = tx
                 .query_row(
@@ -649,6 +717,185 @@ pub(crate) mod tests {
                 .proposal
                 .is_none()
         );
+    }
+    #[test]
+    fn media_chat_direct_proposals_apply_selected_fields_without_creating_analysis() {
+        let (mut c, _dir) = fixture();
+        c.execute("UPDATE afiles SET comments='人工说明' WHERE id=1", [])
+            .unwrap();
+        c.execute("INSERT INTO afile_tags VALUES(1,2)", []).unwrap();
+        let src = source(&c, 1).unwrap();
+        let proposal = AnalysisText {
+            title: " 七个人，一段青春 ".into(),
+            description: String::new(),
+            tags: vec![],
+        };
+        let mut options = Adoption {
+            title: true,
+            proposal: Some(proposal),
+            ..Default::default()
+        };
+        assert!(source(&c, 1).unwrap().title.is_none());
+        assert!(analyses(&c, &src).unwrap().is_empty());
+        adopt_proposal(&mut c, &src, &options).unwrap();
+        let fresh = source(&c, 1).unwrap();
+        assert_eq!(fresh.title.as_deref(), Some("七个人，一段青春"));
+        assert_eq!(fresh.comments.as_deref(), Some("人工说明"));
+        assert_eq!(fresh.tag_ids, vec![2]);
+        let sort_key: Option<String> = c
+            .query_row("SELECT title_sort_key FROM afiles WHERE id=1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(sort_key.is_some());
+        options.title = false;
+        options.tags = true;
+        options.proposal = Some(AnalysisText {
+            title: String::new(),
+            description: String::new(),
+            tags: vec![" 湖泊 ".into(), "New".into(), "new".into()],
+        });
+        adopt_proposal(&mut c, &fresh, &options).unwrap();
+        let fresh = source(&c, 1).unwrap();
+        assert_eq!(fresh.tag_ids, vec![1, 2]);
+        options.create_tags = true;
+        adopt_proposal(&mut c, &fresh, &options).unwrap();
+        let updated = source(&c, 1).unwrap();
+        assert_eq!(updated.tag_ids.len(), 3);
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM atags WHERE name='New'", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row("SELECT has_tags FROM afiles WHERE id=1", [], |r| r
+                .get::<_, bool>(0))
+                .unwrap(),
+            true
+        );
+        assert!(analyses(&c, &updated).unwrap().is_empty());
+        assert_eq!(std::fs::read(&src.path).unwrap(), b"unchanged original");
+    }
+    #[test]
+    fn media_chat_direct_proposals_validate_selected_fields_without_relaxing_analysis_json() {
+        let mut text = AnalysisText {
+            title: " 标题 ".into(),
+            description: String::new(),
+            tags: vec![" Lake ".into(), "lake".into()],
+        };
+        let mut options = Adoption {
+            title: true,
+            ..Default::default()
+        };
+        let normalized = validate_proposal(&text, &options).unwrap();
+        assert_eq!(normalized.title, "标题");
+        assert_eq!(normalized.tags, vec!["Lake"]);
+        assert!(AnalysisText::parse(&serde_json::to_string(&text).unwrap()).is_err());
+        options.description = true;
+        assert!(validate_proposal(&text, &options).is_err());
+        text.description = "第一行\n第二行".into();
+        assert!(validate_proposal(&text, &options).is_ok());
+        text.description.push('\0');
+        assert!(validate_proposal(&text, &options).is_err());
+        text.description = "x".repeat(8001);
+        assert!(validate_proposal(&text, &options).is_err());
+        text.description = "说明".into();
+        text.title = "x".repeat(257);
+        assert!(validate_proposal(&text, &options).is_err());
+        text.title = "bad\n".into();
+        assert!(validate_proposal(&text, &options).is_err());
+        text.title = "标题".into();
+        text.tags = vec!["same".into(); 21];
+        assert!(validate_proposal(&text, &options).is_err());
+        text.tags = vec!["x".repeat(65)];
+        assert!(validate_proposal(&text, &options).is_err());
+        text.tags = vec!["bad\t".into()];
+        assert!(validate_proposal(&text, &options).is_err());
+        options.title = false;
+        options.description = false;
+        options.tags = true;
+        text.title.clear();
+        text.description.clear();
+        text.tags.clear();
+        assert!(validate_proposal(&text, &options).is_ok());
+    }
+    #[test]
+    fn media_chat_direct_proposals_keep_conflicts_only_empty_and_atomic_rollback() {
+        let (mut c, _dir) = fixture();
+        let src = source(&c, 1).unwrap();
+        let mut options = Adoption {
+            title: true,
+            description: true,
+            tags: true,
+            create_tags: true,
+            proposal: Some(AnalysisText {
+                title: "新标题".into(),
+                description: "新说明".into(),
+                tags: vec!["新标签".into()],
+            }),
+            ..Default::default()
+        };
+        c.execute("UPDATE afiles SET comments='人工说明' WHERE id=1", [])
+            .unwrap();
+        assert!(adopt_proposal(&mut c, &src, &options).is_err());
+        assert!(source(&c, 1).unwrap().title.is_none());
+        assert!(source(&c, 1).unwrap().tag_ids.is_empty());
+        let fresh = source(&c, 1).unwrap();
+        options.only_empty = true;
+        adopt_proposal(&mut c, &fresh, &options).unwrap();
+        let fresh = source(&c, 1).unwrap();
+        assert_eq!(fresh.title.as_deref(), Some("新标题"));
+        assert_eq!(fresh.comments.as_deref(), Some("人工说明"));
+        assert_eq!(fresh.tag_ids.len(), 1);
+        c.execute("UPDATE afiles SET size=size+1 WHERE id=1", [])
+            .unwrap();
+        assert!(
+            adopt_proposal(&mut c, &fresh, &options)
+                .unwrap_err()
+                .contains("刷新建议")
+        );
+        let fresh = source(&c, 1).unwrap();
+        let title_before = fresh.title.clone();
+        options.proposal = None;
+        assert!(adopt_proposal(&mut c, &fresh, &options).is_err());
+        options.only_empty = false;
+        options.proposal = Some(AnalysisText {
+            title: "不能部分写入".into(),
+            description: "触发失败".into(),
+            tags: vec![],
+        });
+        c.execute_batch("CREATE TRIGGER reject_comment BEFORE UPDATE OF comments ON afiles BEGIN SELECT RAISE(ABORT,'fixture failure'); END;").unwrap();
+        assert!(adopt_proposal(&mut c, &fresh, &options).is_err());
+        assert_eq!(source(&c, 1).unwrap().title, title_before);
+    }
+    #[test]
+    fn media_chat_direct_proposals_are_independent_but_analysis_dismissals_remain_strict() {
+        let (mut c, _dir) = fixture();
+        let (src, analysis) = seed(&mut c);
+        c.execute(
+            "INSERT INTO media_ai_dismissals VALUES(1,?1,'title')",
+            [src.stamp()],
+        )
+        .unwrap();
+        let options = Adoption {
+            title: true,
+            proposal: Some(AnalysisText {
+                title: "本轮明确建议".into(),
+                description: "说明".into(),
+                tags: vec![],
+            }),
+            ..Default::default()
+        };
+        adopt(&mut c, &src, &analysis.id, &options).unwrap();
+        assert!(source(&c, 1).unwrap().title.is_none());
+        assert!(adopt(&mut c, &src, "invalid-analysis", &options).is_err());
+        adopt_proposal(&mut c, &src, &options).unwrap();
+        assert_eq!(
+            source(&c, 1).unwrap().title.as_deref(),
+            Some("本轮明确建议")
+        );
+        assert_eq!(analyses(&c, &source(&c, 1).unwrap()).unwrap().len(), 1);
     }
     #[test]
     fn output_validation_does_not_accept_partial_or_oversized_json() {
