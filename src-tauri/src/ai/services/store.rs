@@ -4,7 +4,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{Ordering, Reverse},
-    collections::BinaryHeap,
+    collections::{BTreeSet, BinaryHeap, HashMap},
     time::Duration,
 };
 
@@ -361,7 +361,7 @@ pub struct Hit {
 }
 impl PartialEq for Hit {
     fn eq(&self, other: &Self) -> bool {
-        self.score == other.score && self.analysis_id == other.analysis_id
+        self.cmp(other) == Ordering::Equal
     }
 }
 impl Eq for Hit {}
@@ -375,6 +375,7 @@ impl Ord for Hit {
         self.score
             .total_cmp(&other.score)
             .then_with(|| self.analysis_id.cmp(&other.analysis_id))
+            .then_with(|| self.file_id.cmp(&other.file_id))
     }
 }
 pub fn search(
@@ -410,15 +411,24 @@ pub fn search(
             },
         )
         .map_err(sql_error)?;
-    rank_vectors(rows, query, limit)
+    rank_vectors(rows, query, limit, SearchUnit::Media)
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum SearchUnit {
+    // Gallery limits count files; Agent evidence pagination may count video segments.
+    Media,
+    Segments,
+}
 pub(super) fn rank_vectors(
     rows: impl Iterator<Item = rusqlite::Result<(Hit, Vec<u8>)>>,
     query: &[f32],
     limit: usize,
+    unit: SearchUnit,
 ) -> Result<Vec<Hit>, String> {
     let mut heap = BinaryHeap::new();
+    let mut media = BTreeSet::<Hit>::new();
+    let mut best_by_file = HashMap::<i64, Hit>::new();
     let limit = limit.clamp(1, 200);
     for row in rows {
         let (mut hit, bytes) = row.map_err(sql_error)?;
@@ -433,12 +443,34 @@ pub(super) fn rank_vectors(
             continue;
         }
         hit.score = vector.iter().zip(query).map(|(v, q)| v * q).sum();
+        if matches!(unit, SearchUnit::Media) {
+            if let Some(previous) = best_by_file.get(&hit.file_id) {
+                if hit <= *previous {
+                    continue;
+                }
+                media.remove(previous);
+            } else if media.len() == limit {
+                if media.first().is_some_and(|worst| hit <= *worst) {
+                    continue;
+                }
+                if let Some(worst) = media.pop_first() {
+                    best_by_file.remove(&worst.file_id);
+                }
+            }
+            // Keep only the best K distinct files; discarded files may re-enter on a better segment.
+            best_by_file.insert(hit.file_id, hit.clone());
+            media.insert(hit);
+            continue;
+        }
         if heap.len() < limit {
             heap.push(Reverse(hit));
         } else if heap.peek().is_some_and(|min: &Reverse<Hit>| hit > min.0) {
             heap.pop();
             heap.push(Reverse(hit));
         }
+    }
+    if matches!(unit, SearchUnit::Media) {
+        return Ok(media.into_iter().rev().collect());
     }
     let mut hits: Vec<_> = heap.into_iter().map(|r| r.0).collect();
     hits.sort_by(|a, b| b.cmp(a));
@@ -660,6 +692,49 @@ pub(crate) mod tests {
                 ..Default::default()
             },
         }
+    }
+    #[test]
+    fn media_rank_keeps_distinct_files_and_best_segments_with_stable_ties() {
+        fn row(file_id: i64, evidence: &str, score: f32) -> rusqlite::Result<(Hit, Vec<u8>)> {
+            Ok((
+                Hit {
+                    file_id,
+                    analysis_id: evidence.into(),
+                    title: String::new(),
+                    description: String::new(),
+                    start: 60.0,
+                    end: 120.0,
+                    score: 0.0,
+                },
+                score.to_le_bytes().to_vec(),
+            ))
+        }
+        let rows = || {
+            vec![
+                row(1, "initial", 0.5),
+                row(2, "second", 0.6),
+                row(3, "third", 0.7),
+                row(1, "best", 0.9),
+                row(3, "better", 0.8),
+                row(3, "tie-winner", 0.8),
+            ]
+        };
+        let forward = rank_vectors(rows().into_iter(), &[1.0], 2, SearchUnit::Media).unwrap();
+        let reverse = rank_vectors(rows().into_iter().rev(), &[1.0], 2, SearchUnit::Media).unwrap();
+        for hits in [&forward, &reverse] {
+            assert_eq!(
+                hits.iter().map(|hit| hit.file_id).collect::<Vec<_>>(),
+                vec![1, 3]
+            );
+            assert_eq!(hits[1].analysis_id, "tie-winner");
+            assert_eq!((hits[0].start, hits[0].end), (60.0, 120.0));
+        }
+        let segments = rank_vectors(rows().into_iter(), &[1.0], 6, SearchUnit::Segments).unwrap();
+        assert_eq!(
+            segments.len(),
+            6,
+            "Agent evidence search still returns individual segments"
+        );
     }
     fn seed(c: &mut Connection) -> (MediaSource, Analysis) {
         let src = source(c, 1).unwrap();

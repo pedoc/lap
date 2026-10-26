@@ -352,7 +352,7 @@ test('embedded Settings preserves main-window size, visibility and font scale th
 test('Settings section changes use draft and busy protection, then call the mounted model editor directly', async () => {
   const h = settingsHarness();
   let busy = true, dirty = true, accepted = false;
-  h.pendingChanges.register('model-settings', { busy: () => busy, dirty: () => dirty, revision: () => 'draft-1', confirm: async () => accepted });
+  h.pendingChanges.register('model-settings', { scope: 'settings', busy: () => busy, dirty: () => dirty, revision: () => 'draft-1', confirm: async () => accepted });
   h.context.aiModelsRef.value = { changeTask: async (task: string) => { h.events.push(['task', task]); return true; } };
   assert.equal(await h.api.confirmDiscard(), false);
   assert.equal(await h.api.openSection(constants.SETTINGS_TAB.IMAGE_SEARCH, 'media'), false);
@@ -366,6 +366,28 @@ test('Settings section changes use draft and busy protection, then call the moun
   dirty = false;
   assert.equal(await h.api.openSection(constants.SETTINGS_TAB.NETWORK), true);
   assert.equal(h.context.config.settings.tabIndex, constants.SETTINGS_TAB.NETWORK);
+});
+
+test('Settings tab and close checks include map drafts without asking unrelated media editors', async () => {
+  const h = settingsHarness();
+  let accepted = false, busy = false, questions = 0;
+  h.pendingChanges.register('map-services-settings', {
+    scope: 'settings', dirty: () => true, busy: () => busy, revision: () => 'map-draft',
+    confirm: () => { questions++; return accepted; },
+  });
+  h.pendingChanges.register('unrelated-photo', {
+    scope: 'media-title', dirty: () => true, revision: () => 'title',
+    confirm: () => assert.fail('Leaving settings must not discard an unrelated media draft'),
+  });
+  assert.equal(await h.api.selectSettingsTab(constants.SETTINGS_TAB.NETWORK), false);
+  assert.equal(h.context.config.settings.tabIndex, constants.SETTINGS_TAB.GENERAL);
+  accepted = true;
+  assert.equal(await h.api.confirmDiscard(), true);
+  assert.equal(await h.api.selectSettingsTab(constants.SETTINGS_TAB.NETWORK), true);
+  busy = true;
+  const previous = questions;
+  assert.equal(await h.api.confirmDiscard(), false);
+  assert.equal(questions, previous);
 });
 
 test('embedded settings apply local appearance and user language without broadcasting changes back to the same window', async () => {

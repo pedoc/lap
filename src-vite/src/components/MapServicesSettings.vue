@@ -33,30 +33,74 @@
   </div>
 </template>
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { config } from '@/common/config';
 import { openExternalUrl } from '@/common/api';
 import { MAP_SERVICES, defaultMapServices, applyMapServices, serviceFields } from '@/common/mapServices';
+import { pendingChanges } from '@/common/pendingChanges';
 const { t } = useI18n();
 const draft = ref(JSON.parse(JSON.stringify(config.settings.mapServices || defaultMapServices())));
 const baseline = ref(config.settings.mapServicesRevision || '');
+const draftBaseline = ref(JSON.stringify(draft.value));
+const dirty = computed(() => JSON.stringify(draft.value) !== draftBaseline.value);
 const busy = ref(false), error = ref(''), saved = ref(false);
+let mounted = true, request = 0;
+let unregister = () => {};
 const tileProviders = MAP_SERVICES.filter(provider => provider.tiles), geoProviders = MAP_SERVICES.filter(provider => provider.geo);
 const activeProviders = computed(() => MAP_SERVICES.filter(provider => provider.fields.length && [draft.value.tileProvider, draft.value.geocoder].includes(provider.id)).map(provider => ({...provider,fields:serviceFields(provider,draft.value)})));
 async function reset() {
+  if (busy.value || !await pendingChanges.confirmOne('map-services-settings') || !mounted || busy.value) return;
+  await load();
+}
+function receive(state) {
+  draft.value = JSON.parse(JSON.stringify(state.settings));
+  baseline.value = state.revision;
+  draftBaseline.value = JSON.stringify(draft.value);
+}
+function receiveResponse(state, startedRevision) {
+  const currentRevision = config.settings.mapServicesRevision || '';
+  if (currentRevision !== startedRevision && currentRevision !== state.revision) {
+    receive({ settings: config.settings.mapServices || defaultMapServices(), revision: currentRevision });
+    return false;
+  }
+  applyMapServices(config, state);
+  receive(state);
+  return true;
+}
+async function load() {
+  if (busy.value || !mounted) return;
+  const operation = ++request, revision = config.settings.mapServicesRevision || '';
   error.value = ''; saved.value = false; busy.value = true;
-  try { const state = await invoke('get_map_services'); applyMapServices(config, state); draft.value = JSON.parse(JSON.stringify(state.settings)); baseline.value = state.revision; }
-  catch (reason) { error.value = reason?.message || String(reason); }
-  finally { busy.value = false; }
+  try { const state = await invoke('get_map_services'); if (mounted && operation === request) receiveResponse(state, revision); }
+  catch (reason) { if (mounted && operation === request) error.value = reason?.message || String(reason); }
+  finally { if (mounted && operation === request) busy.value = false; }
 }
 async function save() {
+  if (busy.value || !mounted) return;
+  const operation = ++request, revision = config.settings.mapServicesRevision || '';
   busy.value = true; error.value = ''; saved.value = false;
-  try { const state = await invoke('save_map_services', { settings: JSON.parse(JSON.stringify(draft.value)), expectedRevision: baseline.value }); applyMapServices(config, state); draft.value = JSON.parse(JSON.stringify(state.settings)); baseline.value = state.revision; saved.value = true; }
-  catch (reason) { error.value = reason?.message || String(reason); }
-  finally { busy.value = false; }
+  try { const state = await invoke('save_map_services', { settings: JSON.parse(JSON.stringify(draft.value)), expectedRevision: baseline.value }); if (mounted && operation === request) saved.value = receiveResponse(state, revision); }
+  catch (reason) { if (mounted && operation === request) error.value = reason?.message || String(reason); }
+  finally { if (mounted && operation === request) busy.value = false; }
 }
+watch(dirty, value => { if (value) saved.value = false; });
+watch(() => config.settings.mapServicesRevision, revision => {
+  if (!busy.value && !dirty.value && revision !== baseline.value) {
+    receive({ settings: config.settings.mapServices || defaultMapServices(), revision: revision || '' });
+    saved.value = false;
+  }
+});
+onMounted(() => {
+  unregister = pendingChanges.register('map-services-settings', {
+    scope: 'settings', dirty: () => dirty.value, busy: () => busy.value,
+    revision: () => JSON.stringify([baseline.value, draft.value]),
+    confirm: () => ask(t('map_services.discard'), { kind: 'warning' }),
+  });
+});
+onUnmounted(() => { mounted = false; request++; unregister(); });
 // Loading never alters the user's provider/credentials; only the Save button persists changes.
-void reset();
+void load();
 </script>

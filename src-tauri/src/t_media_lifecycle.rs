@@ -1,6 +1,6 @@
 //! Photo visibility and recoverable file deletion. No automatic expiry or original-file overwrite.
 use crate::t_sqlite::{self, AFile};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -13,12 +13,64 @@ use std::{
 use tauri::Emitter;
 
 static OPERATIONS: Mutex<()> = Mutex::new(());
+fn folder_path_identity(path: &Path) -> PathBuf {
+    // Match canonical paths when online and keep equivalent Windows spellings comparable offline.
+    let mut ancestor = path;
+    let mut tail = Vec::new();
+    let resolved = loop {
+        match ancestor.canonicalize() {
+            Ok(mut canonical) => {
+                for part in tail.into_iter().rev() {
+                    canonical.push(part);
+                }
+                break canonical;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let (Some(name), Some(parent)) = (ancestor.file_name(), ancestor.parent()) else {
+                    break path.to_path_buf();
+                };
+                tail.push(name.to_os_string());
+                ancestor = parent;
+            }
+            Err(_) => break path.to_path_buf(),
+        }
+    };
+    #[cfg(windows)]
+    let resolved = {
+        let value = resolved.to_string_lossy().replace('/', "\\").to_lowercase();
+        PathBuf::from(if let Some(unc) = value.strip_prefix("\\\\?\\unc\\") {
+            format!("\\\\{unc}")
+        } else {
+            value.strip_prefix("\\\\?\\").unwrap_or(&value).to_string()
+        })
+    };
+    let mut normalized = PathBuf::new();
+    for component in resolved.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(std::path::Component::Normal(_))
+                ) =>
+            {
+                normalized.pop();
+            }
+            std::path::Component::ParentDir if normalized.has_root() => {}
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
 pub fn is_recovery_path(path: &Path) -> bool {
-    path.components().any(|c| {
-        c.as_os_str()
-            .to_string_lossy()
-            .eq_ignore_ascii_case(".lap-trash")
-    })
+    let reserved = |path: &Path| {
+        path.components().any(|c| {
+            c.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(".lap-trash")
+        })
+    };
+    reserved(path) || reserved(&folder_path_identity(path))
 }
 pub const STATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER,trash_group TEXT,original_name TEXT,visibility_group TEXT,FOREIGN KEY(file_id) REFERENCES afiles(id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS media_states_deleted ON media_states(deleted_at);";
 pub fn setup(conn: &Connection) -> Result<(), String> {
@@ -66,34 +118,205 @@ pub fn path_reserved(conn: &Connection, folder: i64, name: &str) -> Result<bool,
     conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states ms JOIN afiles a ON a.id=ms.file_id JOIN media_trash_groups g ON g.id=ms.trash_group WHERE a.folder_id=?1 AND ms.original_name=?2 AND g.status!='trashed')",params![folder,name],|r|r.get(0)).map_err(|e|e.to_string())
 }
 pub fn folder_has_private(conn: &Connection, path: &str) -> Result<bool, String> {
-    let mut stmt=conn.prepare("SELECT f.path FROM media_states ms JOIN afiles a ON a.id=ms.file_id JOIN afolders f ON f.id=a.folder_id WHERE ms.hidden=1 OR ms.deleted_at IS NOT NULL").map_err(|e|e.to_string())?;
+    let root = folder_path_identity(Path::new(path));
+    let mut stmt=conn.prepare("SELECT DISTINCT f.path FROM media_states ms JOIN afiles a ON a.id=ms.file_id JOIN afolders f ON f.id=a.folder_id WHERE ms.hidden=1 OR ms.deleted_at IS NOT NULL").map_err(|e|e.to_string())?;
     for row in stmt
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?
     {
-        if Path::new(&row.map_err(|e| e.to_string())?).starts_with(path) {
+        if folder_path_identity(Path::new(&row.map_err(|e| e.to_string())?)).starts_with(&root) {
             return Ok(true);
         }
     }
     Ok(false)
 }
 pub fn folder_has_deleted(conn: &Connection, path: &str) -> Result<bool, String> {
-    if crate::t_media_restore::planned_path_reserved(conn, Path::new(path))? {
+    let root = folder_path_identity(Path::new(path));
+    if crate::t_media_restore::planned_path_reserved(conn, &root)? {
         return Ok(true);
     }
     if is_recovery_path(Path::new(path)) {
         return Ok(true);
     }
-    let mut stmt=conn.prepare("SELECT f.path FROM media_states ms JOIN afiles a ON a.id=ms.file_id JOIN afolders f ON f.id=a.folder_id WHERE ms.deleted_at IS NOT NULL").map_err(|e|e.to_string())?;
+    let mut stmt=conn.prepare("SELECT DISTINCT f.path FROM media_states ms JOIN afiles a ON a.id=ms.file_id JOIN afolders f ON f.id=a.folder_id WHERE ms.deleted_at IS NOT NULL").map_err(|e|e.to_string())?;
     let paths = stmt
         .query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
     for folder in paths {
-        if Path::new(&folder.map_err(|e| e.to_string())?).starts_with(path) {
+        if folder_path_identity(Path::new(&folder.map_err(|e| e.to_string())?)).starts_with(&root) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+pub(crate) fn validate_folder_operation(conn: &Connection, path: &str) -> Result<(), String> {
+    if folder_has_deleted(conn, path)? {
+        return Err("Restore or clear Recently Deleted before modifying this folder".into());
+    }
+    if folder_has_private(conn, path)? {
+        return Err("PRIVATE_FOLDER: This folder contains hidden media. Unhide those items in the private view before modifying or exporting the folder".into());
+    }
+    Ok(())
+}
+pub(crate) fn validate_folder_transfer(
+    conn: &Connection,
+    source: &str,
+    destination_parent: &str,
+    replace: bool,
+) -> Result<(), String> {
+    validate_folder_operation(conn, source)?;
+    if folder_has_deleted(conn, destination_parent)? {
+        return Err(
+            "Restore or clear Recently Deleted before transferring into this folder".into(),
+        );
+    }
+    if replace {
+        let name = Path::new(source)
+            .file_name()
+            .ok_or("Source folder has no name")?;
+        let target = Path::new(destination_parent).join(name);
+        validate_folder_operation(conn, &target.to_string_lossy())?;
+    }
+    Ok(())
+}
+fn transfer_target_path(path: &Path) -> Result<PathBuf, String> {
+    let parent = path
+        .parent()
+        .ok_or("Destination directory is unavailable")?
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let name = path
+        .file_name()
+        .ok_or("Destination filename is unavailable")?;
+    Ok(path.canonicalize().unwrap_or_else(|_| parent.join(name)))
+}
+pub(crate) fn validate_destination_folder(
+    conn: &Connection,
+    folder_id: i64,
+    path: &str,
+) -> Result<i64, String> {
+    let (registered, album): (String, i64) = conn
+        .query_row(
+            "SELECT path,album_id FROM afolders WHERE id=?1",
+            [folder_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let registered = Path::new(&registered)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let actual = Path::new(path).canonicalize().map_err(|e| e.to_string())?;
+    if registered != actual {
+        return Err(
+            "Destination folder changed; select its current location before moving files".into(),
+        );
+    }
+    Ok(album)
+}
+fn transfer_path_key(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        path.to_string_lossy().to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().into_owned()
+    }
+}
+pub(crate) fn validate_transfer_targets_on(
+    conn: &Connection,
+    targets: &[PathBuf],
+    replace: bool,
+) -> Result<Vec<i64>, String> {
+    let physical = targets
+        .iter()
+        .map(|path| transfer_target_path(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let keys = physical
+        .iter()
+        .map(|path| transfer_path_key(path))
+        .collect::<HashSet<_>>();
+    let mut replaced = HashSet::new();
+    for (target, actual) in targets.iter().zip(&physical) {
+        if is_recovery_path(target)
+            || is_recovery_path(actual)
+            || crate::t_media_restore::planned_path_reserved(conn, target)?
+            || crate::t_media_restore::planned_path_reserved(conn, actual)?
+        {
+            return Err("Recovery destinations are reserved; original files were retained".into());
+        }
+        let name = target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or("Invalid destination filename")?;
+        let aae_owner = target
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("aae"))
+            .then(|| target.file_stem().and_then(|value| value.to_str()))
+            .flatten();
+        let candidates = {
+            let mut statement = conn.prepare("SELECT id,folder,name FROM (
+                SELECT a.id AS id,f.path AS folder,CASE WHEN ms.deleted_at IS NOT NULL THEN COALESCE(ms.original_name,a.name) ELSE a.name END AS name
+                FROM afiles a JOIN afolders f ON f.id=a.folder_id LEFT JOIN media_states ms ON ms.file_id=a.id
+                ) WHERE name=?1 COLLATE NOCASE OR (?2 IS NOT NULL AND
+                    (name=?2 COLLATE NOCASE OR substr(name,1,length(?2)+1)=(?2||'.') COLLATE NOCASE))").map_err(|e|e.to_string())?;
+            statement
+                .query_map(params![name, aae_owner], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        for (id, folder, candidate_name) in candidates {
+            let candidate = Path::new(&folder).join(candidate_name);
+            let Ok(candidate_path) = transfer_target_path(&candidate) else {
+                continue;
+            };
+            let sidecar_owner = aae_owner.is_some()
+                && candidate
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|owner| {
+                        let short = candidate
+                            .file_stem()
+                            .and_then(|value| value.to_str())
+                            .map(|stem| format!("{stem}.aae"));
+                        let full = format!("{owner}.aae");
+                        (name.eq_ignore_ascii_case(&full)
+                            || short.is_some_and(|short| name.eq_ignore_ascii_case(&short)))
+                            && candidate_path.parent().is_some_and(|parent| {
+                                transfer_path_key(&parent.join(name)) == transfer_path_key(actual)
+                            })
+                    });
+            if transfer_path_key(&candidate_path) != transfer_path_key(actual) && !sidecar_owner {
+                continue;
+            }
+            let members = component_ids_on(conn, id)?;
+            for member in members {
+                let private: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND (hidden=1 OR deleted_at IS NOT NULL))", [member], |r|r.get(0)).map_err(|e|e.to_string())?;
+                if private {
+                    return Err("PRIVATE_FOLDER: The destination contains hidden or deleted media. Use the private view before replacing it".into());
+                }
+                if !replace {
+                    return Err("DESTINATION_EXISTS: The destination is already registered; choose another name".into());
+                }
+                let member_path = transfer_target_path(&original_path_on(conn, member)?)?;
+                if !keys.contains(&transfer_path_key(&member_path)) {
+                    return Err("Replace would leave part of the destination media group behind. Choose Keep both instead".into());
+                }
+            }
+            replaced.insert(id);
+        }
+    }
+    let mut replaced = replaced.into_iter().collect::<Vec<_>>();
+    replaced.sort_unstable();
+    Ok(replaced)
 }
 pub fn has_deleted_in_album(conn: &Connection, album: i64) -> Result<bool, String> {
     let root: String = conn
@@ -372,45 +595,31 @@ fn component_ids(primary: i64) -> Result<Vec<i64>, String> {
         component_ids_on(&conn, primary)
     }
 }
-fn component_ids_on(conn: &Connection, primary: i64) -> Result<Vec<i64>, String> {
-    let mut ids = vec![primary];
-    let mut statement = conn
-        .prepare("SELECT id FROM afiles WHERE live_photo_video_id=?1")
-        .map_err(|e| e.to_string())?;
-    let owners = statement
-        .query_map([primary], |r| r.get::<_, i64>(0))
+pub(crate) fn component_ids_on(conn: &Connection, primary: i64) -> Result<Vec<i64>, String> {
+    // UNION deduplicates the full undirected group, including cycles and restored visibility links.
+    let mut statement = conn.prepare(
+        "WITH RECURSIVE members(id) AS (
+            SELECT id FROM afiles WHERE id=?1
+            UNION
+            SELECT a.id FROM afiles a JOIN members m ON a.live_photo_video_id=m.id WHERE a.id>0
+            UNION
+            SELECT a.live_photo_video_id FROM afiles a JOIN members m ON a.id=m.id
+                JOIN afiles companion ON companion.id=a.live_photo_video_id WHERE a.live_photo_video_id>0
+            UNION
+            SELECT related.file_id FROM media_states current
+                JOIN members m ON current.file_id=m.id
+                JOIN media_states related ON related.visibility_group=current.visibility_group
+                JOIN afiles a ON a.id=related.file_id
+                WHERE current.visibility_group IS NOT NULL AND current.visibility_group<>''
+        ) SELECT id FROM members ORDER BY id<>?1,id",
+    ).map_err(|e|e.to_string())?;
+    let ids = statement
+        .query_map([primary], |r| r.get(0))
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    for owner in owners.into_iter().chain(std::iter::once(primary)) {
-        if !ids.contains(&owner) {
-            ids.push(owner);
-        }
-        let companion: Option<i64> = conn
-            .query_row(
-                "SELECT live_photo_video_id FROM afiles WHERE id=?1",
-                [owner],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?
-            .flatten();
-        if let Some(id) = companion.filter(|id| *id > 0) {
-            if !ids.contains(&id) {
-                ids.push(id);
-            }
-        }
-    }
-    let mut statement=conn.prepare("SELECT file_id FROM media_states WHERE visibility_group IN (SELECT visibility_group FROM media_states WHERE file_id=?1)").map_err(|e|e.to_string())?;
-    let related = statement
-        .query_map([primary], |r| r.get::<_, i64>(0))
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    for id in related {
-        if !ids.contains(&id) {
-            ids.push(id);
-        }
+    if ids.is_empty() {
+        return Err("Photo no longer exists in this library".into());
     }
     Ok(ids)
 }
@@ -1546,6 +1755,463 @@ mod tests {
         );
     }
 
+    #[test]
+    #[cfg(windows)]
+    fn folder_guards_match_windows_case_separators_verbatim_and_offline_spellings() {
+        let f = Fixture::new();
+        let private = f.root.join("CaseParent").join("source");
+        fs::create_dir_all(&private).unwrap();
+        f.conn
+            .execute(
+                "INSERT INTO afolders(id,album_id,path) VALUES(2,1,?1)",
+                [private.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        f.conn.execute_batch("INSERT INTO afiles(id,folder_id,name) VALUES(3,2,'hidden.jpg'); INSERT INTO media_states(file_id,hidden) VALUES(3,1);").unwrap();
+        let variants = |path: &Path| {
+            let canonical = path.to_string_lossy().into_owned();
+            let ordinary = canonical
+                .strip_prefix("\\\\?\\")
+                .unwrap_or(&canonical)
+                .to_string();
+            vec![
+                canonical,
+                ordinary.to_lowercase(),
+                ordinary.replace('\\', "/"),
+                ordinary.to_uppercase(),
+            ]
+        };
+        for spelling in variants(&private) {
+            assert!(
+                folder_has_private(&f.conn, &spelling).unwrap(),
+                "{spelling}"
+            );
+            assert!(validate_folder_operation(&f.conn, &spelling).is_err());
+        }
+        assert!(
+            !folder_has_private(
+                &f.conn,
+                &f.root
+                    .join("CaseParent")
+                    .join("source-other")
+                    .to_string_lossy()
+            )
+            .unwrap()
+        );
+        let offline = f.root.join("MissingDisk").join("source");
+        f.conn
+            .execute(
+                "UPDATE afolders SET path=?1 WHERE id=2",
+                [offline.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        for spelling in variants(&offline) {
+            assert!(
+                folder_has_private(&f.conn, &spelling).unwrap(),
+                "{spelling}"
+            );
+        }
+        f.conn
+            .execute(
+                "UPDATE media_states SET hidden=0,deleted_at=1 WHERE file_id=3",
+                [],
+            )
+            .unwrap();
+        for spelling in variants(&offline) {
+            assert!(
+                folder_has_deleted(&f.conn, &spelling).unwrap(),
+                "{spelling}"
+            );
+        }
+        for spelling in variants(&f.root.join(".LaP-TrAsH").join("pending")) {
+            assert!(is_recovery_path(Path::new(&spelling)));
+            assert!(folder_has_deleted(&f.conn, &spelling).unwrap());
+        }
+    }
+
+    #[test]
+    fn aae_targets_cannot_overwrite_private_or_uncovered_owner_edits() {
+        for private in [false, true] {
+            let f = Fixture::new();
+            f.conn
+                .execute_batch("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER;")
+                .unwrap();
+            if private {
+                f.conn
+                    .execute("INSERT INTO media_states(file_id,hidden) VALUES(1,1)", [])
+                    .unwrap();
+            }
+            fs::write(f.root.join("photo.raw"), b"unpaired destination raw").unwrap();
+            let sidecar = f.root.join("photo.AAE");
+            fs::write(&sidecar, b"existing JPEG edits").unwrap();
+            let source = f.root.join("incoming.AAE");
+            fs::write(&source, b"incoming RAW edits").unwrap();
+            let result = validate_transfer_targets_on(
+                &f.conn,
+                &[f.root.join("photo.raw"), sidecar.clone()],
+                true,
+            )
+            .and_then(|_| {
+                crate::t_utils::copy_file_to_path_with_policy(
+                    &source.to_string_lossy(),
+                    &sidecar,
+                    crate::t_utils::FileConflictPolicy::Replace,
+                )?
+                .finalize()
+            });
+            let error = result.unwrap_err();
+            assert!(
+                if private {
+                    error.starts_with("PRIVATE_FOLDER:")
+                } else {
+                    error.contains("Keep both")
+                },
+                "{error}"
+            );
+            assert_eq!(fs::read(&sidecar).unwrap(), b"existing JPEG edits");
+            assert_eq!(
+                fs::read(f.root.join("photo.jpg")).unwrap(),
+                b"original photo"
+            );
+            assert_eq!(
+                f.conn
+                    .query_row(
+                        "SELECT name FROM manual_annotations WHERE file_id=1",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                "Alice"
+            );
+        }
+    }
+
+    #[test]
+    fn private_replace_targets_reject_copy_and_move_without_touching_bytes_or_annotations() {
+        for moving in [false, true] {
+            let f = Fixture::new();
+            f.conn.execute_batch("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER; INSERT INTO media_states(file_id,hidden) VALUES(1,1);").unwrap();
+            let incoming = f.root.join("incoming");
+            fs::create_dir(&incoming).unwrap();
+            let source = incoming.join("photo.jpg");
+            let target = f.root.join("photo.jpg");
+            fs::write(&source, b"incoming photo").unwrap();
+            let result =
+                validate_transfer_targets_on(&f.conn, &[target.clone()], true).and_then(|_| {
+                    let transfer = if moving {
+                        crate::t_utils::move_file_to_path_with_policy(
+                            &source.to_string_lossy(),
+                            &target,
+                            crate::t_utils::FileConflictPolicy::Replace,
+                        )
+                    } else {
+                        crate::t_utils::copy_file_to_path_with_policy(
+                            &source.to_string_lossy(),
+                            &target,
+                            crate::t_utils::FileConflictPolicy::Replace,
+                        )
+                    }?;
+                    transfer.finalize()
+                });
+            assert!(result.unwrap_err().starts_with("PRIVATE_FOLDER:"));
+            assert_eq!(fs::read(&source).unwrap(), b"incoming photo");
+            assert_eq!(fs::read(&target).unwrap(), b"original photo");
+            assert_eq!(
+                f.conn
+                    .query_row(
+                        "SELECT name FROM manual_annotations WHERE file_id=1",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                "Alice"
+            );
+            assert_eq!(
+                f.conn
+                    .query_row("SELECT rating FROM afiles WHERE id=1", [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                5
+            );
+        }
+    }
+
+    #[test]
+    fn replacing_part_of_a_target_group_cannot_drop_uncovered_or_private_members() {
+        let f = Fixture::new();
+        f.conn.execute_batch("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER; UPDATE afiles SET live_photo_video_id=2 WHERE id=1;").unwrap();
+        let partial = vec![f.root.join("photo.jpg")];
+        assert!(
+            validate_transfer_targets_on(&f.conn, &partial, true)
+                .unwrap_err()
+                .contains("Keep both")
+        );
+        let complete = vec![f.root.join("photo.jpg"), f.root.join("video.mov")];
+        assert_eq!(
+            validate_transfer_targets_on(&f.conn, &complete, true).unwrap(),
+            vec![1, 2]
+        );
+        f.conn
+            .execute("INSERT INTO media_states(file_id,hidden) VALUES(2,1)", [])
+            .unwrap();
+        assert!(
+            validate_transfer_targets_on(&f.conn, &complete, true)
+                .unwrap_err()
+                .starts_with("PRIVATE_FOLDER:")
+        );
+        assert_eq!(
+            fs::read(f.root.join("photo.jpg")).unwrap(),
+            b"original photo"
+        );
+        assert_eq!(fs::read(f.root.join("video.mov")).unwrap(), b"paired video");
+        assert_eq!(
+            f.conn
+                .query_row("SELECT COUNT(*) FROM afiles", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            f.conn
+                .query_row(
+                    "SELECT name FROM manual_annotations WHERE file_id=1",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "Alice"
+        );
+    }
+
+    #[test]
+    fn deleted_original_names_and_recovery_paths_cannot_be_used_as_transfer_destinations() {
+        let f = Fixture::new();
+        f.conn
+            .execute_batch("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER;")
+            .unwrap();
+        let (id, manifest) = f.plan();
+        f.trash(&id, &manifest);
+        assert!(validate_transfer_targets_on(&f.conn, &[f.root.join("photo.jpg")], true).is_err());
+        let recovery = PathBuf::from(&manifest.members[0].stored_path);
+        assert!(
+            validate_transfer_targets_on(&f.conn, &[recovery.clone()], true)
+                .unwrap_err()
+                .contains("reserved")
+        );
+        assert_eq!(fs::read(recovery).unwrap(), b"original photo");
+    }
+
+    #[test]
+    fn a_renamed_and_recreated_destination_is_rejected_before_any_move() {
+        let f = Fixture::new();
+        let old_target = f.root.join("target");
+        let renamed_target = f.root.join("renamed");
+        fs::create_dir(&old_target).unwrap();
+        fs::write(old_target.join("existing.jpg"), b"existing destination").unwrap();
+        f.conn
+            .execute(
+                "INSERT INTO afolders(id,album_id,path) VALUES(2,1,?1)",
+                [old_target.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        assert_eq!(
+            validate_destination_folder(&f.conn, 2, &old_target.to_string_lossy()).unwrap(),
+            1
+        );
+        fs::rename(&old_target, &renamed_target).unwrap();
+        fs::create_dir(&old_target).unwrap();
+        f.conn
+            .execute(
+                "UPDATE afolders SET path=?1 WHERE id=2",
+                [renamed_target.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        assert!(
+            validate_destination_folder(&f.conn, 2, &old_target.to_string_lossy())
+                .unwrap_err()
+                .contains("changed")
+        );
+        assert_eq!(
+            fs::read(f.root.join("photo.jpg")).unwrap(),
+            b"original photo"
+        );
+        assert_eq!(
+            fs::read(renamed_target.join("existing.jpg")).unwrap(),
+            b"existing destination"
+        );
+        assert!(!old_target.join("photo.jpg").exists());
+    }
+
+    #[test]
+    fn private_folder_transfers_are_rejected_before_disk_changes() {
+        let f = Fixture::new();
+        f.conn
+            .execute("INSERT INTO media_states(file_id,hidden) VALUES(1,1)", [])
+            .unwrap();
+        let destination = f.root.join("destination");
+        assert!(
+            validate_folder_operation(&f.conn, &f.root.to_string_lossy())
+                .unwrap_err()
+                .contains("hidden media")
+        );
+        for replace in [false, true] {
+            assert!(
+                validate_folder_transfer(
+                    &f.conn,
+                    &f.root.to_string_lossy(),
+                    &destination.to_string_lossy(),
+                    replace
+                )
+                .is_err()
+            );
+            assert!(!destination.exists());
+            assert_eq!(
+                fs::read(f.root.join("photo.jpg")).unwrap(),
+                b"original photo"
+            );
+        }
+    }
+    #[test]
+    fn replace_checks_the_actual_private_destination_and_keep_both_preserves_it() {
+        let f = Fixture::new();
+        let source = f.root.join("source");
+        let destination = f.root.join("destination");
+        let target = destination.join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join("public.jpg"), b"public source").unwrap();
+        fs::write(target.join("hidden.jpg"), b"private target").unwrap();
+        f.conn
+            .execute(
+                "INSERT INTO afolders(id,album_id,path) VALUES(2,1,?1)",
+                [target.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        f.conn.execute_batch("INSERT INTO afiles(id,folder_id,name) VALUES(3,2,'hidden.jpg'); INSERT INTO media_states(file_id,hidden) VALUES(3,1);").unwrap();
+        assert!(
+            validate_folder_transfer(
+                &f.conn,
+                &source.to_string_lossy(),
+                &destination.to_string_lossy(),
+                true
+            )
+            .unwrap_err()
+            .contains("hidden media")
+        );
+        assert_eq!(
+            fs::read(target.join("hidden.jpg")).unwrap(),
+            b"private target"
+        );
+        validate_folder_transfer(
+            &f.conn,
+            &source.to_string_lossy(),
+            &destination.to_string_lossy(),
+            false,
+        )
+        .unwrap();
+        let copy = crate::t_utils::copy_folder_with_policy(
+            &source.to_string_lossy(),
+            &destination.to_string_lossy(),
+            crate::t_utils::FileConflictPolicy::KeepBoth,
+        )
+        .unwrap()
+        .finalize()
+        .unwrap();
+        assert_eq!(
+            fs::read(Path::new(&copy).join("public.jpg")).unwrap(),
+            b"public source"
+        );
+        assert!(!Path::new(&copy).join("hidden.jpg").exists());
+        assert_eq!(
+            fs::read(target.join("hidden.jpg")).unwrap(),
+            b"private target"
+        );
+    }
+    #[test]
+    fn media_groups_follow_both_pair_directions_and_visibility_links_without_cycles_or_null_groups()
+    {
+        let f = Fixture::new();
+        f.conn.execute_batch("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER;
+            INSERT INTO afiles(id,folder_id,name) VALUES(3,1,'third.mov'),(4,1,'linked.raw'),(5,1,'linked.jpg'),(6,1,'unrelated.jpg'),(7,1,'empty-a.jpg'),(8,1,'empty-b.jpg');
+            UPDATE afiles SET live_photo_video_id=CASE id WHEN 1 THEN 2 WHEN 2 THEN 3 WHEN 3 THEN 1 WHEN 4 THEN 5 END;
+            INSERT INTO media_states(file_id,visibility_group) VALUES(3,'linked'),(4,'linked'),(6,NULL),(7,''),(8,'');").unwrap();
+        for primary in 1..=5 {
+            let ids = component_ids_on(&f.conn, primary).unwrap();
+            assert_eq!(ids[0], primary);
+            assert_eq!(ids.len(), 5);
+            assert_eq!(
+                ids.into_iter().collect::<HashSet<_>>(),
+                HashSet::from([1, 2, 3, 4, 5])
+            );
+        }
+        assert_eq!(component_ids_on(&f.conn, 6).unwrap(), vec![6]);
+        assert_eq!(component_ids_on(&f.conn, 7).unwrap(), vec![7]);
+        assert!(component_ids_on(&f.conn, 999).is_err());
+    }
+    #[test]
+    fn deleting_and_restoring_raw_jpeg_live_chain_keeps_every_original_and_annotation() {
+        let f = Fixture::new();
+        fs::rename(f.root.join("photo.jpg"), f.root.join("photo.raw")).unwrap();
+        fs::rename(f.root.join("video.mov"), f.root.join("photo.jpg")).unwrap();
+        fs::write(f.root.join("photo.mov"), b"live movie").unwrap();
+        f.conn
+            .execute_batch(
+                "ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER;
+            UPDATE afiles SET name='photo.raw',live_photo_video_id=2 WHERE id=1;
+            UPDATE afiles SET name='photo.jpg',live_photo_video_id=3 WHERE id=2;
+            INSERT INTO afiles(id,folder_id,name) VALUES(3,1,'photo.mov');",
+            )
+            .unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let manifest = prepare_manifest(&f.conn, 1, &id).unwrap();
+        assert_eq!(
+            manifest
+                .members
+                .iter()
+                .filter_map(|member| member.file_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        f.trash(&id, &manifest);
+        assert_eq!(
+            f.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM media_states WHERE deleted_at IS NOT NULL",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            3
+        );
+        assert!(!f.root.join("photo.mov").exists());
+        restore_on(&f.conn, &load(&f.conn, &id).unwrap()).unwrap();
+        assert_eq!(
+            fs::read(f.root.join("photo.raw")).unwrap(),
+            b"original photo"
+        );
+        assert_eq!(fs::read(f.root.join("photo.jpg")).unwrap(), b"paired video");
+        assert_eq!(fs::read(f.root.join("photo.mov")).unwrap(), b"live movie");
+        assert_eq!(
+            fs::read(f.root.join("photo.AAE")).unwrap(),
+            b"editing sidecar"
+        );
+        assert_eq!(
+            f.conn
+                .query_row("SELECT rating FROM afiles WHERE id=1", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            f.conn
+                .query_row(
+                    "SELECT name FROM manual_annotations WHERE file_id=1",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "Alice"
+        );
+    }
     #[test]
     fn media_lifecycle_real_query_predicates_hide_private_media_but_scan_preserves_hidden() {
         let f = Fixture::new();

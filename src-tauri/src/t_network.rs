@@ -150,9 +150,10 @@ pub fn configure(proxy_url: Option<String>) -> Result<(), String> {
     if let Some(url) = &normalized {
         Proxy::all(url).map_err(|e| format!("Invalid proxy URL: {e}"))?;
     }
-    let mut config = crate::t_config::load_app_config()?;
-    config.network_proxy_url = normalized.clone();
-    crate::t_config::save_app_config(&config)?;
+    crate::t_config::update_app_config(|config| {
+        config.network_proxy_url = normalized.clone();
+        Ok(())
+    })?;
     initialize(normalized);
     Ok(())
 }

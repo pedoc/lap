@@ -16,12 +16,13 @@ pub fn save_map_services(
         .write()
         .map_err(|_| "Map settings unavailable")?;
     let settings = settings.normalize()?;
-    if config::load()?.revision != expected_revision {
-        return Err("Map settings changed in another window; reload before saving".into());
-    }
-    let mut app = crate::t_config::load_app_config()?;
-    app.map_services = Some(settings);
-    crate::t_config::save_app_config(&app)?;
+    crate::t_config::update_app_config(|app| {
+        if app.map_services.clone().unwrap_or_default().revision()? != expected_revision {
+            return Err("Map settings changed in another window; reload before saving".into());
+        }
+        app.map_services = Some(settings);
+        Ok(())
+    })?;
     let state = config::load()?;
     let _ = app_handle.emit("map-services-changed", &state);
     Ok(state)

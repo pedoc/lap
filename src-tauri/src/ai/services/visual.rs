@@ -156,7 +156,7 @@ pub fn search(
             },
         )
         .map_err(sql_error)?;
-    store::rank_vectors(rows, query, limit)
+    store::rank_vectors(rows, query, limit, store::SearchUnit::Media)
 }
 
 #[cfg(test)]
@@ -377,6 +377,70 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn text_and_original_search_limit_distinct_media_before_video_segments() {
+        let (c, _dir) = store::tests::fixture();
+        c.execute_batch("DELETE FROM afiles WHERE id<>1; UPDATE afiles SET file_type=2,duration=6000 WHERE id=1;
+            WITH RECURSIVE ids(id) AS(SELECT 2 UNION ALL SELECT id+1 FROM ids WHERE id<51)
+            INSERT INTO afiles(id,folder_id,name,file_type,modified_at,size,width,height,e_orientation)
+            SELECT id,1,'photo-'||id||'.jpg',1,10,20,1000,1000,1 FROM ids;").unwrap();
+        let text_model = store::tests::model("text-embedding");
+        let visual_model = model();
+        let text_profile = text_model.embedding_profile().unwrap();
+        let visual_profile = visual_model.multimodal_profile().unwrap();
+        for profile in [&text_profile, &visual_profile] {
+            c.execute("INSERT INTO media_ai_profiles VALUES(?1,'{}',1)", [profile])
+                .unwrap();
+        }
+        for id in 1..=51 {
+            let src = store::source(&c, id).unwrap();
+            let snapshot = serde_json::to_string(&src).unwrap();
+            for segment in 0..if id == 1 { 100 } else { 1 } {
+                let score = if id == 1 {
+                    0.99 + segment as f32 * 0.00005
+                } else {
+                    0.9 - id as f32 * 0.001
+                };
+                let vector = [score, (1.0 - score * score).sqrt()]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>();
+                let start = if id == 1 { segment as f64 * 60.0 } else { 0.0 };
+                let end = if id == 1 { start + 60.0 } else { 0.0 };
+                let evidence = format!("{id}-{segment:03}");
+                c.execute("INSERT INTO media_ai_analyses(id,file_id,stamp,source,segment,start,end,title,description,tags,model,created_at)
+                    VALUES(?1,?2,?3,?4,?5,?6,?7,'title','description','[]','{}',1)",
+                    params![evidence,id,src.stamp(),snapshot,segment,start,end]).unwrap();
+                c.execute(
+                    "INSERT INTO media_ai_vectors VALUES(?1,?2,?3)",
+                    params![evidence, text_profile, vector],
+                )
+                .unwrap();
+                c.execute("INSERT INTO media_ai_visual_vectors(id,file_id,stamp,source,segment,start,end,duration,profile_id,vector,created_at)
+                    VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1)",
+                    params![evidence,id,src.stamp(),snapshot,segment,start,end,if id == 1 {6000.0} else {0.0},visual_profile,vector]).unwrap();
+            }
+        }
+        for hits in [
+            store::search(&c, &text_model, &[1.0, 0.0], 100, None, 0).unwrap(),
+            search(&c, &visual_model, &[1.0, 0.0], 100, None, 0).unwrap(),
+        ] {
+            assert_eq!(hits.len(), 51);
+            assert_eq!(
+                hits.iter()
+                    .map(|hit| hit.file_id)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                51
+            );
+            assert_eq!(hits[0].file_id, 1);
+            assert_eq!((hits[0].start, hits[0].end), (5940.0, 6000.0));
+        }
+        let limited = search(&c, &visual_model, &[1.0, 0.0], 20, None, 0).unwrap();
+        assert_eq!(limited.len(), 20);
+        assert_eq!(limited.last().unwrap().file_id, 20);
+    }
+
+    #[test]
     fn video_vectors_keep_time_ranges_and_resume_without_duplicate_segments() {
         let (mut c, _dir) = store::tests::fixture();
         c.execute("UPDATE afiles SET file_type=2,duration=65 WHERE id=1", [])
@@ -389,7 +453,7 @@ pub(crate) mod tests {
         put_vector(&mut c, &src, &model, 1, 60.0, 65.0, 65.0, vec![0.0, 2.0]).unwrap();
         assert!(complete(&src, &vectors(&c, &src, &model).unwrap()));
         let hits = search(&c, &model, &[0.0, 1.0], 10, None, 0).unwrap();
-        assert_eq!(hits.len(), 2);
+        assert_eq!(hits.len(), 1);
         assert_eq!((hits[0].start, hits[0].end), (60.0, 65.0));
         assert!(put_vector(&mut c, &src, &model, 1, 0.0, 60.0, 65.0, vec![1.0, 0.0]).is_err());
         let mut unprobed = src.clone();

@@ -185,6 +185,18 @@ pub fn ensure_selected() -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn ensure_selected_on(conn: &Connection) -> Result<(), String> {
+    let profiles = [Task::Semantic, Task::Face, Task::Ocr, Task::Detection]
+        .into_iter()
+        .map(|task| super::settings::active(task).map(|model| (task, model.profile())))
+        .collect::<Result<Vec<_>, _>>()?;
+    let _lock = PROFILE_LOCK.lock().map_err(|error| error.to_string())?;
+    for (task, fingerprint) in profiles {
+        ensure_on(conn, task, &fingerprint)?;
+    }
+    Ok(())
+}
+
 pub fn invalidate_file(file_id: i64) -> Result<(), String> {
     let _lock = PROFILE_LOCK.lock().map_err(|e| e.to_string())?;
     let conn = crate::t_sqlite::open_conn()?;

@@ -820,7 +820,12 @@ const clickRenameFolder = async (newFolderName: string) => {
     uiStore.removeInputHandler('AlbumFolder-rename');
   } else {
     const oldFolderPath = selection.folderPath.value;
-    const newFolderPath_ = await renameFolder(oldFolderPath, newFolderName);
+    let newFolderPath_: string | null;
+    try { newFolderPath_ = await renameFolder(oldFolderPath, newFolderName); }
+    catch (error) {
+      toast.error(String(error).startsWith('PRIVATE_FOLDER:') ? t('media_lifecycle.private_folder_operation') : String(error));
+      return;
+    }
     if(newFolderPath_) {    // rename success
       let folder = selectedFolder.value;
       if (folder) {
@@ -916,7 +921,8 @@ const clickMoveTo = async () => {
     } else {
       toast.error(localeMsg.value.msgbox.move_to.error);
     }
-  });
+  }).catch(error => toast.error(String(error).startsWith('PRIVATE_FOLDER:')
+    ? t('media_lifecycle.private_folder_operation') : localeMsg.value.msgbox.move_to.error));
 };
 
 const selectSystemDestination = async (title: string) => {
@@ -999,9 +1005,16 @@ const clickMoveToFolder = async () => {
     if (!confirmed) return;
   }
 
-  const newPath = destinationAlbum
-    ? await moveFolder(folder.path, destinationAlbum.id, destPath, conflictPolicy)
-    : await moveFolderOutsideLibrary(folder.path, destPath, conflictPolicy);
+  let newPath: string | null;
+  try {
+    newPath = destinationAlbum
+      ? await moveFolder(folder.path, destinationAlbum.id, destPath, conflictPolicy)
+      : await moveFolderOutsideLibrary(folder.path, destPath, conflictPolicy);
+  } catch (error) {
+    toast.error(String(error).startsWith('PRIVATE_FOLDER:') ? t('media_lifecycle.private_folder_operation')
+      : t('msgbox.move_to_folder.error', { source: folder.name, dest: destPath }));
+    return;
+  }
   if (!newPath) {
     toast.error(t('msgbox.move_to_folder.error', { source: folder.name, dest: destPath }));
     return;
@@ -1037,12 +1050,14 @@ const clickCopyToFolder = async () => {
   const destinationAlbum = Array.isArray(albums)
     ? albums.find(album => isWithinRootPath(destPath, album.path))
     : null;
-  const newPath = await copyFolder(
-    folder.path,
-    destPath,
-    Number(destinationAlbum?.id || 0),
-    conflictPolicy,
-  );
+  let newPath: string | null;
+  try {
+    newPath = await copyFolder(folder.path, destPath, Number(destinationAlbum?.id || 0), conflictPolicy);
+  } catch (error) {
+    toast.error(String(error).startsWith('PRIVATE_FOLDER:') ? t('media_lifecycle.private_folder_operation')
+      : t('msgbox.copy_to_folder.error', { source: folder.name, dest: destPath }));
+    return;
+  }
   if (newPath) {
     toast.success(t('msgbox.copy_to_folder.success', { source: folder.name, dest: destPath }));
     if (destinationAlbum) {
@@ -1070,15 +1085,17 @@ const clickTrashFolder = async () => {
   const deleteFn = deletePermanently.value ? deleteFolderPermanently : deleteFolder;
   let deleteResult = 0;
   let deleteErrored = false;
+  let deleteError: unknown;
   try {
     deleteResult = await deleteFn(selection.folderPath.value);
   } catch (error) {
     deleteErrored = true;
+    deleteError = error;
     console.error('Failed to delete folder:', error);
   }
   if (deleteErrored) {
     toast.error(
-      deletePermanently.value
+      String(deleteError).startsWith('PRIVATE_FOLDER:') ? t('media_lifecycle.private_folder_operation') : deletePermanently.value
         ? t('msgbox.permanent_delete.folder_error')
         : t('msgbox.move_to_trash.folder_error')
     );

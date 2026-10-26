@@ -643,6 +643,7 @@ export async function renameFolder(folderPath, newFolderName) {
     };
   } catch (error) {
     console.log('Failed to rename folder:', error);
+    throw error;
   }
   return null;
 }
@@ -656,6 +657,7 @@ export async function moveFolder(folderPath, newAlbumId, newFolderPath, conflict
     };
   } catch (error) {
     console.log('Failed to move folder:', error);
+    throw error;
   }
   return null;
 }
@@ -665,6 +667,7 @@ export async function moveFolderOutsideLibrary(folderPath, newFolderPath, confli
     return await invoke('move_folder_outside_library', { folderPath, newFolderPath, conflictPolicy });
   } catch (error) {
     console.log('Failed to move folder outside library:', error);
+    throw error;
   }
   return null;
 }
@@ -678,6 +681,7 @@ export async function copyFolder(folderPath, newFolderPath, newAlbumId = 0, conf
     };
   } catch (error) {
     console.log('Failed to copy folder:', error);
+    throw error;
   }
   return null;
 }
@@ -1117,37 +1121,16 @@ export async function renameFile(fileId, filePath, newName) {
 
 // move a file
 export async function moveFile(fileId, filePath, newFolderId, newFolderPath, conflictPolicy = 'keep_both') {
-  try {
-    const result = await invoke('move_file', { fileId, filePath, newFolderId, newFolderPath, conflictPolicy });
-    if(result) {
-      return result;
-    };
-  } catch (error) {
-    console.log('Failed to move file:', error);
-  }
-  return null;
+  return await invoke('move_file', { fileId, filePath, newFolderId, newFolderPath, conflictPolicy });
 }
 
 export async function moveFileOutsideLibrary(fileId, filePath, newFolderPath, conflictPolicy = 'keep_both') {
-  try {
-    return await invoke('move_file_outside_library', { fileId, filePath, newFolderPath, conflictPolicy });
-  } catch (error) {
-    console.log('Failed to move file outside library:', error);
-  }
-  return null;
+  return await invoke('move_file_outside_library', { fileId, filePath, newFolderPath, conflictPolicy });
 }
 
 // copy a file
 export async function copyFile(filePath, newFolderPath, conflictPolicy = 'keep_both') {
-  try {
-    const result = await invoke('copy_file', { filePath, newFolderPath, conflictPolicy });
-    if(result) {
-      return result;
-    };
-  } catch (error) {
-    console.log('Failed to copy file:', error);
-  }
-  return null;
+  return await invoke('copy_file', { filePath, newFolderPath, conflictPolicy });
 }
 
 // delete a file
@@ -1298,7 +1281,7 @@ export async function importFile(filePath, folderId, folderPath, throwOnError = 
 }
 
 export async function importAndOrganize(albumId, sourcePath, destinationPath, layout, completedPaths = []) {
-  return await invoke('import_and_organize', { albumId, sourcePath, destinationPath, layout, completedPaths });
+  return await invoke('import_and_organize', { albumId, sourcePath, destinationPath, layout, completedPaths, libraryId: libConfig._libraryId || null });
 }
 
 export async function cancelImportAndOrganize() {
@@ -1902,7 +1885,7 @@ export async function listenIndexProgress(callback) {
 
 // start deduplication scan
 export async function dedupStartScan(params = null, collectionId = null, fileIds = null) {
-  return await invoke('dedup_start_scan', { params, collectionId, fileIds });
+  return await invoke('dedup_start_scan', { params, collectionId, fileIds, libraryId: libConfig._libraryId || null });
 }
 
 // get deduplication scan status
@@ -1973,7 +1956,7 @@ export async function listenDedupScanProgress(callback) {
 }
 
 export async function similarStartScan(scopeKey, sourceVersion, similarityThreshold, params = null, collectionId = null, fileIds = null) {
-  return await invoke('similar_start_scan', { scopeKey, sourceVersion, similarityThreshold, params, collectionId, fileIds });
+  return await invoke('similar_start_scan', { scopeKey, sourceVersion, similarityThreshold, params, collectionId, fileIds, libraryId: libConfig._libraryId || null });
 }
 
 export async function similarGetScanStatus() {

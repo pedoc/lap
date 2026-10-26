@@ -54,16 +54,49 @@ const canSubmit = computed(() => !busy.value && !anyRunning.value && preflight.v
   ? (!options.value.indexOnly || preflight.value.embeddingReady && preflight.value.analyzed > 0) && (!options.value.visualOnly || preflight.value.visualEmbeddingReady)
   : preflight.value.mediaReady && (!options.value.index || preflight.value.embeddingReady) && (!options.value.visualIndex || preflight.value.visualEmbeddingReady)));
 let timer: ReturnType<typeof setInterval> | undefined, generation = 0;
-async function refresh(full = false) {
-  const epoch = generation, libraryId = mediaAiBatch.libraryId;
-  try {
-    const next: any[] = await invoke('media_ai_jobs', { libraryId });
-    if (epoch !== generation || !mediaAiBatch.open) return;
-    jobs.value = next;
-    if (full) { const next = await invoke('media_ai_preflight', { libraryId, fileIds: mediaAiBatch.fileIds, modelId: mediaAiBatch.modelId }); if (epoch === generation) preflight.value = next; }
-  } catch (e) { if (epoch === generation) error.value = String(e); }
+let disposed = false;
+let pending: { epoch: number; key: string; full: boolean; promise: Promise<void> } | null = null;
+const contextKey = () => JSON.stringify([mediaAiBatch.libraryId, mediaAiBatch.fileIds, mediaAiBatch.modelId]);
+const isCurrent = (epoch: number, key: string) => !disposed && mediaAiBatch.open && epoch === generation
+  && key === contextKey() && mediaAiBatch.libraryId === libConfig._libraryId;
+function refresh(full = false): Promise<void> {
+  const epoch = generation, key = contextKey();
+  if (!isCurrent(epoch, key)) return Promise.resolve();
+  if (pending) {
+    const previous = pending;
+    return previous.promise.then(() => {
+      if (isCurrent(epoch, key) && (previous.epoch !== epoch || previous.key !== key || full && !previous.full)) return refresh(full);
+    });
+  }
+  const libraryId = mediaAiBatch.libraryId, fileIds = mediaAiBatch.fileIds ? [...mediaAiBatch.fileIds] : null, modelId = mediaAiBatch.modelId;
+  const operation = { epoch, key, full, promise: Promise.resolve() };
+  operation.promise = (async () => {
+    try {
+      const next: any[] = await invoke('media_ai_jobs', { libraryId });
+      if (!isCurrent(epoch, key)) return;
+      jobs.value = next;
+      if (full) {
+        const next = await invoke('media_ai_preflight', { libraryId, fileIds, modelId });
+        if (isCurrent(epoch, key)) preflight.value = next;
+      }
+    } catch (e) { if (isCurrent(epoch, key)) error.value = String(e); }
+  })().finally(() => { if (pending === operation) pending = null; });
+  pending = operation;
+  return operation.promise;
 }
-async function action(fn: () => Promise<unknown>) { if (busy.value) return; busy.value = true; error.value = ''; try { await fn(); await refresh(true); } catch (e) { error.value = String(e); } finally { busy.value = false; } }
+async function action(fn: () => Promise<unknown>) {
+  const epoch = generation, key = contextKey();
+  if (busy.value || !isCurrent(epoch, key)) return;
+  busy.value = true; error.value = '';
+  try {
+    if (pending) await pending.promise;
+    if (!isCurrent(epoch, key)) return;
+    await fn();
+    if (isCurrent(epoch, key)) await refresh(true);
+  }
+  catch (e) { if (isCurrent(epoch, key)) error.value = String(e); }
+  finally { busy.value = false; }
+}
 async function submit() {
   if (!canSubmit.value) return;
   const next = { ...options.value, modelId: mediaAiBatch.modelId, index: options.value.indexOnly || !onlyIndexes.value && options.value.index, visualIndex: !onlyIndexes.value && options.value.visualIndex, force: !onlyIndexes.value && options.value.force,
@@ -73,11 +106,14 @@ async function submit() {
 async function pause(jobId: string) { await action(() => invoke('media_ai_pause_job', { jobId })); }
 async function resume(jobId: string, retryFailed: boolean) { await action(() => invoke('media_ai_resume_job', { libraryId: mediaAiBatch.libraryId, jobId, retryFailed })); }
 watch(() => [mediaAiBatch.open, mediaAiBatch.libraryId, mediaAiBatch.fileIds, mediaAiBatch.modelId], async () => {
-  generation++; clearInterval(timer); preflight.value = null; error.value = '';
-  if (!mediaAiBatch.open) return;
-  loading.value = true; await refresh(true); loading.value = false;
-  timer = setInterval(() => { if (!busy.value) void refresh(); }, 2000);
+  const epoch = ++generation, key = contextKey();
+  clearInterval(timer); timer = undefined; preflight.value = null; jobs.value = []; error.value = ''; loading.value = false;
+  if (!isCurrent(epoch, key)) return;
+  loading.value = true; await refresh(true);
+  if (!isCurrent(epoch, key)) return;
+  loading.value = false;
+  timer = setInterval(() => { if (isCurrent(epoch, key) && !busy.value) void refresh(); }, 2000);
 }, { immediate: true });
 watch(() => libConfig._libraryId, () => { mediaAiBatch.open = false; });
-onUnmounted(() => { generation++; clearInterval(timer); });
+onUnmounted(() => { disposed = true; generation++; clearInterval(timer); timer = undefined; });
 </script>

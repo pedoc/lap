@@ -3280,12 +3280,35 @@ impl AFile {
     }
 
     pub fn update_moved_file_group(
-        file_id: i64,
-        component_file_ids: &[i64],
+        moved_files: &[(i64, String)],
         replaced_file_ids: &[i64],
         new_folder_id: i64,
     ) -> Result<usize, String> {
         let mut conn = open_conn()?;
+        Self::update_moved_file_group_on(&mut conn, moved_files, replaced_file_ids, new_folder_id)
+    }
+
+    fn update_moved_file_group_on(
+        conn: &mut Connection,
+        moved_files: &[(i64, String)],
+        replaced_file_ids: &[i64],
+        new_folder_id: i64,
+    ) -> Result<usize, String> {
+        let moved_ids: HashSet<_> = moved_files.iter().map(|(id, _)| *id).collect();
+        if new_folder_id <= 0
+            || moved_files.is_empty()
+            || moved_ids.len() != moved_files.len()
+            || moved_files.iter().any(|(id, name)| {
+                *id <= 0
+                    || name.is_empty()
+                    || name == "."
+                    || name == ".."
+                    || name.contains(['/', '\\', '\0'])
+            })
+            || replaced_file_ids.iter().any(|id| moved_ids.contains(id))
+        {
+            return Err("Invalid moved media group".into());
+        }
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let mut updated = 0usize;
 
@@ -3308,15 +3331,24 @@ impl AFile {
 
         {
             let mut update_stmt = tx
-                .prepare_cached("UPDATE afiles SET folder_id = ?1 WHERE id = ?2")
+                .prepare_cached("UPDATE afiles SET folder_id=?1,name=?2,name_pinyin=?3 WHERE id=?4")
                 .map_err(|e| e.to_string())?;
-            updated += update_stmt
-                .execute(params![new_folder_id, file_id])
-                .map_err(|e| e.to_string())?;
-            for component_file_id in component_file_ids {
-                updated += update_stmt
-                    .execute(params![new_folder_id, component_file_id])
+            for (file_id, name) in moved_files {
+                let changed = update_stmt
+                    .execute(params![
+                        new_folder_id,
+                        name,
+                        t_utils::natural_sort_key(&name.to_lowercase()),
+                        file_id
+                    ])
                     .map_err(|e| e.to_string())?;
+                if changed != 1 {
+                    return Err(
+                        "A moved media record is no longer registered; changes were rolled back"
+                            .into(),
+                    );
+                }
+                updated += changed;
             }
         }
 
@@ -4766,13 +4798,35 @@ impl AFile {
     }
 
     pub fn live_photo_component_files(file_id: i64) -> Result<Vec<Self>, String> {
-        let Some(file) = Self::get_file_info(file_id)? else {
+        let Some(primary) = Self::get_file_info(file_id)? else {
             return Ok(Vec::new());
         };
-        let Some(video_id) = file.live_photo_video_id.filter(|id| *id > 0) else {
-            return Ok(Vec::new());
-        };
-        Self::get_files_by_ids_including_private(&[video_id])
+        crate::t_media_lifecycle::validate_original(
+            file_id,
+            primary
+                .file_path
+                .as_deref()
+                .ok_or("Media path is unavailable")?,
+            false,
+        )?;
+        let conn = open_conn()?;
+        let ids = crate::t_media_lifecycle::component_ids_on(&conn, file_id)?;
+        drop(conn);
+        let components = ids
+            .into_iter()
+            .filter(|id| *id != file_id)
+            .collect::<Vec<_>>();
+        let files = Self::get_files_by_ids_including_private(&components)?;
+        for file in &files {
+            crate::t_media_lifecycle::validate_original(
+                file.id.ok_or("Media ID is unavailable")?,
+                file.file_path
+                    .as_deref()
+                    .ok_or("Media path is unavailable")?,
+                false,
+            )?;
+        }
+        Ok(files)
     }
 
     pub fn pair_raw_jpeg_in_folder(folder_id: i64) -> Result<usize, String> {
@@ -10016,6 +10070,19 @@ pub(crate) fn open_conn() -> Result<PooledConn, String> {
 pub fn create_db() -> Result<(), String> {
     let _lease = t_storage::DbConnectionLease::acquire()?;
     let path = t_storage::get_current_db_path()?;
+    create_db_at(&path)
+}
+
+pub(crate) fn prepare_library_database(library_id: &str) -> Result<(), String> {
+    let _lease = t_storage::DbConnectionLease::acquire()?;
+    let path = t_storage::get_library_db_path(library_id)?;
+    create_db_at(&path)?;
+    let conn = Connection::open(&path).map_err(|error| error.to_string())?;
+    setup_conn(&conn)?;
+    crate::ai::profiles::ensure_selected_on(&conn)
+}
+
+fn create_db_at(path: &str) -> Result<(), String> {
     // Re-evaluating this library: clear any stale corrupt mark for it before checking.
     clear_db_corrupted(&path);
     if Path::new(&path).exists() {
@@ -10031,16 +10098,22 @@ pub fn create_db() -> Result<(), String> {
             }
             Ok(false) => {}
             Err(e) => {
-                eprintln!("create_db: integrity pre-check skipped ({}); falling back to migration open", e)
+                eprintln!(
+                    "create_db: integrity pre-check skipped ({}); falling back to migration open",
+                    e
+                )
             }
         }
     }
     // Catch page-level corruption that surfaces while the migrations open the db read-write, so
     // the flag is raised and the UI shows the switch-library banner instead of raw errors.
-    match create_db_internal() {
+    match create_db_internal(path) {
         Ok(()) => Ok(()),
         Err(err) if is_corruption_error(&err) => {
-            eprintln!("create_db: database corruption detected for '{}': {}", path, err);
+            eprintln!(
+                "create_db: database corruption detected for '{}': {}",
+                path, err
+            );
             mark_db_corrupted(&path);
             Err(DB_CORRUPTED_MSG.to_string())
         }
@@ -10048,8 +10121,9 @@ pub fn create_db() -> Result<(), String> {
     }
 }
 
-fn create_db_internal() -> Result<(), String> {
-    let conn = open_conn()?;
+fn create_db_internal(path: &str) -> Result<(), String> {
+    let conn = Connection::open(path).map_err(|error| error.to_string())?;
+    setup_conn(&conn)?;
     initialize_database_schema(&conn)?;
     crate::t_scan::recover_interrupted(&conn)
 }
@@ -11635,6 +11709,219 @@ mod cloud_scan_tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+}
+
+#[cfg(test)]
+mod moved_file_group_tests {
+    use super::*;
+
+    struct DiskFixture {
+        base: PathBuf,
+        root: PathBuf,
+    }
+    impl DiskFixture {
+        fn new() -> Self {
+            let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/moved-file-group-tests");
+            fs::create_dir_all(&base).unwrap();
+            let root = base.join(format!("test-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&root).unwrap();
+            Self {
+                base: base.canonicalize().unwrap(),
+                root: root.canonicalize().unwrap(),
+            }
+        }
+    }
+    impl Drop for DiskFixture {
+        fn drop(&mut self) {
+            if self.root.parent() == Some(self.base.as_path()) {
+                let _ = fs::remove_dir_all(&self.root);
+            }
+        }
+    }
+    fn db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;
+            CREATE TABLE afolders(id INTEGER PRIMARY KEY); INSERT INTO afolders VALUES(1),(2);
+            CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER REFERENCES afolders(id),name TEXT,name_pinyin TEXT,rating INTEGER,comments TEXT,UNIQUE(folder_id,name));
+            CREATE TABLE athumbs(file_id INTEGER PRIMARY KEY REFERENCES afiles(id) ON DELETE CASCADE,thumb_data BLOB);
+            CREATE TABLE afile_tags(file_id INTEGER REFERENCES afiles(id),tag_id INTEGER);
+            INSERT INTO afiles VALUES(1,1,'photo.jpg','old-sort-key',5,'manual source comment');
+            INSERT INTO afile_tags VALUES(1,42); INSERT INTO athumbs VALUES(1,X'0102');").unwrap();
+        conn
+    }
+
+    #[test]
+    fn keep_both_records_the_actual_name_with_or_without_an_indexed_conflict() {
+        for indexed_target in [false, true] {
+            let disk = DiskFixture::new();
+            let source = disk.root.join("source");
+            let target = disk.root.join("target");
+            fs::create_dir(&source).unwrap();
+            fs::create_dir(&target).unwrap();
+            let original = source.join("photo.jpg");
+            fs::write(&original, b"moved source").unwrap();
+            fs::write(target.join("photo.jpg"), b"pre-existing target").unwrap();
+            let mut conn = db();
+            if indexed_target {
+                conn.execute(
+                    "INSERT INTO afiles VALUES(2,2,'photo.jpg','target-key',2,'target comment')",
+                    [],
+                )
+                .unwrap();
+            }
+            let destination = t_utils::resolve_file_transfer_destination(
+                &original.to_string_lossy(),
+                &target.to_string_lossy(),
+                t_utils::FileConflictPolicy::KeepBoth,
+            )
+            .unwrap();
+            let transfer = t_utils::move_file_to_path_with_policy(
+                &original.to_string_lossy(),
+                &destination,
+                t_utils::FileConflictPolicy::KeepBoth,
+            )
+            .unwrap();
+            let name = t_utils::get_file_name(&transfer.path);
+            assert_eq!(name, "photo(1).jpg");
+            assert_eq!(
+                AFile::update_moved_file_group_on(&mut conn, &[(1, name.clone())], &[], 2).unwrap(),
+                1
+            );
+            transfer.finalize().unwrap();
+            let row: (i64, String, String, i64, String) = conn
+                .query_row(
+                    "SELECT folder_id,name,name_pinyin,rating,comments FROM afiles WHERE id=1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                row,
+                (
+                    2,
+                    name.clone(),
+                    t_utils::natural_sort_key(&name),
+                    5,
+                    "manual source comment".into()
+                )
+            );
+            assert_eq!(fs::read(target.join(row.1)).unwrap(), b"moved source");
+            assert_eq!(
+                fs::read(target.join("photo.jpg")).unwrap(),
+                b"pre-existing target"
+            );
+            assert_eq!(
+                conn.query_row("SELECT tag_id FROM afile_tags WHERE file_id=1", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+                42
+            );
+            if indexed_target {
+                assert_eq!(
+                    conn.query_row("SELECT comments FROM afiles WHERE id=2", [], |r| r
+                        .get::<_, String>(0))
+                        .unwrap(),
+                    "target comment"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_name_conflicts_roll_back_every_catalogue_update_and_disk_move() {
+        let disk = DiskFixture::new();
+        let source = disk.root.join("source");
+        let target = disk.root.join("target");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        let photo = source.join("photo.jpg");
+        let movie = source.join("photo.mov");
+        fs::write(&photo, b"photo").unwrap();
+        fs::write(&movie, b"movie").unwrap();
+        let first = t_utils::move_file_to_path_with_policy(
+            &photo.to_string_lossy(),
+            &target.join("photo(1).jpg"),
+            t_utils::FileConflictPolicy::KeepBoth,
+        )
+        .unwrap();
+        let second = t_utils::move_file_to_path_with_policy(
+            &movie.to_string_lossy(),
+            &target.join("photo(1).mov"),
+            t_utils::FileConflictPolicy::KeepBoth,
+        )
+        .unwrap();
+        let mut conn = db();
+        conn.execute_batch("INSERT INTO afiles VALUES(3,1,'photo.mov','movie-sort',3,'movie comment'),(4,2,'photo(1).mov','reserved-sort',1,'reserved record');").unwrap();
+        assert!(
+            AFile::update_moved_file_group_on(
+                &mut conn,
+                &[(1, "photo(1).jpg".into()), (3, "photo(1).mov".into())],
+                &[],
+                2
+            )
+            .is_err()
+        );
+        first.rollback_move(&photo).unwrap();
+        second.rollback_move(&movie).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT folder_id||':'||name||':'||name_pinyin FROM afiles WHERE id=1",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "1:photo.jpg:old-sort-key"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT folder_id||':'||name||':'||name_pinyin FROM afiles WHERE id=3",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "1:photo.mov:movie-sort"
+        );
+        assert_eq!(fs::read(photo).unwrap(), b"photo");
+        assert_eq!(fs::read(movie).unwrap(), b"movie");
+        assert!(!target.join("photo(1).jpg").exists());
+        assert!(!target.join("photo(1).mov").exists());
+    }
+
+    #[test]
+    fn a_missing_member_rolls_back_replacement_records_and_related_thumbnails() {
+        let mut conn = db();
+        conn.execute_batch("INSERT INTO afiles VALUES(2,2,'photo.jpg','target-key',1,'target comment');INSERT INTO athumbs VALUES(2,X'0304');").unwrap();
+        assert!(
+            AFile::update_moved_file_group_on(
+                &mut conn,
+                &[(1, "photo.jpg".into()), (99, "photo.mov".into())],
+                &[2],
+                2
+            )
+            .is_err()
+        );
+        assert_eq!(
+            conn.query_row("SELECT comments FROM afiles WHERE id=2", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "target comment"
+        );
+        assert_eq!(
+            conn.query_row("SELECT thumb_data FROM athumbs WHERE file_id=2", [], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .unwrap(),
+            vec![3, 4]
+        );
+        assert_eq!(
+            conn.query_row("SELECT folder_id FROM afiles WHERE id=1", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
 }
 
 #[cfg(test)]

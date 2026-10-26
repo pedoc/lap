@@ -638,12 +638,31 @@ fn load_app_config_locked() -> Result<AppConfig, String> {
     }
 }
 
-/// Save app config to file
-pub fn save_app_config(config: &AppConfig) -> Result<(), String> {
-    let _guard = config_io_lock()
+/// Apply only this operation's changes to the latest configuration under one lock.
+pub(crate) fn update_app_config<T>(
+    update: impl FnOnce(&mut AppConfig) -> Result<T, String>,
+) -> Result<T, String> {
+    update_config_with(
+        config_io_lock(),
+        load_app_config_locked,
+        save_app_config_locked,
+        update,
+    )
+}
+
+fn update_config_with<T>(
+    lock: &Mutex<()>,
+    load: impl FnOnce() -> Result<AppConfig, String>,
+    save: impl FnOnce(&AppConfig) -> Result<(), String>,
+    update: impl FnOnce(&mut AppConfig) -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = lock
         .lock()
         .map_err(|_| "Config lock poisoned".to_string())?;
-    save_app_config_locked(config)
+    let mut config = load()?;
+    let result = update(&mut config)?;
+    save(&config)?;
+    Ok(result)
 }
 
 fn save_app_config_locked(config: &AppConfig) -> Result<(), String> {
@@ -818,82 +837,72 @@ fn recover_app_config_from_library_dbs() -> Result<AppConfig, String> {
 
 /// Add a new library
 pub fn add_library(name: &str) -> Result<Library, String> {
-    let mut config = load_app_config()?;
-
-    // Check for duplicate names
-    if config.libraries.iter().any(|l| l.name == name) {
-        return Err("Library name already exists".to_string());
-    }
-
-    // Generate unique ID
-    let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().timestamp();
-
-    let library = Library {
-        id: id.clone(),
-        name: name.to_string(),
-        created_at: now,
-
-        state: LibraryState::default(),
-        hidden: false,
-    };
-
-    config.libraries.push(library.clone());
-    save_app_config(&config)?;
-
-    Ok(library)
+    update_app_config(|config| {
+        if config.libraries.iter().any(|l| l.name == name) {
+            return Err("Library name already exists".to_string());
+        }
+        let library = Library {
+            id: Uuid::new_v4().to_string(),
+            name: name.to_string(),
+            created_at: chrono::Utc::now().timestamp(),
+            state: LibraryState::default(),
+            hidden: false,
+        };
+        config.libraries.push(library.clone());
+        Ok(library)
+    })
 }
 
 /// Edit library name
 pub fn edit_library(id: &str, new_name: &str) -> Result<(), String> {
-    let mut config = load_app_config()?;
-
-    // Check for duplicate names (excluding current library)
-    if config
-        .libraries
-        .iter()
-        .any(|l| l.name == new_name && l.id != id)
-    {
-        return Err("Library name already exists".to_string());
-    }
-
-    // Find and update the library
-    if let Some(lib) = config.libraries.iter_mut().find(|l| l.id == id) {
-        lib.name = new_name.to_string();
-        save_app_config(&config)?;
+    update_app_config(|config| {
+        if config
+            .libraries
+            .iter()
+            .any(|l| l.name == new_name && l.id != id)
+        {
+            return Err("Library name already exists".to_string());
+        }
+        let library = config
+            .libraries
+            .iter_mut()
+            .find(|l| l.id == id)
+            .ok_or("Library not found")?;
+        library.name = new_name.to_string();
         Ok(())
-    } else {
-        Err("Library not found".to_string())
-    }
+    })
 }
 
 /// Remove a library (also deletes the database file)
-pub fn remove_library(id: &str) -> Result<(), String> {
+pub fn remove_library(id: &str, replacement_id: Option<&str>) -> Result<(), String> {
     crate::t_media_jobs::assert_library_idle(id)?;
-    let mut config = load_app_config()?;
-
-    // Cannot remove the only remaining library
-    if config.libraries.len() <= 1 {
-        return Err("Cannot remove the last library".to_string());
-    }
-
-    // Find and remove the library
-    let original_len = config.libraries.len();
-    config.libraries.retain(|l| l.id != id);
-
-    if config.libraries.len() == original_len {
-        return Err("Library not found".to_string());
-    }
-
-    // If removing current library, switch to first available
-    if config.current_library_id == id {
-        config.current_library_id = config.libraries[0].id.clone();
-    }
-
-    save_app_config(&config)?;
+    let thumb_cache_dir = get_app_cache_dir()?.join(id);
+    let db_path = update_app_config(|config| {
+        if config.libraries.len() <= 1 {
+            return Err("Cannot remove the last library".to_string());
+        }
+        if !config.libraries.iter().any(|library| library.id == id) {
+            return Err("Library not found".to_string());
+        }
+        if config.current_library_id == id {
+            let replacement = replacement_id
+                .ok_or("Prepare a replacement library before removing the current library")?;
+            if replacement == id
+                || !config
+                    .libraries
+                    .iter()
+                    .any(|library| library.id == replacement)
+            {
+                return Err("Replacement library is no longer available".into());
+            }
+            config.current_library_id = replacement.to_string();
+        }
+        let path = t_storage::get_library_db_path_from_config(config, id)?;
+        config.libraries.retain(|library| library.id != id);
+        Ok(path)
+    })?;
 
     // Delete the database file and SQLite WAL/SHM companion files
-    let db_path = t_storage::get_library_db_path(id)?;
     let db = std::path::Path::new(&db_path);
     for path in [
         db.to_path_buf(),
@@ -905,7 +914,6 @@ pub fn remove_library(id: &str) -> Result<(), String> {
         }
     }
 
-    let thumb_cache_dir = get_app_cache_dir()?.join(id);
     if thumb_cache_dir.exists() {
         let _ = fs::remove_dir_all(&thumb_cache_dir);
     }
@@ -915,17 +923,13 @@ pub fn remove_library(id: &str) -> Result<(), String> {
 
 /// Switch to a different library
 pub fn switch_library(id: &str) -> Result<(), String> {
-    let mut config = load_app_config()?;
-
-    // Verify library exists
-    if !config.libraries.iter().any(|l| l.id == id) {
-        return Err("Library not found".to_string());
-    }
-
-    config.current_library_id = id.to_string();
-    save_app_config(&config)?;
-
-    Ok(())
+    update_app_config(|config| {
+        if !config.libraries.iter().any(|l| l.id == id) {
+            return Err("Library not found".to_string());
+        }
+        config.current_library_id = id.to_string();
+        Ok(())
+    })
 }
 
 /// Get library info
@@ -1006,15 +1010,15 @@ fn get_thumb_cache_size(library_id: &str) -> i64 {
 
 /// Save library state
 pub fn save_library_state(id: &str, state: LibraryState) -> Result<(), String> {
-    let mut config = load_app_config()?;
-
-    if let Some(lib) = config.libraries.iter_mut().find(|l| l.id == id) {
-        lib.state = state;
-        save_app_config(&config)?;
+    update_app_config(|config| {
+        let library = config
+            .libraries
+            .iter_mut()
+            .find(|library| library.id == id)
+            .ok_or("Library not found")?;
+        library.state = state;
         Ok(())
-    } else {
-        Err("Library not found".to_string())
-    }
+    })
 }
 
 /// Get library state
@@ -1041,51 +1045,263 @@ pub fn get_current_library_state() -> Result<LibraryState, String> {
 
 /// Hide/Show a library
 pub fn hide_library(id: &str, hidden: bool) -> Result<(), String> {
-    let mut config = load_app_config()?;
-
-    // Cannot hide the current library
-    // if config.current_library_id == id && hidden {
-    //     return Err("Cannot hide the current library".to_string());
-    // }
-
-    if let Some(lib) = config.libraries.iter_mut().find(|l| l.id == id) {
-        lib.hidden = hidden;
-        save_app_config(&config)?;
+    update_app_config(|config| {
+        let library = config
+            .libraries
+            .iter_mut()
+            .find(|library| library.id == id)
+            .ok_or("Library not found")?;
+        library.hidden = hidden;
         Ok(())
-    } else {
-        Err("Library not found".to_string())
-    }
+    })
 }
 
 /// Reorder libraries
 pub fn reorder_libraries(ids: Vec<String>) -> Result<(), String> {
-    let mut config = load_app_config()?;
+    update_app_config(|config| {
+        let mut lib_map: std::collections::HashMap<String, Library> = config
+            .libraries
+            .drain(..)
+            .map(|library| (library.id.clone(), library))
+            .collect();
+        let mut new_libraries = Vec::new();
+        for id in ids {
+            if let Some(library) = lib_map.remove(&id) {
+                new_libraries.push(library);
+            }
+        }
+        new_libraries.extend(lib_map.into_values());
+        config.libraries = new_libraries;
+        Ok(())
+    })
+}
 
-    // Create a map for quick lookup
-    let mut lib_map: std::collections::HashMap<String, Library> = config
-        .libraries
-        .drain(..)
-        .map(|l| (l.id.clone(), l))
-        .collect();
+#[cfg(test)]
+mod atomic_update_tests {
+    use super::*;
+    use std::sync::{Arc, mpsc};
 
-    let mut new_libraries = Vec::new();
-
-    // Rebuild the list based on the new order
-    for id in ids {
-        if let Some(lib) = lib_map.remove(&id) {
-            new_libraries.push(lib);
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("lap-config-atomic-{}", Uuid::new_v4()));
+            fs::create_dir(&root).unwrap();
+            let fixture = Self(root);
+            fixture.save(&AppConfig::default()).unwrap();
+            fixture
+        }
+        fn load(&self) -> Result<AppConfig, String> {
+            serde_json::from_slice(
+                &fs::read(self.0.join("config.json")).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())
+        }
+        fn save(&self, config: &AppConfig) -> Result<(), String> {
+            write_atomic(
+                &self.0.join("config.json"),
+                &serde_json::to_string(config).unwrap(),
+            )
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
         }
     }
 
-    // Append any remaining libraries (shouldn't happen if frontend is correct, but safe fallback)
-    for (_, lib) in lib_map {
-        new_libraries.push(lib);
+    #[test]
+    fn automatic_state_save_and_restore_publish_share_the_entire_transaction() {
+        let fixture = Arc::new(Fixture::new());
+        let lock = Arc::new(Mutex::new(()));
+        let (loaded, received) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let saver_fixture = fixture.clone();
+        let saver_lock = lock.clone();
+        let saver = thread::spawn(move || {
+            update_config_with(
+                &saver_lock,
+                || saver_fixture.load(),
+                |config| saver_fixture.save(config),
+                |config| {
+                    loaded.send(()).unwrap();
+                    released.recv().unwrap();
+                    config.libraries[0].state.album.id = 7;
+                    Ok(())
+                },
+            )
+            .unwrap()
+        });
+        received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            lock.try_lock().is_err(),
+            "the lock must cover the gap between reading and saving"
+        );
+        let restored_fixture = fixture.clone();
+        let restored_lock = lock.clone();
+        let restore = thread::spawn(move || {
+            update_config_with(
+                &restored_lock,
+                || restored_fixture.load(),
+                |config| restored_fixture.save(config),
+                |config| {
+                    let mut library = config.libraries[0].clone();
+                    library.id = "restored".into();
+                    library.name = "Restored".into();
+                    config.libraries.push(library);
+                    config.network_proxy_url = Some("http://127.0.0.1:1234".into());
+                    Ok(())
+                },
+            )
+            .unwrap()
+        });
+        release.send(()).unwrap();
+        saver.join().unwrap();
+        restore.join().unwrap();
+        // A later autosave must also merge into the catalogue published by restore.
+        update_config_with(
+            &lock,
+            || fixture.load(),
+            |config| fixture.save(config),
+            |config| {
+                config.libraries[0].state.album.id = 8;
+                Ok(())
+            },
+        )
+        .unwrap();
+        let config = fixture.load().unwrap();
+        assert_eq!(config.libraries.len(), 2);
+        assert_eq!(config.libraries[1].id, "restored");
+        assert_eq!(config.libraries[0].state.album.id, 8);
+        assert_eq!(
+            config.network_proxy_url.as_deref(),
+            Some("http://127.0.0.1:1234")
+        );
     }
 
-    config.libraries = new_libraries;
-    save_app_config(&config)?;
+    #[test]
+    fn concurrent_config_updates_preserve_unrelated_fields_and_failed_updates_do_not_publish() {
+        let fixture = Arc::new(Fixture::new());
+        let lock = Arc::new(Mutex::new(()));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let fixture = fixture.clone();
+                let lock = lock.clone();
+                thread::spawn(move || {
+                    for _ in 0..10 {
+                        update_config_with(
+                            &lock,
+                            || fixture.load(),
+                            |config| fixture.save(config),
+                            |config| {
+                                config.last_selected_item_index += 1;
+                                Ok(())
+                            },
+                        )
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(fixture.load().unwrap().last_selected_item_index, 79);
+        let before = fs::read(fixture.0.join("config.json")).unwrap();
+        let result: Result<(), String> = update_config_with(
+            &lock,
+            || fixture.load(),
+            |config| fixture.save(config),
+            |config| {
+                config.libraries.clear();
+                Err("cancelled before publication".into())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(fixture.0.join("config.json")).unwrap(), before);
+    }
 
-    Ok(())
+    #[cfg(debug_assertions)]
+    #[test]
+    fn replacement_preparation_and_real_library_removal_are_isolated_and_failure_safe() {
+        const CHILD: &str = "LAP_LIBRARY_REMOVAL_TEST_CHILD";
+        if let Ok(nonce) = std::env::var(CHILD) {
+            let root = PathBuf::from(std::env::var_os("LAP_TEST_DATA_DIR").unwrap());
+            assert!(
+                root.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("lap-config-atomic-")
+            );
+            assert_eq!(fs::read_to_string(root.join("test-marker")).unwrap(), nonce);
+
+            let original = add_library("Original").unwrap();
+            switch_library(&original.id).unwrap();
+            crate::t_sqlite::create_db().unwrap();
+            let original_path = t_storage::get_library_db_path(&original.id).unwrap();
+            let photo = root.join("original.jpg");
+            fs::write(&photo, b"original media must survive library removal").unwrap();
+            {
+                let conn = crate::t_sqlite::open_conn().unwrap();
+                conn.execute_batch("CREATE TABLE original_marker(value TEXT); INSERT INTO original_marker VALUES('A');").unwrap();
+            }
+            let replacement = add_library("Replacement").unwrap();
+            let replacement_path = t_storage::get_library_db_path(&replacement.id).unwrap();
+            fs::write(&replacement_path, b"not a sqlite database").unwrap();
+            assert!(crate::t_sqlite::prepare_library_database(&replacement.id).is_err());
+            assert_eq!(current_library_id().unwrap(), original.id);
+            assert!(Path::new(&original_path).exists());
+            fs::remove_file(&replacement_path).unwrap();
+            crate::t_sqlite::prepare_library_database(&replacement.id).unwrap();
+            assert_eq!(
+                current_library_id().unwrap(),
+                original.id,
+                "preparation must not publish identity"
+            );
+            {
+                let conn = rusqlite::Connection::open(&replacement_path).unwrap();
+                assert_eq!(
+                    conn.query_row("SELECT COUNT(*) FROM ai_index_profiles", [], |row| row
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    4
+                );
+            }
+            {
+                let _connections = t_storage::DbMigrationGuard::acquire().unwrap();
+                remove_library(&original.id, Some(&replacement.id)).unwrap();
+            }
+            let config = load_app_config().unwrap();
+            assert_eq!(config.current_library_id, replacement.id);
+            assert!(
+                !config
+                    .libraries
+                    .iter()
+                    .any(|library| library.id == original.id)
+            );
+            assert!(!Path::new(&original_path).exists());
+            assert!(Path::new(&replacement_path).exists());
+            assert_eq!(
+                fs::read(photo).unwrap(),
+                b"original media must survive library removal"
+            );
+            return;
+        }
+        // Run real global configuration/SQLite APIs in a separate process, never the user's AppData.
+        let fixture = Fixture::new();
+        let nonce = Uuid::new_v4().to_string();
+        fs::write(fixture.0.join("test-marker"), &nonce).unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "t_config::atomic_update_tests::replacement_preparation_and_real_library_removal_are_isolated_and_failure_safe", "--nocapture"])
+            .env("LAP_TEST_DATA_DIR", &fixture.0)
+            .env(CHILD, nonce)
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "child test failed:\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 }
 
 #[cfg(test)]

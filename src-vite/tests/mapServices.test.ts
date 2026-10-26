@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
+import { createPendingChangesRegistry } from '../src/common/pendingChanges.ts';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
@@ -50,7 +51,7 @@ test('tile transport uses revision-scoped IPC, cancellation and object URLs inst
   } finally {(globalThis as any).document=previous;}
 });
 function script(name: string) { const source=readFileSync(new URL(`../src/components/${name}.vue`,import.meta.url),'utf8');return stripTypeScriptTypes(source.match(/<script setup(?: lang="ts")?>([\s\S]*?)<\/script>/)![1]).replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm,'').replace(/^import\s*['"][^'"]+['"];?\r?\n/gm,'').replaceAll('import.meta.url', "'file:///test/'"); }
-const vue={defineEmits:()=>()=>{},ref:(value:any)=>({value}),computed:(get:any)=>({get value(){return get();}}),watch(){},onMounted(){},onBeforeUnmount(){},nextTick:async()=>{}};
+const vue={defineEmits:()=>()=>{},ref:(value:any)=>({value}),computed:(get:any)=>({get value(){return get();}}),watch(){},onMounted(){},onBeforeUnmount(){},onUnmounted(){},nextTick:async()=>{}};
 for (const component of ['MapView','PhotoMapView']) test(`${component} delegates whole-engine switching without resetting the camera`, () => {
   const config:any={infoPanel:{mapTheme:0},settings:{mapTheme:0,mapServices:defaultMapServices(),mapServicesRevision:'r1'}};
   const changes:any[]=[], moves:any[]=[];
@@ -61,7 +62,7 @@ for (const component of ['MapView','PhotoMapView']) test(`${component} delegates
 });
 test('settings save the selected services and all vendor parameters with an optimistic revision', async () => {
   const config:any={settings:{mapServices:defaultMapServices(),mapServicesRevision:'r1'}},calls:any[]=[];
-  const api=runInNewContext(`${script('MapServicesSettings')}\n;({draft,save,busy,error,saved})`,{...vue,config,MAP_SERVICES,serviceFields,defaultMapServices,applyMapServices,useI18n:()=>({t:(key:string)=>key}),invoke:async(command:string,args:any)=>{calls.push({command,args});return command==='get_map_services'?{settings:defaultMapServices(),revision:'r1'}:{settings:args.settings,revision:'r2'};}});
+  const api=runInNewContext(`${script('MapServicesSettings')}\n;({draft,save,busy,error,saved})`,{...vue,config,MAP_SERVICES,serviceFields,defaultMapServices,applyMapServices,pendingChanges:createPendingChangesRegistry(),ask:async()=>true,useI18n:()=>({t:(key:string)=>key}),invoke:async(command:string,args:any)=>{calls.push({command,args});return command==='get_map_services'?{settings:defaultMapServices(),revision:'r1'}:{settings:args.settings,revision:'r2'};}});
   await new Promise(resolve=>setImmediate(resolve));api.draft.value.tileProvider='mapbox';api.draft.value.geocoder='amap';api.draft.value.providers.mapbox.token='pk.test';api.draft.value.providers.amap.token='fake-web-service-key';await api.save();
   const saved=calls.find(call=>call.command==='save_map_services');assert.equal(saved.args.expectedRevision,'r1');assert.equal(saved.args.settings.tileProvider,'mapbox');assert.equal(saved.args.settings.geocoder,'amap');assert.equal(config.settings.mapServices.tileProvider,'mapbox');assert.ok(api.saved.value);
 });
@@ -98,7 +99,7 @@ test('the real settings template renders service choices, password inputs, conse
   const {descriptor}=parse(source);let code=stripTypeScriptTypes(compileScript(descriptor,{id:'map-settings-test',inlineTemplate:true}).content);
   const imports:Record<string,any>={};code=code.replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g,(_,names)=>{for(const name of names.split(',')){const [original,alias]=name.trim().split(/\s+as\s+/);imports[alias||original]=(Vue as any)[original];}return '';}).replace(/^import .*;?\r?\n/gm,'').replace('export default','const component =');
   const settings=defaultMapServices();settings.tileProvider='mapbox';settings.geocoder='amap';settings.providers.mapbox.token='pk.not-real';
-  const component=runInNewContext(`${code}\n;component`,{...imports,MAP_SERVICES,serviceFields,defaultMapServices,applyMapServices,config:{settings:{mapServices:settings,mapServicesRevision:'r1'}},useI18n:()=>({t:(key:string)=>key}),invoke:async()=>({settings,revision:'r1'}),openExternalUrl(){}});
+  const component=runInNewContext(`${code}\n;component`,{...imports,MAP_SERVICES,serviceFields,defaultMapServices,applyMapServices,pendingChanges:createPendingChangesRegistry(),ask:async()=>true,config:{settings:{mapServices:settings,mapServicesRevision:'r1'}},useI18n:()=>({t:(key:string)=>key}),invoke:async()=>({settings,revision:'r1'}),openExternalUrl(){}});
   const html=await renderToString(Vue.createSSRApp(component));
   assert.match(html,/value="esri"/);assert.match(html,/value="mapbox"/);assert.match(html,/value="amap"/);assert.match(html,/type="password"/);assert.match(html,/map_services\.console/);assert.match(html,/map_services\.privacy/);assert.match(html,/type="checkbox"/);
 });

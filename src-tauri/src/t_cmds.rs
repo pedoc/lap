@@ -272,9 +272,10 @@ fn gstreamer_element_missing(exit_code: Option<i32>, stderr: &[u8]) -> bool {
 /// set last selected item index
 #[tauri::command]
 pub fn set_last_selected_item_index(index: i64) -> Result<(), String> {
-    let mut config = t_config::load_app_config()?;
-    config.last_selected_item_index = index;
-    t_config::save_app_config(&config)
+    t_config::update_app_config(|config| {
+        config.last_selected_item_index = index;
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -384,15 +385,169 @@ pub fn edit_library(id: &str, name: &str) -> Result<(), String> {
 
 /// remove a library (also deletes the database file)
 #[tauri::command]
-pub async fn remove_library(id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _guard = FILE_REFRESH_LIBRARY_LOCK.write().map_err(|e| e.to_string())?;
+pub async fn remove_library(app_handle: tauri::AppHandle, id: String) -> Result<(), String> {
+    let config = t_config::load_app_config()?;
+    if config.libraries.len() <= 1 || !config.libraries.iter().any(|library| library.id == id) {
+        return Err("Library is unavailable or is the last remaining library".into());
+    }
+    let expected_current = config.current_library_id;
+    let _admission = if expected_current == id {
+        Some(drain_library_tasks(&app_handle).await?)
+    } else {
+        None
+    };
+    let worker_app = app_handle.clone();
+    let changed = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = library_change_writer()?;
+        let config = t_config::load_app_config()?;
+        if config.current_library_id != expected_current {
+            return Err("Current library changed while removal was pending; retry".into());
+        }
+        if expected_current == id { ensure_foreground_tasks_idle(&worker_app)?; }
+        if config.libraries.len() <= 1 || !config.libraries.iter().any(|library| library.id == id) {
+            return Err("Library is unavailable or is the last remaining library".to_string());
+        }
         let path=crate::t_storage::get_library_db_path(&id)?;
         if Path::new(&path).exists(){let conn=rusqlite::Connection::open_with_flags(&path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e|e.to_string())?;
             let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='media_trash_groups')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
             if exists && conn.query_row("SELECT COUNT(*) FROM media_trash_groups",[],|r|r.get::<_,i64>(0)).map_err(|e|e.to_string())?>0 {return Err("Restore or clear Recently Deleted before removing this library".into());}}
-        t_config::remove_library(&id)
-    }).await.map_err(|e| e.to_string())?
+        let replacement = (config.current_library_id == id).then(|| {
+            config.libraries.iter().find(|library| library.id != id).map(|library| library.id.clone())
+        }).flatten();
+        if let Some(replacement) = &replacement {
+            // Prepare the successor while all old-library work is drained and identity is unchanged.
+            t_sqlite::prepare_library_database(replacement)
+                .map_err(|error| format!("Cannot prepare the replacement library; original library was retained: {error}"))?;
+        }
+        // Also drain ordinary readers before unlinking SQLite files on Windows.
+        let _connections = t_storage::DbMigrationGuard::acquire()?;
+        t_config::remove_library(&id, replacement.as_deref())?;
+        if replacement.is_some() {
+            t_utils::clear_album_accessibility();
+        }
+        Ok(replacement.is_some())
+    }).await.map_err(|e| e.to_string())??;
+    if changed {
+        if let Err(error) = refresh_library_runtime(app_handle).await {
+            eprintln!(
+                "Library removal committed; runtime refresh will retry on the next load: {error}"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn cancel_library_recognition() -> Result<(), String> {
+    let library = t_config::current_library_id()?;
+    crate::ai::ocr::cancel_all(&library);
+    crate::ai::objects_jobs::cancel_all(&library);
+    t_face::cancel_all(&library);
+    Ok(())
+}
+
+fn foreground_task_admission(
+    library_id: Option<&str>,
+) -> Result<std::sync::RwLockReadGuard<'static, ()>, String> {
+    crate::ai::vision_jobs::ensure_admission()?;
+    let guard = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "Library is changing; retry after it finishes")?;
+    crate::ai::vision_jobs::ensure_admission()?;
+    if let Some(library) = library_id {
+        if t_config::current_library_id()? != library {
+            return Err("Library changed; reopen the task in the current library".into());
+        }
+    }
+    Ok(guard)
+}
+
+fn ensure_foreground_tasks_idle(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if app_handle
+        .state::<ImportCancellation>()
+        .0
+        .lock()
+        .map_err(|_| "Import state is unavailable")?
+        .running
+        || app_handle
+            .state::<crate::t_dedup::DedupState>()
+            .is_scanning
+            .load(std::sync::atomic::Ordering::SeqCst)
+        || app_handle
+            .state::<t_similar::SimilarState>()
+            .is_scanning
+            .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err("Finish or stop import, duplicate or similarity tasks before changing the current library".into());
+    }
+    Ok(())
+}
+
+async fn drain_library_scans(
+    cancellation: std::sync::Arc<std::sync::Mutex<HashMap<i64, bool>>>,
+) -> Result<t_utils::ScanAdmissionBlock, String> {
+    let admission = t_utils::block_album_scans();
+    {
+        let mut flags = cancellation.lock().map_err(|error| error.to_string())?;
+        for flag in flags.values_mut() {
+            *flag = true;
+        }
+    }
+    for album_id in &admission.album_ids {
+        if let Some(session) = crate::t_scan::active_session(*album_id) {
+            session.pause_requested();
+        }
+        t_utils::wait_for_album_scan_end(*album_id).await?;
+    }
+    Ok(admission)
+}
+
+async fn drain_library_tasks(
+    app_handle: &tauri::AppHandle,
+) -> Result<
+    (
+        crate::ai::vision_jobs::AdmissionPause,
+        t_utils::ScanAdmissionBlock,
+    ),
+    String,
+> {
+    use tauri::Manager;
+    let recognition = crate::ai::vision_jobs::pause_admission();
+    ensure_foreground_tasks_idle(app_handle)?;
+    cancel_library_recognition()?;
+    let scans = drain_library_scans(app_handle.state::<IndexCancellation>().0.clone()).await?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        cancel_library_recognition()?;
+        if !crate::ai::ocr::is_running()
+            && !crate::ai::objects_jobs::is_running()
+            && !t_face::indexing_snapshot()?.0
+            && !crate::ai::vision_jobs::running(crate::ai::types::Task::Semantic)
+        {
+            return Ok((recognition, scans));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("Timed out waiting for recognition to stop; library was retained".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+fn library_change_writer() -> Result<std::sync::RwLockWriteGuard<'static, ()>, String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match FILE_REFRESH_LIBRARY_LOCK.try_write() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Library is busy; retry after current operations finish: {error}"
+                ));
+            }
+        }
+    }
 }
 
 /// Startup integrity check result for the selected library.
@@ -404,49 +559,34 @@ pub fn is_database_corrupted() -> bool {
 /// switch to a different library
 #[tauri::command]
 pub async fn switch_library(app_handle: tauri::AppHandle, id: String) -> Result<(), String> {
-    use tauri::Manager;
-    let _recognition_admission = crate::ai::vision_jobs::pause_admission();
-    let current_library = t_config::current_library_id()?;
-    crate::ai::ocr::cancel_all(&current_library);
-    crate::ai::objects_jobs::cancel_all(&current_library);
-    t_face::cancel_all(&current_library);
-    let scan_admission=t_utils::block_album_scans();
-    {
-        let cancellation=app_handle.state::<IndexCancellation>().0.clone();
-        let mut flags=cancellation.lock().map_err(|e|e.to_string())?;
-        for flag in flags.values_mut(){*flag=true;}
-    }
-    for album_id in &scan_admission.album_ids {
-        if let Some(session)=crate::t_scan::active_session(*album_id){session.pause_requested();}
-        t_utils::wait_for_album_scan_end(*album_id).await?;
-    }
+    let (_recognition_admission, _scan_admission) = drain_library_tasks(&app_handle).await?;
     // The blocking task reports whether the target library turned out to be corrupt, deciding from
     // create_db's returned error itself rather than re-reading the process-global flag afterwards
     // (which a concurrent switch could resolve against a different library).
+    let worker_app = app_handle.clone();
     let corrupted = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
-        // New requests from another window may arrive while scans are stopping.
-        // Cancel them before retrying the writer instead of waiting for a whole AI batch.
-        let _guard = loop {
-            let current = t_config::current_library_id()?;
-            crate::ai::ocr::cancel_all(&current);
-            crate::ai::objects_jobs::cancel_all(&current);
-            t_face::cancel_all(&current);
-            match FILE_REFRESH_LIBRARY_LOCK.try_write() {
-                Ok(guard) => break guard,
-                Err(std::sync::TryLockError::WouldBlock) => {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                Err(std::sync::TryLockError::Poisoned(error)) => return Err(error.to_string()),
+        let _guard = library_change_writer()?;
+        ensure_foreground_tasks_idle(&worker_app)?;
+        if !t_config::load_app_config()?
+            .libraries
+            .iter()
+            .any(|library| library.id == id)
+        {
+            return Err("Library not found".into());
+        }
+        let corrupted = match t_sqlite::prepare_library_database(&id) {
+            Ok(()) => false,
+            Err(error) if error == t_sqlite::DB_CORRUPTED_MSG => true,
+            Err(error) => {
+                return Err(format!(
+                    "Cannot prepare the target library; current library was retained: {error}"
+                ));
             }
         };
         t_config::switch_library(&id)?;
         t_utils::clear_album_accessibility();
         t_sqlite::clear_conn_pool();
-        match t_sqlite::create_db() {
-            Ok(()) => { crate::ai::profiles::ensure_selected()?; Ok(false) },
-            Err(e) if e == t_sqlite::DB_CORRUPTED_MSG => Ok(true),
-            Err(e) => Err(e),
-        }
+        Ok(corrupted)
     })
     .await
     .map_err(|e| format!("Failed to join switch library task: {}", e))??;
@@ -454,6 +594,13 @@ pub async fn switch_library(app_handle: tauri::AppHandle, id: String) -> Result<
     if corrupted {
         return Ok(());
     }
+    if let Err(error) = refresh_library_runtime(app_handle).await {
+        eprintln!("Library switch committed; runtime refresh will retry on the next load: {error}");
+    }
+    Ok(())
+}
+
+async fn refresh_library_runtime(app_handle: tauri::AppHandle) -> Result<(), String> {
     t_utils::restore_album_scopes(&app_handle)?;
     tauri::async_runtime::spawn_blocking(|| -> Result<(), String> {
         let mut albums = Album::get_all_albums()
@@ -837,27 +984,26 @@ pub fn create_folder(path: &str, folder_name: &str) -> Option<String> {
 
 /// rename a folder
 #[tauri::command]
-pub fn rename_folder(folder_path: &str, new_folder_name: &str) -> Option<String> {
-    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard().ok()?;
-    if crate::t_media_lifecycle::folder_has_deleted(
-        &*crate::t_sqlite::open_conn().ok()?,
+pub fn rename_folder(folder_path: &str, new_folder_name: &str) -> Result<String, String> {
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "Library is changing; retry this folder operation")?;
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    crate::t_media_lifecycle::validate_folder_operation(
+        &*crate::t_sqlite::open_conn()?,
         folder_path,
-    )
-    .unwrap_or(true)
-    {
-        return None;
-    }
+    )?;
     let new_folder_path = t_utils::rename_folder(folder_path, new_folder_name);
 
     match new_folder_path {
         Some(new_path) => {
             if let Err(e) = Album::rename_root_folder(folder_path, &new_path) {
                 eprintln!("Error while renaming root folder in DB: {}", e);
-                return None;
+                return Err(format!("Error while renaming root folder in DB: {e}"));
             }
-            Some(new_path)
+            Ok(new_path)
         }
-        None => None,
+        None => Err("Could not rename this folder".into()),
     }
 }
 
@@ -869,15 +1015,16 @@ pub fn move_folder(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "Library is changing; retry this folder operation")?;
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)?
-        || crate::t_media_lifecycle::folder_has_deleted(
-            &*crate::t_sqlite::open_conn()?,
-            new_folder_path,
-        )?
-    {
-        return Err("Restore or clear Recently Deleted before transferring this folder".into());
-    }
+    crate::t_media_lifecycle::validate_folder_transfer(
+        &*crate::t_sqlite::open_conn()?,
+        folder_path,
+        new_folder_path,
+        conflict_policy == "replace",
+    )?;
 
     let old_album_id = AFolder::fetch(folder_path)?.map(|folder| folder.album_id);
     let moved_thumb_keys = if old_album_id.is_some_and(|album_id| album_id != new_album_id) {
@@ -919,15 +1066,16 @@ pub fn move_folder_outside_library(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "Library is changing; retry this folder operation")?;
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)?
-        || crate::t_media_lifecycle::folder_has_deleted(
-            &*crate::t_sqlite::open_conn()?,
-            new_folder_path,
-        )?
-    {
-        return Err("Restore or clear Recently Deleted before transferring this folder".into());
-    }
+    crate::t_media_lifecycle::validate_folder_transfer(
+        &*crate::t_sqlite::open_conn()?,
+        folder_path,
+        new_folder_path,
+        conflict_policy == "replace",
+    )?;
 
     let transfer = t_utils::move_folder_with_policy(
         folder_path,
@@ -957,15 +1105,16 @@ pub fn copy_folder(
     new_album_id: i64,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "Library is changing; retry this folder operation")?;
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)?
-        || crate::t_media_lifecycle::folder_has_deleted(
-            &*crate::t_sqlite::open_conn()?,
-            new_folder_path,
-        )?
-    {
-        return Err("Restore or clear Recently Deleted before transferring this folder".into());
-    }
+    crate::t_media_lifecycle::validate_folder_transfer(
+        &*crate::t_sqlite::open_conn()?,
+        folder_path,
+        new_folder_path,
+        conflict_policy == "replace",
+    )?;
 
     let transfer = t_utils::copy_folder_with_policy(
         folder_path,
@@ -996,10 +1145,14 @@ pub fn copy_folder(
 /// delete a folder (move to trash)
 #[tauri::command]
 pub fn delete_folder(folder_path: &str) -> Result<usize, String> {
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "Library is changing; retry this folder operation")?;
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)? {
-        return Err("Restore or clear Recently Deleted before deleting this folder".into());
-    }
+    crate::t_media_lifecycle::validate_folder_operation(
+        &*crate::t_sqlite::open_conn()?,
+        folder_path,
+    )?;
     // trash the folder
     if t_utils::trash_path(folder_path).is_err() {
         return Ok(0);
@@ -1013,10 +1166,14 @@ pub fn delete_folder(folder_path: &str) -> Result<usize, String> {
 /// permanently delete a folder (skip trash)
 #[tauri::command]
 pub fn delete_folder_permanently(folder_path: &str) -> Result<usize, String> {
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "Library is changing; retry this folder operation")?;
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
-    if crate::t_media_lifecycle::folder_has_deleted(&*crate::t_sqlite::open_conn()?, folder_path)? {
-        return Err("Restore or clear Recently Deleted before deleting this folder".into());
-    }
+    crate::t_media_lifecycle::validate_folder_operation(
+        &*crate::t_sqlite::open_conn()?,
+        folder_path,
+    )?;
     t_utils::delete_folder_permanently(folder_path)?;
 
     AFolder::delete_folder(folder_path)
@@ -1797,10 +1954,11 @@ pub fn move_file(
     crate::t_media_lifecycle::validate_original(file_id, file_path, false)?;
     let old_file_info = AFile::get_file_info(file_id).ok().flatten();
     let old_album_id = old_file_info.as_ref().and_then(|file| file.album_id);
-    let new_album_id = AFolder::get_by_id(new_folder_id)
-        .ok()
-        .flatten()
-        .map(|folder| folder.album_id);
+    let new_album_id = Some(crate::t_media_lifecycle::validate_destination_folder(
+        &*crate::t_sqlite::open_conn()?,
+        new_folder_id,
+        new_folder_path,
+    )?);
     let policy = t_utils::FileConflictPolicy::from_str(conflict_policy);
     let (primary_target, sidecar_plans) =
         resolve_group_primary_target(Some(file_id), file_path, new_folder_path, policy)?;
@@ -1813,11 +1971,10 @@ pub fn move_file(
     }
     if policy == t_utils::FileConflictPolicy::Replace {
         collect_replaced_file_ids_for_targets(
-            new_folder_id,
             std::iter::once(&primary_target).chain(sidecar_plans.iter().map(|plan| &plan.new_path)),
             &source_file_ids,
             &mut replaced_file_ids,
-        );
+        )?;
     }
 
     let mut component_transfers = Vec::new();
@@ -1847,16 +2004,17 @@ pub fn move_file(
         }
     };
 
-    let component_file_ids = component_transfers
-        .iter()
-        .filter_map(|(component_id, _, _)| *component_id)
-        .collect::<Vec<_>>();
-    if let Err(error) = AFile::update_moved_file_group(
-        file_id,
-        &component_file_ids,
-        &replaced_file_ids,
-        new_folder_id,
-    ) {
+    let mut moved_files = vec![(file_id, t_utils::get_file_name(&transfer.path))];
+    moved_files.extend(
+        component_transfers
+            .iter()
+            .filter_map(|(component_id, _, transfer)| {
+                component_id.map(|id| (id, t_utils::get_file_name(&transfer.path)))
+            }),
+    );
+    if let Err(error) =
+        AFile::update_moved_file_group(&moved_files, &replaced_file_ids, new_folder_id)
+    {
         let rollback_error = transfer.rollback_move(Path::new(file_path)).err();
         for (_, original_path, transfer) in component_transfers {
             let _ = transfer.rollback_move(&original_path);
@@ -1965,6 +2123,9 @@ pub fn copy_file(
     new_folder_path: &str,
     conflict_policy: &str,
 ) -> Result<String, String> {
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK
+        .try_read()
+        .map_err(|_| "Library is changing; retry this file operation")?;
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
     let policy = t_utils::FileConflictPolicy::from_str(conflict_policy);
     let (primary_target, sidecar_plans) =
@@ -2045,9 +2206,14 @@ pub fn import_and_organize(
     destination_path: String,
     layout: String,
     completed_paths: Vec<String>,
+    library_id: Option<String>,
 ) -> Result<(), String> {
+    let _admission = foreground_task_admission(library_id.as_deref())?;
     {
-        let mut import = state.0.lock().map_err(|_| "Import cancellation state is unavailable")?;
+        let mut import = state
+            .0
+            .lock()
+            .map_err(|_| "Import cancellation state is unavailable")?;
         if import.running {
             return Err("An import is already in progress".to_string());
         }
@@ -2062,15 +2228,28 @@ pub fn import_and_organize(
             &destination_path,
             &layout,
             completed_paths.into_iter().collect(),
-            |progress| { let _ = app_handle.emit("import-organize-progress", progress); },
-            || cancellation.lock().map(|import| import.cancelled).unwrap_or(true),
+            |progress| {
+                let _ = app_handle.emit("import-organize-progress", progress);
+            },
+            || {
+                cancellation
+                    .lock()
+                    .map(|import| import.cancelled)
+                    .unwrap_or(true)
+            },
         );
         if let Ok(mut import) = cancellation.lock() {
             import.running = false;
         }
         let payload = match result {
-            Ok(result) => ImportOrganizeFinished { result: Some(result), error: None },
-            Err(error) => ImportOrganizeFinished { result: None, error: Some(error) },
+            Ok(result) => ImportOrganizeFinished {
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => ImportOrganizeFinished {
+                result: None,
+                error: Some(error),
+            },
         };
         let _ = app_handle.emit("import-organize-finished", payload);
     });
@@ -3577,7 +3756,9 @@ pub fn similar_start_scan(
     params: Option<QueryParams>,
     collection_id: Option<i64>,
     file_ids: Option<Vec<i64>>,
+    library_id: Option<String>,
 ) -> Result<(), String> {
+    let _admission = foreground_task_admission(library_id.as_deref())?;
     t_similar::start_scan(
         app_handle,
         state,
@@ -4062,7 +4243,9 @@ pub fn dedup_start_scan(
     params: Option<crate::t_sqlite::QueryParams>,
     collection_id: Option<i64>,
     file_ids: Option<Vec<i64>>,
+    library_id: Option<String>,
 ) -> Result<(), String> {
+    let _admission = foreground_task_admission(library_id.as_deref())?;
     crate::t_dedup::start_scan(app_handle, state, params, collection_id, file_ids)
 }
 
@@ -4243,7 +4426,7 @@ mod gstreamer_probe_tests {
 
 #[cfg(test)]
 mod raw_display_library_tests {
-    use super::with_library_context;
+    use super::{drain_library_scans, foreground_task_admission, with_library_context};
     use std::sync::{Arc, Mutex, RwLock, TryLockError, mpsc};
 
     #[test]
@@ -4310,5 +4493,54 @@ mod raw_display_library_tests {
         *current.lock().unwrap() = "library-b".into();
         drop(guard);
         assert!(with_library_context(&lock, "library-a", || Ok(current.lock().unwrap().clone()), || Ok(())).is_err());
+    }
+
+    #[test]
+    fn deleting_or_switching_a_library_drains_scans_before_reopening_admission() {
+        let cancellation = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let album = 9_000_000_001;
+        let active = crate::t_utils::AlbumScanGuard::acquire(album, cancellation.clone()).unwrap();
+        let worker_cancel = cancellation.clone();
+        let worker = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(drain_library_scans(worker_cancel)).unwrap()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !cancellation
+            .lock()
+            .unwrap()
+            .get(&album)
+            .copied()
+            .unwrap_or(false)
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            !worker.is_finished(),
+            "the library must stay selected until blocking scan work exits"
+        );
+        assert!(crate::t_utils::AlbumScanGuard::acquire(album + 1, cancellation.clone()).is_err());
+        drop(active);
+        let admission = worker.join().unwrap();
+        assert!(crate::t_utils::AlbumScanGuard::acquire(album + 1, cancellation.clone()).is_err());
+        drop(admission);
+        assert!(crate::t_utils::AlbumScanGuard::acquire(album + 1, cancellation).is_ok());
+    }
+
+    #[test]
+    fn foreground_task_acceptance_cannot_slip_past_a_library_transition() {
+        let accepted = foreground_task_admission(None).unwrap();
+        let paused = crate::ai::vision_jobs::pause_admission();
+        assert!(foreground_task_admission(None).is_err());
+        assert!(
+            super::FILE_REFRESH_LIBRARY_LOCK.try_write().is_err(),
+            "a task must finish reserving its running state before the transition can check it"
+        );
+        drop(accepted);
+        let writer = super::FILE_REFRESH_LIBRARY_LOCK.try_write().unwrap();
+        assert!(foreground_task_admission(None).is_err());
+        drop(writer);
+        drop(paused);
+        assert!(foreground_task_admission(None).is_ok());
     }
 }

@@ -2059,6 +2059,18 @@ function getGroupedFileIndexForRowIndex(rowIndex: number) {
 
 class CopyIndexError extends Error {}
 
+function fileTransferFailure(fallback: string, reasons: unknown[]) {
+  const details = reasons.filter(reason => reason != null).map(reason => {
+    const message = (reason instanceof Error ? reason.message : String(reason)).replace(/^Error:\s*/, '').trim();
+    if (message.startsWith('PRIVATE_FOLDER:')) return t('media_lifecycle.file_transfer_private');
+    if (message.includes('Replace would leave part of the destination media group behind')) return t('media_lifecycle.file_transfer_group');
+    if (message.startsWith('Destination folder changed')) return t('media_lifecycle.file_transfer_stale');
+    if (message.includes('Recovery destinations are reserved')) return t('media_lifecycle.file_transfer_recovery');
+    return message.slice(0, 1000);
+  }).filter(message => message && message !== fallback);
+  return [fallback, ...Array.from(new Set(details)).slice(0, 3)].filter(Boolean).join('\n');
+}
+
 async function confirmLargeBatch(count: number) {
   if (count <= LARGE_BATCH_CONFIRM_THRESHOLD) return true;
   return ask(
@@ -3438,6 +3450,7 @@ async function clearContentInternalDrag(event?: PointerEvent) {
       let done = 0;
       let indexFailureCount = 0;
       let transferFailureCount = 0;
+      const transferErrors: unknown[] = [];
       let applyAllPolicy: FileConflictPolicy | null = null;
       const affectedAlbumIds = new Set<number>([albumId]);
       for (const file of files) {
@@ -3452,25 +3465,30 @@ async function clearContentInternalDrag(event?: PointerEvent) {
         );
         if (conflict.applyAll) applyAllPolicy = conflict.policy;
         if (conflict.policy === 'skip') continue;
-        if (copy) {
-          const copiedPath = await copyFile(file.file_path, destPath, conflict.policy);
-          if (copiedPath) {
-            if (await addFileToDb(selected.id, copiedPath)) {
-              done++;
+        try {
+          if (copy) {
+            const copiedPath = await copyFile(file.file_path, destPath, conflict.policy);
+            if (copiedPath) {
+              if (await addFileToDb(selected.id, copiedPath)) {
+                done++;
+              } else {
+                indexFailureCount++;
+              }
             } else {
-              indexFailureCount++;
+              transferFailureCount++;
             }
           } else {
-            transferFailureCount++;
+            const movedPath = await moveFile(file.id, file.file_path, selected.id, destPath, conflict.policy);
+            if (movedPath) {
+              done++;
+              affectedAlbumIds.add(Number(file.album_id || 0));
+            } else {
+              transferFailureCount++;
+            }
           }
-        } else {
-          const movedPath = await moveFile(file.id, file.file_path, selected.id, destPath, conflict.policy);
-          if (movedPath) {
-            done++;
-            affectedAlbumIds.add(Number(file.album_id || 0));
-          } else {
-            transferFailureCount++;
-          }
+        } catch (error) {
+          transferFailureCount++;
+          transferErrors.push(error);
         }
       }
       if (done > 0) {
@@ -3484,12 +3502,12 @@ async function clearContentInternalDrag(event?: PointerEvent) {
         }));
       }
       if (transferFailureCount > 0) {
-        toast.error(t(copy ? 'msgbox.copy_to_folder.error' : 'msgbox.move_to_folder.error', {
+        toast.error(fileTransferFailure(t(copy ? 'msgbox.copy_to_folder.error' : 'msgbox.move_to_folder.error', {
           source: files.length === 1
             ? getFolderName(files[0].file_path)
-            : t('toolbar.filter.select_count', { count: files.length.toLocaleString() }),
+            : t('toolbar.filter.select_count', { count: transferFailureCount.toLocaleString() }),
           dest: getFolderName(destPath) || destPath,
-        }));
+        }), transferErrors));
       }
     }
   }
@@ -9285,6 +9303,7 @@ const onMoveTo = async () => {
   const destAlbumId = Number(libConfig.destFolder.albumId || 0);
   const destLabel = getFolderName(destPath) || destPath;
   let successCount = 0;
+  const failures: unknown[] = [];
 
   // Resolve destination folder ID: when the user selects an album root (not a
   // subfolder), destFolder.folderId is null. Ensure the root folder record
@@ -9300,7 +9319,6 @@ const onMoveTo = async () => {
   }
 
   if (selectMode.value && selectedCount.value > 0) {    // multi-select mode
-    const sourceLabel = t('toolbar.filter.select_count', { count: selectedCount.value.toLocaleString() });
     const items = await getActionableSelectedItemsForAction();
     if (!items) return;
     if (!await confirmLargeBatch(items.length)) return;
@@ -9320,9 +9338,10 @@ const onMoveTo = async () => {
       console.log('onMoveTo:', movedFile);
       affectedAlbumIds.add(Number(item.album_id || 0));
     });
-    const failedCount = moves.filter(
-      result => result.status === 'rejected' || !result.value.movedFile,
-    ).length;
+    for (const result of moves) {
+      if (result.status === 'rejected') failures.push(result.reason);
+      else if (!result.value.movedFile) failures.push(null);
+    }
     if (successIds.length > 0) {
       successCount = successIds.length;
       const successIdSet = new Set(successIds);
@@ -9336,40 +9355,43 @@ const onMoveTo = async () => {
       totalFileSize.value = fileList.value.reduce((total, file) => total + file.size, 0);
       selectedItemIndex.value = fileList.value.length > 0 ? Math.min(selectedItemIndex.value, fileList.value.length - 1) : -1;
       rebuildSelectionAfterListMutation(remainingSelectedIds);
-      toast.success(t('msgbox.move_to.success', { source: sourceLabel, dest: destLabel }));
-    }
-    if (failedCount > 0 && successCount > 0) {
-      toast.error(t('msgbox.move_to.error', { source: sourceLabel, dest: destLabel }));
+      toast.success(t('msgbox.move_to.success', {
+        source: t('toolbar.filter.select_count', { count: successCount.toLocaleString() }), dest: destLabel,
+      }));
     }
   } 
   else if(selectedItemIndex.value >= 0) {               // single select mode
     const file = fileList.value[selectedItemIndex.value];
     const sourceLabel = file.name;
-    const movedFile = await moveFile(file.id, file.file_path, destFolderId, destPath);
-    if(movedFile) {
-      console.log('onMoveTo:', movedFile);
-      affectedAlbumIds.add(Number(file.album_id || 0));
-      removeFromFileList(selectedItemIndex.value);
-      successCount = 1;
-      toast.success(t('msgbox.move_to.success', { source: sourceLabel, dest: destLabel }));
+    try {
+      const movedFile = await moveFile(file.id, file.file_path, destFolderId, destPath);
+      if(movedFile) {
+        console.log('onMoveTo:', movedFile);
+        affectedAlbumIds.add(Number(file.album_id || 0));
+        removeFromFileList(selectedItemIndex.value);
+        successCount = 1;
+        toast.success(t('msgbox.move_to.success', { source: sourceLabel, dest: destLabel }));
+      } else failures.push(null);
+    } catch (error) {
+      failures.push(error);
     }
   }
 
-  if (destAlbumId > 0) affectedAlbumIds.add(destAlbumId);
-  await refreshAffectedAlbums(Array.from(affectedAlbumIds));
-  await refreshLibraryTotalCount();
-  if (successCount > 0 && (groupedModeActive.value || effectiveGroupBy.value > 0)) {
-    await updateContent(true);
+  if (successCount > 0) {
+    if (destAlbumId > 0) affectedAlbumIds.add(destAlbumId);
+    await refreshAffectedAlbums(Array.from(affectedAlbumIds));
+    await refreshLibraryTotalCount();
+    if (groupedModeActive.value || effectiveGroupBy.value > 0) await updateContent(true);
   }
 
-  if (successCount === 0) {
+  if (failures.length || successCount === 0) {
     const sourceLabel = selectMode.value
       ? t('toolbar.filter.select_count', { count: selectedCount.value.toLocaleString() })
       : (fileList.value[selectedItemIndex.value]?.name || '');
-    toast.error(t('msgbox.move_to.error', { source: sourceLabel, dest: destLabel }));
+    toast.error(fileTransferFailure(t('msgbox.move_to.error', { source: sourceLabel, dest: destLabel }), failures));
   }
 
-  showMoveTo.value = false;
+  if (!failures.length && successCount > 0) showMoveTo.value = false;
 }
 
 const selectSystemDestination = async (title: string) => {
@@ -9523,7 +9545,10 @@ const onMoveToFolder = async () => {
       ? Math.min(selectedItemIndex.value, fileList.value.length - 1)
       : -1;
     rebuildSelectionAfterListMutation(remainingSelectedIds);
-    toast.success(t('msgbox.move_to_folder.success', { source: sourceLabel, dest: getFolderName(destPath) || destPath }));
+    toast.success(t('msgbox.move_to_folder.success', {
+      source: files.length > 1 ? t('toolbar.filter.select_count', { count: successIds.length.toLocaleString() }) : sourceLabel,
+      dest: getFolderName(destPath) || destPath,
+    }));
     await refreshAffectedAlbums(Array.from(affectedAlbumIds));
     await refreshLibraryTotalCount();
     // Moving a file changes its grouping key (for example, folder grouping).
@@ -9533,8 +9558,12 @@ const onMoveToFolder = async () => {
       await updateContent(true);
     }
   }
-  if (moveResults.some(result => result.status === 'rejected')) {
-    toast.error(t('msgbox.move_to_folder.error', { source: sourceLabel, dest: getFolderName(destPath) || destPath }));
+  const failedMoves = moveResults.filter(result => result.status === 'rejected');
+  if (failedMoves.length > 0) {
+    toast.error(fileTransferFailure(t('msgbox.move_to_folder.error', {
+      source: files.length > 1 ? t('toolbar.filter.select_count', { count: failedMoves.length.toLocaleString() }) : sourceLabel,
+      dest: getFolderName(destPath) || destPath,
+    }), failedMoves.map(result => result.reason)));
   }
 }
 
@@ -9593,7 +9622,10 @@ const onCopyToFolder = async () => {
   ).length;
 
   if (successCount > 0) {
-    toast.success(t('msgbox.copy_to_folder.success', { source: sourceLabel, dest: destLabel }));
+    toast.success(t('msgbox.copy_to_folder.success', {
+      source: files.length > 1 ? t('toolbar.filter.select_count', { count: successCount.toLocaleString() }) : sourceLabel,
+      dest: destLabel,
+    }));
     if (libraryDestination) {
       await refreshAffectedAlbums([libraryDestination.albumId]);
       await refreshLibraryTotalCount();
@@ -9601,7 +9633,11 @@ const onCopyToFolder = async () => {
     }
   }
   if (copyFailureCount > 0) {
-    toast.error(t('msgbox.copy_to_folder.error', { source: sourceLabel, dest: destLabel }));
+    toast.error(fileTransferFailure(t('msgbox.copy_to_folder.error', {
+      source: files.length > 1 ? t('toolbar.filter.select_count', { count: copyFailureCount.toLocaleString() }) : sourceLabel,
+      dest: destLabel,
+    }),
+      copyResults.flatMap(result => result.status === 'rejected' && !(result.reason instanceof CopyIndexError) ? [result.reason] : [])));
   }
   if (indexFailureCount > 0) {
     toast.error(t('msgbox.copy_to_folder.index_error', {

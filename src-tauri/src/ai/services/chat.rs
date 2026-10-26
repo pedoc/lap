@@ -1160,17 +1160,244 @@ fn finish_on(
     tx.commit().map_err(sql_error)?;
     view_on(c, library, session)
 }
-fn validate_answer(answer: &str, references: &[Reference]) -> Result<(), String> {
-    for part in answer.split('[').skip(1) {
-        let Some((value, _)) = part.split_once(']') else {
+fn answer_code_end(answer: &str, start: usize) -> Option<usize> {
+    let bytes = answer.as_bytes();
+    let marker = bytes[start];
+    let count = bytes[start..]
+        .iter()
+        .take_while(|byte| **byte == marker)
+        .count();
+    let line_start = answer[..start].rfind('\n').map_or(0, |index| index + 1);
+    if count >= 3
+        && start - line_start <= 3
+        && bytes[line_start..start].iter().all(|byte| *byte == b' ')
+    {
+        let mut cursor = answer[start..]
+            .find('\n')
+            .map_or(bytes.len(), |offset| start + offset + 1);
+        while cursor < bytes.len() {
+            let end = answer[cursor..]
+                .find('\n')
+                .map_or(bytes.len(), |offset| cursor + offset + 1);
+            let line = &answer[cursor..end];
+            let trimmed = line.trim_start_matches(' ');
+            let closing = trimmed
+                .as_bytes()
+                .iter()
+                .take_while(|byte| **byte == marker)
+                .count();
+            if line.len() - trimmed.len() <= 3
+                && closing >= count
+                && trimmed[closing..].trim().is_empty()
+            {
+                return Some(end);
+            }
+            cursor = end;
+        }
+        return Some(bytes.len());
+    }
+    if marker != b'`' {
+        return None;
+    }
+    let mut cursor = start + count;
+    while cursor < bytes.len() {
+        if bytes[cursor] != marker {
+            cursor += 1;
             continue;
+        }
+        let closing = bytes[cursor..]
+            .iter()
+            .take_while(|byte| **byte == marker)
+            .count();
+        if closing == count {
+            return Some(cursor + count);
+        }
+        cursor += closing;
+    }
+    None
+}
+fn answer_reference_label(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+fn answer_reference_definition(line: &str, continuation: Option<&str>) -> Option<(String, bool)> {
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() > 3 || line.starts_with('\t') {
+        return None;
+    }
+    let (label, destination) = trimmed.strip_prefix('[')?.split_once("]:")?;
+    let label = answer_reference_label(label);
+    if label.is_empty() {
+        return None;
+    }
+    let continued = destination.trim().is_empty();
+    if continued {
+        let next = continuation?;
+        let destination = next.trim();
+        // Only an explicit destination can extend a definition; ordinary following prose cannot.
+        if next.len() - next.trim_start_matches(' ').len() > 3
+            || next.starts_with('\t')
+            || destination.split_whitespace().count() != 1
+            || !(destination.starts_with("https://")
+                || destination.starts_with("http://")
+                || destination.starts_with("mailto:")
+                || destination.starts_with('/')
+                || destination.starts_with("./")
+                || destination.starts_with("../")
+                || destination.starts_with('#')
+                || destination.starts_with('<') && destination.ends_with('>'))
+        {
+            return None;
+        }
+    }
+    Some((label, continued))
+}
+fn answer_reference_definitions(answer: &str) -> HashSet<String> {
+    let mut definitions = HashSet::new();
+    let mut cursor = 0;
+    while cursor < answer.len() {
+        let end = answer[cursor..]
+            .find('\n')
+            .map_or(answer.len(), |offset| cursor + offset + 1);
+        let line = &answer[cursor..end];
+        let trimmed = line.trim_start_matches(' ');
+        let indent = line.len() - trimmed.len();
+        if indent <= 3 && !line.starts_with('\t') {
+            let start = cursor + indent;
+            if let Some(marker @ (b'`' | b'~')) = trimmed.as_bytes().first().copied() {
+                if trimmed
+                    .as_bytes()
+                    .iter()
+                    .take_while(|byte| **byte == marker)
+                    .count()
+                    >= 3
+                {
+                    if let Some(end) = answer_code_end(answer, start) {
+                        cursor = end;
+                        continue;
+                    }
+                }
+            }
+            if let Some((label, _)) =
+                answer_reference_definition(line, answer[end..].lines().next())
+            {
+                definitions.insert(label);
+            }
+        }
+        cursor = end;
+    }
+    definitions
+}
+fn validate_answer(answer: &str, references: &[Reference]) -> Result<(), String> {
+    // Bare [n] is a media citation only in prose with media evidence, not inside data or Markdown markup.
+    if references.is_empty() || serde_json::from_str::<serde_json::Value>(answer).is_ok() {
+        return Ok(());
+    }
+    let definitions = answer_reference_definitions(answer);
+    let bytes = answer.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if cursor == 0 || bytes[cursor - 1] == b'\n' {
+            let end = answer[cursor..]
+                .find('\n')
+                .map_or(bytes.len(), |offset| cursor + offset);
+            let line = &answer[cursor..end];
+            let continuation = if end < bytes.len() {
+                answer[end + 1..].split('\n').next()
+            } else {
+                None
+            };
+            let definition = answer_reference_definition(line, continuation);
+            if line.starts_with("    ")
+                || line.starts_with('\t')
+                || definition.is_some()
+                || serde_json::from_str::<serde_json::Value>(line.trim()).is_ok()
+            {
+                cursor = (end + 1).min(bytes.len());
+                if definition.is_some_and(|(_, continued)| continued) {
+                    cursor = answer[cursor..]
+                        .find('\n')
+                        .map_or(bytes.len(), |offset| cursor + offset + 1);
+                }
+                continue;
+            }
+        }
+        if bytes[cursor] == b'\\' {
+            cursor = (cursor + 2).min(bytes.len());
+            continue;
+        }
+        if matches!(bytes[cursor], b'`' | b'~') {
+            if let Some(end) = answer_code_end(answer, cursor) {
+                cursor = end;
+                continue;
+            }
+        }
+        if matches!(bytes[cursor], b'{' | b'[') {
+            let mut json = serde_json::Deserializer::from_str(&answer[cursor..])
+                .into_iter::<serde_json::Value>();
+            if let Some(Ok(value)) = json.next() {
+                if value.is_object()
+                    || value
+                        .as_array()
+                        .is_some_and(|items| items.len() != 1 || !items[0].is_number())
+                {
+                    cursor += json.byte_offset();
+                    continue;
+                }
+            }
+        }
+        if bytes[cursor] != b'[' {
+            cursor += 1;
+            continue;
+        }
+        let start = cursor + 1;
+        let Some(close) = answer[start..].find(']').map(|offset| start + offset) else {
+            break;
         };
-        if !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit()) {
+        let value = &answer[start..close];
+        let tail = answer[close + 1..].trim_start();
+        if tail.starts_with('(') {
+            let mut end = answer.len() - tail.len() + 1;
+            let mut depth = 1;
+            while end < bytes.len() && depth > 0 {
+                match bytes[end] {
+                    b'\\' => {
+                        end = (end + 2).min(bytes.len());
+                        continue;
+                    }
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                end += 1;
+            }
+            if depth == 0 {
+                cursor = end;
+                continue;
+            }
+        }
+        if let Some((label, remaining)) =
+            tail.strip_prefix('[').and_then(|rest| rest.split_once(']'))
+        {
+            let label = if label.is_empty() { value } else { label };
+            if definitions.contains(&answer_reference_label(label)) {
+                cursor = answer.len() - remaining.len();
+                continue;
+            }
+        }
+        if !definitions.contains(&answer_reference_label(value))
+            && !value.is_empty()
+            && value.bytes().all(|c| c.is_ascii_digit())
+        {
             let index = value.parse::<usize>().map_err(|_| "回答引用编号无效")?;
             if index == 0 || index > references.len() {
                 return Err("回答引用了本轮不存在的媒体编号，请重试。".into());
             }
         }
+        cursor = close + 1;
     }
     Ok(())
 }
@@ -3471,7 +3698,87 @@ mod tests {
         validate_answer("湖边的周末。[1]", &references).unwrap();
         assert!(validate_answer("看这项媒体。[99]", &references).is_err());
         assert!(validate_answer("无效编号。[0]", &references).is_err());
-        assert!(validate_answer("未提供的媒体。[1]", &[]).is_err());
+        validate_answer("纯文本数字 [1]", &[]).unwrap();
+    }
+    #[test]
+    fn media_chat_citations_ignore_json_markdown_links_and_code() {
+        let (mut c, _dir) = store::tests::fixture();
+        let references = vec![reference(&mut c)];
+        let data = [
+            "[99]",
+            r#"{"ids":[99],"text":"[100]"}"#,
+            "返回结果：{\"ids\":[99]}。",
+            "数组：[[99], [100]]。",
+            "网页：[2026](https://example.invalid/?data=[99])。",
+            "网页：[2026](https://example.invalid/(year))。",
+            "链接 [2026][source]\n[source]: https://example.invalid/?data=[99]",
+            "参考 [2026]\n[2026]: https://example.invalid/",
+            "内联代码 `[99]` 和 ``[100] ` x``。",
+            "```json\n[99]\n```\n合法引用。[1]",
+            "~~~json\n{\"ids\":[99]}\n~~~\n合法引用。[1]",
+            "    [99]\n合法引用。[1]",
+            "转义文本 \\[99]。",
+        ];
+        for answer in data {
+            validate_answer(answer, &[]).unwrap();
+            assert!(
+                validate_answer(answer, &references).is_ok(),
+                "valid data: {answer}"
+            );
+        }
+        for answer in [
+            "画面描述。[2]",
+            "画面描述。[0]",
+            "相邻引用。[1][99]",
+            "代码 `[99]` 之后的错误引用。[2]",
+            "```json\n[99]\n```\n错误引用。[2]",
+            "链接 [2026](https://example.invalid/) 后的错误引用。[2]",
+            "JSON {\"ids\":[99]} 后的错误引用。[2]",
+        ] {
+            assert!(
+                validate_answer(answer, &references).is_err(),
+                "invalid citation: {answer}"
+            );
+        }
+    }
+    #[test]
+    fn media_chat_reference_links_require_real_definitions_outside_code() {
+        let (mut c, _dir) = store::tests::fixture();
+        let references = vec![reference(&mut c)];
+        for answer in [
+            "相邻引用。[99][1]",
+            "相邻引用。[1][99]",
+            "[99]:\n正文。[99]",
+            "[99]:",
+            "[99]:   \n正文。[99]",
+            "```text\n[99]: https://example.invalid/\n```\n画面描述。[99]",
+            "~~~text\n[99]: https://example.invalid/\n~~~\n画面描述。[99]",
+            "    [99]: https://example.invalid/\n画面描述。[99]",
+            "链接 [99][source]\n```text\n[source]: https://example.invalid/\n```",
+            "未闭合链接 [1](missing 后的错误引用。[99]",
+        ] {
+            assert!(
+                validate_answer(answer, &references).is_err(),
+                "invalid citation: {answer}"
+            );
+        }
+        for answer in [
+            "相邻引用。[1][1]",
+            "链接 [99][source]\n[source]: https://example.invalid/",
+            "链接 [99][SOURCE]\n[source]: https://example.invalid/",
+            "链接 [99][  My Label  ]\n[My  Label]: https://example.invalid/",
+            "链接 [99][]\n[99]: https://example.invalid/",
+            "链接 [99][1]\n[1]: https://example.invalid/",
+            "[99]:\n  https://example.invalid/?data=[100]\n合法链接。[99]",
+            "```text\n[99]: https://example.invalid/\n```\n合法引用。[1]",
+        ] {
+            validate_answer(answer, &references).unwrap();
+        }
+        assert_eq!(
+            answer_reference_definition("[   ]: https://example.invalid/", None),
+            None
+        );
+        assert_eq!(answer_reference_definition("[99]:   ", None), None);
     }
     #[tokio::test]
     async fn media_chat_mock_http_carries_history_and_temporary_model_without_role_changes() {

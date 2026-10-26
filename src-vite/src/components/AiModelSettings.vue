@@ -388,6 +388,7 @@ async function importModel() {
 watch(task, () => { choose(view.value?.selection[task.value]); });
 onMounted(async () => {
   unlisten.push(pendingChanges.register('model-settings', {
+    scope: 'settings',
     dirty: () => !!mediaSettings.value?.dirty || draftDirty.value || !!apiKey.value || !!manifest.value.trim(),
     busy: () => writeBusy.value || !!mediaSettings.value?.busy,
     revision: () => JSON.stringify([editingId.value, draft.value, apiKey.value, manifest.value, mediaSettings.value?.revision]),

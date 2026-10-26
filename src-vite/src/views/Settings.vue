@@ -657,7 +657,7 @@ const appWindow = getCurrentWebviewWindow()
 const aiModelsRef = ref<{ confirmDiscard: () => Promise<boolean>; changeTask: (task: string) => Promise<boolean> } | null>(null);
 let disposed = false;
 let changingTab = false;
-async function confirmDiscard() { return pendingChanges.confirmOne('model-settings'); }
+async function confirmDiscard() { return pendingChanges.confirm('settings'); }
 async function selectSettingsTab(id: number) {
   if (disposed || changingTab || !settingsTabs.some(tab => tab.id === id)) return false;
   if (id === config.settings.tabIndex) return true;

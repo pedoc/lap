@@ -35,6 +35,7 @@ pub(crate) enum SidecarTransferSource {
     },
     AppleAae {
         old_path: PathBuf,
+        owner_path: PathBuf,
     },
 }
 
@@ -48,14 +49,13 @@ pub(crate) fn build_apple_sidecar_rename_plan(
     new_name: &str,
 ) -> Result<Vec<SidecarRenamePlan>, String> {
     let components = AFile::live_photo_component_files(file_id)?;
-    build_rename_plan(file_path, new_name, &components, apple_aae_sidecar_paths(file_path))
+    build_rename_plan(file_path, new_name, &components)
 }
 
 fn build_rename_plan(
     file_path: &str,
     new_name: &str,
     components: &[AFile],
-    aae_paths: Vec<PathBuf>,
 ) -> Result<Vec<SidecarRenamePlan>, String> {
     let primary_path = Path::new(file_path);
     let new_stem = Path::new(new_name)
@@ -77,10 +77,20 @@ fn build_rename_plan(
         }
     }
 
-    if let Some(parent) = primary_path.parent() {
-        for old_path in aae_paths {
+    for source in sidecar_transfer_sources(file_path, components) {
+        if let SidecarTransferSource::AppleAae {
+            old_path,
+            owner_path,
+        } = source
+        {
+            let parent = owner_path
+                .parent()
+                .ok_or("AAE owner has no parent folder")?;
+            let owner_name =
+                sidecar_owner_target_name(&owner_path, primary_path, new_name, new_stem)
+                    .ok_or("AAE owner has no valid file name")?;
             if let Some(plan) =
-                build_aae_rename_plan(primary_path, parent, &old_path, new_name, new_stem)
+                build_aae_rename_plan(&owner_path, parent, &old_path, &owner_name, new_stem)
             {
                 if seen_sidecar_paths.insert(normalize_sidecar_path_key(&plan.old_path)) {
                     plans.push(plan);
@@ -107,7 +117,12 @@ pub(crate) fn preflight_rename_plan(
         return false;
     }
 
+    let mut targets = HashSet::from([normalize_sidecar_path_key(&primary_target)]);
     for plan in sidecar_plans {
+        if !targets.insert(normalize_sidecar_path_key(&plan.new_path)) {
+            eprintln!("The media group contains overlapping rename targets");
+            return false;
+        }
         if !plan.old_path.exists() {
             eprintln!("Sidecar file does not exist: {}", plan.old_path.display());
             return false;
@@ -384,16 +399,19 @@ fn resolve_apple_sidecar_transfer_sources(
     file_id: Option<i64>,
     file_path: &str,
 ) -> Result<Vec<SidecarTransferSource>, String> {
-    let mut seen_paths = HashSet::new();
-
     let component_files = if let Some(file_id) = file_id {
         AFile::live_photo_component_files(file_id)?
     } else {
         live_photo_component_files_for_path(file_path)?
     };
 
+    Ok(sidecar_transfer_sources(file_path, &component_files))
+}
+
+fn sidecar_transfer_sources(file_path: &str, components: &[AFile]) -> Vec<SidecarTransferSource> {
+    let mut seen_paths = HashSet::from([normalize_sidecar_path_key(Path::new(file_path))]);
     let mut sources = Vec::new();
-    for component in component_files {
+    for component in components {
         if let Some(path) = component.file_path.as_deref() {
             let old_path = PathBuf::from(path);
             if seen_paths.insert(normalize_sidecar_path_key(&old_path)) {
@@ -405,13 +423,23 @@ fn resolve_apple_sidecar_transfer_sources(
         }
     }
 
-    for sidecar in apple_aae_sidecar_paths(file_path) {
-        if seen_paths.insert(normalize_sidecar_path_key(&sidecar)) {
-            sources.push(SidecarTransferSource::AppleAae { old_path: sidecar });
+    let owners = std::iter::once(Path::new(file_path)).chain(
+        components
+            .iter()
+            .filter_map(|file| file.file_path.as_deref().map(Path::new)),
+    );
+    let mut cache = ImportAaeCache::default();
+    for owner in owners {
+        for sidecar in cache.paths(owner) {
+            if seen_paths.insert(normalize_sidecar_path_key(&sidecar)) {
+                sources.push(SidecarTransferSource::AppleAae {
+                    old_path: sidecar,
+                    owner_path: owner.to_path_buf(),
+                });
+            }
         }
     }
-
-    Ok(sources)
+    sources
 }
 
 fn build_apple_sidecar_transfer_plan_from_sources(
@@ -448,9 +476,15 @@ fn build_apple_sidecar_transfer_plan_from_sources(
                     });
                 }
             }
-            SidecarTransferSource::AppleAae { old_path } => {
+            SidecarTransferSource::AppleAae {
+                old_path,
+                owner_path,
+            } => {
+                let owner_name =
+                    sidecar_owner_target_name(owner_path, primary_path, target_name, target_stem)
+                        .ok_or("AAE owner has no valid file name")?;
                 if let Some(new_name) =
-                    build_aae_transfer_target_name(primary_path, old_path, target_name, target_stem)
+                    build_aae_transfer_target_name(owner_path, old_path, &owner_name, target_stem)
                 {
                     let new_path = target_parent.join(new_name);
                     if old_path != &new_path {
@@ -464,7 +498,29 @@ fn build_apple_sidecar_transfer_plan_from_sources(
             }
         }
     }
+    let mut targets = HashSet::from([normalize_sidecar_path_key(primary_target)]);
+    if plans
+        .iter()
+        .any(|plan| !targets.insert(normalize_sidecar_path_key(&plan.new_path)))
+    {
+        return Err("The media group contains overlapping transfer targets".into());
+    }
     Ok(plans)
+}
+
+fn sidecar_owner_target_name(
+    owner: &Path,
+    primary: &Path,
+    target_name: &str,
+    target_stem: &str,
+) -> Option<String> {
+    if owner == primary {
+        return Some(target_name.to_string());
+    }
+    owner
+        .extension()?
+        .to_str()
+        .map(|extension| format!("{target_stem}.{extension}"))
 }
 
 fn build_aae_transfer_target_name(
@@ -526,6 +582,14 @@ pub(crate) fn resolve_group_primary_target(
             &base_target,
             &sidecar_sources,
         )?;
+        let targets = std::iter::once(base_target.clone())
+            .chain(sidecar_plans.iter().map(|plan| plan.new_path.clone()))
+            .collect::<Vec<_>>();
+        crate::t_media_lifecycle::validate_transfer_targets_on(
+            &*crate::t_sqlite::open_conn()?,
+            &targets,
+            true,
+        )?;
         return Ok((base_target, sidecar_plans));
     }
 
@@ -537,6 +601,19 @@ pub(crate) fn resolve_group_primary_target(
             &sidecar_sources,
         )?;
         if !group_target_conflicts(&primary_target, &sidecar_plans) {
+            let targets = std::iter::once(primary_target.clone())
+                .chain(sidecar_plans.iter().map(|plan| plan.new_path.clone()))
+                .collect::<Vec<_>>();
+            if let Err(error) = crate::t_media_lifecycle::validate_transfer_targets_on(
+                &*crate::t_sqlite::open_conn()?,
+                &targets,
+                false,
+            ) {
+                if error.starts_with("DESTINATION_EXISTS:") {
+                    continue;
+                }
+                return Err(error);
+            }
             return Ok((primary_target, sidecar_plans));
         }
     }
@@ -558,33 +635,19 @@ fn push_replaced_file_id(
 }
 
 pub(crate) fn collect_replaced_file_ids_for_targets<'a, I>(
-    folder_id: i64,
     targets: I,
     source_file_ids: &HashSet<i64>,
     replaced_file_ids: &mut Vec<i64>,
-) where
+) -> Result<(), String>
+where
     I: IntoIterator<Item = &'a PathBuf>,
 {
-    for target in targets {
-        let Some(target_path) = target.to_str() else {
-            continue;
-        };
-        let Some(replaced_file) = AFile::fetch(folder_id, target_path).ok().flatten() else {
-            continue;
-        };
-        let Some(replaced_file_id) = replaced_file.id else {
-            continue;
-        };
-
-        push_replaced_file_id(replaced_file_id, source_file_ids, replaced_file_ids);
-        if let Ok(components) = AFile::live_photo_component_files(replaced_file_id) {
-            for component in components {
-                if let Some(component_id) = component.id {
-                    push_replaced_file_id(component_id, source_file_ids, replaced_file_ids);
-                }
-            }
-        }
+    let targets = targets.into_iter().cloned().collect::<Vec<_>>();
+    let conn = crate::t_sqlite::open_conn()?;
+    for file_id in crate::t_media_lifecycle::validate_transfer_targets_on(&conn, &targets, true)? {
+        push_replaced_file_id(file_id, source_file_ids, replaced_file_ids);
     }
+    Ok(())
 }
 
 pub(crate) fn rollback_copied_transfers(transfers: Vec<t_utils::TransferResult>) {
@@ -600,7 +663,11 @@ pub(crate) fn rollback_copied_transfers(transfers: Vec<t_utils::TransferResult>)
 // ---------------------------------------------------------------------------
 
 fn normalize_sidecar_path_key(path: &Path) -> String {
-    path.to_string_lossy().to_ascii_lowercase()
+    // Joined targets and caller paths can spell Windows separators differently.
+    path.components()
+        .collect::<PathBuf>()
+        .to_string_lossy()
+        .to_ascii_lowercase()
 }
 
 fn build_sidecar_rename_plan(
@@ -745,8 +812,57 @@ pub(crate) fn looks_like_content_identifier(value: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "t_apple_sidecar_aae_tests.rs"]
+mod aae_owner_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_plans_keep_raw_jpeg_live_members_distinct_and_reject_colliding_extensions() {
+        let source = Path::new("source/photo.raw");
+        let destination = Path::new("target/photo(1).raw");
+        let sources = vec![
+            SidecarTransferSource::LivePhoto {
+                old_path: PathBuf::from("source/photo.jpg"),
+                file_id: Some(2),
+            },
+            SidecarTransferSource::LivePhoto {
+                old_path: PathBuf::from("source/photo.mov"),
+                file_id: Some(3),
+            },
+        ];
+        let plans = build_apple_sidecar_transfer_plan_from_sources(
+            &source.to_string_lossy(),
+            destination,
+            &sources,
+        )
+        .unwrap();
+        assert_eq!(
+            plans
+                .iter()
+                .map(|plan| (plan.file_id, plan.new_path.as_path()))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(2), Path::new("target/photo(1).jpg")),
+                (Some(3), Path::new("target/photo(1).mov"))
+            ]
+        );
+        let mut colliding = sources;
+        colliding.push(SidecarTransferSource::LivePhoto {
+            old_path: PathBuf::from("source/another.raw"),
+            file_id: Some(4),
+        });
+        assert!(
+            build_apple_sidecar_transfer_plan_from_sources(
+                &source.to_string_lossy(),
+                destination,
+                &colliding
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn indexed_aae_lookup_matches_both_conventions_and_records_new_imports() {

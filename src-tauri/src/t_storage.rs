@@ -42,10 +42,10 @@ impl Drop for DbConnectionLease {
     }
 }
 
-struct DbMigrationGuard;
+pub(crate) struct DbMigrationGuard;
 
 impl DbMigrationGuard {
-    fn acquire() -> Result<Self, String> {
+    pub(crate) fn acquire() -> Result<Self, String> {
         DB_MIGRATION_IN_PROGRESS
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| "Database storage migration is already in progress.".to_string())?;
@@ -79,7 +79,10 @@ fn get_db_storage_dir_from_config(config: &AppConfig) -> Result<PathBuf, String>
     }
 }
 
-fn get_library_db_path_from_config(config: &AppConfig, library_id: &str) -> Result<String, String> {
+pub(crate) fn get_library_db_path_from_config(
+    config: &AppConfig,
+    library_id: &str,
+) -> Result<String, String> {
     let db_dir = get_db_storage_dir_from_config(config)?;
     Ok(db_dir
         .join(format!("{}.db", library_id))
@@ -180,7 +183,7 @@ pub fn reset_db_storage_dir() -> Result<DbStorageChangeResult, String> {
 
 fn migrate_db_storage(new_dir: Option<&str>) -> Result<DbStorageChangeResult, String> {
     let _migration_guard = DbMigrationGuard::acquire()?;
-    let mut config = t_config::load_app_config()?;
+    let config = t_config::load_app_config()?;
     let target_dir = match new_dir {
         Some(dir) => PathBuf::from(dir),
         None => t_config::get_libraries_dir()?,
@@ -207,8 +210,22 @@ fn migrate_db_storage(new_dir: Option<&str>) -> Result<DbStorageChangeResult, St
             migrated_libraries.push(library.clone());
         }
     }
-    config.db_storage_dir = new_dir.map(|_| path.clone());
-    t_config::save_app_config(&config)?;
+    t_config::update_app_config(|current| {
+        let library_ids = |value: &AppConfig| {
+            value
+                .libraries
+                .iter()
+                .map(|library| library.id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        if current.db_storage_dir != config.db_storage_dir
+            || library_ids(current) != library_ids(&config)
+        {
+            return Err("Libraries or database location changed during migration; retry".into());
+        }
+        current.db_storage_dir = new_dir.map(|_| path.clone());
+        Ok(())
+    })?;
 
     let cleanup_warnings = if current_dir != target_dir {
         cleanup_old_databases(&current_dir, &migrated_libraries)

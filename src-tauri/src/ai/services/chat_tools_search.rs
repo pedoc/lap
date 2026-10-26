@@ -303,7 +303,7 @@ fn ranked(
             ))
         })
         .map_err(store::sql_error)?;
-    store::rank_vectors(rows, query, limit)
+    store::rank_vectors(rows, query, limit, store::SearchUnit::Segments)
 }
 fn hit_current(
     c: &Connection,

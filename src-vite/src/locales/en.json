@@ -2976,6 +2976,7 @@
     "proxy_hint": "Tiles and address requests use the application proxy in General. Offline location lookup needs no network; map display is still online.",
     "saved": "Saved and applied to map windows",
     "reload": "Reload configuration",
+    "discard": "Discard your unsaved map service configuration?",
     "save": "Save and apply",
     "saving": "Saving…",
     "gps_placeholder": "GPS is (0,0), a suspected placeholder. Address resolution and nearest-city guesses are skipped; original GPS is unchanged.",
@@ -3108,6 +3109,11 @@
   }
 },
   "media_lifecycle": {
+    "private_folder_operation": "This folder contains hidden media. Unhide those items in the private view before modifying, copying or exporting the folder.",
+    "file_transfer_private": "The source or destination contains hidden or deleted media. Unhide or restore the affected items in the private view before retrying; choose Keep both to avoid replacing a private destination.",
+    "file_transfer_group": "Replacing this destination would leave an incomplete RAW or Live Photo group. Choose Keep both, or organize the complete destination group first.",
+    "file_transfer_stale": "The destination folder changed. Select its current location and retry.",
+    "file_transfer_recovery": "This destination is reserved for recovery. Finish restoring the affected items or choose another folder.",
     "partial_failed": "{count} operation(s) failed; see Recently Deleted for the retained recovery record.",
     "move_deleted": "Move to Recently Deleted",
     "move_confirm": "Move these hidden originals to Recently Deleted? Their hidden state and metadata are retained; restoring keeps them hidden.",
