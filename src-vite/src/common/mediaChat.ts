@@ -24,7 +24,7 @@ export type ChatPhase = 'queued' | 'preparing' | 'waiting' | 'thinking' | 'respo
 export type ChatToolScope = 'references' | 'library';
 export const CHAT_CONTEXT_FIELDS = ['file', 'tags', 'people', 'objects', 'ocr', 'exif', 'analysis', 'location'] as const;
 export type ChatContextField = typeof CHAT_CONTEXT_FIELDS[number];
-export const DEFAULT_CHAT_CONTEXT_FIELDS: readonly ChatContextField[] = CHAT_CONTEXT_FIELDS.filter(field => field !== 'location');
+export const DEFAULT_CHAT_CONTEXT_FIELDS: readonly ChatContextField[] = CHAT_CONTEXT_FIELDS;
 export function normalizeChatContextFields(value: unknown): ChatContextField[] {
   return Array.isArray(value) ? CHAT_CONTEXT_FIELDS.filter(field => value.includes(field)) : [...DEFAULT_CHAT_CONTEXT_FIELDS];
 }

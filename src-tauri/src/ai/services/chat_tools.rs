@@ -10,13 +10,16 @@ use std::collections::HashSet;
 #[path = "chat_tools_search.rs"]
 mod search;
 
+pub(super) const CONTEXT_FIELDS: [&str; 8] = [
+    "file", "tags", "people", "objects", "ocr", "exif", "analysis", "location",
+];
 pub struct ToolContext {
     pub library_id: String,
     pub request_id: String,
     pub app: Option<tauri::AppHandle>,
     pub model: config::Resolved,
     pub scope_file_ids: Option<Vec<i64>>,
-    pub allowed_fields: Vec<String>,
+    pub prefetch_fields: Vec<String>,
 }
 pub struct ToolOutput {
     pub json: Value,
@@ -43,7 +46,7 @@ pub fn definitions() -> Vec<Tool> {
     let mut out = vec![
         tool(
             "get_media_info",
-            "Read existing catalogue data for visible media. Request only needed fields. Does not run recognition. People names distinguish confirmed/suggested/unknown; regions and index state include coverage. Position describes the face center in the displayed image only when coordinate alignment is known. Local paths and embeddings are never returned.",
+            "Read existing catalogue data for visible media. Explicit fields can request categories omitted from automatic context; omitted fields default only to the user's automatic-context selection. Request only needed fields. Does not run recognition. People names distinguish confirmed/suggested/unknown; regions and index state include coverage. Position describes the face center in the displayed image only when coordinate alignment is known. Local paths and embeddings are never returned.",
             json!({"type":"object","properties":{"file_ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"maxItems":16},"fields":{"type":"array","items":{"type":"string","enum":["file","tags","people","objects","ocr","exif","location","analysis"]},"uniqueItems":true}},"required":["file_ids"],"additionalProperties":false}),
         ),
         tool(
@@ -70,12 +73,6 @@ pub async fn execute(
         "search_media" => search::execute(library, &call.fn_arguments, ctx).await,
         _ => super::chat_tools_workflow::execute(library, call, ctx).await,
     }
-}
-pub(super) fn permitted(ctx: &ToolContext, field: &str) -> bool {
-    ctx.allowed_fields.iter().any(|value| value == field)
-}
-pub(super) fn denied(reason: &str) -> ToolOutput {
-    ToolOutput::value(json!({"status":"denied","reason":reason}))
 }
 pub(super) fn check_scope(ids: &[i64], ctx: &ToolContext) -> Result<(), String> {
     if ids.is_empty() || ids.len() > 16 || ids.iter().any(|id| *id <= 0) {
@@ -229,20 +226,22 @@ struct InfoArgs {
     file_ids: Vec<i64>,
     fields: Option<Vec<String>>,
 }
+fn info_fields(requested: Option<Vec<String>>, ctx: &ToolContext) -> Result<Vec<String>, String> {
+    let fields = requested.unwrap_or_else(|| ctx.prefetch_fields.clone());
+    if fields.len() > CONTEXT_FIELDS.len()
+        || fields
+            .iter()
+            .any(|field| !CONTEXT_FIELDS.contains(&field.as_str()))
+    {
+        return Err("get_media_info 资料类别无效。".into());
+    }
+    Ok(fields)
+}
 fn info(library: &str, args: &Value, ctx: &ToolContext) -> Result<ToolOutput, String> {
     let args: InfoArgs =
         serde_json::from_value(args.clone()).map_err(|_| "get_media_info 参数无效".to_string())?;
     check_scope(&args.file_ids, ctx)?;
-    let fields = args.fields.unwrap_or_else(|| ctx.allowed_fields.clone());
-    if fields.iter().any(|f| {
-        ![
-            "file", "tags", "people", "objects", "ocr", "exif", "location", "analysis",
-        ]
-        .contains(&f.as_str())
-            || !permitted(ctx, f)
-    }) {
-        return Ok(denied("请求了本轮未授权的资料类别。"));
-    }
+    let fields = info_fields(args.fields, ctx)?;
     let configuration = config::load()?;
     store::db(library, |c| {
         info_on(c, &args.file_ids, &fields, &configuration)
@@ -519,7 +518,7 @@ fn people_on(c: &Connection, src: &store::MediaSource, profile: &str) -> Result<
     let truncated = items.len() > 100;
     items.truncate(100);
     Ok(
-        json!({"status":if items.is_empty()&&!compatible&&scanned!=0{"stale"}else if scanned==0&&items.is_empty(){"not_indexed"}else{"ready"},"items":items,"truncated":truncated,"modelCompatible":compatible,"scanComplete":scanned!=0&&compatible,"coverage":if scanned!=0&&compatible{"indexed_image"}else{"manual_regions_only"},"positionStatus":if src.orientation==1{"display_aligned"}else{"coordinate_alignment_unknown"},"coordinateSpace":{"units":"normalized","basis":"face_catalog","origin":"top_left","regionFormat":"x_y_width_height","width":src.width,"height":src.height,"exifOrientation":src.orientation,"cropSupported":src.orientation==1}}),
+        json!({"status":if items.is_empty()&&!compatible&&scanned!=0{"stale"}else if scanned==0&&items.is_empty(){"not_indexed"}else{"ready"},"regionType":"face","items":items,"truncated":truncated,"modelCompatible":compatible,"scanComplete":scanned!=0&&compatible,"coverage":if scanned!=0&&compatible{"indexed_image"}else{"manual_regions_only"},"positionStatus":if src.orientation==1{"display_aligned"}else{"coordinate_alignment_unknown"},"coordinateSpace":{"units":"normalized","basis":"face_catalog","origin":"top_left","regionFormat":"x_y_width_height","width":src.width,"height":src.height,"exifOrientation":src.orientation,"cropSupported":src.orientation==1}}),
     )
 }
 fn objects(c: &Connection, id: i64) -> Result<Value, String> {
@@ -542,7 +541,7 @@ fn objects_on(c: &Connection, id: i64, profile: &str) -> Result<Value, String> {
     document.objects.truncate(100);
     let items:Vec<_>=document.objects.iter().map(|object|json!({"id":object.id,"class":{"key":object.class.key,"name":limited(&object.class.name,128)},"score":object.score,"reviewed":object.reviewed,"bounds":object.bounds})).collect();
     Ok(
-        json!({"status":"ready","source":if manual{"manual"}else{"automatic"},"revision":revision,"coordinateSpace":{"units":"normalized","basis":"decoded_image","width":document.image_width,"height":document.image_height},"items":items,"truncated":document.truncated||count>100}),
+        json!({"status":"ready","regionType":"object","source":if manual{"manual"}else{"automatic"},"revision":revision,"coordinateSpace":{"units":"normalized","basis":"decoded_image","origin":"top_left","regionFormat":"x_y_width_height","width":document.image_width,"height":document.image_height},"items":items,"truncated":document.truncated||count>100}),
     )
 }
 fn ocr(c: &Connection, id: i64) -> Result<Value, String> {
@@ -563,7 +562,7 @@ fn ocr_on(c: &Connection, id: i64, profile: &str) -> Result<Value, String> {
     };
     let lines:Vec<_>=document.lines.iter().take(100).map(|line|json!({"text":limited(&line.text,1000),"confidence":line.confidence,"bounds":line.bounds})).collect();
     Ok(
-        json!({"status":"ready","source":if manual{"manual"}else{"automatic"},"revision":revision,"text":limited(&document.text,12000),"items":lines,"truncated":document.lines.len()>100||document.text.chars().count()>12000,"coordinateSpace":{"units":"normalized","basis":"ocr_document","width":document.image_width,"height":document.image_height,"rotationDegrees":document.rotation_degrees,"deskewDegrees":document.deskew_degrees}}),
+        json!({"status":"ready","regionType":"text_line","source":if manual{"manual"}else{"automatic"},"revision":revision,"text":limited(&document.text,12000),"items":lines,"truncated":document.lines.len()>100||document.text.chars().count()>12000,"coordinateSpace":{"units":"normalized","basis":"ocr_document","origin":"top_left","regionFormat":"x_y_width_height","width":document.image_width,"height":document.image_height},"processing":{"rotationDegrees":document.rotation_degrees,"deskewDegrees":document.deskew_degrees,"boundsMapping":"already_mapped_to_input"}}),
     )
 }
 fn location(c: &Connection, id: i64, available: &HashSet<String>) -> Result<Value, String> {
@@ -761,7 +760,7 @@ async fn content(library: &str, args: &Value, ctx: &ToolContext) -> Result<ToolO
             &args,
             reference,
             parts,
-            &ctx.allowed_fields,
+            &ctx.prefetch_fields,
             &configuration,
         )
     })
@@ -793,12 +792,7 @@ mod tests {
             app: None,
             model: store::tests::model("chat"),
             scope_file_ids: Some(vec![1, 2, 3]),
-            allowed_fields: vec![
-                "file", "tags", "people", "objects", "ocr", "exif", "analysis",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
+            prefetch_fields: CONTEXT_FIELDS.into_iter().map(str::to_owned).collect(),
         }
     }
     fn call(name: &str, args: Value) -> ToolCall {
@@ -814,7 +808,8 @@ mod tests {
         face_annotations::ensure_schema(c).unwrap();
     }
     #[tokio::test]
-    async fn assistant_tools_deny_wrong_library_scope_fields_and_unbounded_search_before_io() {
+    async fn assistant_tools_reject_wrong_library_scope_unknown_fields_and_unbounded_search_before_io()
+     {
         let ctx = context();
         assert!(
             execute(
@@ -828,17 +823,15 @@ mod tests {
             .contains("wrong_library")
         );
         assert!(check_scope(&[99], &ctx).is_err());
-        let output = execute(
+        let error = execute(
             "library-a",
-            &call(
-                "get_media_info",
-                json!({"file_ids":[1],"fields":["location"]}),
-            ),
+            &call("get_media_info", json!({"file_ids":[1],"fields":["path"]})),
             &ctx,
         )
         .await
+        .err()
         .unwrap();
-        assert_eq!(output.json["status"], "denied");
+        assert!(error.contains("资料类别无效"));
         assert!(
             execute(
                 "library-a",
@@ -862,19 +855,23 @@ mod tests {
             .await
             .is_err()
         );
-        let mut none = context();
-        none.allowed_fields.clear();
-        let output = execute(
-            "library-a",
-            &call(
-                "search_media",
-                json!({"limit":2,"mode":"structured","person_ids":[1]}),
-            ),
-            &none,
-        )
-        .await
-        .unwrap();
-        assert_eq!(output.json["status"], "denied");
+    }
+    #[test]
+    fn explicit_tool_fields_are_independent_of_automatic_context_selection() {
+        let (c, _dir) = store::tests::fixture();
+        c.execute_batch("ALTER TABLE afiles ADD COLUMN gps_latitude REAL;ALTER TABLE afiles ADD COLUMN gps_longitude REAL;UPDATE afiles SET gps_latitude=12.5,gps_longitude=34.5 WHERE id=1;INSERT INTO afile_tags VALUES(1,1);").unwrap();
+        let mut ctx = context();
+        ctx.prefetch_fields.clear();
+        assert!(info_fields(None, &ctx).unwrap().is_empty());
+        let explicit = info_fields(Some(vec!["location".into(), "tags".into()]), &ctx).unwrap();
+        let configuration = config::Configuration::default();
+        let output = info_on(&c, &[1], &explicit, &configuration).unwrap();
+        assert_eq!(output.json["items"][0]["location"]["latitude"], 12.5);
+        assert_eq!(output.json["items"][0]["tags"]["items"][0]["id"], 1);
+        let automatic =
+            context_on(&c, &output.references, &ctx.prefetch_fields, &configuration).unwrap();
+        assert!(automatic["items"].as_array().unwrap().is_empty());
+        assert!(info_fields(Some(vec!["path".into()]), &ctx).is_err());
     }
     #[test]
     fn assistant_info_is_a_whitelist_and_unknown_faces_are_not_named() {
@@ -910,6 +907,7 @@ mod tests {
                 .any(|f| f["state"] == "confirmed" && f["name"] == "Visible Name")
         );
         let named = faces.iter().find(|f| f["name"] == "Visible Name").unwrap();
+        assert_eq!(output.json["items"][0]["people"]["regionType"], "face");
         assert_eq!(named["position"]["horizontal"], "left");
         assert_eq!(named["position"]["subject"], "face_center");
         assert_eq!(named["region"]["width"], json!(0.2f32));
@@ -1048,13 +1046,38 @@ mod tests {
         c.execute("INSERT INTO object_annotations VALUES(1,?1,?2,'profile','Fixture',?3,'{}',?4,1,1,'revision-1')",params![src.modified,src.size,dog.to_string(),cat.to_string()]).unwrap();
         let result = objects_on(&c, 1, "profile").unwrap();
         assert_eq!(result["source"], "manual");
+        assert_eq!(result["regionType"], "object");
+        assert_eq!(result["coordinateSpace"]["basis"], "decoded_image");
+        assert_eq!(result["coordinateSpace"]["origin"], "top_left");
+        assert_eq!(
+            result["coordinateSpace"]["regionFormat"],
+            "x_y_width_height"
+        );
         assert_eq!(result["items"][0]["class"]["name"], "cat");
         assert_eq!(result["revision"], "revision-1");
-        let document = json!({"text":"automatic","lines":[{"text":"automatic","confidence":0.8,"bounds":[0.1,0.2,0.3,0.1]}],"imageWidth":1000,"imageHeight":1000});
+        let document = json!({"text":"automatic","lines":[{"text":"automatic","confidence":0.8,"bounds":[0.1,0.2,0.3,0.1]}],"imageWidth":1000,"imageHeight":1000,"rotationDegrees":90,"deskewDegrees":2.5});
         c.execute("INSERT INTO ocr_index(file_id,profile,modified_at,size,document,text,error) VALUES(1,'ocr-profile',?1,?2,?3,'automatic',NULL)",params![src.modified,src.size,document.to_string()]).unwrap();
         c.execute("INSERT INTO ocr_annotations VALUES(1,?1,?2,'ocr-profile','Fixture',?3,?4,?3,'human','ocr-revision')",params![src.modified,src.size,document.to_string(),json!([{"text":"human","ignored":false}]).to_string()]).unwrap();
         let result = ocr_on(&c, 1, "ocr-profile").unwrap();
         assert_eq!(result["source"], "manual");
+        assert_eq!(result["regionType"], "text_line");
+        assert_eq!(result["coordinateSpace"]["basis"], "ocr_document");
+        assert_eq!(result["coordinateSpace"]["origin"], "top_left");
+        assert_eq!(
+            result["coordinateSpace"]["regionFormat"],
+            "x_y_width_height"
+        );
+        assert_eq!(
+            result["processing"]["boundsMapping"],
+            "already_mapped_to_input"
+        );
+        assert_eq!(result["processing"]["rotationDegrees"], 90);
+        assert_eq!(result["processing"]["deskewDegrees"], 2.5);
+        assert_eq!(
+            result["items"][0]["bounds"],
+            json!([0.1f32, 0.2f32, 0.3f32, 0.1f32])
+        );
+        assert!(result["coordinateSpace"].get("rotationDegrees").is_none());
         assert_eq!(result["text"], "human");
         assert_eq!(result["items"][0]["text"], "human");
     }

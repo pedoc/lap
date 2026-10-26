@@ -1,4 +1,4 @@
-use super::{ToolContext, ToolOutput, check_scope, denied, limited, permitted, reference_on, tool};
+use super::{ToolContext, ToolOutput, check_scope, limited, reference_on, tool};
 use crate::ai::{
     media,
     services::{client, config, store, workflow},
@@ -267,8 +267,8 @@ fn profile(model: &config::Resolved, source: &str) -> Result<String, String> {
         model.embedding_profile()
     }
 }
-fn default_source(configuration: &config::Configuration, ctx: &ToolContext) -> &'static str {
-    if permitted(ctx, "analysis") && configuration.role("embedding").is_ok() {
+fn default_source(configuration: &config::Configuration) -> &'static str {
+    if configuration.role("embedding").is_ok() {
         "analysis"
     } else {
         "media"
@@ -337,11 +337,7 @@ fn hit_current(
         c.query_row("SELECT EXISTS(SELECT 1 FROM media_ai_visual_vectors WHERE id=?1 AND file_id=?2 AND stamp=?3)",rusqlite::params![hit.analysis_id,hit.file_id,src.stamp()],|r|r.get(0)).map_err(store::sql_error)
     }
 }
-pub(super) async fn execute(
-    library: &str,
-    value: &Value,
-    ctx: &ToolContext,
-) -> Result<ToolOutput, String> {
+fn parse_args(value: &Value) -> Result<Args, String> {
     let mut args: Args =
         serde_json::from_value(value.clone()).map_err(|_| "search_media 参数无效".to_string())?;
     if args.limit < 1
@@ -376,23 +372,14 @@ pub(super) async fn execute(
     {
         return Err("名称条件过长或条件数量超过8项。".into());
     }
-    if (!args.file_name.is_empty()
-        || args.date_from.is_some()
-        || args.date_to.is_some()
-        || args.mode == "structured" && !args.query.is_empty())
-        && !permitted(ctx, "file")
-    {
-        return Ok(denied("文件条件未获授权。"));
-    }
-    if (!args.person_ids.is_empty() || !args.person_names.is_empty()) && !permitted(ctx, "people") {
-        return Ok(denied("人物条件未获授权。"));
-    }
-    if (!args.tag_ids.is_empty() || !args.tag_names.is_empty()) && !permitted(ctx, "tags") {
-        return Ok(denied("标签条件未获授权。"));
-    }
-    if args.mode != "structured" && args.source == "analysis" && !permitted(ctx, "analysis") {
-        return Ok(denied("分析文本检索未获授权。"));
-    }
+    Ok(args)
+}
+pub(super) async fn execute(
+    library: &str,
+    value: &Value,
+    ctx: &ToolContext,
+) -> Result<ToolOutput, String> {
+    let mut args = parse_args(value)?;
     let configuration = if args.mode != "structured" {
         Some(config::load()?)
     } else {
@@ -401,7 +388,7 @@ pub(super) async fn execute(
     if args.source.is_empty() {
         args.source = configuration
             .as_ref()
-            .map(|c| default_source(c, ctx))
+            .map(default_source)
             .unwrap_or("analysis")
             .into();
     }
@@ -549,16 +536,13 @@ pub(super) async fn execute(
             if args.mode != "structured" {
                 item["score"] = json!(hit.score)
             }
-            if permitted(ctx, "file") {
-                item["name"] = json!(
-                    std::path::Path::new(&src.path)
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                )
-            }
-            if args.mode != "structured" && args.source == "analysis" && permitted(ctx, "analysis")
-            {
+            item["name"] = json!(
+                std::path::Path::new(&src.path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            );
+            if args.mode != "structured" && args.source == "analysis" {
                 item["title"] = json!(limited(&hit.title, 256));
                 item["description"] = json!(limited(&hit.description, 2000));
             }
@@ -715,7 +699,8 @@ mod tests {
     fn person_name_resolution_and_filters_share_current_profile_and_manual_precedence() {
         let (c, _dir) = store::tests::fixture();
         c.execute_batch("ALTER TABLE afiles ADD COLUMN taken_date INTEGER;ALTER TABLE afiles ADD COLUMN has_faces INTEGER DEFAULT 1;CREATE TABLE persons(id INTEGER PRIMARY KEY,name TEXT,hidden INTEGER);CREATE TABLE faces(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER,annotation_id INTEGER);CREATE TABLE ai_index_profiles(task TEXT PRIMARY KEY,fingerprint TEXT);INSERT INTO ai_index_profiles VALUES('face','face-profile');CREATE TABLE face_annotations(id INTEGER PRIMARY KEY,file_id INTEGER,person_id INTEGER,kind TEXT,source_modified_at INTEGER,source_size INTEGER);INSERT INTO persons VALUES(1,'Twin',0),(2,'Twin',0),(3,'Hidden',1),(4,'Stale',0);INSERT INTO faces VALUES(1,1,1,NULL),(2,3,3,NULL);INSERT INTO face_annotations SELECT 1,id,2,'confirmed',modified_at,size FROM afiles WHERE id=2;INSERT INTO face_annotations SELECT 2,id,4,'confirmed',modified_at-1,size FROM afiles WHERE id=3;").unwrap();
-        let ctx = super::super::tests::context();
+        let mut ctx = super::super::tests::context();
+        ctx.prefetch_fields.clear();
         let names = vec!["Twin".into()];
         let ambiguous = match resolve_names(&c, &names, true, &ctx, "face-profile").unwrap() {
             Err(output) => output,
@@ -741,7 +726,7 @@ mod tests {
         }
         let auto = match filters_on(
             &c,
-            &args(json!({"limit":2,"person_ids":[1]})),
+            &parse_args(&json!({"limit":2,"mode":"structured","person_ids":[1]})).unwrap(),
             &ctx,
             "different-profile",
         )
@@ -753,7 +738,7 @@ mod tests {
         assert!(ids(&c, &auto).is_empty());
         let manual = match filters_on(
             &c,
-            &args(json!({"limit":2,"person_ids":[2]})),
+            &parse_args(&json!({"limit":2,"mode":"structured","person_ids":[2]})).unwrap(),
             &ctx,
             "different-profile",
         )
@@ -778,13 +763,17 @@ mod tests {
     fn exact_filename_filters_escape_like_wildcards() {
         let (c, _dir) = store::tests::fixture();
         c.execute_batch("UPDATE afiles SET name='100% photo.jpg' WHERE id=1;UPDATE afiles SET name='100x photo.jpg' WHERE id=2;").unwrap();
-        let ctx = super::super::tests::context();
-        let selected = filter(&c, &args(json!({"limit":2,"file_name":"100%"})), &ctx);
+        let mut ctx = super::super::tests::context();
+        ctx.prefetch_fields.clear();
+        let selected = filter(
+            &c,
+            &parse_args(&json!({"limit":2,"mode":"structured","file_name":"100%"})).unwrap(),
+            &ctx,
+        );
         assert_eq!(ids(&c, &selected), vec![1]);
     }
     #[test]
     fn omitted_source_uses_text_only_embedding_configuration_without_multimodal_role() {
-        let ctx = super::super::tests::context();
         let mut embedding = store::tests::model("text-only");
         embedding.provider.kind = ProviderKind::Embedding;
         embedding.model.capabilities = [Capability::EmbedText].into_iter().collect();
@@ -793,16 +782,9 @@ mod tests {
         configuration.models.push(embedding.model.clone());
         configuration.roles.embedding = Some(embedding.model.id.clone());
         assert!(configuration.role("multimodalEmbedding").is_err());
-        assert_eq!(default_source(&configuration, &ctx), "analysis");
-        let mut no_analysis = ctx;
-        no_analysis.allowed_fields.retain(|f| f != "analysis");
-        assert_eq!(
-            default_source(&configuration, &no_analysis),
-            "media",
-            "a default cannot bypass the analysis grant"
-        );
+        assert_eq!(default_source(&configuration), "analysis");
         configuration.roles.embedding = None;
-        assert_eq!(default_source(&configuration, &no_analysis), "media");
+        assert_eq!(default_source(&configuration), "media");
     }
     #[test]
     fn late_rank_results_are_rechecked_after_source_or_filter_changes() {

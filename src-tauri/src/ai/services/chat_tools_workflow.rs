@@ -322,7 +322,7 @@ mod tests {
             scope_file_ids: Some(vec![1]),
             app: None,
             request_id: "request".into(),
-            allowed_fields: vec!["file".into(), "analysis".into()],
+            prefetch_fields: vec!["file".into(), "analysis".into()],
         }
     }
     #[test]

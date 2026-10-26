@@ -170,13 +170,13 @@ test('reasoning labels translate known levels and leave custom levels untouched 
   } finally { console.warn = warn; console.error = error; h.dispose(); i18n.dispose(); }
 });
 
-test('tool scope and information permissions are scoped to drafts and snapshotted when sending, with location off by default', async () => {
+test('tool scope and preloaded information are independent draft choices, with shooting location selected by default', async () => {
   const pending = deferred(), h = harness({ media_chat_send: () => pending.promise });
   try {
-    await h.boot(); assert.equal(h.api.toolScope.value, null); assert.equal(h.api.contextFields.value.includes('location'), false); assert.equal(h.api.toolsEnabled.value, true);
-    assert.equal(h.api.contextFields.value.length, 7);
+    await h.boot(); assert.equal(h.api.toolScope.value, null); assert.equal(h.api.contextFields.value.includes('location'), true); assert.equal(h.api.toolsEnabled.value, true);
+    assert.equal(h.api.contextFields.value.length, 8);
     h.api.toolScope.value = 'library'; h.api.contextFields.value = ['file', 'tags']; h.api.toolsEnabled.value = false;
-    await h.api.newSession(); assert.equal(h.api.toolScope.value, null); assert.equal(h.api.contextFields.value.includes('location'), false);
+    await h.api.newSession(); assert.equal(h.api.toolScope.value, null); assert.equal(h.api.contextFields.value.includes('location'), true);
     await h.api.selectSession('session-a'); assert.equal(h.api.toolScope.value, 'library'); assert.deepEqual(Array.from(h.api.contextFields.value), ['file', 'tags']); assert.equal(h.api.toolsEnabled.value, false);
     h.api.draft.value = 'Find photos'; const run = h.api.send();
     const sent = h.calls.find(([name]) => name === 'media_chat_send')[1];
@@ -779,7 +779,7 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.match(infoCall, /max-h-64 overflow-auto whitespace-pre-wrap break-all/);
     assert.doesNotMatch(html, /LOCAL_ONLY_SECRET_PATH|<script>unsafe/);
     assert.match(html, /media_chat.tool_awaiting_result/); assert.match(html, /media_chat.tool_empty_result/); assert.match(html, /Fixture read failed/);
-    const location = html.match(/<input[^>]*data-chat-context-field="location"[^>]*>/)![0]; assert.doesNotMatch(location, /checked/);
+    const location = html.match(/<input[^>]*data-chat-context-field="location"[^>]*>/)![0]; assert.match(location, /checked/);
     assert.doesNotMatch(html, /sourceStamp|"analysisId"|"arguments"/);
     assert.match(html, /ml-auto w-fit[^>]+data-chat-role="user"/); assert.match(html, /mr-auto w-full[^>]+data-chat-role="assistant"/);
     assert.doesNotMatch(html, /<aside|data-chat-reasoning-summary|data-chat-history-row/);
