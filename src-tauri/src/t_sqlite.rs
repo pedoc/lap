@@ -11636,3 +11636,41 @@ mod cloud_scan_tests {
     }
 
 }
+
+#[cfg(test)]
+mod gps_rational_tests {
+    use super::AFile;
+
+    #[test]
+    fn signed_and_unsigned_gps_fractions_produce_the_same_coordinates() {
+        let unsigned = exif::Value::Rational(vec![
+            exif::Rational { num: 30, denom: 1 },
+            exif::Rational { num: 15, denom: 1 },
+            exif::Rational { num: 30, denom: 1 },
+        ]);
+        let signed = exif::Value::SRational(vec![
+            exif::SRational { num: 30, denom: 1 },
+            exif::SRational { num: 15, denom: 1 },
+            exif::SRational { num: 30, denom: 1 },
+        ]);
+        let values = AFile::gps_rational_values(&signed).unwrap();
+        assert_eq!(Some(values.clone()), AFile::gps_rational_values(&unsigned));
+        let north = AFile::dms_to_decimal(&values, "N").unwrap();
+        assert!((north - 30.258333333333333).abs() < 1e-10);
+        assert_eq!(AFile::dms_to_decimal(&values, " \"S\" "), Some(-north));
+        assert_eq!(AFile::dms_to_decimal(&values, " 'W' "), Some(-north));
+    }
+
+    #[test]
+    fn malformed_gps_coordinates_do_not_become_finite_map_points() {
+        let invalid = exif::Value::SRational(vec![
+            exif::SRational { num: 1, denom: 0 },
+            exif::SRational { num: 0, denom: 1 },
+            exif::SRational { num: 0, denom: 1 },
+        ]);
+        let values = AFile::gps_rational_values(&invalid).unwrap();
+        assert_eq!(AFile::dms_to_decimal(&values, "N"), None);
+        assert_eq!(AFile::dms_to_decimal(&[30.0, 1.0], "N"), None);
+        assert_eq!(AFile::gps_rational_values(&exif::Value::Ascii(vec![])), None);
+    }
+}

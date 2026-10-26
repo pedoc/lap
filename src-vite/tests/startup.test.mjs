@@ -15,7 +15,7 @@ const storeSource = await readFile(new URL('../src/stores/configStore.js', impor
 
 async function fixture(customLoaders = {}) {
   const calls = [];
-  const loaders = Object.fromEntries(['en', 'zh-CN', 'ja', 'de'].map(language => [
+  const loaders = Object.fromEntries(['en', 'zh-CN', 'zh-TW', 'ja', 'de'].map(language => [
     `../locales/${language}.json`, async () => {
       calls.push(language);
       return { default: { title: language } };
@@ -34,6 +34,33 @@ test('startup loads only English and the selected language, mapping zh to zh-CN'
   assert.equal(i18n.global.locale.value, 'zh');
   assert.equal(i18n.global.getLocaleMessage('zh').title, 'zh-CN');
   assert.equal(i18n.global.availableLocales.includes('ja'), false);
+});
+
+test('system language maps Chinese scripts and safely falls back for unsupported locales', async () => {
+  const { resolveSystemLanguage } = await fixture();
+  for (const locale of ['zh-CN', 'zh_SG', 'zh-Hans', 'zh']) assert.equal(resolveSystemLanguage(locale), 'zh');
+  for (const locale of ['zh-TW', 'zh_HK', 'zh-MO', 'zh-Hant']) assert.equal(resolveSystemLanguage(locale), 'zh-TW');
+  assert.equal(resolveSystemLanguage('ja-JP'), 'ja');
+  assert.equal(resolveSystemLanguage('de-AT'), 'de');
+  for (const locale of [null, '', 'not a locale', 'xx-XX']) assert.equal(resolveSystemLanguage(locale), 'en');
+});
+
+test('a pending user language choice wins over a cross-window settings echo', async () => {
+  let releaseJapanese;
+  const f = await fixture({ '../locales/ja.json': () => new Promise(resolve => { releaseJapanese = resolve; }) });
+  const storeModule = moduleFixture(storeSource, {
+    pinia: { defineStore }, '@/common/i18n': f.module.namespace,
+    '@/common/constants': { SIDEBAR: { ALBUM: 1 }, MAP_MARKER_SIZES: [10, 20] },
+    '@/common/mediaChatPosition': mediaChatPosition, '@/common/sidebarOrder': sidebarOrder,
+  }, { context: f.context });
+  setActivePinia(createPinia());
+  const config = storeModule.namespace.useConfigStore();
+  const chosen = config.setLanguage('ja', { fromUser: true });
+  assert.equal(config.settings.languageInitialized, true);
+  await config.setLanguage('de');
+  releaseJapanese({ default: { title: 'ja' } });
+  await chosen;
+  assert.equal(config.settings.language, 'ja');
 });
 
 test('concurrent language requests share one load and subsequent requests use cache', async () => {

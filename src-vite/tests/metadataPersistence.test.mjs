@@ -30,7 +30,9 @@ for (const scope of ['content', 'viewer']) {
         };
         const name = field === 'is_favorite' ? 'toggleFavorite'
           : scope === 'content' ? 'setSelectedFileRating' : 'setCurrentFileRating';
-        await productionFunction(scope === 'content' ? content : viewer, name, bindings)(5);
+        const action = productionFunction(scope === 'content' ? content : viewer, name, bindings);
+        if (field === 'rating') await action(5);
+        else await action();
         const desired = field === 'rating' ? 5 : true;
         assert.equal(file[field], saved ? desired : field === 'rating' ? 2 : false);
         assert.deepEqual(writes, [[1, desired]]);

@@ -208,7 +208,8 @@ async function loadPoints(fitToResults) {
   try {
     const result = await getMapPoints()
     if (token !== pointRequestToken || !props.active) return
-    points.value = result || []
+    points.value = result.points || []
+    sourceFiles = result.sourceFiles
     visibleFiles = []
     if (fitToResults) {
       if (restoreView) {
@@ -287,7 +288,6 @@ async function fetchVisibleFiles() {
 }
 
 async function getMapPoints() {
-  sourceFiles = null
   let ids
   if (props.querySource === 'collection' && props.collectionId) {
     ids = await getCollectionQueryFileIds(props.collectionId, props.queryParams)
@@ -296,13 +296,13 @@ async function getMapPoints() {
   } else if (props.querySource === 'search') {
     ids = [...props.fileIds]
   } else {
-    return getGpsMapPoints(props.queryParams)
+    return { points: await getGpsMapPoints(props.queryParams), sourceFiles: null }
   }
   // ID lookup does not preserve ordering; use the source query/result order.
   const order = new Map((ids || []).map((id, index) => [Number(id), index]))
   const files = await getFilesByIds(ids || [])
-  sourceFiles = (files || []).sort((a, b) => (order.get(Number(a.id)) ?? Infinity) - (order.get(Number(b.id)) ?? Infinity))
-  return aggregateFiles(sourceFiles)
+  const orderedFiles = (files || []).sort((a, b) => (order.get(Number(a.id)) ?? Infinity) - (order.get(Number(b.id)) ?? Infinity))
+  return { points: aggregateFiles(orderedFiles), sourceFiles: orderedFiles }
 }
 
 function aggregateFiles(files) {

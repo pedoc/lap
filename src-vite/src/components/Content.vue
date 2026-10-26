@@ -11282,7 +11282,7 @@ async function handleThumbnailReady(event: any) {
     const missingFiles = fileList.value.filter(
       (file: any) => file && !file.isPlaceholder && (!file.thumbnail || file.rawThumbnailStale) && readyIds.has(Number(file.id || 0))
     );
-    if (missingFiles.length > 0) await getFileListThumb(missingFiles);
+    if (missingFiles.length > 0) await getFileListThumb(missingFiles, { viewportBound: false });
     return;
   }
 
@@ -11325,7 +11325,7 @@ async function handleThumbnailReady(event: any) {
     if (activeFile.file_path === '') activeFile.file_path = activePath;
   }
 
-  if (isCurrent()) await getFileListThumb(currentFiles, { bustCache: true });
+  if (isCurrent()) await getFileListThumb(currentFiles, { bustCache: true, viewportBound: false });
 }
 
 // All grid loads share one queue with centrally capped batch size and concurrency.

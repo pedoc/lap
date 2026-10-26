@@ -204,16 +204,38 @@ function gridFixture(grouped = false, loadThumbs) {
   const api = new Function('createThumbnailScheduler', 'config', 'getFileThumbs', 'gridRows',
     'visibleItemCount', 'lastVisibleRange', 'isItemRow', 'isRealFileItem', 'onBeforeUnmount',
     'getCachedThumbnailDataUrl', 'getThumbnailDataUrl', 'thumbnailPlaceholder', 'console',
-    adapter + '; return { getFileListThumb, invalidateThumbnailRequests, refreshThumbnailViewport };')(
+    'libConfig', 'fileList', 'selectedItemIndex', 'getFileInfo', 'clearCachedThumbnailDataUrl', 'nextTick',
+    adapter + '; return { getFileListThumb, invalidateThumbnailRequests, refreshThumbnailViewport, handleThumbnailReady };')(
     createThumbnailScheduler, { settings: { thumbnailSize: 512 } },
     requests => loadThumbs ? loadThumbs(requests, io) : io.load(requests), rows, { value: 4 }, range, row => row?.type === 'item',
     file => file && !file.isPlaceholder && typeof file.id === 'number', callback => { dispose = callback; },
     id => memory.get(id), thumb => { memory.set(thumb.id, thumb.url); return thumb.url; },
-    'placeholder', { log(...args) { errors.push(args); } });
+    'placeholder', { log(...args) { errors.push(args); } },
+    { _libraryId: 'default' }, { value: files }, { value: 250 }, async () => ({ modified_at: 1 }),
+    id => memory.delete(id), async () => {});
   const finish = index => io.calls[index].finish(io.calls[index].payloads.map(p => ({
     error_code: 0, id: p.fileId, url: `thumb:${p.fileId}`,
   })));
   return { ...api, io, files, rows, range, memory, errors, finish, dispose: () => dispose() };
+}
+
+for (const invalidate of [false, true]) {
+  test(`thumbnail-ready ${invalidate ? 'invalidation' : 'first generation'} reloads a selected map photo outside the grid viewport`, async () => {
+    const grid = gridFixture();
+    const selected = grid.files[250];
+    selected.thumbnail = invalidate ? 'old-thumb' : '';
+    if (invalidate) grid.memory.set(selected.id, 'old-thumb');
+    const refreshed = grid.handleThumbnailReady({ payload: {
+      library_id: 'default', file_ids: [selected.id], invalidate, thumbnail_only: true,
+    } });
+    await tick();
+    assert.equal(grid.io.calls.length, 1);
+    assert.deepEqual(grid.io.calls[0].payloads.map(file => file.fileId), [selected.id]);
+    grid.finish(0);
+    await refreshed;
+    assert.equal(selected.thumbnail, `thumb:${selected.id}`);
+    grid.dispose();
+  });
 }
 
 test('Content reports real API failures, releases slots and retries the same files', async () => {

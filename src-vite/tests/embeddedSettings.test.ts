@@ -322,7 +322,7 @@ function settingsHarness(embedded = true) {
     getNetworkProxy: async () => '', getAppResourcesStatus: async () => ({}),
     listenAppResourcesDownloadProgress: async () => () => {}, getDbStorageDir: async () => '', isUsingCustomDbStorage: async () => false,
   };
-  const api = functions('views/Settings', ['settingsTabs', 'confirmDiscard', 'selectSettingsTab', 'openSection', 'requestClose', 'handleKeyDown', 'normalizeScale', 'applyWindowScale', 'updateSettingsWindowSize'], context);
+  const api = functions('views/Settings', ['settingsTabs', 'confirmDiscard', 'selectSettingsTab', 'openSection', 'requestClose', 'handleKeyDown', 'normalizeScale', 'applyWindowScale', 'updateSettingsWindowSize', 'changeLanguage'], context);
   return { context, api, events, windowCalls, font, pendingChanges, listeners,
     mount: () => lifecycle('views/Settings', 'onMounted', context)(),
     unmount: () => lifecycle('views/Settings', 'onUnmounted', context)(),
@@ -368,23 +368,31 @@ test('Settings section changes use draft and busy protection, then call the moun
   assert.equal(h.context.config.settings.tabIndex, constants.SETTINGS_TAB.NETWORK);
 });
 
-test('embedded settings watchers apply local appearance and language without broadcasting changes back to the same window', async () => {
+test('embedded settings apply local appearance and user language without broadcasting changes back to the same window', async () => {
   const { source, nodes } = script('views/Settings');
   const watchers = nodes.filter((node: any) => node.type === 'ExpressionStatement' && node.expression.callee?.name === 'watch' && /settings-(language|appearance|scale)-changed/.test(source.slice(node.start!, node.end!)));
-  assert.equal(watchers.length, 3);
+  assert.equal(watchers.length, 2);
   for (const embedded of [true, false]) {
     const h = settingsHarness(embedded), themes: any[] = [];
     h.context.locale = Vue.ref('en');
     h.context.setTheme = (...args: any[]) => themes.push(args);
     h.context.config = Vue.reactive({ settings: { ...h.context.config.settings, language: 'en', appearance: 0, lightTheme: 'light', darkTheme: 'dark' } });
+    const languageCalls: any[] = [];
+    h.context.config.setLanguage = (language: string, options: any) => {
+      languageCalls.push([language, options.fromUser]);
+      h.context.config.settings.language = language;
+      h.context.locale.value = language;
+    };
     const scope = Vue.effectScope();
     try {
       scope.run(() => runInNewContext(stripTypeScriptTypes(watchers.map((node: any) => source.slice(node.start, node.end)).join('\n')), { ...h.context, watch: Vue.watch }));
-      assert.equal(h.events.length, embedded ? 0 : 1, 'The immediate language watch must respect embedded mode');
+      assert.equal(h.events.length, 0, 'Opening Settings must not broadcast a language choice');
       h.events.length = 0;
-      Object.assign(h.context.config.settings, { language: 'zh-CN', appearance: 1, scale: 2 });
+      h.api.changeLanguage('zh');
+      Object.assign(h.context.config.settings, { appearance: 1, scale: 2 });
       await Vue.nextTick();
-      assert.equal(h.context.locale.value, 'zh-CN');
+      assert.equal(h.context.locale.value, 'zh');
+      assert.deepEqual(languageCalls, [['zh', true]]);
       assert.deepEqual(themes, [[1, 'dark']]);
       assert.equal(h.events.length, embedded ? 0 : 3);
       assert.equal(h.font.fontSize, embedded ? '20px' : '32px');

@@ -6,7 +6,8 @@ import {runInNewContext} from 'node:vm';
 
 const source = readFileSync(new URL('../src/components/Content.vue', import.meta.url), 'utf8');
 const start = source.indexOf('async function handleThumbnailReady(');
-const end = source.indexOf('// Get the thumbnail for the files', start);
+const end = source.indexOf('// All grid loads share one queue', start);
+assert.ok(start >= 0 && end > start);
 const handlerSource = stripTypeScriptTypes(source.slice(start, end));
 function harness(rows: any[] = [], lookup?: (id: number) => Promise<any>) {
   const fileList = {value: rows}, libConfig = {_libraryId: 'default'};
