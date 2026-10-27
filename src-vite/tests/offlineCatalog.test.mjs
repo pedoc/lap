@@ -36,20 +36,39 @@ const source = fs.readFileSync(new URL('../src/common/fileMenu.ts', import.meta.
 const iconNames = source.match(/import \{([^}]+)\} from '@\/common\/icons'/)[1].split(',').map(s => s.trim()).filter(Boolean);
 const config = { main: { sidebarIndex: 1 }, settings: { face: { enabled: true } }, externalAppsFor: () => [{ id: 'editor', name: 'Editor' }], defaultExternalApp: () => null };
 const smartHelpers = new Function(moduleBody('../src/common/smartAlbums.ts') + '; return {smartTreeRows,isSmartFolder,setSmartOverrides};')();
-const useFileMenuItems = new Function('smartTreeRows','isSmartFolder','setSmartOverrides','computed', 'markRaw', 'config', 'libConfig', 'SIDEBAR', 'DEFAULT_PLATFORM', 'getShortcutLabel', 'isOriginalUnavailable', 'requiresOriginalAction', 'isWin', ...iconNames, moduleBody('../src/common/fileMenu.ts') + '; return useFileMenuItems;')(
-  smartHelpers.smartTreeRows,smartHelpers.isSmartFolder,smartHelpers.setSmartOverrides, computed, markRaw, config, libConfig, { ALBUM: 1, SMART_ALBUM: 2 }, '', () => '', isOriginalUnavailable, requiresOriginalAction, true, ...iconNames.map(() => ({})),
+const castRequests = [];
+const useFileMenuItems = new Function('smartTreeRows','isSmartFolder','setSmartOverrides','computed', 'markRaw', 'config', 'libConfig', 'SIDEBAR', 'DEFAULT_PLATFORM', 'getShortcutLabel', 'isOriginalUnavailable', 'requiresOriginalAction', 'isWin', 'openDlna', ...iconNames, moduleBody('../src/common/fileMenu.ts') + '; return useFileMenuItems;')(
+  smartHelpers.smartTreeRows,smartHelpers.isSmartFolder,smartHelpers.setSmartOverrides, computed, markRaw, config, libConfig, { ALBUM: 1, SMART_ALBUM: 2 }, '', () => '', isOriginalUnavailable, requiresOriginalAction, true, (...args) => castRequests.push(args), ...iconNames.map(() => ({})),
 );
 const words = () => new Proxy({}, { get: (_, key) => String(key) });
 const locale = ref({ menu: { file: words(), meta: words() }, rating: words(), culling: words() });
 const allItems = items => items.flatMap(item => [item, ...allItems(item.children || [])]);
 const action = (items, name) => allItems(items).find(item => item.action?.actionName === name);
 
+test('cast actions launch directly from single and selection menus and reject a stale library', () => {
+  const library = libConfig._libraryId;
+  const menu = useFileMenuItems(ref({ id: 12, file_type: 1 }), locale, false, key => key, () => { throw Error('Casting is handled by the menu itself'); });
+  const cast = action(menu.value, 'cast-media');
+  cast.action();
+  assert.deepEqual(castRequests.at(-1), [library, [12]]);
+  const selected = useFileMenuItems(ref(null), locale, false, key => key, () => {}, {
+    selectMode: ref(true), selectionMediaKind: ref('mixed'), selectionCount: ref(2), selectionIds: () => [12, 13], selectionHasUnavailable: ref(false),
+  });
+  action(selected.value, 'cast-media').action();
+  assert.deepEqual(castRequests.at(-1), [library, [12, 13]]);
+  const count = castRequests.length;
+  libConfig._libraryId = 'other-library';
+  cast.action();
+  assert.equal(castRequests.length, count);
+  libConfig._libraryId = library;
+});
+
 test('single-file menu retains catalog organization and blocks original-file operations while offline', () => {
   const file = ref({ id: 42, album_id: 1, album_accessible: false, file_type: 1, has_embedding: true, file_path: '/photos/offline.jpg' });
   setAlbumAccessibility(1, false);
   const called = [];
   const menu = useFileMenuItems(file, locale, true, key => key, name => called.push(name));
-  for (const name of ['edit', 'print', 'rename', 'copy', 'move-within-library', 'move-to-folder', 'copy-to-folder', 'trash', 'reveal', 'refresh-file-info', 'set-desktop-wallpaper', 'open-external-app:editor']) {
+  for (const name of ['edit', 'print', 'rename', 'copy', 'move-within-library', 'move-to-folder', 'copy-to-folder', 'trash', 'reveal', 'refresh-file-info', 'set-desktop-wallpaper', 'open-external-app:editor', 'cast-media']) {
     assert.equal(action(menu.value, name).disabled, true, name);
     action(menu.value, name).action();
   }

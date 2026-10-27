@@ -1,4 +1,5 @@
 import { isOriginalUnavailable, requiresOriginalAction } from '@/common/availability';
+import { openDlna } from '@/common/dlna';
 import { isSmartFolder, smartTreeRows, setSmartOverrides } from '@/common/smartAlbums';
 import { computed, markRaw, Ref } from 'vue';
 import { config, libConfig } from '@/common/config';
@@ -58,10 +59,18 @@ export const useFileMenuItems = (
     selectionHasUnavailable?: Ref<boolean>;
   }
 ) => {
-  const createAction = (actionName: string) => Object.assign(() => {
-    if (requiresOriginalAction(actionName) && (options?.selectMode?.value ? options?.selectionHasUnavailable?.value : isOriginalUnavailable(file.value))) return;
-    onAction(actionName);
-  }, { actionName });
+  const createAction = (actionName: string) => {
+    const libraryId = libConfig._libraryId;
+    return Object.assign(() => {
+      if (requiresOriginalAction(actionName) && (options?.selectMode?.value ? options?.selectionHasUnavailable?.value : isOriginalUnavailable(file.value))) return;
+      if (actionName === 'cast-media') {
+        if (libraryId !== libConfig._libraryId) return;
+        openDlna(libraryId, options?.selectMode?.value ? options.selectionIds?.() || [] : [Number(file.value?.id)]);
+        return;
+      }
+      onAction(actionName);
+    }, { actionName });
+  };
   const shortcut = (actionId: ShortcutActionId) => getShortcutLabel(actionId, DEFAULT_PLATFORM);
 
   // Resolves a label string against the current locale, or returns the fallback if none was found.
@@ -187,6 +196,7 @@ export const useFileMenuItems = (
         disabled: unavailable || selectionCount === 0,
         action: createAction('refresh-file-info'),
       },
+      { label: translate('dlna.title'), icon: markRaw(IconMonitor), disabled: unavailable || selectionCount === 0 || !options?.selectionIds, action: createAction('cast-media') },
     ];
   };
 
@@ -214,6 +224,7 @@ export const useFileMenuItems = (
         action: createAction('open')
       },
       { ...externalAppMenu(isVideo ? 'video' : 'image'), hidden: !isImage && !isVideo },
+      { label: translate('dlna.title'), icon: markRaw(IconMonitor), disabled: !isImage && !isVideo, action: createAction('cast-media') },
       {
         label: localeMsg.value.menu.file.edit_image,
         icon: markRaw(IconImageEdit),

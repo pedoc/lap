@@ -54,6 +54,7 @@ export function resetLibraryAccessibility() {
 }
 
 const originalActions = new Set([
+  'cast-media',
   'edit', 'print', 'rename', 'copy', 'move-within-library', 'move-to-folder',
   'copy-to-folder', 'trash', 'reveal', 'detect-faces', 'redetect-faces', 'regenerate-thumbnails', 'refresh-file-info', 'set-desktop-wallpaper', 'create-montage',
 ]);

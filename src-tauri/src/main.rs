@@ -22,6 +22,7 @@ mod t_cmds;
 mod t_common;
 mod t_config;
 mod t_dedup;
+mod t_dlna;
 mod t_drag;
 mod t_embedded_jpeg;
 mod t_face;
@@ -200,6 +201,12 @@ async fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::Destroyed | tauri::WindowEvent::CloseRequested { .. }
+            ) {
+                t_dlna::release_owner(window.label());
+            }
             if window.label() != "main" {
                 return;
             }
@@ -346,6 +353,11 @@ async fn main() {
             t_media_lifecycle::delete_hidden_media,
             t_media_lifecycle::get_private_media_preview,
             t_private_media::read_private_media,
+            t_dlna::dlna_discover,
+            t_dlna::dlna_connect,
+            t_dlna::dlna_cast,
+            t_dlna::dlna_control,
+            t_dlna::dlna_disconnect,
             t_private_lock::private_lock_status,
             t_private_lock::unlock_private_view,
             t_private_lock::configure_private_lock,

@@ -8,6 +8,7 @@
     <MediaJobPanel />
     <MediaAiBatch />
     <MediaChatDialog />
+    <DlnaDialog />
     <FaceDiagnosticsDialog v-if="faceDiagnosticState.visible && faceDiagnosticState.report?.library_id === libConfig._libraryId" :report="faceDiagnosticState.report" @cancel="faceDiagnosticState.visible = false" />
   </template>
 </template>
@@ -27,6 +28,7 @@ import ToastContainer from '@/components/ToastContainer.vue';
 import MediaJobPanel from '@/components/MediaJobPanel.vue';
 import MediaAiBatch from '@/components/MediaAiBatch.vue';
 import MediaChatDialog from '@/components/MediaChatDialog.vue';
+import DlnaDialog from '@/components/DlnaDialog.vue';
 import FaceDiagnosticsDialog from '@/components/FaceDiagnosticsDialog.vue';
 import { mediaAiSearch } from '@/common/mediaAi';
 import { mediaChat, closeMediaChat } from '@/common/mediaChat';
@@ -119,7 +121,7 @@ const handleKeyDown = (event) => {
   // Inputs that handle their own keys must not trigger global shortcuts (Enter is file.rename on
   // macOS). SearchBox/MoveTo/ImportOrganize are deliberately excluded — they rely on this channel.
   const uiStore = useUIStore();
-  if (uiStore.inputStack.includes('Settings') || uiStore.inputStack.includes('MediaChat')) return;
+  if (uiStore.inputStack.includes('Settings') || uiStore.inputStack.includes('MediaChat') || uiStore.inputStack.includes('Dlna')) return;
   // MoveTo buttons activate locally; forwarding Enter would also confirm the move.
   if (
     event.key === 'Enter' && uiStore.isInputActive('MoveTo') &&

@@ -1,4 +1,25 @@
 {
+  "dlna": {
+    "title": "Cast to TV (DLNA)",
+    "intro": "Choose a TV or receiver on the same local network. Only the selected media is shared while this window is open.",
+    "devices": "TVs and receivers",
+    "searching": "Searching…",
+    "refresh": "Search again",
+    "empty": "No compatible receivers found. Enable DLNA reception on your TV, check that both devices are on the same network, and allow Lap through the firewall on private networks.",
+    "counter": "Item {current} of {total}",
+    "ready": "Choose a receiver, then press Cast.",
+    "sending": "Sending to TV…",
+    "sent": "Playback request sent to the TV.",
+    "paused": "Pause request sent to the TV.",
+    "formats": "Photos are sent as JPEG previews up to 4K. Videos use their original format and must be supported by the TV; automatic video transcoding is not included.",
+    "previous": "Previous",
+    "next": "Next",
+    "pause": "Pause",
+    "resume": "Resume",
+    "play": "Cast",
+    "stop": "Stop casting",
+    "close": "Close"
+  },
   "viewer_toolbar": {
     "browse": "Browse",
     "zoom": "Zoom",

@@ -74,5 +74,8 @@ test('standalone viewing exposes only supported callbacks while retaining metada
   assert.deepEqual(actions.find(item => item.id === 'rating')!.children!.map(item => item.id), ['rating-0', 'rating-5']);
   const viewer = readFileSync(new URL('../src/views/ImageViewer.vue', import.meta.url), 'utf8');
   const handled = new Set([...viewer.matchAll(/case '([^']+)':/g)].map(match => match[1]));
-  for (const id of VIEWER_WINDOW_FILE_ACTIONS) if (!id.startsWith('smart-album-')) assert.ok(handled.has(id), id);
+  const fileMenu = readFileSync(new URL('../src/common/fileMenu.ts', import.meta.url), 'utf8');
+  assert.ok(fileMenu.includes("if (actionName === 'cast-media')"));
+  assert.ok(fileMenu.includes('openDlna(libraryId,'));
+  for (const id of VIEWER_WINDOW_FILE_ACTIONS) if (!id.startsWith('smart-album-') && id !== 'cast-media') assert.ok(handled.has(id), id);
 });

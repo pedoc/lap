@@ -14,6 +14,7 @@ export interface ViewerToolbarAction {
 
 // These actions are handled by ImageViewer's active-pane dispatcher or are local smart-album callbacks.
 export const VIEWER_WINDOW_FILE_ACTIONS: ReadonlySet<string> = new Set([
+  'cast-media',
   'favorite', 'tag', 'add-to-collection', 'comment', 'rotate',
   'rating-0', 'rating-1', 'rating-2', 'rating-3', 'rating-4', 'rating-5',
   'culling-pick', 'culling-reject', 'culling-unreviewed',
@@ -24,7 +25,7 @@ export const VIEWER_WINDOW_FILE_ACTIONS: ReadonlySet<string> = new Set([
 
 const PRIORITY = [
   'toggle-face-boxes', 'favorite', 'rating', 'culling', 'tag', 'add-to-collection', 'comment', 'rotate',
-  'edit', 'search-similar', 'reveal', 'rename', 'copy', 'print', 'open', 'open-external-app',
+  'edit', 'search-similar', 'reveal', 'rename', 'copy', 'print', 'open', 'open-external-app', 'cast-media',
   'recognize-objects', 'rerecognize-objects', 'recognize-text', 'rerecognize-text', 'detect-faces', 'redetect-faces', 'find-person',
   'regenerate-thumbnails', 'refresh-file-info', 'move-copy', 'set-as',
   'smart-album-include', 'smart-album-exclude', 'smart-album-reset', 'hide-media', 'trash',
