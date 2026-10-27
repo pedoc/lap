@@ -62,7 +62,7 @@ function harness(overrides: any = {}, i18n?: { t: any; te: any }) {
     },
   };
   const scope = Vue.effectScope();
-  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,messageProposals,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,previewRows,previewVisibleFields,previewTags,addPreviewTags,removePreviewTag,previewTagKeydown,previewTagValidation,previewTagState,previewTagCatalog,previewHasText,previewHasTags,previewSelectedFieldCount,selectPreviewAnalysis,applySuggestions,adoptionCount,onlyEmpty,createTags,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
+  const api: any = scope.run(() => runInNewContext(`${body};({openEntry,view,sessions,activeLibrary,configuration,draft,attachments,incoming,incomingIds,visual,selectedModelId,readyModels,canSend,canGenerateSuggestions,reasoningEffort,reasoningLevels,defaultReasoningEffort,reasoningLabel,reasoningDefaultLabel,contextOpen,toolsEnabled,toolScope,contextFields,toggleContext,toolTask,toolTaskUnrefreshed,refreshToolTasks,toolProposal,messageProposals,toolResultSummary,reviewToolProposal,reviewingToolProposal,previewOpen,newSession,selectSession,addIncoming,attachIds,pickCandidate,mention,pickerOpen,candidates,candidateIndex,candidateKeydown,send,stopAnswer,request,refreshCurrent,receiveStreamEvent,streamTurn,renderedMessages,messagesRoot,nearBottom,newContent,messagesScrolled,scrollMessages,markdownRendered,showHistory,historyQuery,historyMenuId,filteredSessions,toggleHistory,beginRename,dropFiles,internalDrop,notice,error,generateSuggestions,previewRows,previewVisibleFields,previewTags,addPreviewTags,removePreviewTag,previewTagKeydown,previewTagEditValue,editPreviewTag,previewTagEditKeydown,previewTagValidation,previewTagState,previewTagCatalog,previewHasText,previewHasTags,previewSelectedFieldCount,selectPreviewAnalysis,applySuggestions,adoptionCount,onlyEmpty,openTasks,openIncomingTasks,deleteSession,renameSession,renameText,viewport,previewSize,fitFrame,frame,autoDockWindow,toggleAutoDockWindow,beginFrameGesture,moveFrameGesture,endFrameGesture,resizeKeydown,openFile,actionsOpen,menuItems,toggleActions,updateMention,runMenuAction,actionKeydown});`, context));
   return { api, context, calls, files, views, mediaChat, libConfig, handlers, mounts, listeners, storage, channels,
     boot: async () => { mediaChat.open = true; await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); },
     dispose: () => { unmounts.forEach(fn => fn()); scope.stop(); },
@@ -587,8 +587,8 @@ test('chat suggestions without analysis are editable and apply only the confirme
     assert.equal(row.ready, true); assert.equal(row.analysisId, null); assert.equal(row.analyses.length, 0);
     assert.equal(h.api.adoptionCount.value, 1);
     assert.equal(h.calls.some(([name]) => name === 'media_ai_start_job' || name === 'media_ai_adopt'), false);
-    assert.equal(h.api.onlyEmpty.value, true); assert.equal(h.api.createTags.value, false);
-    h.api.onlyEmpty.value = false; h.api.createTags.value = true;
+    assert.equal(h.api.onlyEmpty.value, true);
+    h.api.onlyEmpty.value = false;
     row.proposal.title = 'Reviewed chat title'; row.proposal.description = 'Reviewed description'; row.tagsText = 'first、second、first';
     await h.api.applySuggestions();
     const sent = h.calls.find(([name]) => name === 'media_ai_adopt')[1];
@@ -685,6 +685,44 @@ test('tag chips normalize additions, distinguish library and attached tags, and 
   } finally { h.dispose(); }
 });
 
+test('tags can be edited, added and removed without selecting their adoption field and only confirmation creates or writes tags', async () => {
+  const h = harness();
+  try {
+    await h.boot(); const call = directProposalCall(); call.localData.proposal.fields = { title: false, description: false, tags: true };
+    await h.api.reviewToolProposal(call); const row = h.api.previewRows.value[0]; row.fields.tags = false; row.tagsText = 'Existing、Catalog tag';
+    h.api.editPreviewTag(row, 'Existing', 'Renamed suggestion');
+    assert.equal(h.api.previewTagEditValue(row, 'Existing'), 'Renamed suggestion'); assert.equal(row.tagsText, 'Existing、Catalog tag');
+    h.api.editPreviewTag(row, 'Catalog tag', 'Another suggestion');
+    assert.equal(row.tagsText, 'Renamed suggestion、Catalog tag', 'Changing inputs must preserve the previous tag edit');
+    row.tagDraft = 'New tag'; h.api.addPreviewTags(row); h.api.removePreviewTag(row, 'Another suggestion');
+    assert.deepEqual(Array.from(h.api.previewTags(row)), ['Renamed suggestion', 'New tag']); assert.equal(row.tagEdit, null);
+    assert.deepEqual(Array.from(row.currentTags), ['Existing'], 'Editing a suggestion must not rename the attached library tag');
+    await h.api.applySuggestions(); assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    row.fields.tags = true; h.context.pendingChanges.confirm = async () => false;
+    await h.api.applySuggestions(); assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt'), false);
+    h.context.pendingChanges.confirm = async () => true; await h.api.applySuggestions();
+    const writes = h.calls.filter(([name]) => name === 'media_ai_adopt'); assert.equal(writes.length, 1);
+    assert.equal(writes[0][1].options.createTags, true); assert.deepEqual(writes[0][1].options.proposal.tags, ['Renamed suggestion', 'New tag']);
+    assert.equal(h.calls.some(([name]) => /rename_tag|create_tag|delete_tag/.test(name)), false);
+  } finally { h.dispose(); }
+});
+
+test('inline tag editing preserves IME text and Escape cancels the draft without closing the preview', async () => {
+  const h = harness();
+  try {
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall()); const row = h.api.previewRows.value[0];
+    let prevented = 0, stopped = 0, blurred = 0;
+    const input = { blur() { blurred++; } }, key = (value: string, composing = false) => ({ key: value, isComposing: composing, target: input, currentTarget: input, preventDefault() { prevented++; }, stopPropagation() { stopped++; } });
+    h.api.editPreviewTag(row, 'Suggested', '海边'); h.api.previewTagEditKeydown(row, key('Enter', true));
+    assert.equal(h.api.previewTagEditValue(row, 'Suggested'), '海边'); assert.deepEqual(Array.from(h.api.previewTags(row)), ['Suggested']); assert.equal(prevented, 0); assert.equal(blurred, 0);
+    h.api.previewTagEditKeydown(row, key('Enter'));
+    assert.deepEqual(Array.from(h.api.previewTags(row)), ['海边']); assert.equal(row.tagEdit, null); assert.equal(blurred, 1);
+    h.api.editPreviewTag(row, '海边', 'Cancelled edit'); h.api.previewTagEditKeydown(row, key('Escape'));
+    assert.equal(row.tagEdit, null); assert.equal(h.api.previewTagEditValue(row, '海边'), '海边'); assert.equal(h.api.previewOpen.value, true); assert.ok(stopped > 0);
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt' || name === 'media_chat_send'), false);
+  } finally { h.dispose(); }
+});
+
 test('tag validation preserves oversized or unsafe input and blocks adoption including an uncommitted draft', async () => {
   const tags = Array.from({ length: 21 }, (_, index) => `tag-${index}`);
   for (const [text, draft] of [[tags.join('、'), ''], [tags.slice(0, 20).join('、'), tags[20]], ['🙂'.repeat(65), ''], ['control\u0001tag', '']]) {
@@ -703,6 +741,7 @@ test('tag validation preserves oversized or unsafe input and blocks adoption inc
   try {
     await h.boot(); await h.api.reviewToolProposal(directProposalCall()); const row = h.api.previewRows.value[0];
     row.tagsText = '🙂'.repeat(64); assert.equal(h.api.previewTagValidation(row), '', 'Tag length counts Unicode characters rather than UTF-16 units');
+    h.api.editPreviewTag(row, row.tagsText, '🙂'.repeat(65)); assert.ok(h.api.previewTagValidation(row), 'An unfinished inline rename participates in the same validation');
   } finally { h.dispose(); }
 });
 
@@ -711,7 +750,7 @@ test('adoption commits valid unfinished tag input into the exact confirmed paylo
   try {
     await h.boot(); const call = directProposalCall(); call.localData.proposal.fields = { title: false, description: false, tags: true };
     await h.api.reviewToolProposal(call); const row = h.api.previewRows.value[0];
-    row.tagsText = 'Existing'; row.tagDraft = 'Catalog tag、Beach、beach'; h.api.createTags.value = true;
+    row.tagsText = 'Existing'; row.tagDraft = 'Catalog tag、Beach、beach';
     await h.api.applySuggestions(); const adopted = h.calls.find(([name]) => name === 'media_ai_adopt')[1];
     assert.deepEqual(adopted.options.proposal.tags, ['Existing', 'Catalog tag', 'Beach']);
     assert.equal(row.tagDraft, ''); assert.equal(adopted.options.createTags, true); assert.equal(row.applied, true);
@@ -1063,6 +1102,18 @@ test('unfinished tag input added during discard confirmation cannot bypass the c
   } finally { h.dispose(); }
 });
 
+test('inline tag renaming during discard confirmation invalidates the confirmed payload without renaming the library tag', async () => {
+  const h = harness(), confirmation = deferred();
+  try {
+    await h.boot(); await h.api.reviewToolProposal(directProposalCall()); const row = h.api.previewRows.value[0]; row.tagsText = 'Existing';
+    h.context.pendingChanges.confirm = () => confirmation.promise;
+    const applying = h.api.applySuggestions(); h.api.editPreviewTag(row, 'Existing', 'Changed during confirmation');
+    confirmation.resolve(true); await applying;
+    assert.equal(h.calls.some(([name]) => name === 'media_ai_adopt' || /rename_tag|create_tag/.test(name)), false);
+    assert.equal(row.tagsText, 'Existing'); assert.equal(h.api.previewTagEditValue(row, 'Existing'), 'Changed during confirmation'); assert.deepEqual(Array.from(row.currentTags), ['Existing']);
+  } finally { h.dispose(); }
+});
+
 test('history rename and deletion operate on the selected library session and deletion requires confirmation', async () => {
   const h = harness();
   try {
@@ -1158,12 +1209,12 @@ test('the actual dialog renders composer model and reasoning controls, media car
     .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
   try {
-    const ModalDialog = { props: ['width', 'height'], setup: (props: any, { slots }: any) => { const key = Vue.getCurrentInstance()!.vnode.key; return () => Vue.h('section', { 'data-preview-width': props.width, 'data-preview-height': props.height, 'data-preview-key': key }, slots.default?.()); } };
+    const ModalDialog = { props: { width: Number, height: Number, opaque: Boolean }, setup: (props: any, { slots }: any) => { const key = Vue.getCurrentInstance()!.vnode.key; return () => Vue.h('section', { 'data-preview-width': props.width, 'data-preview-height': props.height, 'data-preview-key': key, 'data-preview-opaque': String(props.opaque) }, slots.default?.()); } };
     const component = runInNewContext(`${code};component`, { ...h.context, ...imports, watch() {}, onMounted() {}, onUnmounted() {}, ModalDialog });
     const setup = component.setup;
     component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
       state.previewOpen.value = true; state.configuration.value = configuration(); state.configuration.value.models[0].reasoning = { levels: ['none', 'low', 'high'], defaultEffort: 'low' }; state.selectedModelId.value = 'vision'; state.actionsOpen.value = true;
-      state.previewRows.value = [{ file: file(7), source: mediaSource(), analyses: [], analysisId: null, ready: true, availableFields: ['title', 'description', 'tags'], fields: { title: true, description: true, tags: true }, proposal: { title: 'Chat <title>', description: 'Chat description', tags: ['Chat tag'] }, tagsText: 'Chat tag', tagDraft: '', expandedDescription: false, currentTags: [], error: '', applied: false }];
+      state.previewRows.value = [{ file: file(7), source: mediaSource(), analyses: [], analysisId: null, ready: true, availableFields: ['title', 'description', 'tags'], fields: { title: true, description: true, tags: true }, proposal: { title: 'Chat <title>', description: 'Chat description', tags: ['Chat tag'] }, tagsText: 'Chat tag', tagDraft: '', tagEdit: null, expandedDescription: false, currentTags: [], error: '', applied: false }];
       state.attachments.value = [file(7)]; state.view.value = emptyView(); state.view.value.messages.push({ id: 'message-a', role: 'assistant', status: 'completed', modelName: 'vision', createdAt: 1, content: '**Answer**\n\n- Detail [1]', references: [reference(8)] });
       state.contextOpen.value = true;
       state.view.value.messages[0].toolCalls = [
@@ -1221,6 +1272,7 @@ test('the actual dialog renders composer model and reasoning controls, media car
     assert.match(html, /maxlength="8000"/);
     assert.match(html, /media_chat\.scope_hint/);
     assert.match(html, /data-preview-width="860" data-preview-key="1440:900"/); assert.doesNotMatch(html, /data-preview-height=/);
+    assert.match(html, /data-preview-opaque="true"/);
     assert.match(html, /data-chat-adoption-preview/); assert.match(html, /data-chat-preview-table/);
     assert.match(html, /data-chat-preview-scroll/); assert.match(html, /data-chat-preview-footer/);
     assert.match(html, /value="Chat &lt;title&gt;"/); assert.match(html, /Chat description/); assert.match(html, /Chat tag/);
@@ -1239,7 +1291,7 @@ test('the adoption table renders only requested field changes, compact media gro
     .replace(/import\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"];?/g, (_match, names) => { for (const name of names.split(',')) { const [original, alias] = name.trim().split(/\s+as\s+/); imports[alias || original] = (Vue as any)[original]; } return ''; })
     .replace(/^import[\s\S]*?from\s*['"][^'"]+['"];?\r?\n/gm, '').replace('export default', 'const component=');
   try {
-    const ModalDialog = { props: ['width', 'height'], setup: (props: any, { slots }: any) => () => Vue.h('section', { 'data-preview-width': props.width, 'data-preview-height': props.height }, slots.default?.()) };
+    const ModalDialog = { props: { width: Number, height: Number, opaque: Boolean }, setup: (props: any, { slots }: any) => () => Vue.h('section', { 'data-preview-width': props.width, 'data-preview-height': props.height, 'data-preview-opaque': String(props.opaque) }, slots.default?.()) };
     const component = runInNewContext(`${code};component`, { ...h.context, ...imports, watch() {}, onMounted() {}, onUnmounted() {}, ModalDialog });
     const setup = component.setup;
     component.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => {
@@ -1254,7 +1306,12 @@ test('the adoption table renders only requested field changes, compact media gro
     assert.equal((compact.match(/data-chat-preview-field="tags"/g) || []).length, 1);
     assert.doesNotMatch(compact, /data-chat-preview-field="(?:title|description)"/);
     assert.equal((compact.match(/data-chat-preview-media="7"/g) || []).length, 1); assert.match(compact, /photo-7\.jpg/); assert.match(compact, /src="data:image\/png;base64,cGhvdG83"/);
-    assert.doesNotMatch(compact, /media_chat\.only_empty/); assert.match(compact, /media_chat\.create_tags/);
+    assert.doesNotMatch(compact, /media_chat\.only_empty|media_chat\.create_tags/);
+    assert.match(compact, /data-preview-opaque="true"/); assert.doesNotMatch(compact, /line-through|badge-warning/);
+    assert.match(/<fieldset[^>]*>/.exec(compact)![0], /text-sm/);
+    const editableTag = /<input[^>]*value="Brand new"[^>]*>/.exec(compact);
+    assert.ok(editableTag, 'Every proposed tag has an inline editor without first enabling a mode');
+    assert.doesNotMatch(editableTag[0], /\s(?:disabled|readonly)(?:\s|=|>)/, 'Deselecting adoption must not disable editing');
     assert.match(compact, /Existing/); assert.match(compact, /Catalog tag/); assert.match(compact, /Brand new/);
     assert.match(compact, /data-tag-state="existing"/); assert.match(compact, /data-tag-state="add"/); assert.match(compact, /data-tag-state="new"/);
     assert.match(compact, /max-height:800px/); assert.match(compact, /<thead[^>]*sticky/);
@@ -1270,7 +1327,7 @@ test('the adoption table renders only requested field changes, compact media gro
     assert.equal((multi.match(/data-chat-preview-media="[79]"/g) || []).length, 2);
     assert.equal((multi.match(/data-chat-preview-field="title"/g) || []).length, 2); assert.equal((multi.match(/data-chat-preview-field="tags"/g) || []).length, 2);
     assert.doesNotMatch(multi, /data-chat-preview-field="description"/); assert.match(multi, /photo-9\.jpg/); assert.match(multi, /src="data:image\/png;base64,cGhvdG85"/);
-    assert.match(multi, /media_chat\.only_empty/); assert.match(multi, /media_chat\.create_tags/); assert.equal(h.api.previewSelectedFieldCount.value, 4);
+    assert.match(multi, /media_chat\.only_empty/); assert.doesNotMatch(multi, /media_chat\.create_tags/); assert.equal(h.api.previewSelectedFieldCount.value, 4);
 
     const description = directProposalCall(); description.localData.proposal.fields = { title: false, description: true, tags: false }; description.localData.proposal.files[0].proposal.description = 'A long description. '.repeat(60);
     await h.api.reviewToolProposal(description); const descriptionRows = clone(h.api.previewRows.value), collapsed = await render(descriptionRows);

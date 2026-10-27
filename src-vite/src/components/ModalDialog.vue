@@ -4,7 +4,8 @@
       <div v-if="visible" class="fixed inset-0 bg-black/30 z-600">
         <div
           ref="modalDialogRef"
-          class="modal-dialog text-base-content/70 bg-base-200/80 backdrop-blur-md border border-base-content/30 rounded-box overflow-hidden flex flex-col"
+          class="modal-dialog border border-base-content/30 rounded-box overflow-hidden flex flex-col"
+          :class="opaque ? 'bg-base-100 text-base-content' : 'text-base-content/70 bg-base-200/80 backdrop-blur-md'"
           :style="{ position: 'fixed', top: y + 'px', left: x + 'px', width: width + 'px', ...(height !== undefined && { height: height + 'px' }) }"
         >
         <!-- title bar -->
@@ -51,6 +52,10 @@ const props = defineProps({
   height: {
     type: Number,
     default: undefined // undefined means no height limit
+  },
+  opaque: {
+    type: Boolean,
+    default: false
   },
   // When provided, dialog position is persisted in localStorage under this key
   // and restored on next mount. Without it, dialog always centers on mount.
