@@ -14,16 +14,21 @@ These are genuine screenshots of Lap 0.4.9 running natively on Windows with the 
 | [smart-albums.webp](smart-albums.webp) | 按规则组织的智能相册 |
 | [combined-filters.webp](combined-filters.webp) | 组合条件筛选与结果预览 |
 | [media-chat.webp](media-chat.webp) | 媒体理解中的两图问答 |
+| [ocr.webp](ocr.webp) | 本地中英文文字识别、搜索命中高亮与文字框 |
 | [objects.webp](objects.webp) | 本地物体识别与图片中的检测结果 |
-| [map.webp](map.webp) | 按地理位置浏览示例照片 |
+| [map-amap-3d.webp](map-amap-3d.webp) | 高德原生 SDK 的上海城市建筑、旋转与倾斜视图 |
+| [map-amap-satellite.webp](map-amap-satellite.webp) | 高德原生 SDK 的上海卫星影像与照片标记 |
+| [map.webp](map.webp) | 早期世界地图示例，保留作参考，主 README 不再引用 |
 
 ## 示例图库与真实性边界
 
-截图使用独立的 `LAP_TEST_DATA_DIR` 和 `WEBVIEW2_USER_DATA_FOLDER`，从公开摄影素材建立示例图库，没有使用个人相册。导入共 **26 个文件：24 张不同的 CC0 照片，以及其中两张照片的逐字节重复副本**。
+截图使用独立的 `LAP_TEST_DATA_DIR` 和 `WEBVIEW2_USER_DATA_FOLDER`，从公开摄影素材建立示例图库，没有使用个人相册。首轮截图导入共 **26 个文件：24 张不同的 CC0 照片，以及其中两张照片的逐字节重复副本**。补拍 OCR 和高德地图时追加了一张原创旅行札记卡片，图库总数为 **27 个文件**；不同批次截图中的数量差异由此产生。
 
 评分、收藏、标签，以及示例副本中的日期、相机和镜头字段是为了展示功能而设置的数据，不代表原摄影作品的真实拍摄时间或器材。示例日期覆盖 2023–2026 年，并包含往年 10 月 27 日。仅在来源页面提供明确坐标时写入 GPS；9 张不同照片的坐标来自对应 Wikimedia Commons 文件页。
 
-`media-chat.webp` 展示在实际配置的模型上进行两图问答的真实结果；模型输出不代表对照片地点或事实的独立核验。`objects.webp` 展示本地 RF-DETR 的真实推理结果。公开资产中不包含 API 密钥、私有服务地址、临时数据库或个人媒体。
+`media-chat.webp` 展示在实际配置的模型上进行两图问答的真实结果；模型输出不代表对照片地点或事实的独立核验。`ocr.webp` 使用本地 PP-OCRv5 Server 的真实推理结果，`objects.webp` 展示本地 RF-DETR 的真实推理结果。高德地图截图来自应用内原生 SDK 的真实城市／卫星视图，使用同一张上海照片的来源坐标，保留供应商署名；镜头通过原生 SDK 调整缩放、旋转和俯仰，照片标记使用应用已有的 128 像素尺寸设置。当前应用没有独立的 Cesium 地球或地形渲染器。公开资产中不包含 API 密钥、私有服务地址、临时数据库或个人媒体。
+
+首批 26 个文件均已完成本地 OCR 推理，但倾斜书页中的文字识别较弱。为展示清晰的中英文文字定位与修订流程，另外用 Pillow 制作了 `2026-10-27_25_iceland-field-notes.jpg`：1600 × 1100 像素的原创排版，包含 “ICELAND”“冰岛旅行手记”“South Coast · Route 1”“Golden hour by the waterfall”等旅行札记文字。卡片背景复用下表 Robert Lukeman 的 CC0 冰岛瀑布照片，GPS 也仅复用该来源的已知坐标；原创排版同样以 CC0 提供。卡片导入后使用真实本地 OCR 识别，未手工填入识别结果。仅提交界面截图，不提交卡片原图。
 
 ## 重新截取
 
@@ -36,7 +41,7 @@ These are genuine screenshots of Lap 0.4.9 running natively on Windows with the 
 
 ## 摄影素材来源
 
-下表列出本次使用的全部 24 张不同照片。许可已从 Wikimedia Commons 文件页的许可元数据核对为 [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)。其中标有 Unsplash 的作品使用的是 Commons 记录的早期 CC0 授权，具体来源及许可记录以各文件页为准。下表文件名是示例副本名称。
+下表列出本次使用的全部 24 张不同原始照片；追加的旅行札记卡片复用其中的冰岛瀑布背景。许可已从 Wikimedia Commons 文件页的许可元数据核对为 [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)。其中标有 Unsplash 的作品使用的是 Commons 记录的早期 CC0 授权，具体来源及许可记录以各文件页为准。下表文件名是示例副本名称。
 
 | 示例副本 | 摄影者 / 来源署名 | 原始作品及许可记录 |
 | --- | --- | --- |

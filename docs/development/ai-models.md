@@ -2,9 +2,11 @@
 
 ## Scope and rollout
 
-The first stage replaces fixed model paths, numeric model selection, and global AI tuning with model definitions, per-model configuration, registered capability adapters, and global task selection. Incremental face grouping and streaming result UI are deliberately subsequent stages. CPU and HTTP remain supported. Windows DirectML and macOS CoreML hardware acceleration are implemented; CUDA is an opt-in build feature. See [regression checklist](ai-regression-matrix.md).
+The first stage replaces fixed model paths, numeric model selection, and global AI tuning with model definitions, per-model configuration, registered capability adapters, and global task selection. CPU and HTTP remain supported. Windows DirectML and macOS CoreML hardware acceleration are implemented. Windows x64 CUDA uses a bundled bridge and an optional execution component downloaded in Settings; other platforms retain the manual `ai-cuda` build feature. See [CUDA execution components](../cuda-runtime.md) and the [regression checklist](ai-regression-matrix.md).
 
-This early-development build does not migrate old AI results. Each library has one active derived index per task. Switching an incompatible profile discards automatic model vectors/results, while preserving human people and model-independent face annotations. Original media, folders, ratings, tags, and comments are not deleted. This is not an archive of multiple model indexes. Model selection is global, but derived data remains isolated by library. Activation checks the current library immediately; other libraries are checked against the global model when opened. There is no automatic fallback to the default model on library switching.
+The manifest-based local models and legacy Jina-compatible adapter described below are separate from the implemented LLM and Embedding services in `ai/services/`. For media understanding, streaming media chat, metadata suggestions, and text/multimodal retrieval, see the [current media services guide](../media-understanding.md).
+
+Model selection is global, while derived data remains isolated by library and compatible model/source identity. The manifest-based semantic/face pipeline can rebuild incompatible automatic indexes while preserving human people and model-independent face annotations; original media, folders, ratings, tags, and comments are not deleted. OCR and object recognition retain model-specific caches and valid human corrections, as described in the [OCR](../ocr.md) and [object recognition](../object-recognition.md) guides. The separate media services retain their own analysis and embedding indexes rather than mixing vector spaces. Switching libraries does not automatically select a different default model.
 
 ## Modules
 
@@ -15,6 +17,7 @@ This early-development build does not migrate old AI results. Each library has o
 - `hardware.rs`: physical GPU identity grouping and logical DirectML adapter diagnostics. Windows uses kernel-reported physical PnP identities rather than names or logical LUIDs; aliases are grouped without summing VRAM. Unverified adapters remain usable but are not counted as physical GPUs.
 - `runtime.rs`: ONNX session execution configuration. Provider discovery, model-specific session creation, operator-placement diagnostics and reported CPU fallback are separate.
 - `remote.rs`: Jina-compatible multimodal embedding HTTP protocol, credential storage, consent, response validation.
+- `services/`: configured LLM and Embedding services, native `genai` integration, media chat, analysis, metadata suggestions, and separate retrieval indexes.
 - `assets.rs`: version/content-addressed downloads, SHA256 verification, cancellation, atomic installation.
 - `profiles.rs`: transactional derived-index identity and invalidation; no comparison across incompatible spaces.
 - `commands.rs`: model management and inference tests; blocking workers keep native inference/HTTP away from the UI thread.
@@ -24,7 +27,7 @@ This early-development build does not migrate old AI results. Each library has o
 
 The catalog has an **Open model folder** button for local models. It opens the same content-addressed directory used by downloads, creating an empty folder if necessary; this does not install or activate the model. Online API models have no local model folder.
 
-Builtin manifests are in `ai/catalog.json`. Current models are quantized CLIP ViT-B/32, its aligned multilingual text variant, InsightFace Buffalo-S/M/L, AntelopeV2 and AuraFace v1, and the Jina CLIP v2 API. Pretrained weight licensing is independent of the application's source license; inspect upstream terms, particularly for InsightFace weights.
+Builtin manifests are in `ai/catalog.json`. Semantic/face models and remote embedding options include quantized CLIP ViT-B/32, its aligned multilingual text variant, InsightFace Buffalo-S/M/L, AntelopeV2 and AuraFace v1, and the Jina CLIP v2 API. Pretrained weight licensing is independent of the application's source license; inspect upstream terms, particularly for InsightFace weights.
 
 A model definition has `id`, `version`, `task`, `adapter`, `embeddingSpace`, `dimension`, `languages`, `license`, `description`, `defaults`, and `files`. Each local artifact specifies `role`, HTTPS `url`, mandatory `sha256`, and optional `size`. Registered adapters determine required roles and allowed parameters. Unknown task/adapter combinations, traversal IDs, duplicate/missing roles, nonfinite values, and unsupported parameter ranges are rejected.
 
@@ -38,9 +41,9 @@ Version-1 AI settings are flattened once on load: the previously active library'
 
 ## Online services
 
-The current remote adapter supports the Jina-compatible multimodal `/embeddings` contract: one input object with `text` or a base64 image and a response containing one float embedding. It is not a universal chat, text-only embedding, or face API adapter. Another supplier speaking this contract needs only a custom definition and its configuration; another protocol needs an adapter registered centrally.
+The legacy `remote.rs` adapter supports the Jina-compatible multimodal `/embeddings` contract: one input object with `text` or a base64 image and a response containing one float embedding. Its scope does not include chat, standard text-only embedding, or face APIs. Another supplier speaking this contract needs only a custom definition and its configuration; another protocol needs an adapter registered centrally. The separate `services/` implementation supports generation and additional embedding protocols as described in the [media services guide](../media-understanding.md).
 
-Configure the full endpoint, model ID, explicit remote revision, API key, and consent. HTTPS is required except for loopback services. Online models must pass a real image/text contract test before activation. Test receipts are bound to model/preprocessing and a non-secret credential revision. Replacing a key invalidates the receipt without discarding same-model vectors. New secrets are written under a new credential revision before configuration commits, so a failed save cannot overwrite the old provider key. Keys use Windows Credential Manager, macOS Keychain, or Linux Secret Service; Linux builds require `libdbus-1-dev` and a functioning Secret Service to save keys. Changing provider origin requires explicitly entering a key. Loopback services connect directly; remote requests use the shared proxy client.
+For that Jina-compatible adapter, configure the full endpoint, model ID, explicit remote revision, API key, and consent. HTTPS is required except for loopback services. Online models must pass a real image/text contract test before activation. Test receipts are bound to model/preprocessing and a non-secret credential revision. Replacing a key invalidates the receipt without discarding same-model vectors. New secrets are written under a new credential revision before configuration commits, so a failed save cannot overwrite the old provider key. Keys use Windows Credential Manager, macOS Keychain, or Linux Secret Service; Linux builds require `libdbus-1-dev` and a functioning Secret Service to save keys. Changing provider origin requires explicitly entering a key. Loopback services connect directly; remote requests use the shared proxy client.
 
 Online background indexing is disabled independently of foreground consent. Enable it only after considering library size and provider charges, then rescan the relevant albums. Tests of online models send synthetic sample inputs, not library photographs. Responses are size-bounded and checked for vector dimension, numeric finiteness, and nonzero norm. Provider response bodies, keys, and images are not included in errors.
 
@@ -50,13 +53,13 @@ For another model in an existing adapter family, add/import a manifest; feature 
 
 ## Generative backend investigation
 
-The generative-model investigation and proposed native/Python/API backend boundaries are documented in [生成式模型本地运行与 API 接入调查](generative-backends.md). This is design research; the current adapters do not implement those generative backends.
+The historical generative-model investigation and native/Python/API backend boundaries are documented in [生成式模型本地运行与 API 接入调查](generative-backends.md). Lap does not manage Mage/Qwen model downloads or their local inference environments; configured API services are implemented separately in `ai/services/`.
 
-The proposed media-understanding, retrieval, and scoped Q&A workflows are described in the [开发蓝图与交互设计](../../design/media-understanding/SPEC.md), with [viewable mockups](../../design/media-understanding/gallery.html). The revised mockups render the current settings templates and frontend CSS at the supplied 1437×833 window size, with a separate 600×620 minimum-size check. They preserve the standalone window and original AI task entry points; they do not change the implemented runtime or settings contracts described above.
+Media understanding, retrieval, scoped media chat, and editable metadata suggestions are implemented; their current settings, protocols, and execution boundaries are documented in the [media services guide](../media-understanding.md). Earlier blueprints and mockups are historical design references, not the current runtime contract.
 
-The revised [模型服务与标准 API 调查](ai-service-protocols.md) covers the Cherry Studio-style provider/model/default organization, Chat Completions, Responses and Messages boundaries, and [remote GPU deployment tools](../../scripts/ai-server/README.md) for pinned Mage/Qwen backends. These tools have protocol/loopback checks but still require real GPU acceptance; the production Lap generative adapters remain unimplemented.
+The [模型服务与标准 API 调查](ai-service-protocols.md) records provider/model/default organization and protocol research. Current services implement Chat Completions (including SSE), standard text Embeddings, and multimodal adapters for vLLM, DashScope, Ark, and SiliconFlow; Responses and Claude Messages are not implemented. The [remote GPU deployment tools](../../scripts/ai-server/README.md) for pinned Mage/Qwen backends have protocol/loopback checks and still require real GPU acceptance in the target environment.
 
-The [Rust SDK feasibility report](ai-client-libraries.md) recommends evaluating pinned `genai` behind a thin native service, with Tauri IPC streaming and existing credential/task policies. An [independent SDK check](../../scripts/ai-sdk-check/README.md) exercises eight loopback cases without changing production dependencies or calling a model.
+The [Rust SDK feasibility report](ai-client-libraries.md) records the investigation preceding the current native `genai` service and Tauri IPC streaming implementation. Its [independent SDK check](../../scripts/ai-sdk-check/README.md) exercises eight loopback cases; those checks alone do not validate real model inference.
 
 ## Verification
 
