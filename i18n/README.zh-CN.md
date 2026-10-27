@@ -39,10 +39,42 @@ brew install --cask lap
 
 ## 屏幕截图
 
+以下为当前 Windows 版的真实截图，使用英文界面和独立示例图库。点击图片可查看大图。[示例素材出处与截图说明](../docs/public/screenshots/current/README.md)。
+
+**首页：精选照片、图库统计，以及可展开月份的影像时间轴。**
+
 <p align="center">
-  <img src="../docs/public/screenshots/lap_library.png" alt="Lap 本地照片资料库" width="900">
-  <img src="../docs/public/screenshots/lap_map_view.png" alt="Lap 地图视图" width="900">
-  <img src="../docs/public/screenshots/lap_montage.png" alt="Lap 照片拼图" width="900">
+  <a href="../docs/public/screenshots/current/home.webp"><img src="../docs/public/screenshots/current/home.webp" alt="Lap 首页：精选照片、图库统计与影像时间轴" width="900"></a>
+</p>
+
+**组合筛选：嵌套“全部满足／任一满足”条件，预览结果并保存为智能相册。**
+
+<p align="center">
+  <a href="../docs/public/screenshots/current/combined-filters.webp"><img src="../docs/public/screenshots/current/combined-filters.webp" alt="Lap 组合筛选：嵌套条件与匹配照片预览" width="900"></a>
+</p>
+
+**智能相册：按规则动态整理照片，用虚拟文件夹组织相册。**
+
+<p align="center">
+  <a href="../docs/public/screenshots/current/smart-albums.webp"><img src="../docs/public/screenshots/current/smart-albums.webp" alt="Lap 智能相册：虚拟文件夹与动态筛选的照片集" width="900"></a>
+</p>
+
+**媒体聊天：引用两张照片，通过自行配置的 OpenAI 兼容服务比较封面候选。**
+
+<p align="center">
+  <a href="../docs/public/screenshots/current/media-chat.webp"><img src="../docs/public/screenshots/current/media-chat.webp" alt="Lap 媒体聊天：比较两张引用照片作为封面的效果" width="900"></a>
+</p>
+
+**本地对象识别：查看真实 RF-DETR 检测结果，并可手工修订。**
+
+<p align="center">
+  <a href="../docs/public/screenshots/current/objects.webp"><img src="../docs/public/screenshots/current/objects.webp" alt="Lap 本地对象识别：示例照片上的 RF-DETR 检测结果" width="900"></a>
+</p>
+
+**地图：按当前筛选条件浏览带地理标记的照片；底图需要联网加载。**
+
+<p align="center">
+  <a href="../docs/public/screenshots/current/map.webp"><img src="../docs/public/screenshots/current/map.webp" alt="Lap 地图：带地理标记的照片与当前照片选集" width="900"></a>
 </p>
 
 ## 为什么选择 Lap
@@ -55,10 +87,15 @@ brew install --cask lap
 
 ## 功能特性
 
+- **首页概览**：精选照片、图库统计、年／月影像时间轴和往年今日。
 - **灵活浏览资料库**：按日期、文件夹、地点、相机、镜头、标签、评分和人脸筛选，支持排序和搜索。
 - **以文件夹为中心的工作流**：支持多个资料库、拖放导入/导出、复制粘贴导入/导出、文件系统同步，以及安全的移动、复制和删除。
 - **本地 AI 搜索**：支持文本搜索、视觉相似搜索、主题、人脸聚类，以及可选的 50 多种语言搜索。
+- **本地图片文字识别**：搜索照片内文字、定位命中区域，并可修订识别文字。
+- **本地对象识别**：支持类别／数量筛选、检测框叠层和人工修订。
+- **可选媒体聊天**：接入自行配置的 OpenAI 兼容生成服务，引用照片／视频对话，预览和编辑标题、说明及标签建议。媒体会发送至您配置的服务。
 - **智能相册**：保存基于规则的视图，自定义分组和排序。
+- **组合筛选**：用嵌套“全部满足／任一满足”条件组合已有元数据、人物、对象和图片文字，预览结果并可保存为智能相册。
 - **按日期整理导入**：支持按日、月、年或单一文件夹导入，保留原文件名并跳过重复内容。
 - **合集与标签**：批量整理所选文件，无需移动或复制原件。
 - **重复照片清理**：查看可释放空间，跨重复组批量清理。

@@ -42,10 +42,42 @@ brew install --cask lap
 
 ## Screenshots
 
+Real screenshots of the current Windows app, using the English interface and a sample photo library. Click an image to view it at full size. [Sample media and capture notes](docs/public/screenshots/current/README.md).
+
+**Home — featured photos, library statistics, and an expandable year/month timeline.**
+
 <p align="center">
-  <img src="docs/public/screenshots/lap_library.png" alt="Lap local photo library manager" width="900">
-  <img src="docs/public/screenshots/lap_map_view.png" alt="Lap map view" width="900">
-  <img src="docs/public/screenshots/lap_montage.png" alt="Lap photo collage" width="900">
+  <a href="docs/public/screenshots/current/home.webp"><img src="docs/public/screenshots/current/home.webp" alt="Lap Home with featured photos, library statistics, and the photo timeline" width="900"></a>
+</p>
+
+**Combined filters — preview nested AND/OR conditions and save useful searches as Smart Albums.**
+
+<p align="center">
+  <a href="docs/public/screenshots/current/combined-filters.webp"><img src="docs/public/screenshots/current/combined-filters.webp" alt="Lap combined filters with nested conditions and matching photo previews" width="900"></a>
+</p>
+
+**Smart Albums — organize dynamic, rule-based collections in virtual folders.**
+
+<p align="center">
+  <a href="docs/public/screenshots/current/smart-albums.webp"><img src="docs/public/screenshots/current/smart-albums.webp" alt="Lap Smart Albums with virtual folders and a filtered photo collection" width="900"></a>
+</p>
+
+**Media chat — compare two photos as cover candidates with a user-configured OpenAI-compatible service.**
+
+<p align="center">
+  <a href="docs/public/screenshots/current/media-chat.webp"><img src="docs/public/screenshots/current/media-chat.webp" alt="Lap media chat comparing two attached photos as cover candidates" width="900"></a>
+</p>
+
+**Local object recognition — inspect real RF-DETR detections and manually correct the results.**
+
+<p align="center">
+  <a href="docs/public/screenshots/current/objects.webp"><img src="docs/public/screenshots/current/objects.webp" alt="Lap local object recognition showing RF-DETR results on a sample photo" width="900"></a>
+</p>
+
+**Map — explore geotagged photos within the current filters; map tiles require an internet connection.**
+
+<p align="center">
+  <a href="docs/public/screenshots/current/map.webp"><img src="docs/public/screenshots/current/map.webp" alt="Lap map with geotagged photo markers and the current photo selection" width="900"></a>
 </p>
 
 ## Why Lap
@@ -58,9 +90,13 @@ brew install --cask lap
 
 ## Features
 
+- **Home dashboard** with featured photos, library statistics, a year/month timeline, and memories from this day in previous years.
 - **Flexible library browsing** by date, folder, location, camera, lens, tags, ratings, and faces, with sorting and search.
 - **Folder-first workflow** with multiple libraries, drag-&-drop import/export, copy-paste import/export, filesystem sync, and safe move/copy/delete operations.
 - **Local AI search** for text prompts, visual similarity, subjects, face clustering, and optional multilingual search in 50+ languages.
+- **Local OCR** to search text inside photos, locate matching text regions, and correct recognized text.
+- **Local object recognition** with category/count filters, detection overlays, and manual corrections.
+- **Optional media chat** through your own OpenAI-compatible generation service, with photo/video references and editable title, description, and tag suggestions. Media is sent to the service you configure.
 - **Smart Albums** save rule-based views with custom grouping and sorting.
 - **Combined filters** search existing metadata, people, objects and image text with nested AND/OR conditions, previews, and optional saving as a Smart Album.
 - **Date-organized import** with day, month, year, or single-folder layouts, original filenames, and duplicate skipping.
