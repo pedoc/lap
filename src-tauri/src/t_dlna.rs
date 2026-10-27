@@ -1,4 +1,5 @@
 mod http;
+mod native;
 mod protocol;
 mod scope;
 mod server;
@@ -9,7 +10,7 @@ use once_cell::sync::Lazy;
 use protocol::Renderer;
 use serde::Serialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     sync::{Arc, Mutex, RwLock},
@@ -17,7 +18,7 @@ use std::{
 };
 use tauri::Manager;
 use tokio::{
-    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::Semaphore,
 };
@@ -115,8 +116,11 @@ pub async fn dlna_share(
 }
 
 #[tauri::command]
-pub fn dlna_activate_share(window: tauri::WebviewWindow, session_id: String) -> Result<(), String> {
-    server::activate(window.label(), &session_id)
+pub async fn dlna_activate_share(
+    window: tauri::WebviewWindow,
+    session_id: String,
+) -> Result<(), String> {
+    server::activate(window.label(), &session_id).await
 }
 
 #[tauri::command]
@@ -130,46 +134,13 @@ pub async fn dlna_discover(window: tauri::WebviewWindow) -> Result<Vec<DlnaDevic
         .entry(owner.clone())
         .or_default()
         .request_id = request_id.clone();
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-        .await
-        .map_err(|_| "无法搜索局域网电视")?;
-    socket
-        .set_multicast_ttl_v4(2)
-        .map_err(|_| "无法搜索局域网电视")?;
-    for target in [
-        "urn:schemas-upnp-org:device:MediaRenderer:1",
-        "urn:schemas-upnp-org:service:AVTransport:1",
-    ] {
-        let request = format!(
-            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {target}\r\n\r\n"
-        );
-        socket
-            .send_to(
-                request.as_bytes(),
-                (Ipv4Addr::new(239, 255, 255, 250), 1900),
-            )
-            .await
-            .map_err(|_| "无法发送局域网设备搜索请求")?;
-    }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    let mut packet = [0u8; 8192];
-    let mut locations = Vec::new();
-    let mut seen = HashSet::new();
-    while locations.len() < 32 && tokio::time::Instant::now() < deadline {
-        let Ok(Ok((length, sender))) =
-            tokio::time::timeout_at(deadline, socket.recv_from(&mut packet)).await
-        else {
-            break;
-        };
-        let IpAddr::V4(address) = sender.ip() else {
-            continue;
-        };
-        if let Some(location) = protocol::discovery_location(&packet[..length], address) {
-            if seen.insert(location.to_string()) {
-                locations.push((location, address));
-            }
-        }
-    }
+    let locations = native::discover()
+        .await?
+        .into_iter()
+        .filter_map(|(location, address)| {
+            protocol::discovery_location(&location, address).map(|url| (url, address))
+        })
+        .collect::<Vec<_>>();
     let client = protocol::client()?;
     let mut renderers = stream::iter(locations)
         .map(|(location, address)| {
@@ -456,7 +427,6 @@ pub async fn dlna_cast(
         _ = session.cancel.cancelled() => return Err("投屏已取消".into()),
         result = tokio::task::spawn_blocking(move || prepare_media(&library, file_id)) => Arc::new(result.map_err(|e| e.to_string())??),
     };
-    let client = protocol::client()?;
     let url = format!("{}{}", session.base_url, media.path);
     let metadata = protocol::metadata(&media.title, &url, media.mime, media.size());
     let replacing = session
@@ -468,9 +438,9 @@ pub async fn dlna_cast(
     let result = tokio::select! {
         _ = session.cancel.cancelled() => Err("投屏已取消".into()),
         result = async {
-            if replacing { let _ = protocol::action(&client, &session.renderer, "Stop", &[("InstanceID", "0")]).await; }
-            protocol::action(&client, &session.renderer, "SetAVTransportURI", &[("InstanceID", "0"), ("CurrentURI", &url), ("CurrentURIMetaData", &metadata)]).await?;
-            protocol::action(&client, &session.renderer, "Play", &[("InstanceID", "0"), ("Speed", "1")]).await
+            if replacing { let _ = protocol::action( &session.renderer, "Stop", &[("InstanceID", "0")]).await; }
+            protocol::action( &session.renderer, "SetAVTransportURI", &[("InstanceID", "0"), ("CurrentURI", &url), ("CurrentURIMetaData", &metadata)]).await?;
+            protocol::action( &session.renderer, "Play", &[("InstanceID", "0"), ("Speed", "1")]).await
         } => result,
     };
     if result.is_err() {
@@ -506,14 +476,13 @@ pub async fn dlna_control(
     {
         return Err("请先选择媒体播放".into());
     }
-    let client = protocol::client()?;
     let mut arguments = vec![("InstanceID", "0")];
     if command == "Play" {
         arguments.push(("Speed", "1"));
     }
     tokio::select! {
         _ = session.cancel.cancelled() => Err("投屏已取消".into()),
-        result = protocol::action(&client, &session.renderer, &command, &arguments) => result,
+        result = protocol::action( &session.renderer, &command, &arguments) => result,
     }
 }
 
@@ -524,17 +493,15 @@ pub async fn dlna_transport_state(
 ) -> Result<String, String> {
     let session = session(window.label(), &session_id)?;
     let _operation = session.operation.lock().await;
-    let client = protocol::client()?;
     let response = tokio::select! {
         _=session.cancel.cancelled()=>return Err("投屏已取消".into()),
-        response=protocol::query(&client,&session.renderer,"GetTransportInfo",&[("InstanceID","0")])=>response?,
+        response=protocol::query(&session.renderer,"GetTransportInfo",&[("InstanceID","0")])=>response?,
     };
-    let state = response
-        .descendant("GetTransportInfoResponse")
-        .map(|response| response.value("CurrentTransportState"))
+    response
+        .get("CurrentTransportState")
         .filter(|state| !state.is_empty())
-        .ok_or("电视未返回播放状态")?;
-    Ok(state.to_owned())
+        .cloned()
+        .ok_or_else(|| "电视未返回播放状态".into())
 }
 
 #[tauri::command]
@@ -602,7 +569,7 @@ async fn serve(listener: TcpListener, session: Arc<Session>, app: tauri::AppHand
                     let _permit = permit;
                     tokio::select! {
                         _ = session.cancel.cancelled() => {},
-                        _ = serve_media(stream, &session, verify_source) => {},
+                        _ = serve_media(stream, session.clone(), verify_source) => {},
                     }
                 });
             }
@@ -615,9 +582,7 @@ async fn serve(listener: TcpListener, session: Arc<Session>, app: tauri::AppHand
     }
     drop(listener);
     let _operation = session.operation.lock().await;
-    if let Ok(client) = protocol::client() {
-        let _ = protocol::action(&client, &session.renderer, "Stop", &[("InstanceID", "0")]).await;
-    }
+    let _ = protocol::action(&session.renderer, "Stop", &[("InstanceID", "0")]).await;
     if let Ok(mut registry) = REGISTRY.lock() {
         if registry
             .session
@@ -630,106 +595,90 @@ async fn serve(listener: TcpListener, session: Arc<Session>, app: tauri::AppHand
     session.closed.cancel();
 }
 
-async fn headers(
-    stream: &mut TcpStream,
-    status: &str,
-    values: &[(&str, String)],
-) -> std::io::Result<()> {
-    let mut text = format!("HTTP/1.1 {status}\r\nConnection: close\r\nCache-Control: no-store\r\n");
-    for (key, value) in values {
-        text.push_str(&format!("{key}: {value}\r\n"));
-    }
-    text.push_str("\r\n");
-    tokio::time::timeout(Duration::from_secs(15), stream.write_all(text.as_bytes())).await??;
-    Ok(())
-}
-
 async fn serve_media(
-    mut stream: TcpStream,
-    session: &Session,
+    stream: TcpStream,
+    session: Arc<Session>,
     verify: fn(&str, &Source) -> Result<(), String>,
 ) -> std::io::Result<()> {
-    let request = http::read(&mut stream).await?;
-    if !matches!(request.method.as_str(), "GET" | "HEAD") {
-        return headers(
-            &mut stream,
-            "405 Method Not Allowed",
-            &[
-                ("Content-Length", "0".into()),
-                ("Allow", "GET, HEAD".into()),
-            ],
-        )
-        .await;
-    }
-    let media = session.media.read().ok().and_then(|media| media.clone());
-    let Some(media) = media.filter(|media| media.path == request.target) else {
-        return headers(
-            &mut stream,
-            "404 Not Found",
-            &[("Content-Length", "0".into())],
-        )
-        .await;
-    };
-    send_media(
-        &mut stream,
-        &request.method,
-        request.header("range"),
-        &session.library,
-        media.clone(),
-        verify,
-        || {
-            session.media.read().ok().is_some_and(|current| {
-                current
-                    .as_ref()
-                    .is_some_and(|current| current.path == media.path)
-            })
-        },
-    )
+    http::serve(stream, move |request| {
+        let session = session.clone();
+        async move {
+            if !matches!(request.method.as_str(), "GET" | "HEAD") {
+                return http::reply(
+                    "405 Method Not Allowed",
+                    "text/plain",
+                    b"",
+                    &[("Allow", "GET, HEAD".into())],
+                    false,
+                );
+            }
+            let media = session.media.read().ok().and_then(|media| media.clone());
+            let Some(media) = media.filter(|media| media.path == request.target) else {
+                return http::reply("404 Not Found", "text/plain", b"", &[], false);
+            };
+            let current = media.path.clone();
+            let active = session.clone();
+            send_media(
+                &request.method,
+                request.header("range"),
+                &session.library,
+                media,
+                verify,
+                move || {
+                    !active.cancel.is_cancelled()
+                        && active.media.read().ok().is_some_and(|media| {
+                            media.as_ref().is_some_and(|media| media.path == current)
+                        })
+                },
+            )
+            .await
+        }
+    })
     .await
 }
 
 async fn send_media(
-    stream: &mut TcpStream,
     method: &str,
     range: Option<&str>,
     library: &str,
     media: Arc<Media>,
     verify: fn(&str, &Source) -> Result<(), String>,
-    active: impl Fn() -> bool + Send + Sync,
-) -> std::io::Result<()> {
+    active: impl Fn() -> bool + Send + Sync + 'static,
+) -> std::io::Result<http::Response> {
     let library = library.to_owned();
     let checked_library = library.clone();
     let source = media.source.clone();
-    if !matches!(
-        tokio::task::spawn_blocking(move || verify(&checked_library, &source)).await,
-        Ok(Ok(()))
-    ) {
-        return headers(stream, "404 Not Found", &[("Content-Length", "0".into())]).await;
+    if !active()
+        || !matches!(
+            tokio::task::spawn_blocking(move || verify(&checked_library, &source)).await,
+            Ok(Ok(()))
+        )
+    {
+        return http::reply("404 Not Found", "text/plain", b"", &[], false);
     }
     let size = media.size();
     let Ok((start, length, partial)) = protocol::byte_range(range, size) else {
-        return headers(
-            stream,
+        return http::reply(
             "416 Range Not Satisfiable",
-            &[
-                ("Content-Length", "0".into()),
-                ("Content-Range", format!("bytes */{size}")),
-            ],
-        )
-        .await;
+            "text/plain",
+            b"",
+            &[("Content-Range", format!("bytes */{size}"))],
+            false,
+        );
     };
-    let mut file = if media.bytes.is_none() {
-        let file = tokio::fs::File::open(&media.source.path).await?;
+    let file = if media.bytes.is_none() {
+        let mut file = tokio::fs::File::open(&media.source.path).await?;
         let metadata = file.metadata().await?;
         if metadata.len() != media.source.size || metadata.modified().ok() != media.source.modified
         {
-            return headers(stream, "404 Not Found", &[("Content-Length", "0".into())]).await;
+            return http::reply("404 Not Found", "text/plain", b"", &[], false);
         }
+        file.seek(std::io::SeekFrom::Start(start)).await?;
         Some(file)
     } else {
         None
     };
-    let mut values = vec![
+    let mut headers = vec![
         ("Content-Type", media.mime.into()),
         ("Content-Length", length.to_string()),
         ("Accept-Ranges", "bytes".into()),
@@ -750,67 +699,82 @@ async fn send_media(
         ),
     ];
     if partial {
-        values.push((
+        headers.push((
             "Content-Range",
             format!("bytes {start}-{}/{size}", start + length - 1),
         ));
     }
-    headers(
-        stream,
+    let body = if method == "HEAD" {
+        http::empty()
+    } else if let Some(bytes) = &media.bytes {
+        use http_body_util::BodyExt;
+        http_body_util::Full::new(bytes::Bytes::copy_from_slice(
+            &bytes[start as usize..(start + length) as usize],
+        ))
+        .map_err(|never| match never {})
+        .boxed_unsync()
+    } else if let Some(file) = file {
+        // Hyper handles backpressure and HTTP framing. Lap checks visibility and
+        // the current sharing capability while it supplies bounded media chunks.
+        http::stream_body(futures_util::stream::try_unfold(
+            (file, length, Instant::now(), library, media, active),
+            move |(mut file, remaining, mut checked, library, media, active)| async move {
+                if remaining == 0 {
+                    return Ok(None);
+                }
+                if !active() {
+                    return Err(std::io::ErrorKind::PermissionDenied.into());
+                }
+                if checked.elapsed() > Duration::from_secs(2) {
+                    let checked_library = library.clone();
+                    let source = media.source.clone();
+                    if !matches!(
+                        tokio::task::spawn_blocking(move || verify(&checked_library, &source))
+                            .await,
+                        Ok(Ok(()))
+                    ) {
+                        return Err(std::io::ErrorKind::PermissionDenied.into());
+                    }
+                    checked = Instant::now();
+                }
+                let mut buffer = vec![0u8; remaining.min(64 * 1024) as usize];
+                let count = file.read(&mut buffer).await?;
+                if count == 0 {
+                    return Err(std::io::ErrorKind::UnexpectedEof.into());
+                }
+                buffer.truncate(count);
+                Ok(Some((
+                    bytes::Bytes::from(buffer),
+                    (
+                        file,
+                        remaining - count as u64,
+                        checked,
+                        library,
+                        media,
+                        active,
+                    ),
+                )))
+            },
+        ))
+    } else {
+        http::empty()
+    };
+    http::response(
         if partial {
             "206 Partial Content"
         } else {
             "200 OK"
         },
-        &values,
+        &headers,
+        body,
     )
-    .await?;
-    if method == "HEAD" {
-        return Ok(());
-    }
-    if let Some(bytes) = &media.bytes {
-        tokio::time::timeout(
-            Duration::from_secs(30),
-            stream.write_all(&bytes[start as usize..(start + length) as usize]),
-        )
-        .await??;
-    } else if let Some(file) = file.as_mut() {
-        file.seek(std::io::SeekFrom::Start(start)).await?;
-        let mut buffer = vec![0u8; 64 * 1024];
-        let mut remaining = length;
-        let mut checked = Instant::now();
-        while remaining > 0 {
-            if !active() {
-                break;
-            }
-            if checked.elapsed() > Duration::from_secs(2) {
-                let library = library.clone();
-                let source = media.source.clone();
-                if !matches!(
-                    tokio::task::spawn_blocking(move || verify(&library, &source)).await,
-                    Ok(Ok(()))
-                ) {
-                    break;
-                }
-                checked = Instant::now();
-            }
-            let wanted = remaining.min(buffer.len() as u64) as usize;
-            let count = file.read(&mut buffer[..wanted]).await?;
-            if count == 0 {
-                break;
-            }
-            tokio::time::timeout(Duration::from_secs(30), stream.write_all(&buffer[..count]))
-                .await??;
-            remaining -= count as u64;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn late_device_discovery_cannot_invalidate_newer_choices_or_restore_a_closed_window() {
@@ -922,7 +886,7 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             tokio::select! {
                 _ = session.cancel.cancelled() => {},
-                result = serve_media(stream, &session, verify) => { result.unwrap(); },
+                result = serve_media(stream, session.clone(), verify) => { result.unwrap(); },
             }
         });
         let mut client = TcpStream::connect(address).await.unwrap();
@@ -958,7 +922,9 @@ mod tests {
         .await;
         assert!(response.starts_with(b"HTTP/1.1 206"));
         assert!(
-            String::from_utf8_lossy(&response).contains("Content-Range: bytes 500-140000/160000")
+            String::from_utf8_lossy(&response)
+                .to_ascii_lowercase()
+                .contains("content-range: bytes 500-140000/160000")
         );
         assert_eq!(body(&response), &bytes[500..140001]);
         let response = request(
@@ -967,7 +933,11 @@ mod tests {
             |_, _| Ok(()),
         )
         .await;
-        assert!(String::from_utf8_lossy(&response).contains("Content-Length: 10\r\n"));
+        assert!(
+            String::from_utf8_lossy(&response)
+                .to_ascii_lowercase()
+                .contains("content-length: 10\r\n")
+        );
         assert!(body(&response).is_empty());
         let response = request(
             session,
@@ -1042,7 +1012,11 @@ mod tests {
         )
         .await;
         assert_eq!(body(&response), &preview[preview.len() - 5..]);
-        assert!(String::from_utf8_lossy(&response).contains("Content-Type: image/jpeg"));
+        assert!(
+            String::from_utf8_lossy(&response)
+                .to_ascii_lowercase()
+                .contains("content-type: image/jpeg")
+        );
         assert_eq!(std::fs::read(file.path()).unwrap(), b"original image");
     }
 }

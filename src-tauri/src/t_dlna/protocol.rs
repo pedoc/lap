@@ -1,5 +1,6 @@
-use quick_xml::{Reader, events::Event};
+use super::native;
 use reqwest::{Client, Url};
+use std::collections::HashMap;
 use std::{net::Ipv4Addr, time::Duration};
 
 pub const AV_TRANSPORT: &str = "urn:schemas-upnp-org:service:AVTransport:";
@@ -39,138 +40,61 @@ fn local_url(url: &Url, address: Ipv4Addr) -> bool {
         && url.fragment().is_none()
 }
 
-pub fn discovery_location(packet: &[u8], sender: Ipv4Addr) -> Option<Url> {
+pub fn discovery_location(location: &str, sender: Ipv4Addr) -> Option<Url> {
     if !lan_address(sender) {
         return None;
     }
-    let text = std::str::from_utf8(packet).ok()?;
-    let mut lines = text.lines();
-    let status = lines.next()?.split_whitespace().collect::<Vec<_>>();
-    if status.len() < 2 || !status[0].starts_with("HTTP/1.") || status[1] != "200" {
-        return None;
-    }
-    let location = lines.find_map(|line| {
-        let (key, value) = line.split_once(':')?;
-        key.trim()
-            .eq_ignore_ascii_case("location")
-            .then_some(value.trim())
-    })?;
     let url = Url::parse(location).ok()?;
     local_url(&url, sender).then_some(url)
 }
 
-#[derive(Default, Debug)]
-pub(super) struct XmlNode {
-    name: String,
-    text: String,
-    children: Vec<XmlNode>,
-}
-
-impl XmlNode {
-    pub(super) fn child(&self, name: &str) -> Option<&Self> {
-        self.children.iter().find(|node| node.name == name)
+pub(super) struct XmlDocument<'a>(roxmltree::Document<'a>);
+impl<'a> XmlDocument<'a> {
+    pub(super) fn descendant(&self, name: &str) -> Option<roxmltree::Node<'_, 'a>> {
+        self.0
+            .descendants()
+            .find(|node| node.is_element() && node.tag_name().name() == name)
     }
-
-    pub(super) fn value(&self, name: &str) -> &str {
-        self.child(name).map(|node| node.text.trim()).unwrap_or("")
-    }
-
-    pub(super) fn descendant(&self, name: &str) -> Option<&Self> {
-        if self.name == name {
-            return Some(self);
-        }
-        self.children.iter().find_map(|node| node.descendant(name))
+    pub(super) fn child(&self, name: &str) -> Option<roxmltree::Node<'_, 'a>> {
+        self.0.root().child(name)
     }
 }
-
-pub(super) fn xml(text: &str) -> Result<XmlNode, String> {
+pub(super) trait XmlElement<'a, 'input: 'a> {
+    fn child(&self, name: &str) -> Option<roxmltree::Node<'a, 'input>>;
+    fn value(&self, name: &str) -> &'a str;
+}
+impl<'a, 'input: 'a> XmlElement<'a, 'input> for roxmltree::Node<'a, 'input> {
+    fn child(&self, name: &str) -> Option<Self> {
+        self.children()
+            .find(|node| node.is_element() && node.tag_name().name() == name)
+    }
+    fn value(&self, name: &str) -> &'a str {
+        self.child(name)
+            .and_then(|node| node.text())
+            .unwrap_or("")
+            .trim()
+    }
+}
+pub(super) fn xml(text: &str) -> Result<XmlDocument<'_>, String> {
     if text.len() > MAX_XML {
         return Err("电视返回的数据过大".into());
     }
-    let mut reader = Reader::from_str(text);
-    reader.config_mut().expand_empty_elements = true;
-    let mut stack = vec![XmlNode::default()];
-    let mut count = 0;
-    loop {
-        match reader.read_event().map_err(|_| "电视返回了无效的 XML")? {
-            Event::Start(start) => {
-                count += 1;
-                if stack.len() >= 32 || count > 4096 {
-                    return Err("电视返回的 XML 结构过大".into());
-                }
-                stack.push(XmlNode {
-                    name: String::from_utf8_lossy(start.local_name().as_ref()).into_owned(),
-                    ..Default::default()
-                });
-            }
-            Event::End(_) => {
-                if stack.len() <= 1 {
-                    return Err("电视返回了无效的 XML".into());
-                }
-                let node = stack.pop().ok_or("电视返回了无效的 XML")?;
-                stack
-                    .last_mut()
-                    .ok_or("电视返回了无效的 XML")?
-                    .children
-                    .push(node);
-            }
-            Event::Text(value) => stack
-                .last_mut()
-                .ok_or("电视返回了无效的 XML")?
-                .text
-                .push_str(&value.decode().map_err(|_| "电视 XML 编码无效")?),
-            Event::CData(value) => stack
-                .last_mut()
-                .ok_or("电视返回了无效的 XML")?
-                .text
-                .push_str(&value.decode().map_err(|_| "电视 XML 编码无效")?),
-            Event::GeneralRef(value) => {
-                let character = if let Some(character) =
-                    value.resolve_char_ref().map_err(|_| "电视 XML 字符无效")?
-                {
-                    character
-                } else {
-                    match value.decode().map_err(|_| "电视 XML 字符无效")?.as_ref() {
-                        "amp" => '&',
-                        "lt" => '<',
-                        "gt" => '>',
-                        "quot" => '"',
-                        "apos" => '\'',
-                        _ => return Err("电视 XML 包含不支持的实体".into()),
-                    }
-                };
-                stack
-                    .last_mut()
-                    .ok_or("电视返回了无效的 XML")?
-                    .text
-                    .push(character);
-            }
-            Event::DocType(_) => return Err("电视 XML 包含不支持的文档类型".into()),
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    if stack.len() != 1 {
-        return Err("电视返回了无效的 XML".into());
-    }
-    stack.pop().ok_or_else(|| "电视返回了无效的 XML".into())
-}
-
-fn renderer_node(node: &XmlNode) -> Option<(&XmlNode, &XmlNode)> {
-    if node.name == "device"
-        && node
-            .value("deviceType")
-            .starts_with("urn:schemas-upnp-org:device:MediaRenderer:")
+    let document = roxmltree::Document::parse_with_options(
+        text,
+        roxmltree::ParsingOptions {
+            allow_dtd: false,
+            nodes_limit: 8192,
+            ..Default::default()
+        },
+    )
+    .map_err(|_| "电视返回了无效的 XML")?;
+    if document
+        .descendants()
+        .any(|node| node.ancestors().count() > 32)
     {
-        if let Some(service) = node.child("serviceList").and_then(|list| {
-            list.children.iter().find(|service| {
-                service.name == "service" && service.value("serviceType").starts_with(AV_TRANSPORT)
-            })
-        }) {
-            return Some((node, service));
-        }
+        return Err("电视返回的 XML 结构过大".into());
     }
-    node.children.iter().find_map(renderer_node)
+    Ok(XmlDocument(document))
 }
 
 pub fn parse_renderer(text: &str, location: &Url, address: Ipv4Addr) -> Result<Renderer, String> {
@@ -179,7 +103,32 @@ pub fn parse_renderer(text: &str, location: &Url, address: Ipv4Addr) -> Result<R
     }
     let document = xml(text)?;
     let root = document.child("root").ok_or("电视设备描述无效")?;
-    let (device, service) = renderer_node(root).ok_or("设备未提供 DLNA 播放服务")?;
+    let (device, service) = root
+        .descendants()
+        .filter(|node| {
+            node.is_element()
+                && node.tag_name().name() == "device"
+                && node
+                    .value("deviceType")
+                    .starts_with("urn:schemas-upnp-org:device:MediaRenderer:")
+        })
+        .find_map(|device| {
+            device
+                .child("serviceList")
+                .and_then(|list| {
+                    list.children().find(|service| {
+                        service.is_element()
+                            && service.tag_name().name() == "service"
+                            && service
+                                .value("serviceType")
+                                .strip_prefix(AV_TRANSPORT)
+                                .and_then(|version| version.parse::<u32>().ok())
+                                .is_some_and(|version| version > 0)
+                    })
+                })
+                .map(|service| (device, service))
+        })
+        .ok_or("设备未提供 DLNA 播放服务")?;
     let base = if root.value("URLBase").is_empty() {
         location.clone()
     } else {
@@ -217,70 +166,62 @@ pub async fn response_text(mut response: reqwest::Response) -> Result<String, St
     String::from_utf8(bytes).map_err(|_| "电视响应编码无效".into())
 }
 
-pub fn envelope(service: &str, action: &str, arguments: &[(&str, &str)]) -> String {
-    let arguments = arguments
-        .iter()
-        .map(|(key, value)| format!("<{key}>{}</{key}>", quick_xml::escape::escape(*value)))
-        .collect::<String>();
-    format!(
-        "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:{action} xmlns:u=\"{}\">{arguments}</u:{action}></s:Body></s:Envelope>",
-        quick_xml::escape::escape(service)
-    )
+pub fn envelope(service: &str, action: &str, arguments: &[(&str, &str)]) -> Result<String, String> {
+    let (name, response) = action
+        .strip_suffix("Response")
+        .map(|name| (name, true))
+        .unwrap_or((action, false));
+    let body = native::document(name, service, arguments, response)?;
+    // libupnp builds the action XML. The media-directory handler streams this
+    // standard wrapper so an unpaginated large album need not become a DOM.
+    let body = body
+        .strip_prefix("<?xml version=\"1.0\"?>")
+        .unwrap_or(&body)
+        .trim();
+    Ok(format!(
+        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body>{body}</s:Body></s:Envelope>"
+    ))
 }
 
 pub async fn action(
-    client: &Client,
     renderer: &Renderer,
     name: &str,
     arguments: &[(&str, &str)],
 ) -> Result<(), String> {
-    query(client, renderer, name, arguments).await.map(|_| ())
+    query(renderer, name, arguments).await.map(|_| ())
 }
 
 pub(super) async fn query(
-    client: &Client,
     renderer: &Renderer,
     name: &str,
     arguments: &[(&str, &str)],
-) -> Result<XmlNode, String> {
-    let response = client
-        .post(renderer.control_url.clone())
-        .header("Content-Type", "text/xml; charset=\"utf-8\"")
-        .header(
-            "SOAPAction",
-            format!("\"{}#{name}\"", renderer.service_type),
-        )
-        .body(envelope(&renderer.service_type, name, arguments))
-        .send()
-        .await
-        .map_err(|_| "无法连接电视，请检查局域网连接与投屏接收功能")?;
-    let status = response.status();
-    let text = response_text(response).await?;
-    let document = xml(&text).ok();
-    if !status.is_success()
-        || document
-            .as_ref()
-            .and_then(|node| node.descendant("Fault").map(|_| ()))
-            .is_some()
-    {
-        let code = document
-            .as_ref()
-            .and_then(|node| node.descendant("errorCode").map(|code| code.text.clone()))
-            .unwrap_or_else(|| status.as_u16().to_string());
-        return Err(format!(
-            "电视拒绝 {name} 请求（{code}）。请检查接收端支持的操作和媒体格式。"
-        ));
-    }
+) -> Result<HashMap<String, String>, String> {
+    let text = native::action(
+        renderer.control_url.to_string(),
+        renderer.service_type.clone(),
+        name.to_owned(),
+        arguments
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect(),
+    )
+    .await
+    .map_err(|error| format!("电视未返回有效的 {name} 播放服务响应（{error}）"))?;
+    let document = xml(&text)?;
     let response_name = format!("{name}Response");
-    if document
-        .as_ref()
-        .and_then(|node| node.descendant("Body"))
-        .and_then(|body| body.child(&response_name))
-        .is_none()
-    {
-        return Err(format!("电视未返回有效的 {name} 播放服务响应"));
-    }
-    document.ok_or_else(|| "电视播放服务响应无效".into())
+    let response = document
+        .descendant(&response_name)
+        .ok_or_else(|| format!("电视未返回有效的 {name} 播放服务响应"))?;
+    Ok(response
+        .children()
+        .filter(|node| node.is_element())
+        .map(|node| {
+            (
+                node.tag_name().name().to_owned(),
+                node.text().unwrap_or("").trim().to_owned(),
+            )
+        })
+        .collect())
 }
 
 pub fn metadata(title: &str, url: &str, mime: &str, size: u64) -> String {
@@ -300,30 +241,11 @@ pub fn byte_range(header: Option<&str>, size: u64) -> Result<(u64, u64, bool), (
     let Some(header) = header else {
         return Ok((0, size, false));
     };
-    let value = header.strip_prefix("bytes=").ok_or(())?;
-    if size == 0 || value.contains(',') {
+    let ranges = http_range::HttpRange::parse(header, size).map_err(|_| ())?;
+    if ranges.len() != 1 || ranges[0].length == 0 {
         return Err(());
     }
-    let (start, end) = value.split_once('-').ok_or(())?;
-    let (start, end) = if start.is_empty() {
-        let suffix = end.parse::<u64>().map_err(|_| ())?;
-        if suffix == 0 {
-            return Err(());
-        }
-        (size.saturating_sub(suffix), size - 1)
-    } else {
-        let start = start.parse::<u64>().map_err(|_| ())?;
-        let end = if end.is_empty() {
-            size - 1
-        } else {
-            end.parse::<u64>().map_err(|_| ())?.min(size - 1)
-        };
-        (start, end)
-    };
-    if start >= size || end < start {
-        return Err(());
-    }
-    Ok((start, end - start + 1, true))
+    Ok((ranges[0].start, ranges[0].length, true))
 }
 
 pub fn video_mime(path: &std::path::Path) -> Option<&'static str> {
@@ -355,37 +277,19 @@ mod tests {
 
     #[test]
     fn discovery_only_accepts_literal_lan_urls_from_the_responding_device() {
-        let sender = Ipv4Addr::new(192, 168, 1, 10);
-        let packet = |url: &str| format!("HTTP/1.1 200 OK\r\nLoCaTiOn: {url}\r\n\r\n");
-        assert_eq!(
-            discovery_location(
-                packet("http://192.168.1.10:8080/root.xml").as_bytes(),
-                sender
-            )
-            .unwrap()
-            .port(),
-            Some(8080)
-        );
-        for url in [
-            "http://192.168.1.11/root",
-            "http://127.0.0.1/root",
-            "http://example.com/root",
-            "https://192.168.1.10/root",
-            "http://user@192.168.1.10/root",
-            "file:///photos/a.jpg",
+        let address = Ipv4Addr::new(192, 168, 1, 10);
+        assert!(discovery_location("http://192.168.1.10:8080/root.xml", address).is_some());
+        for value in [
+            "http://192.168.1.11/root.xml",
+            "http://127.0.0.1/root.xml",
+            "http://example.com/root.xml",
+            "https://192.168.1.10/root.xml",
+            "http://user:pass@192.168.1.10/root.xml",
+            "http://192.168.1.10/root.xml#fragment",
         ] {
-            assert!(
-                discovery_location(packet(url).as_bytes(), sender).is_none(),
-                "{url}"
-            );
+            assert!(discovery_location(value, address).is_none(), "{value}");
         }
-        assert!(
-            discovery_location(
-                packet("http://8.8.8.8/root").as_bytes(),
-                Ipv4Addr::new(8, 8, 8, 8)
-            )
-            .is_none()
-        );
+        assert!(discovery_location("http://8.8.8.8/root.xml", Ipv4Addr::new(8, 8, 8, 8)).is_none());
     }
 
     #[test]
@@ -463,14 +367,31 @@ mod tests {
                 ("CurrentURIMetaData", &metadata),
             ],
         );
+        let body = body.unwrap();
         let parsed = xml(&body).unwrap();
-        assert_eq!(parsed.descendant("CurrentURI").unwrap().text, uri);
         assert_eq!(
-            parsed.descendant("CurrentURIMetaData").unwrap().text,
+            parsed
+                .descendant("CurrentURI")
+                .unwrap()
+                .text()
+                .unwrap_or(""),
+            uri
+        );
+        assert_eq!(
+            parsed
+                .descendant("CurrentURIMetaData")
+                .unwrap()
+                .text()
+                .unwrap_or(""),
             metadata
         );
         assert_eq!(
-            xml(&metadata).unwrap().descendant("title").unwrap().text,
+            xml(&metadata)
+                .unwrap()
+                .descendant("title")
+                .unwrap()
+                .text()
+                .unwrap_or(""),
             "旅行 <2026> & 家人"
         );
     }
@@ -530,7 +451,7 @@ mod tests {
                 }
                 requests.push(String::from_utf8(request).unwrap());
                 let body = if index == 4 {
-                    "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><detail><UPnPError><errorCode>701</errorCode></UPnPError></detail></s:Fault></s:Body></s:Envelope>".to_owned()
+                    "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><detail><UPnPError xmlns=\"urn:schemas-upnp-org:control-1-0\"><errorCode>701</errorCode></UPnPError></detail></s:Fault></s:Body></s:Envelope>".to_owned()
                 } else if index == 5 {
                     "<html>Not a SOAP service</html>".to_owned()
                 } else {
@@ -542,7 +463,7 @@ mod tests {
                 socket
                     .write_all(
                         format!(
-                            "HTTP/1.1 {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            "HTTP/1.1 {}\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             if index == 4 {
                                 "500 Internal Server Error"
                             } else {
@@ -563,7 +484,6 @@ mod tests {
             control_url: Url::parse(&format!("http://{address}/control")).unwrap(),
             service_type: format!("{AV_TRANSPORT}1"),
         };
-        let client = client().unwrap();
         for name in ["SetAVTransportURI", "Play", "Pause", "Stop"] {
             let mut arguments = vec![("InstanceID", "0")];
             if name == "SetAVTransportURI" {
@@ -574,16 +494,16 @@ mod tests {
             } else if name == "Play" {
                 arguments.push(("Speed", "1"));
             }
-            action(&client, &renderer, name, &arguments).await.unwrap();
+            action(&renderer, name, &arguments).await.unwrap();
         }
         assert!(
-            action(&client, &renderer, "Pause", &[("InstanceID", "0")])
+            action(&renderer, "Pause", &[("InstanceID", "0")])
                 .await
                 .unwrap_err()
                 .contains("701")
         );
         assert!(
-            action(&client, &renderer, "Stop", &[("InstanceID", "0")])
+            action(&renderer, "Stop", &[("InstanceID", "0")])
                 .await
                 .unwrap_err()
                 .contains("未返回有效")
@@ -600,7 +520,9 @@ mod tests {
             assert!(request.to_ascii_lowercase().contains(
                 &format!("soapaction: \"{}#{name}\"", renderer.service_type).to_ascii_lowercase()
             ));
-            assert!(request.contains(&format!("<u:{name}")));
+            assert!(
+                request.contains(&format!("<{name}")) || request.contains(&format!("<u:{name}"))
+            );
         }
     }
 }

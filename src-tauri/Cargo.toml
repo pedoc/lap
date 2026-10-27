@@ -12,6 +12,7 @@ build = "build.rs"
 
 [build-dependencies]
 cc = "1"
+cmake = "0.1"
 pkg-config = "0.3"
 tauri-build = { version = "2", features = [] }
 
@@ -51,6 +52,13 @@ trash = "3.3.1"
 base64 = "0.22.1"
 flate2 = "1"
 http = "1"
+bytes = "1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+http-range = "0.1"
+tokio-io-timeout = "1.2"
+roxmltree = "0.21"
 image = "0.25.10"
 quick-xml = "0.38.4"
 png = "0.18.1"
@@ -64,8 +72,7 @@ genai = { version = "=0.7.0", default-features = false }
 futures-util = { version = "=0.3.32", default-features = false, features = ["std"] }
 reqwest_ai = { package = "reqwest", version = "=0.13.5", default-features = false, features = ["json", "rustls-no-provider", "socks"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-socket2 = "=0.6.3"
+tokio-util = { version = "0.7", features = ["rt", "io"] }
 tempfile = "3.27"
 opener = "0.7.2"
 arboard = "3.6.1"

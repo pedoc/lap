@@ -10,8 +10,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "native/upnp/build.rs"]
+mod upnp_build;
+
 fn main() {
     write_build_info();
+    upnp_build::build();
     build_libraw();
     build_libheif();
     emit_heif_cache_revision();

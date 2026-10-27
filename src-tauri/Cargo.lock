@@ -9,9 +9,11 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "blake3",
+ "bytes",
  "cc",
  "chrono",
  "clipboard-win",
+ "cmake",
  "csv",
  "dirs 5.0.1",
  "drag",
@@ -21,6 +23,10 @@ dependencies = [
  "genai",
  "hnsw_rs",
  "http",
+ "http-body-util",
+ "http-range",
+ "hyper",
+ "hyper-util",
  "image",
  "imagesize",
  "jxl-oxide",
@@ -47,13 +53,13 @@ dependencies = [
  "reqwest 0.12.28",
  "reqwest 0.13.5",
  "ring",
+ "roxmltree",
  "rstar",
  "rusqlite",
  "rustls",
  "serde",
  "serde_json",
  "sha2",
- "socket2",
  "tauri",
  "tauri-build",
  "tauri-plugin-aptabase",
@@ -67,6 +73,7 @@ dependencies = [
  "tempfile",
  "tokenizers",
  "tokio",
+ "tokio-io-timeout",
  "tokio-util",
  "trash",
  "uuid",
@@ -869,6 +876,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
 dependencies = [
  "error-code",
+]
+
+[[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -2646,6 +2662,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
 name = "hyper"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2659,6 +2681,7 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
+ "httpdate",
  "itoa",
  "pin-project-lite",
  "pin-utils",
@@ -5589,6 +5612,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "rstar"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7140,6 +7172,16 @@ dependencies = [
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-io-timeout"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bd86198d9ee903fedd2f9a2e72014287c0d9167e4ae43b5853007205dda1b76"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]

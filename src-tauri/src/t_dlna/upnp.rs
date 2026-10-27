@@ -1,3 +1,4 @@
+use super::protocol::XmlElement;
 use super::{
     http::Request,
     protocol,
@@ -29,9 +30,9 @@ fn escape(value: &str) -> String {
     quick_xml::escape::escape(value).into_owned()
 }
 
-pub fn description(id: &str, title: &str) -> String {
+pub fn description(id: &str, title: &str, event_base: &str) -> String {
     format!(
-        "<?xml version=\"1.0\"?><root xmlns=\"urn:schemas-upnp-org:device-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion><device><deviceType>{MEDIA_SERVER}</deviceType><friendlyName>{}</friendlyName><manufacturer>Lap</manufacturer><modelName>Lap Media Server</modelName><modelNumber>{}</modelNumber><UDN>uuid:{id}</UDN><serviceList><service><serviceType>{CONTENT_DIRECTORY}</serviceType><serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId><SCPDURL>content-directory.xml</SCPDURL><controlURL>control/content-directory</controlURL><eventSubURL>events/content-directory</eventSubURL></service><service><serviceType>{CONNECTION_MANAGER}</serviceType><serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId><SCPDURL>connection-manager.xml</SCPDURL><controlURL>control/connection-manager</controlURL><eventSubURL>events/connection-manager</eventSubURL></service></serviceList></device></root>",
+        "<?xml version=\"1.0\"?><root xmlns=\"urn:schemas-upnp-org:device-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion><device><deviceType>{MEDIA_SERVER}</deviceType><friendlyName>{}</friendlyName><manufacturer>Lap</manufacturer><modelName>Lap Media Server</modelName><modelNumber>{}</modelNumber><UDN>uuid:{id}</UDN><serviceList><service><serviceType>{CONTENT_DIRECTORY}</serviceType><serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId><SCPDURL>content-directory.xml</SCPDURL><controlURL>control/content-directory</controlURL><eventSubURL>{event_base}/{id}/events/content-directory</eventSubURL></service><service><serviceType>{CONNECTION_MANAGER}</serviceType><serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId><SCPDURL>connection-manager.xml</SCPDURL><controlURL>control/connection-manager</controlURL><eventSubURL>{event_base}/{id}/events/connection-manager</eventSubURL></service></serviceList></device></root>",
         escape(title),
         env!("CARGO_PKG_VERSION")
     )
@@ -151,73 +152,6 @@ pub fn scpd(content_directory: bool) -> String {
     }).collect::<String>();
     format!(
         "<?xml version=\"1.0\"?><scpd xmlns=\"urn:schemas-upnp-org:service-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion><actionList>{actions}</actionList><serviceStateTable>{states}</serviceStateTable></scpd>"
-    )
-}
-
-pub fn targets(id: &str) -> Vec<(String, String)> {
-    let uuid = format!("uuid:{id}");
-    [
-        "upnp:rootdevice",
-        MEDIA_SERVER,
-        CONTENT_DIRECTORY,
-        CONNECTION_MANAGER,
-    ]
-    .into_iter()
-    .map(|target| (target.to_owned(), format!("{uuid}::{target}")))
-    .chain(std::iter::once((uuid.clone(), uuid.clone())))
-    .collect()
-}
-
-pub fn search_targets(packet: &[u8], id: &str) -> Vec<(String, String)> {
-    let Ok(text) = std::str::from_utf8(packet) else {
-        return Vec::new();
-    };
-    let mut lines = text.lines();
-    if lines.next() != Some("M-SEARCH * HTTP/1.1") {
-        return Vec::new();
-    }
-    let headers = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(key, value)| (key.to_ascii_lowercase(), value.trim()))
-        .collect::<std::collections::HashMap<_, _>>();
-    if headers.get("man").map(|value| value.trim_matches('"')) != Some("ssdp:discover") {
-        return Vec::new();
-    }
-    if !headers
-        .get("mx")
-        .and_then(|value| value.parse::<u32>().ok())
-        .is_some_and(|mx| mx > 0)
-    {
-        return Vec::new();
-    }
-    let Some(target) = headers.get("st") else {
-        return Vec::new();
-    };
-    targets(id)
-        .into_iter()
-        .filter(|(name, _)| *target == "ssdp:all" || *target == name)
-        .collect()
-}
-
-pub fn search_response(target: &str, usn: &str, location: &str) -> String {
-    format!(
-        "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=180\r\nEXT:\r\nLOCATION: {location}\r\nSERVER: Lap/{} UPnP/1.0\r\nST: {target}\r\nUSN: {usn}\r\n\r\n",
-        env!("CARGO_PKG_VERSION")
-    )
-}
-
-pub fn advertisement(target: &str, usn: &str, location: &str, alive: bool) -> String {
-    let extra = if alive {
-        format!(
-            "CACHE-CONTROL: max-age=180\r\nLOCATION: {location}\r\nSERVER: Lap/{} UPnP/1.0\r\n",
-            env!("CARGO_PKG_VERSION")
-        )
-    } else {
-        String::new()
-    };
-    format!(
-        "NOTIFY * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nNT: {target}\r\nNTS: ssdp:{}\r\nUSN: {usn}\r\n{extra}\r\n",
-        if alive { "alive" } else { "byebye" }
     )
 }
 
@@ -438,25 +372,7 @@ fn control_inner(
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
         .collect::<Vec<_>>();
-    Ok(protocol::envelope(
-        service,
-        &format!("{action}Response"),
-        &outputs,
-    ))
-}
-
-pub fn event(directory: bool, update_id: u32) -> String {
-    let properties = if directory {
-        format!("<e:property><SystemUpdateID>{update_id}</SystemUpdateID></e:property>")
-    } else {
-        format!(
-            "<e:property><SourceProtocolInfo>{}</SourceProtocolInfo></e:property><e:property><SinkProtocolInfo/></e:property><e:property><CurrentConnectionIDs>0</CurrentConnectionIDs></e:property>",
-            escape(PROTOCOLS)
-        )
-    };
-    format!(
-        "<?xml version=\"1.0\"?><e:propertyset xmlns:e=\"urn:schemas-upnp-org:event-1-0\">{properties}</e:propertyset>"
-    )
+    protocol::envelope(service, &format!("{action}Response"), &outputs).map_err(|_| 501u32)
 }
 
 pub struct BrowseSpec {
@@ -527,52 +443,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn media_server_discovery_advertises_device_directory_and_connection_manager() {
-        let request = |target: &str| {
-            format!(
-                "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {target}\r\n\r\n"
-            )
-        };
-        assert_eq!(
-            search_targets(request("ssdp:all").as_bytes(), "test").len(),
-            5
-        );
-        for target in [
-            "upnp:rootdevice",
-            MEDIA_SERVER,
-            CONTENT_DIRECTORY,
-            CONNECTION_MANAGER,
-            "uuid:test",
-        ] {
-            let targets = search_targets(request(target).as_bytes(), "test");
-            assert_eq!(targets.len(), 1);
-            let response = search_response(
-                &targets[0].0,
-                &targets[0].1,
-                "http://192.168.1.2:1234/test/description.xml",
-            );
-            assert!(response.contains(&format!("ST: {target}\r\n")));
-            assert!(
-                response.contains("LOCATION: http://192.168.1.2:1234/test/description.xml\r\n")
-            );
-            assert!(
-                advertisement(
-                    &targets[0].0,
-                    &targets[0].1,
-                    "http://192.168.1.2/root",
-                    false
-                )
-                .contains("NTS: ssdp:byebye\r\n")
-            );
-        }
-        assert!(
-            search_targets(
-                request("urn:schemas-upnp-org:device:MediaRenderer:1").as_bytes(),
-                "test"
-            )
-            .is_empty()
-        );
-        assert!(description("test", "Lap & 家庭").contains("Lap &amp; 家庭"));
+    fn media_server_description_advertises_its_library_and_sdk_event_endpoints() {
+        let description = description("test", "Lap & 家庭", "http://192.168.1.2:49152");
+        assert!(description.contains("Lap &amp; 家庭"));
+        assert!(description.contains("http://192.168.1.2:49152/test/events/content-directory"));
+        protocol::xml(&description).unwrap();
         protocol::xml(&scpd(true)).unwrap();
         protocol::xml(&scpd(false)).unwrap();
     }

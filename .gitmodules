@@ -13,3 +13,9 @@
 [submodule "src-tauri/third_party/libde265"]
 	path = src-tauri/third_party/libde265
 	url = https://github.com/strukturag/libde265.git
+[submodule "libupnp"]
+	path = src-tauri/third_party/libupnp
+	url = https://github.com/pupnp/pupnp.git
+[submodule "pthreads4w"]
+	path = src-tauri/third_party/pthreads4w
+	url = https://github.com/GerHobbelt/pthread-win32.git

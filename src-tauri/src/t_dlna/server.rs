@@ -1,9 +1,8 @@
-use super::{Media, Source, http, protocol, scope, upnp};
+use super::{Media, Source, http, native, protocol, scope, upnp};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -12,7 +11,7 @@ use std::{
 };
 use tauri::{Listener, Manager};
 use tokio::{
-    net::{TcpListener, TcpStream, UdpSocket},
+    net::{TcpListener, TcpStream},
     sync::{Notify, Semaphore},
 };
 use tokio_util::sync::CancellationToken;
@@ -26,15 +25,6 @@ pub struct Shared {
     server_name: String,
 }
 
-#[derive(Clone)]
-struct Subscription {
-    callback: reqwest::Url,
-    peer: Ipv4Addr,
-    expires: Instant,
-    directory: bool,
-    sequence: u32,
-}
-
 struct Server {
     id: String,
     owner: String,
@@ -46,9 +36,11 @@ struct Server {
     cancel: CancellationToken,
     closed: CancellationToken,
     cache: tokio::sync::Mutex<Option<Arc<Media>>>,
-    subscriptions: Mutex<HashMap<String, Subscription>>,
     updates: Notify,
-    update_id: AtomicU32,
+    update_id: Arc<AtomicU32>,
+    address: Ipv4Addr,
+    event_base: String,
+    published: tokio::sync::watch::Sender<Option<Result<(), String>>>,
     catalogue: upnp::Catalogue,
     stream_catalogue: upnp::StreamCatalogue,
     prepare: fn(&str, i64) -> Result<Media, String>,
@@ -56,33 +48,6 @@ struct Server {
 }
 
 static ACTIVE: Lazy<Mutex<Option<Arc<Server>>>> = Lazy::new(|| Mutex::new(None));
-const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
-
-fn multicast() -> Result<UdpSocket, String> {
-    let socket = socket2::Socket::new(
-        socket2::Domain::IPV4,
-        socket2::Type::DGRAM,
-        Some(socket2::Protocol::UDP),
-    )
-    .map_err(|_| "无法创建 DLNA 发现服务")?;
-    socket
-        .set_reuse_address(true)
-        .map_err(|_| "无法配置 DLNA 发现服务")?;
-    socket
-        .bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, 1900)).into())
-        .map_err(|_| "无法监听 DLNA 发现端口 1900，请检查其他媒体服务和防火墙")?;
-    socket
-        .join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED)
-        .map_err(|_| "无法加入 DLNA 局域网发现组")?;
-    socket
-        .set_multicast_ttl_v4(2)
-        .map_err(|_| "无法配置 DLNA 发现服务")?;
-    socket
-        .set_nonblocking(true)
-        .map_err(|_| "无法配置 DLNA 发现服务")?;
-    UdpSocket::from_std(socket.into()).map_err(|_| "无法启动 DLNA 发现服务".into())
-}
-
 pub async fn start(
     window: tauri::WebviewWindow,
     library_id: String,
@@ -100,7 +65,10 @@ pub async fn start(
         .local_addr()
         .map_err(|_| "无法读取媒体目录服务端口")?
         .port();
-    let socket = multicast()?;
+    let (address, event_base) =
+        tokio::task::spawn_blocking(|| Ok::<_, String>((native::address()?, native::endpoint()?)))
+            .await
+            .map_err(|e| e.to_string())??;
     let server = Arc::new(Server {
         id: uuid::Uuid::new_v4().to_string(),
         owner: window.label().to_owned(),
@@ -115,9 +83,11 @@ pub async fn start(
         cancel: CancellationToken::new(),
         closed: CancellationToken::new(),
         cache: tokio::sync::Mutex::new(None),
-        subscriptions: Mutex::new(HashMap::new()),
         updates: Notify::new(),
-        update_id: AtomicU32::new(1),
+        update_id: Arc::new(AtomicU32::new(1)),
+        address,
+        event_base,
+        published: tokio::sync::watch::channel(None).0,
         catalogue: scope::page,
         stream_catalogue: scope::stream_page,
         prepare: super::prepare_media,
@@ -136,11 +106,11 @@ pub async fn start(
         scope_name: server.scope.title.clone(),
         server_name: server.name.clone(),
     };
-    tauri::async_runtime::spawn(run(listener, socket, server, window.app_handle().clone()));
+    tauri::async_runtime::spawn(run(listener, server, window.app_handle().clone()));
     Ok(result)
 }
 
-pub fn activate(owner: &str, id: &str) -> Result<(), String> {
+pub async fn activate(owner: &str, id: &str) -> Result<(), String> {
     let server = ACTIVE
         .lock()
         .map_err(|_| "共享服务不可用")?
@@ -148,9 +118,27 @@ pub fn activate(owner: &str, id: &str) -> Result<(), String> {
         .filter(|server| server.id == id && server.owner == owner && !server.cancel.is_cancelled())
         .cloned()
         .ok_or("共享会话已结束")?;
+    let mut published = server.published.subscribe();
     server.active.store(true, Ordering::Release);
     server.activated.notify_one();
-    Ok(())
+    let result = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if let Some(result) = published.borrow_and_update().clone() {
+                return result;
+            }
+            published
+                .changed()
+                .await
+                .map_err(|_| "共享服务已关闭".to_owned())?;
+        }
+    })
+    .await
+    .map_err(|_| "媒体服务器注册超时".to_owned())
+    .and_then(|result| result);
+    if result.is_err() {
+        server.cancel.cancel();
+    }
+    result
 }
 
 pub async fn disconnect(owner: &str, id: &str) -> Result<(), String> {
@@ -177,120 +165,46 @@ pub fn release_owner(owner: &str) {
     }
 }
 
-async fn route_address(peer: Ipv4Addr) -> Option<Ipv4Addr> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await.ok()?;
-    socket.connect((peer, 9)).await.ok()?;
-    match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(address) => Some(address),
-        _ => None,
-    }
-}
-
-async fn notify_presence(socket: &UdpSocket, server: &Server, alive: bool) {
-    let Some(address) = route_address(GROUP).await else {
-        return;
-    };
-    let location = format!(
-        "http://{address}:{}/{}/description.xml",
-        server.port, server.id
-    );
-    for (target, usn) in upnp::targets(&server.id) {
-        if alive && server.cancel.is_cancelled() {
-            break;
-        }
-        let text = upnp::advertisement(&target, &usn, &location, alive);
-        let _ = tokio::time::timeout(
-            Duration::from_millis(250),
-            socket.send_to(text.as_bytes(), (GROUP, 1900)),
-        )
-        .await;
-    }
-}
-
-async fn discovery(socket: UdpSocket, server: Arc<Server>) {
+async fn publish(server: Arc<Server>) {
     if !server.active.load(Ordering::Acquire) {
-        tokio::select! {_=server.cancel.cancelled()=>return,_=server.activated.notified()=>{}}
+        tokio::select! { _=server.cancel.cancelled()=>return, _=server.activated.notified()=>{} }
     }
     if server.cancel.is_cancelled() {
         return;
     }
-    let mut interval = tokio::time::interval(Duration::from_secs(60));
-    let mut buffer = [0u8; 8192];
+    let description = format!(
+        "http://{}:{}/{}/description.xml",
+        server.address, server.port, server.id
+    );
+    let device = native::Device::publish(
+        description,
+        server.id.clone(),
+        upnp::PROTOCOLS,
+        server.update_id.clone(),
+    );
+    let mut device = match tokio::select! { _=server.cancel.cancelled()=>return, result=device=>result }
+    {
+        Ok(device) => {
+            server.published.send_replace(Some(Ok(())));
+            device
+        }
+        Err(error) => {
+            server.published.send_replace(Some(Err(error)));
+            server.cancel.cancel();
+            return;
+        }
+    };
     loop {
         tokio::select! {
             _=server.cancel.cancelled()=>break,
-            _=interval.tick()=>notify_presence(&socket,&server,true).await,
-            packet=socket.recv_from(&mut buffer)=>{
-                let Ok((length,peer))=packet else {break;};
-                let IpAddr::V4(peer_ip)=peer.ip() else {continue;};
-                if !protocol::lan_address(peer_ip) {continue;}
-                let targets=upnp::search_targets(&buffer[..length],&server.id);
-                if targets.is_empty() {continue;}
-                let Some(address)=route_address(peer_ip).await else {continue;};
-                let location=format!("http://{address}:{}/{}/description.xml",server.port,server.id);
-                for (target,usn) in targets {
-                    let text=upnp::search_response(&target,&usn,&location);
-                    let _=tokio::time::timeout(Duration::from_millis(250),socket.send_to(text.as_bytes(),peer)).await;
-                }
-            }
+            _=server.updates.notified()=>{ let _=device.notify(server.update_id.load(Ordering::Acquire)); }
         }
     }
-    notify_presence(&socket, &server, false).await;
+    device.close().await;
 }
 
-async fn events(server: Arc<Server>) {
-    let Ok(client) = protocol::client() else {
-        return;
-    };
-    let Ok(method) = reqwest::Method::from_bytes(b"NOTIFY") else {
-        return;
-    };
-    let mut interval = tokio::time::interval(Duration::from_secs(30));
-    loop {
-        tokio::select! {
-            _=server.cancel.cancelled()=>break,
-            _=interval.tick()=>{if let Ok(mut subscriptions)=server.subscriptions.lock(){subscriptions.retain(|_,sub|sub.expires>Instant::now());}continue;},
-            _=server.updates.notified()=>{},
-        }
-        let batch = if let Ok(mut subscriptions) = server.subscriptions.lock() {
-            subscriptions.retain(|_, sub| sub.expires > Instant::now());
-            subscriptions
-                .iter_mut()
-                .map(|(sid, sub)| {
-                    let result = (sid.clone(), sub.clone());
-                    sub.sequence = if sub.sequence == u32::MAX {
-                        1
-                    } else {
-                        sub.sequence + 1
-                    };
-                    result
-                })
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        for (sid, sub) in batch {
-            let notification = client
-                .request(method.clone(), sub.callback)
-                .timeout(Duration::from_secs(3))
-                .header("Content-Type", "text/xml; charset=\"utf-8\"")
-                .header("NT", "upnp:event")
-                .header("NTS", "upnp:propchange")
-                .header("SID", sid)
-                .header("SEQ", sub.sequence.to_string())
-                .body(upnp::event(
-                    sub.directory,
-                    server.update_id.load(Ordering::Acquire),
-                ))
-                .send();
-            tokio::select! {_=server.cancel.cancelled()=>return,_=notification=>{}}
-        }
-    }
-}
-
-async fn run(listener: TcpListener, socket: UdpSocket, server: Arc<Server>, app: tauri::AppHandle) {
-    let discovery = tauri::async_runtime::spawn(discovery(socket, server.clone()));
-    let event_task = tauri::async_runtime::spawn(events(server.clone()));
+async fn run(listener: TcpListener, server: Arc<Server>, app: tauri::AppHandle) {
+    let publication = tauri::async_runtime::spawn(publish(server.clone()));
     let listeners = [
         "media-lifecycle-changed",
         "files-deleted",
@@ -326,7 +240,7 @@ async fn run(listener: TcpListener, socket: UdpSocket, server: Arc<Server>, app:
                 let Ok(permit)=permits.clone().try_acquire_owned() else {continue;}; let server=server.clone();
                 tauri::async_runtime::spawn(async move {
                     let _permit=permit;
-                    tokio::select! {_=server.cancel.cancelled()=>{},_=handle(stream,peer_ip,&server)=>{}}
+                    tokio::select! {_=server.cancel.cancelled()=>{},_=handle(stream,peer_ip,server.clone())=>{}}
                 });
             }
         }
@@ -336,8 +250,7 @@ async fn run(listener: TcpListener, socket: UdpSocket, server: Arc<Server>, app:
     for id in listeners {
         app.unlisten(id);
     }
-    let _ = discovery.await;
-    let _ = event_task.await;
+    let _ = publication.await;
     *server.cache.lock().await = None;
     if let Ok(mut active) = ACTIVE.lock() {
         if active.as_ref().is_some_and(|active| active.id == server.id) {
@@ -345,97 +258,6 @@ async fn run(listener: TcpListener, socket: UdpSocket, server: Arc<Server>, app:
         }
     }
     server.closed.cancel();
-}
-
-fn callback(value: &str, peer: Ipv4Addr) -> Option<reqwest::Url> {
-    let value = value.strip_prefix('<')?.strip_suffix('>')?;
-    let url = reqwest::Url::parse(value).ok()?;
-    (url.scheme() == "http"
-        && url.host_str()?.parse::<Ipv4Addr>().ok()? == peer
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.fragment().is_none())
-    .then_some(url)
-}
-
-async fn subscribe(
-    stream: &mut TcpStream,
-    request: &http::Request,
-    peer: Ipv4Addr,
-    server: &Server,
-    directory: bool,
-) -> std::io::Result<()> {
-    let result = (|| -> Option<(String, u64)> {
-        let seconds = match request.header("timeout") {
-            Some("Second-infinite") | None => 300,
-            Some(value) => value
-                .strip_prefix("Second-")?
-                .parse::<u64>()
-                .ok()?
-                .clamp(1, 1800),
-        };
-        let mut subscriptions = server.subscriptions.lock().ok()?;
-        subscriptions.retain(|_, sub| sub.expires > Instant::now());
-        if let Some(sid) = request.header("sid") {
-            if request.header("callback").is_some() || request.header("nt").is_some() {
-                return None;
-            }
-            let sub = subscriptions
-                .get_mut(sid)
-                .filter(|sub| sub.peer == peer && sub.directory == directory)?;
-            if request.method == "UNSUBSCRIBE" {
-                subscriptions.remove(sid);
-            } else {
-                sub.expires = Instant::now() + Duration::from_secs(seconds);
-            }
-            Some((sid.to_owned(), seconds))
-        } else {
-            if request.method != "SUBSCRIBE"
-                || request.header("nt") != Some("upnp:event")
-                || subscriptions.len() >= 16
-            {
-                return None;
-            }
-            let callback = callback(request.header("callback")?, peer)?;
-            let sid = format!("uuid:{}", uuid::Uuid::new_v4());
-            subscriptions.insert(
-                sid.clone(),
-                Subscription {
-                    callback,
-                    peer,
-                    expires: Instant::now() + Duration::from_secs(seconds),
-                    directory,
-                    sequence: 0,
-                },
-            );
-            Some((sid, seconds))
-        }
-    })();
-    if let Some((sid, seconds)) = result {
-        http::reply(
-            stream,
-            "200 OK",
-            "text/plain",
-            b"",
-            &[("SID", sid), ("TIMEOUT", format!("Second-{seconds}"))],
-            false,
-        )
-        .await?;
-        if request.method == "SUBSCRIBE" {
-            server.updates.notify_one();
-        }
-        Ok(())
-    } else {
-        http::reply(
-            stream,
-            "412 Precondition Failed",
-            "text/plain",
-            b"",
-            &[],
-            false,
-        )
-        .await
-    }
 }
 
 async fn prepared_media(server: &Server, id: i64, path: &str) -> Result<Arc<Media>, String> {
@@ -500,152 +322,132 @@ fn spool_browse(
     Ok((file, length))
 }
 
-async fn handle(mut stream: TcpStream, peer: Ipv4Addr, server: &Server) -> std::io::Result<()> {
-    let request = match http::read(&mut stream).await {
-        Ok(request) => request,
-        Err(_) => {
-            return http::reply(
-                &mut stream,
-                "400 Bad Request",
-                "text/plain",
-                b"",
-                &[],
-                false,
-            )
-            .await;
-        }
-    };
-    if !server.active.load(Ordering::Acquire) || server.cancel.is_cancelled() {
-        return http::reply(&mut stream, "404 Not Found", "text/plain", b"", &[], false).await;
-    }
-    let prefix = format!("/{}/", server.id);
-    let Some(path) = request
-        .target
-        .split('?')
-        .next()
-        .and_then(|path| path.strip_prefix(&prefix))
-    else {
-        return http::reply(&mut stream, "404 Not Found", "text/plain", b"", &[], false).await;
-    };
-    let head = request.method == "HEAD";
-    if matches!(request.method.as_str(), "GET" | "HEAD") {
-        let document = match path {
-            "description.xml" => Some(upnp::description(&server.id, &server.name)),
-            "content-directory.xml" => Some(upnp::scpd(true)),
-            "connection-manager.xml" => Some(upnp::scpd(false)),
-            _ => None,
-        };
-        if let Some(document) = document {
-            return http::reply(
-                &mut stream,
-                "200 OK",
-                "text/xml; charset=\"utf-8\"",
-                document.as_bytes(),
-                &[],
-                head,
-            )
-            .await;
-        }
-        if let Some(id) = path
-            .strip_prefix("media/")
-            .and_then(|value| value.split_once('.'))
-            .filter(|(_, extension)| {
-                !extension.is_empty()
-                    && extension.len() < 12
-                    && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-            })
-            .and_then(|(id, _)| id.parse::<i64>().ok())
-            .filter(|id| server.scope.contains(*id))
-        {
-            if let Ok(media) = prepared_media(server, id, &request.target).await {
-                return super::send_media(
-                    &mut stream,
-                    &request.method,
-                    request.header("range"),
-                    &server.scope.library,
-                    media,
-                    server.verify,
-                    || !server.cancel.is_cancelled(),
-                )
-                .await;
+async fn handle(stream: TcpStream, _peer: Ipv4Addr, server: Arc<Server>) -> std::io::Result<()> {
+    let local = stream.local_addr()?;
+    http::serve(stream, move |request| {
+        let server = server.clone();
+        async move {
+            if !server.active.load(Ordering::Acquire) || server.cancel.is_cancelled() {
+                return http::reply("404 Not Found", "text/plain", b"", &[], false);
             }
-        }
-    } else if request.method == "POST"
-        && matches!(
-            path,
-            "control/content-directory" | "control/connection-manager"
-        )
-    {
-        let directory = path.ends_with("content-directory");
-        let base = format!("http://{}/{}", stream.local_addr()?, server.id);
-        let scope = server.scope.clone();
-        let catalogue = server.catalogue;
-        let update = server.update_id.load(Ordering::Acquire);
-        if directory {
-            if let Some(spec) = upnp::streamed_browse(&request) {
-                let code = match spec {
-                    Ok(spec) => {
-                        let catalogue = server.stream_catalogue;
-                        let cancel = server.cancel.clone();
-                        match tokio::task::spawn_blocking(move || {
-                            spool_browse(&scope, &spec, &base, update, catalogue, &cancel)
-                        })
-                        .await
-                        {
-                            Ok(Ok((file, length))) => {
-                                return http::reply_file(&mut stream, file, length).await;
-                            }
-                            _ => 501,
-                        }
-                    }
-                    Err(code) => code,
+            let prefix = format!("/{}/", server.id);
+            let Some(path) = request
+                .target
+                .split('?')
+                .next()
+                .and_then(|path| path.strip_prefix(&prefix))
+            else {
+                return http::reply("404 Not Found", "text/plain", b"", &[], false);
+            };
+            let head = request.method == "HEAD";
+            if matches!(request.method.as_str(), "GET" | "HEAD") {
+                let document = match path {
+                    "description.xml" => Some(upnp::description(
+                        &server.id,
+                        &server.name,
+                        &server.event_base,
+                    )),
+                    "content-directory.xml" => Some(upnp::scpd(true)),
+                    "connection-manager.xml" => Some(upnp::scpd(false)),
+                    _ => None,
                 };
-                let response = upnp::fault(code);
+                if let Some(document) = document {
+                    return http::reply(
+                        "200 OK",
+                        "text/xml; charset=\"utf-8\"",
+                        document.as_bytes(),
+                        &[],
+                        head,
+                    );
+                }
+                if let Some(id) = path
+                    .strip_prefix("media/")
+                    .and_then(|value| value.split_once('.'))
+                    .filter(|(_, extension)| {
+                        !extension.is_empty()
+                            && extension.len() < 12
+                            && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                    })
+                    .and_then(|(id, _)| id.parse::<i64>().ok())
+                    .filter(|id| server.scope.contains(*id))
+                {
+                    if let Ok(media) = prepared_media(&server, id, &request.target).await {
+                        return super::send_media(
+                            &request.method,
+                            request.header("range"),
+                            &server.scope.library,
+                            media,
+                            server.verify,
+                            {
+                                let server = server.clone();
+                                move || !server.cancel.is_cancelled()
+                            },
+                        )
+                        .await;
+                    }
+                }
+            } else if request.method == "POST"
+                && matches!(
+                    path,
+                    "control/content-directory" | "control/connection-manager"
+                )
+            {
+                let directory = path.ends_with("content-directory");
+                let base = format!("http://{local}/{}", server.id);
+                let scope = server.scope.clone();
+                let catalogue = server.catalogue;
+                let update = server.update_id.load(Ordering::Acquire);
+                if directory {
+                    if let Some(spec) = upnp::streamed_browse(&request) {
+                        let code = match spec {
+                            Ok(spec) => {
+                                let catalogue = server.stream_catalogue;
+                                let cancel = server.cancel.clone();
+                                match tokio::task::spawn_blocking(move || {
+                                    spool_browse(&scope, &spec, &base, update, catalogue, &cancel)
+                                })
+                                .await
+                                {
+                                    Ok(Ok((file, length))) => {
+                                        return http::reply_file(file, length);
+                                    }
+                                    _ => 501,
+                                }
+                            }
+                            Err(code) => code,
+                        };
+                        let response = upnp::fault(code);
+                        return http::reply(
+                            response.status,
+                            "text/xml; charset=\"utf-8\"",
+                            response.body.as_bytes(),
+                            &[],
+                            false,
+                        );
+                    }
+                }
+                let response = tokio::task::spawn_blocking(move || {
+                    upnp::control(&request, directory, &scope, &base, update, catalogue)
+                })
+                .await
+                .map_err(std::io::Error::other)?;
                 return http::reply(
-                    &mut stream,
                     response.status,
                     "text/xml; charset=\"utf-8\"",
                     response.body.as_bytes(),
                     &[],
                     false,
-                )
-                .await;
+                );
             }
+            http::reply("404 Not Found", "text/plain", b"", &[], head)
         }
-        let response = tokio::task::spawn_blocking(move || {
-            upnp::control(&request, directory, &scope, &base, update, catalogue)
-        })
-        .await
-        .map_err(std::io::Error::other)?;
-        return http::reply(
-            &mut stream,
-            response.status,
-            "text/xml; charset=\"utf-8\"",
-            response.body.as_bytes(),
-            &[],
-            false,
-        )
-        .await;
-    } else if matches!(request.method.as_str(), "SUBSCRIBE" | "UNSUBSCRIBE")
-        && matches!(
-            path,
-            "events/content-directory" | "events/connection-manager"
-        )
-    {
-        return subscribe(
-            &mut stream,
-            &request,
-            peer,
-            server,
-            path.ends_with("content-directory"),
-        )
-        .await;
-    }
-    http::reply(&mut stream, "404 Not Found", "text/plain", b"", &[], head).await
+    })
+    .await
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::protocol::XmlElement;
     use super::*;
     use std::path::PathBuf;
 
@@ -711,7 +513,7 @@ mod tests {
             .unwrap(),
         );
         Arc::new(Server {
-            id: "test-share".into(),
+            id: uuid::Uuid::new_v4().to_string(),
             owner: "test-window".into(),
             name: "Lap · 测试".into(),
             scope,
@@ -721,9 +523,11 @@ mod tests {
             cancel: CancellationToken::new(),
             closed: CancellationToken::new(),
             cache: tokio::sync::Mutex::new(None),
-            subscriptions: Mutex::new(HashMap::new()),
             updates: Notify::new(),
-            update_id: AtomicU32::new(1),
+            update_id: Arc::new(AtomicU32::new(1)),
+            address: native::address().unwrap(),
+            event_base: native::endpoint().unwrap(),
+            published: tokio::sync::watch::channel(None).0,
             catalogue,
             stream_catalogue,
             prepare,
@@ -732,22 +536,40 @@ mod tests {
     }
 
     async fn start_fixture() -> (String, Arc<Server>, tokio::task::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let state = fixture(address.port());
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let address = std::net::SocketAddrV4::new(native::address().unwrap(), port);
+        let state = fixture(port);
         let server = state.clone();
         let task = tokio::spawn(async move {
-            let notifications = tokio::spawn(events(server.clone()));
+            let publication = tokio::spawn(publish(server.clone()));
             loop {
                 tokio::select! {
                     _=server.cancel.cancelled()=>break,
-                    connection=listener.accept()=>{let (stream,_)=connection.unwrap();let server=server.clone();tokio::spawn(async move {tokio::select! {_=server.cancel.cancelled()=>{},result=handle(stream,Ipv4Addr::LOCALHOST,&server)=>{result.unwrap();}}});}
+                    connection=listener.accept()=>{let (stream,_)=connection.unwrap();let server=server.clone();tokio::spawn(async move {tokio::select! {_=server.cancel.cancelled()=>{},result=handle(stream,Ipv4Addr::LOCALHOST,server.clone())=>{result.unwrap();}}});}
                 }
             }
             drop(listener);
-            let _ = notifications.await;
+            let _ = publication.await;
         });
-        (format!("http://{address}/test-share"), state, task)
+        (format!("http://{address}/{}", state.id), state, task)
+    }
+
+    async fn activate_fixture(server: &Server) {
+        let mut published = server.published.subscribe();
+        server.active.store(true, Ordering::Release);
+        server.activated.notify_one();
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Some(result) = published.borrow_and_update().clone() {
+                    return result;
+                }
+                published.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap()
+        .unwrap();
     }
 
     async fn browse(
@@ -769,7 +591,8 @@ mod tests {
                 ("RequestedCount", count),
                 ("SortCriteria", ""),
             ],
-        );
+        )
+        .unwrap();
         client
             .post(format!("{base}/control/content-directory"))
             .header(
@@ -799,7 +622,31 @@ mod tests {
                 .status(),
             404
         );
-        server.active.store(true, Ordering::Release);
+        activate_fixture(&server).await;
+        let socket = tokio::net::UdpSocket::bind((server.address, 0))
+            .await
+            .unwrap();
+        let search = format!(
+            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: uuid:{}\r\n\r\n",
+            server.id
+        );
+        socket
+            .send_to(search.as_bytes(), (Ipv4Addr::new(239, 255, 255, 250), 1900))
+            .await
+            .unwrap();
+        let mut packet = [0u8; 8192];
+        let (length, _) =
+            tokio::time::timeout(Duration::from_secs(4), socket.recv_from(&mut packet))
+                .await
+                .unwrap()
+                .unwrap();
+        let response = String::from_utf8_lossy(&packet[..length]);
+        assert!(
+            response
+                .to_ascii_lowercase()
+                .contains(&format!("location: {base}/description.xml").to_ascii_lowercase())
+        );
+        assert!(response.contains(&format!("uuid:{}", server.id)));
         let descriptor = client
             .get(format!("{base}/description.xml"))
             .send()
@@ -873,13 +720,19 @@ mod tests {
 
     #[tokio::test]
     async fn event_subscriptions_send_initial_state_and_reject_callbacks_on_other_hosts() {
-        let (base, server, task) = start_fixture().await;
-        server.active.store(true, Ordering::Release);
+        let (_base, server, task) = start_fixture().await;
+        activate_fixture(&server).await;
         let client = protocol::client().unwrap();
         let method = reqwest::Method::from_bytes(b"SUBSCRIBE").unwrap();
         assert_eq!(
             client
-                .request(method.clone(), format!("{base}/events/content-directory"))
+                .request(
+                    method.clone(),
+                    format!(
+                        "{}/{}/events/content-directory",
+                        server.event_base, server.id
+                    )
+                )
                 .header("NT", "upnp:event")
                 .header("CALLBACK", "<http://8.8.8.8/events>")
                 .send()
@@ -888,18 +741,55 @@ mod tests {
                 .status(),
             412
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other = if server.address != Ipv4Addr::new(10, 255, 255, 254) {
+            "10.255.255.254"
+        } else {
+            "10.255.255.253"
+        };
+        assert_eq!(
+            client
+                .request(
+                    method.clone(),
+                    format!(
+                        "{}/{}/events/content-directory",
+                        server.event_base, server.id
+                    )
+                )
+                .header("NT", "upnp:event")
+                .header("CALLBACK", format!("<http://{other}/events>"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            412
+        );
+        let listener = TcpListener::bind((server.address, 0)).await.unwrap();
         let callback_url = format!("<http://{}/events>", listener.local_addr().unwrap());
         let callback = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let request = http::read(&mut stream).await.unwrap();
-            http::reply(&mut stream, "200 OK", "text/plain", b"", &[], false)
-                .await
-                .unwrap();
-            request
+            let (stream, _) = listener.accept().await.unwrap();
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let sender = Arc::new(Mutex::new(Some(sender)));
+            http::serve(stream, move |request| {
+                let sender = sender.clone();
+                async move {
+                    if let Some(sender) = sender.lock().unwrap().take() {
+                        let _ = sender.send(request);
+                    }
+                    http::reply("200 OK", "text/plain", b"", &[], false)
+                }
+            })
+            .await
+            .unwrap();
+            receiver.await.unwrap()
         });
         let response = client
-            .request(method, format!("{base}/events/content-directory"))
+            .request(
+                method,
+                format!(
+                    "{}/{}/events/content-directory",
+                    server.event_base, server.id
+                ),
+            )
             .header("NT", "upnp:event")
             .header("CALLBACK", callback_url)
             .header("TIMEOUT", "Second-30")
@@ -930,7 +820,10 @@ mod tests {
             client
                 .request(
                     reqwest::Method::from_bytes(b"UNSUBSCRIBE").unwrap(),
-                    format!("{base}/events/content-directory")
+                    format!(
+                        "{}/{}/events/content-directory",
+                        server.event_base, server.id
+                    )
                 )
                 .header("SID", sid)
                 .send()
@@ -939,7 +832,6 @@ mod tests {
                 .status(),
             200
         );
-        assert!(server.subscriptions.lock().unwrap().is_empty());
         server.cancel.cancel();
         task.await.unwrap();
     }
