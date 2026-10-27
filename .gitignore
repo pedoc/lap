@@ -16,3 +16,4 @@ set_version.py
 publish_release.sh
 release-downloads.sh
 .codex/readme-*/
+videos/
