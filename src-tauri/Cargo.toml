@@ -59,6 +59,7 @@ http-body-util = "0.1"
 http-range = "0.1"
 tokio-io-timeout = "1.2"
 roxmltree = "0.21"
+netdev = { version = "0.46", default-features = false, features = ["gateway"] }
 image = "0.25.10"
 quick-xml = "0.38.4"
 png = "0.18.1"

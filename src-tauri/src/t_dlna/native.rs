@@ -15,6 +15,7 @@ use std::{
 unsafe extern "C" {
     fn lap_upnp_init(
         callback: unsafe extern "C" fn(*const c_char, *const u8),
+        interface_name: *const c_char,
         handle: *mut c_int,
     ) -> c_int;
     fn lap_upnp_address() -> *const c_char;
@@ -69,8 +70,16 @@ fn string(value: &str) -> Result<CString, String> {
 fn client() -> Result<c_int, String> {
     CLIENT
         .get_or_try_init(|| {
+            // SDK auto-selection can pick a VMware/host-only adapter. Use the
+            // operating system's default interface and let the SDK bind SSDP to it.
+            let interface = netdev::get_default_interface()
+                .map_err(|error| format!("无法确定 DLNA 使用的网络接口：{error}"))?;
+            if interface.ipv4.is_empty() {
+                return Err("默认网络接口没有 IPv4 地址，无法搜索局域网电视".into());
+            }
+            let interface_name = string(&interface.name)?;
             let mut handle = 0;
-            check(unsafe { lap_upnp_init(discovered, &mut handle) })?;
+            check(unsafe { lap_upnp_init(discovered, interface_name.as_ptr(), &mut handle) })?;
             Ok(handle)
         })
         .copied()
@@ -298,6 +307,18 @@ impl Drop for Device {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn sdk_binds_the_os_default_interface_instead_of_the_first_virtual_adapter() {
+        let interface = netdev::get_default_interface().unwrap();
+        let bound = tokio::task::spawn_blocking(address).await.unwrap().unwrap();
+        assert!(
+            interface.ipv4.iter().any(|network| network.addr() == bound),
+            "SDK bound {bound}, OS default interface is {} ({:?})",
+            interface.name,
+            interface.ipv4
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn sdk_discovers_a_standard_renderer_and_unregister_removes_it() {

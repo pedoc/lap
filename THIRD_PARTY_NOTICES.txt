@@ -652,7 +652,7 @@ h2 0.4.13 (Rust; MIT) | Notice [129]: LICENSE | https://github.com/hyperium/h2 |
 half 2.7.1 (Rust; MIT OR Apache-2.0) | Notice [4]: LICENSE-APACHE | Notice [107]: LICENSE-MIT | https://github.com/VoidStarKat/half-rs | Authors: Kathryn Long <squeeself@gmail.com>
 HarfBuzz FFmpeg sidecar dependency (Native / Assets; MIT) | Notice [130]: FFmpeg-HarfBuzz-COPYING | https://github.com/harfbuzz/harfbuzz | Enabled in the bundled macOS FFmpeg build. Upstream license notice snapshot; the exact component version is not supplied by the binary distributor.
 hash32 0.3.1 (Rust; MIT OR Apache-2.0) | Notice [14]: LICENSE-APACHE | Notice [28]: LICENSE-MIT | https://github.com/japaric/hash32 | Authors: Jorge Aparicio <jorge@japaric.io>
-hashbrown 0.14.5, 0.15.5, 0.16.1 (Rust; MIT OR Apache-2.0) | Notice [14]: LICENSE-APACHE | Notice [131]: LICENSE-MIT | https://github.com/rust-lang/hashbrown | Authors: Amanieu d'Antras <amanieu@gmail.com>
+hashbrown 0.14.5, 0.15.5, 0.17.1 (Rust; MIT OR Apache-2.0) | Notice [14]: LICENSE-APACHE | Notice [131]: LICENSE-MIT | https://github.com/rust-lang/hashbrown | Authors: Amanieu d'Antras <amanieu@gmail.com>
 hashlink 0.9.1 (Rust; MIT OR Apache-2.0) | Notice [14]: LICENSE-APACHE | Notice [132]: LICENSE-MIT | https://github.com/kyren/hashlink | Authors: kyren <kerriganw@gmail.com>
 heapless 0.8.0 (Rust; MIT OR Apache-2.0) | Notice [14]: LICENSE-APACHE | Notice [18]: LICENSE-MIT | https://github.com/rust-embedded/heapless | Authors: Jorge Aparicio <jorge@japaric.io>, Per Lindgren <per.lindgren@ltu.se>, Emil Fresk <emil.fresk@gmail.com>
 heck 0.5.0 (Rust; MIT OR Apache-2.0) | Notice [14]: LICENSE-APACHE | Notice [133]: LICENSE-MIT | https://github.com/withoutboats/heck
@@ -676,7 +676,7 @@ idna 1.1.0 (Rust; MIT OR Apache-2.0) | Notice [14]: LICENSE-APACHE | Notice [152
 idna_adapter 1.2.1 (Rust; Apache-2.0 OR MIT) | Notice [14]: LICENSE-APACHE | Notice [153]: LICENSE-MIT | https://github.com/hsivonen/idna_adapter | Authors: The rust-url developers
 image-webp 0.2.4 (Rust; MIT OR Apache-2.0) | Notice [4]: LICENSE-APACHE | Notice [107]: LICENSE-MIT | https://github.com/image-rs/image-webp
 imgref 1.12.0 (Rust; CC0-1.0 OR Apache-2.0) | Notice [14]: LICENSE-APACHE | Notice [42]: LICENSE-CC0 | https://github.com/kornelski/imgref | Authors: Kornel Lesiński <kornel@geekhood.net>
-indexmap 2.13.0 (Rust; Apache-2.0 OR MIT) | Notice [14]: LICENSE-APACHE | Notice [155]: LICENSE-MIT | https://github.com/indexmap-rs/indexmap
+indexmap 2.14.2 (Rust; Apache-2.0 OR MIT) | Notice [14]: LICENSE-APACHE | Notice [155]: LICENSE-MIT | https://github.com/indexmap-rs/indexmap
 infer 0.19.0 (Rust; MIT) | Notice [156]: LICENSE | https://github.com/bojand/infer | Authors: Bojan <dbojan@gmail.com>
 ipnet 2.12.0 (Rust; MIT OR Apache-2.0) | Notice [159]: LICENSE-APACHE | Notice [160]: LICENSE-MIT | https://github.com/krisprice/ipnet | Authors: Kris Price <kris@krisprice.nz>
 iri-string 0.7.12 (Rust; MIT OR Apache-2.0) | Notice [14]: LICENSE-APACHE.txt | Notice [161]: LICENSE-MIT.txt | https://github.com/lo48576/iri-string | Authors: YOSHIOKA Takuma <nop_thread@nops.red>
@@ -798,7 +798,7 @@ phf_macros 0.11.3 (Rust; MIT) | Notice [253]: LICENSE | https://github.com/rust-
 phf_shared 0.11.3 (Rust; MIT) | Notice [253]: LICENSE | https://github.com/rust-phf/rust-phf | Authors: Steven Fackler <sfackler@gmail.com>
 pin-project-lite 0.2.17 (Rust; Apache-2.0 OR MIT) | Notice [4]: LICENSE-APACHE | Notice [13]: LICENSE-MIT | https://github.com/taiki-e/pin-project-lite
 pin-utils 0.1.0 (Rust; MIT OR Apache-2.0) | Notice [254]: LICENSE-APACHE | Notice [255]: LICENSE-MIT | https://github.com/rust-lang-nursery/pin-utils | Authors: Josef Brandl <mail@josefbrandl.de>
-plist 1.8.0 (Rust; MIT) | Notice [259]: LICENCE | https://github.com/ebarnard/rust-plist/ | Authors: Ed Barnard <eabarnard@gmail.com>
+plist 1.10.3 (Rust; MIT) | Notice [392]: LICENCE | https://github.com/ebarnard/rust-plist/ | Authors: Ed Barnard <eabarnard@gmail.com>
 potential_utf 0.1.4 (Rust; Unicode-3.0) | Notice [151]: LICENSE | https://github.com/unicode-org/icu4x | Authors: The ICU4X Project Developers
 powerfmt 0.2.0 (Rust; MIT OR Apache-2.0) | Notice [261]: LICENSE-Apache | Notice [262]: LICENSE-MIT | https://github.com/jhpratt/powerfmt | Authors: Jacob Pratt <jacob@jhpratt.dev>
 ppv-lite86 0.2.21 (Rust; MIT OR Apache-2.0) | Notice [263]: LICENSE-APACHE | Notice [264]: LICENSE-MIT | https://github.com/cryptocorrosion/cryptocorrosion | Authors: The CryptoCorrosion Contributors
@@ -991,6 +991,16 @@ zune-core 0.5.1 (Rust; MIT OR Apache-2.0 OR Zlib) | Notice [14]: LICENSE-APACHE 
 zune-inflate 0.2.54 (Rust; MIT OR Apache-2.0 OR Zlib) | Notice [381]: etemesi254--zune-image--69502ce83fdf--LICENSE.md | https://crates.io/crates/zune-inflate/0.2.54
 zune-jpeg 0.5.15 (Rust; MIT OR Apache-2.0 OR Zlib) | Notice [14]: LICENSE-APACHE | Notice [379]: LICENSE-MIT | Notice [380]: LICENSE-ZLIB | https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg | Authors: caleb <etemesicaleb@gmail.com>
 ZVBI FFmpeg sidecar dependency (Native / Assets; LGPL-2.0-or-later / GPL-2.0 / BSD / MIT (see file notices)) | Notice [382]: FFmpeg-ZVBI-COPYING.md | https://github.com/zapping-vbi/zvbi | Enabled in the bundled macOS FFmpeg build. Upstream license notice snapshot; the exact component version is not supplied by the binary distributor.
+
+Additional network-interface dependencies:
+
+netdev 0.46.3 (Rust; MIT) | Notice [387]: LICENSE | https://github.com/shellrow/netdev
+mac-addr 0.3.0 (Rust; MIT) | Notice [388]: LICENSE | https://github.com/shellrow/mac-addr
+netlink-packet-core 0.9.0 (Rust; MIT) | Notice [389]: LICENSE-MIT | https://github.com/rust-netlink/netlink-packet-core
+netlink-packet-route 0.33.0 (Rust; MIT) | Notice [390]: LICENSE-MIT | https://github.com/rust-netlink/netlink-packet-route
+netlink-sys 0.9.0 (Rust; MIT) | Notice [389]: LICENSE-MIT | https://github.com/rust-netlink/netlink-sys
+objc2-system-configuration 0.3.2 (Rust; Zlib OR Apache-2.0 OR MIT) | Notice [44]: objc2 LICENSE.md | https://github.com/madsmtm/objc2
+quick-xml 0.42.0 (Rust; MIT) | Notice [391]: LICENSE-MIT.md | https://github.com/tafia/quick-xml
 
 FULL NOTICE TEXTS
 
@@ -35061,6 +35071,156 @@ SOFTWARE.
 NOTICE [386]
 
 Copyright (c) 2017 The tokio-io-timeout Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+========================================================================
+NOTICE [387]
+
+MIT License
+
+Copyright (c) 2021-2026 shellrow
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+========================================================================
+NOTICE [388]
+
+MIT License
+
+Copyright (c) 2025 shellrow
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+========================================================================
+NOTICE [389]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+Distributions of all or part of the Software intended to be used by the
+recipients as they would use the unmodified Software, containing modifications
+that substantially alter, remove, or disable functionality of the Software,
+outside of the documented configuration mechanisms provided by the Software,
+shall be modified such that the Original Author's bug reporting email addresses
+and urls are either replaced with the contact information of the parties
+responsible for the changes, or removed entirely.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+========================================================================
+NOTICE [390]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the “Software”), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+========================================================================
+NOTICE [391]
+
+The MIT License (MIT)
+
+Copyright (c) 2016 Johann Tuffe
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+========================================================================
+NOTICE [392]
+
+Copyright (c) 2015 Edward Barnard
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

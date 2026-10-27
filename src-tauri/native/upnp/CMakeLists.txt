@@ -4,6 +4,8 @@ project(LapUpnp LANGUAGES C)
 get_filename_component(LAP_THIRD_PARTY "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party" ABSOLUTE)
 if(MSVC)
     enable_language(CXX)
+    # netdev supplies Windows adapter GUIDs; do not convert localized friendly names.
+    set(UPNP_ADAPTER_UUID_NAME ON CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     # Upstream detects architecture by running an executable. Supply its known
     # ARM64 result when cross-compiling from an x64 Windows host.
