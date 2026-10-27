@@ -1,0 +1,30 @@
+{
+  "ocr": {
+    "source": "screens/ocr.webp",
+    "x": 329,
+    "y": 147,
+    "w": 1101,
+    "h": 853
+  },
+  "objects": {
+    "source": "screens/objects.webp",
+    "x": 328,
+    "y": 168,
+    "w": 1110,
+    "h": 837
+  },
+  "filters": {
+    "source": "screens/combined-filters.webp",
+    "x": 280,
+    "y": 110,
+    "w": 1125,
+    "h": 845
+  },
+  "chat": {
+    "source": "screens/media-chat.webp",
+    "x": 287,
+    "y": 155,
+    "w": 1100,
+    "h": 720
+  }
+}
