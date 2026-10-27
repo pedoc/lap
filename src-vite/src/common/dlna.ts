@@ -1,19 +1,43 @@
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { config } from '@/common/config';
 
-export interface DlnaDevice { id: string; name: string; address: string }
+export interface DlnaDevice { id: string; name: string; address: string; networks?: string[] }
 export interface DlnaAlbum { id: number; name?: string }
 interface CastResult { title: string; kind: 'image' | 'video' }
-interface Started { sessionId: string; fileIds?: number[]; count?: number; scopeName: string; serverName?: string }
+export interface DlnaNetwork { id: string; name: string; addresses: string[]; isDefault: boolean }
+export interface DlnaViewOrder { sortType: number; sortOrder: number; randomSeed: number; groupBy: number; folderSort: number; calendarSort: number; categorySort: number }
+type DlnaOrder = 'view' | 'selection' | 'taken' | 'filename' | 'title' | 'added' | 'random';
+let viewOrderContext: { libraryId: string; albumId: number; order: DlnaViewOrder } | null = null;
+function normalizeOrder(value: Partial<DlnaViewOrder> = {}): DlnaViewOrder {
+  return { sortType: Number(value.sortType || 0), sortOrder: Number(value.sortOrder) === 1 ? 1 : 0, randomSeed: Number(value.randomSeed || 0), groupBy: Number(value.groupBy || 0), folderSort: Number(value.folderSort || 0), calendarSort: Number(value.calendarSort || 0), categorySort: Number(value.categorySort || 0) };
+}
+export function setDlnaViewOrder(libraryId: string, albumId: number, order: Partial<DlnaViewOrder>) {
+  viewOrderContext = { libraryId, albumId, order: normalizeOrder(order) };
+}
+function currentOrder(libraryId: string, albumId: number) {
+  if (viewOrderContext?.libraryId === libraryId && viewOrderContext.albumId === albumId) return { ...viewOrderContext.order };
+  return normalizeOrder({ ...config.search, folderSort: config.settings.folderSort, calendarSort: config.settings.calendarSort });
+}
+function playbackOrder() {
+  if (dlna.orderBy === 'selection') return {};
+  if (dlna.orderBy === 'view') return { order: { ...dlna.viewOrder } };
+  const sortType = { taken: 0, filename: 3, title: 10, added: 8, random: 7 }[dlna.orderBy];
+  return { order: normalizeOrder({ sortType, sortOrder: dlna.orderDescending ? 1 : 0, randomSeed: Math.floor(Math.random() * 2147483646) + 1 }) };
+}
+interface Started { sessionId: string; fileIds?: number[]; count?: number; scopeName: string; serverName?: string; address?: string }
 
 export const dlna = reactive({
   visible: false, libraryId: '', selectedIds: [] as number[], fileIds: [] as number[], albumId: 0, albumName: '',
   scopeKind: 'selection' as 'selection' | 'album', mode: 'cast' as 'cast' | 'browse', devices: [] as DlnaDevice[],
   deviceId: '', sessionId: '', index: 0, total: 0, scopeName: '', serverName: '', title: '', kind: '', paused: false,
   discovering: false, busy: false, error: '', autoPlay: false, intervalSeconds: 5,
+  networks: [] as DlnaNetwork[], networkId: '', searchCompleted: 0, searchTotal: 0, searchingNetwork: '', searchErrors: [] as string[],
+  orderBy: 'view' as DlnaOrder, orderDescending: true, viewOrder: normalizeOrder(), sharedAddress: '',
 });
 
-let revision = 0, playback = 0, playingSeen = false;
+let revision = 0, playback = 0, playingSeen = false, searchRevision = 0;
+let activeSearchId = '';
 let timer: ReturnType<typeof setTimeout> | null = null;
 let connecting: Promise<Started> | null = null;
 let disconnecting: Promise<unknown> = Promise.resolve();
@@ -24,43 +48,88 @@ function current(ticket: number) { return ticket === revision && dlna.visible; }
 function scope() { return dlna.scopeKind === 'album' ? { kind: 'album', albumId: dlna.albumId } : { kind: 'selection', fileIds: [...dlna.selectedIds] }; }
 
 export function closeDlna() {
-  revision++; clearTimer();
+  revision++; clearTimer(); void stopDlnaDiscovery();
   const pending = connecting, sessionId = dlna.sessionId;
   // Closing before start returns must also revoke that late session.
   disconnecting = Promise.allSettled([disconnecting, ...(pending ? [pending.then(result => disconnect(result.sessionId))] : []), ...(sessionId ? [disconnect(sessionId)] : [])]);
-  Object.assign(dlna, { visible: false, sessionId: '', busy: false, discovering: false, title: '', kind: '', error: '', fileIds: [], serverName: '', total: 0 });
+  Object.assign(dlna, { visible: false, sessionId: '', busy: false, discovering: false, title: '', kind: '', error: '', fileIds: [], serverName: '', sharedAddress: '', total: 0 });
 }
 
-export function openDlna(libraryId: string, fileIds: number[], album?: DlnaAlbum) {
+export function openDlna(libraryId: string, fileIds: number[], album?: DlnaAlbum, options: { mode?: 'cast' | 'browse' } = {}) {
   const ids = [...new Set(fileIds.filter(id => Number.isSafeInteger(id) && id > 0))];
   const albumId = album && Number.isSafeInteger(album.id) && album.id > 0 ? album.id : 0;
   if (!libraryId || (!ids.length && !albumId)) return;
   closeDlna();
-  Object.assign(dlna, { visible: true, libraryId, selectedIds: ids, fileIds: [...ids], albumId, albumName: album?.name || '', scopeKind: ids.length ? 'selection' : 'album', mode: 'cast', devices: [], deviceId: '', index: 0, paused: false, scopeName: '', total: ids.length, autoPlay: !ids.length });
-  void discoverDlna();
+  Object.assign(dlna, { visible: true, libraryId, selectedIds: ids, fileIds: [...ids], albumId, albumName: album?.name || '', scopeKind: ids.length ? 'selection' : 'album', mode: options.mode || 'cast', devices: [], deviceId: '', index: 0, paused: false, scopeName: '', total: ids.length, autoPlay: !ids.length, networks: [], networkId: '', searchCompleted: 0, searchTotal: 0, searchingNetwork: '', searchErrors: [], orderBy: ids.length ? 'selection' : 'view', viewOrder: currentOrder(libraryId, albumId), orderDescending: Number(config.search.sortOrder) === 1 });
+  if (dlna.mode === 'cast') void discoverDlna(); else void loadNetworks(revision);
 }
 
 export function setDlnaScope(kind: 'selection' | 'album') {
   if (dlna.busy || dlna.sessionId || (kind === 'album' ? !dlna.albumId : !dlna.selectedIds.length)) return;
   clearTimer();
-  Object.assign(dlna, { scopeKind: kind, fileIds: kind === 'selection' ? [...dlna.selectedIds] : [], total: kind === 'selection' ? dlna.selectedIds.length : 0, index: 0, error: '', autoPlay: kind === 'album' });
+  Object.assign(dlna, { scopeKind: kind, fileIds: kind === 'selection' ? [...dlna.selectedIds] : [], total: kind === 'selection' ? dlna.selectedIds.length : 0, index: 0, error: '', autoPlay: kind === 'album', orderBy: kind === 'album' ? 'view' : 'selection' });
 }
 
 export function setDlnaMode(mode: 'cast' | 'browse') {
   if (dlna.busy || dlna.sessionId || dlna.mode === mode) return;
-  revision++; clearTimer(); Object.assign(dlna, { mode, discovering: false, error: '' });
-  if (mode === 'cast') void discoverDlna();
+  revision++; clearTimer(); void stopDlnaDiscovery(); Object.assign(dlna, { mode, error: '' });
+  if (mode === 'cast') void discoverDlna(); else if (!dlna.networks.length) void loadNetworks(revision);
+}
+
+async function loadNetworks(ticket: number, run?: number) {
+  try {
+    const networks = await invoke<DlnaNetwork[]>('dlna_network_interfaces');
+    if (!current(ticket) || (run !== undefined && run !== searchRevision)) return [];
+    dlna.networks = Array.isArray(networks) ? networks : [];
+    return dlna.networks;
+  } catch (error) { if (current(ticket) && (run === undefined || run === searchRevision)) dlna.error = String(error); return []; }
+}
+
+export function stopDlnaDiscovery() {
+  const id = activeSearchId;
+  searchRevision++; activeSearchId = ''; dlna.discovering = false;
+  return id ? invoke('dlna_cancel_discovery', { searchId: id }).catch(() => {}) : Promise.resolve();
+}
+
+export function setDlnaNetwork(id: string) {
+  if (dlna.busy || dlna.sessionId || (id && !dlna.networks.some(network => network.id === id))) return;
+  void stopDlnaDiscovery(); dlna.networkId = id; dlna.devices = []; dlna.deviceId = '';
+  if (dlna.mode === 'cast') void discoverDlna();
+}
+
+export function setDlnaOrder(order: DlnaOrder) {
+  if (dlna.busy || dlna.sessionId || !['view','selection','taken','filename','title','added','random'].includes(order) || (order === 'selection' && dlna.scopeKind !== 'selection')) return;
+  dlna.orderBy = order;
 }
 
 export async function discoverDlna() {
   if (!dlna.visible || dlna.mode !== 'cast' || dlna.discovering || dlna.busy || dlna.sessionId) return;
-  const ticket = revision; dlna.discovering = true; dlna.error = '';
+  const ticket = revision, run = ++searchRevision;
+  Object.assign(dlna, { discovering: true, error: '', devices: [], deviceId: '', searchCompleted: 0, searchTotal: 0, searchingNetwork: '', searchErrors: [] });
+  const valid = () => current(ticket) && run === searchRevision;
   try {
-    const devices = await invoke<DlnaDevice[]>('dlna_discover');
-    if (!current(ticket)) return;
-    dlna.devices = devices; dlna.deviceId = devices[0]?.id || '';
-  } catch (error) { if (current(ticket)) dlna.error = String(error); }
-  finally { if (ticket === revision) dlna.discovering = false; }
+    const searchId = await invoke<string>('dlna_begin_discovery');
+    if (!valid()) { await invoke('dlna_cancel_discovery', { searchId }).catch(() => {}); return; }
+    activeSearchId = searchId;
+    const available = await loadNetworks(ticket, run);
+    if (!valid()) return;
+    const networks = dlna.networkId ? available.filter(network => network.id === dlna.networkId) : available;
+    dlna.searchTotal = networks.length;
+    for (const network of networks) {
+      if (!valid()) return;
+      dlna.searchingNetwork = network.name;
+      try {
+        const devices = await invoke<DlnaDevice[]>('dlna_discover', { interfaceId: network.id, searchId });
+        if (!valid()) return;
+        const selected = dlna.deviceId;
+        dlna.devices = devices;
+        dlna.deviceId = devices.some(device => device.id === selected) ? selected : devices[0]?.id || '';
+      } catch (error) { if (valid()) dlna.searchErrors.push(`${network.name}: ${String(error)}`); }
+      if (valid()) dlna.searchCompleted++;
+    }
+    if (valid() && !dlna.devices.length && dlna.searchErrors.length) dlna.error = dlna.searchErrors.join('；');
+  } catch (error) { if (valid()) dlna.error = String(error); }
+  finally { if (valid()) { dlna.discovering = false; dlna.searchingNetwork = ''; activeSearchId = ''; } }
 }
 
 async function begin(command: string, args: Record<string, unknown>, ticket: number) {
@@ -82,7 +151,7 @@ export async function castDlna(index = dlna.index) {
   try {
     await disconnecting;
     if (!current(ticket)) return;
-    if (!dlna.sessionId && !await begin('dlna_connect', { libraryId, deviceId: dlna.deviceId, scope: scope() }, ticket)) return;
+    if (!dlna.sessionId && !await begin('dlna_connect', { libraryId, deviceId: dlna.deviceId, scope: scope(), ...playbackOrder() }, ticket)) return;
     if (!current(ticket)) return;
     dlna.title = ''; dlna.kind = '';
     const result = await invoke<CastResult>('dlna_cast', { sessionId: dlna.sessionId, fileId: dlna.fileIds[index] });
@@ -97,11 +166,11 @@ export async function shareDlna() {
   try {
     await disconnecting;
     if (!current(ticket)) return;
-    const result = await begin('dlna_share', { libraryId, scope: scope() }, ticket);
+    const result = await begin('dlna_share', { libraryId, scope: scope(), ...playbackOrder() }, ticket);
     if (!result || !current(ticket)) return;
     // Reserve first; publish only if this dialog still owns the completed start.
     await invoke('dlna_activate_share', { sessionId: result.sessionId });
-    if (current(ticket)) dlna.serverName = result.serverName || 'Lap';
+    if (current(ticket)) { dlna.serverName = result.serverName || 'Lap'; dlna.sharedAddress = result.address || ''; }
   } catch (error) {
     if (current(ticket)) {
       const id = dlna.sessionId; dlna.sessionId = '';

@@ -15,6 +15,62 @@ pub enum Scope {
     Album { album_id: i64 },
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackOrder {
+    pub sort_type: i64,
+    pub sort_order: i64,
+    #[serde(default)]
+    pub random_seed: i64,
+    #[serde(default)]
+    pub group_by: i64,
+    #[serde(default)]
+    pub folder_sort: i64,
+    #[serde(default)]
+    pub calendar_sort: i64,
+    #[serde(default)]
+    pub category_sort: i64,
+}
+
+// Reuse exactly the same field, grouping, and seeded-random ordering as the grid.
+fn ordered_ids(conn: &Connection, ids: &[i64], order: &PlaybackOrder) -> Result<Vec<i64>, String> {
+    if !(0..=12).contains(&order.sort_type)
+        || !matches!(order.sort_order, 0 | 1)
+        || !(0..=10).contains(&order.group_by)
+    {
+        return Err("投放排序参数无效".into());
+    }
+    let ids = serde_json::to_string(ids).map_err(|error| error.to_string())?;
+    let from = "FROM json_each(?1) chosen JOIN afiles a ON a.id=chosen.value JOIN afolders b ON b.id=a.folder_id";
+    let file_order =
+        AFile::build_order_clause_values(order.sort_type, order.sort_order, order.random_seed);
+    let sql = if order.sort_type != 7 {
+        if let Some((group, sort)) =
+            AFile::group_key_and_sort_expr(order.group_by, order.calendar_sort)
+        {
+            let groups = AFile::group_order_clause_values(
+                order.group_by,
+                order.folder_sort,
+                order.calendar_sort,
+                order.category_sort,
+            );
+            format!(
+                "WITH members AS (SELECT {group} AS group_id,{group} AS label,{sort} AS group_sort {from}), ranks AS (SELECT group_id,ROW_NUMBER() OVER(ORDER BY {groups}) AS position FROM members GROUP BY group_id) SELECT a.id {from} JOIN ranks g ON g.group_id={group} ORDER BY g.position,{file_order}"
+            )
+        } else {
+            format!("SELECT a.id {from} ORDER BY {file_order}")
+        }
+    } else {
+        format!("SELECT a.id {from} ORDER BY {file_order}")
+    };
+    conn.prepare(&sql)
+        .map_err(|error| error.to_string())?
+        .query_map([ids], |row| row.get(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
 pub struct Snapshot {
     pub library: String,
     pub title: String,
@@ -67,13 +123,27 @@ pub fn is_public_on(conn: &Connection, id: i64) -> Result<bool, String> {
     conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM afiles a JOIN afolders b ON b.id=a.folder_id WHERE a.id=?1 AND {})", public(false)), [id], |row| row.get(0)).map_err(|e| e.to_string())
 }
 
-pub fn resolve(library: &str, scope: Scope) -> Result<Snapshot, String> {
+pub fn resolve(
+    library: &str,
+    scope: Scope,
+    order: Option<PlaybackOrder>,
+) -> Result<Snapshot, String> {
     crate::t_cmds::with_current_library(library, || {
-        resolve_on(&*t_sqlite::open_conn()?, library, scope)
+        resolve_ordered_on(&*t_sqlite::open_conn()?, library, scope, order.as_ref())
     })
 }
 
+#[cfg(test)]
 pub fn resolve_on(conn: &Connection, library: &str, scope: Scope) -> Result<Snapshot, String> {
+    resolve_ordered_on(conn, library, scope, None)
+}
+
+fn resolve_ordered_on(
+    conn: &Connection,
+    library: &str,
+    scope: Scope,
+    order: Option<&PlaybackOrder>,
+) -> Result<Snapshot, String> {
     let _snapshot = read_snapshot(conn)?;
     let (title, ids) = match scope {
         Scope::Selection { file_ids } => {
@@ -127,6 +197,11 @@ pub fn resolve_on(conn: &Connection, library: &str, scope: Scope) -> Result<Snap
     if ids.is_empty() {
         return Err("此范围内没有可共享的本地照片或视频".into());
     }
+    let ids = if let Some(order) = order {
+        ordered_ids(conn, &ids, order)?
+    } else {
+        ids
+    };
     let ids_json = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
     let mut sorted_ids = ids.clone();
     sorted_ids.sort_unstable();
@@ -350,5 +425,70 @@ pub(super) mod tests {
                 .len(),
             200
         );
+    }
+    #[test]
+    fn album_order_reuses_grid_dates_names_groups_and_stable_shuffle() {
+        let conn = database(5);
+        conn.execute_batch("ALTER TABLE afiles ADD COLUMN taken_date INTEGER; ALTER TABLE afiles ADD COLUMN name_pinyin TEXT;").unwrap();
+        conn.execute_batch("UPDATE afiles SET taken_date=CASE id WHEN 1 THEN 300 WHEN 2 THEN 100 WHEN 3 THEN 500 WHEN 4 THEN 200 ELSE 400 END,name_pinyin=CASE id WHEN 1 THEN 'c' WHEN 2 THEN 'a' WHEN 3 THEN 'e' WHEN 4 THEN 'b' ELSE 'd' END;").unwrap();
+        let mut order = PlaybackOrder {
+            sort_type: 0,
+            sort_order: 0,
+            random_seed: 0,
+            group_by: 0,
+            folder_sort: 0,
+            calendar_sort: 0,
+            category_sort: 0,
+        };
+        let album = || Scope::Album { album_id: 1 };
+        assert_eq!(
+            resolve_ordered_on(&conn, "test", album(), Some(&order))
+                .unwrap()
+                .file_ids,
+            vec![2, 4, 1, 5, 3]
+        );
+        order.sort_order = 1;
+        assert_eq!(
+            resolve_ordered_on(&conn, "test", album(), Some(&order))
+                .unwrap()
+                .file_ids,
+            vec![3, 5, 1, 4, 2]
+        );
+        order.sort_type = 3;
+        order.sort_order = 0;
+        assert_eq!(
+            resolve_ordered_on(&conn, "test", album(), Some(&order))
+                .unwrap()
+                .file_ids,
+            vec![2, 4, 1, 5, 3]
+        );
+        conn.execute_batch("INSERT INTO afolders VALUES(2,1,'/a',0); UPDATE afiles SET folder_id=2 WHERE id IN(3,5); ALTER TABLE afolders ADD COLUMN modified_at INTEGER; ALTER TABLE afolders ADD COLUMN created_at INTEGER;").unwrap();
+        order.group_by = 1;
+        assert_eq!(
+            resolve_ordered_on(&conn, "test", album(), Some(&order))
+                .unwrap()
+                .file_ids,
+            vec![5, 3, 2, 4, 1]
+        );
+        order.sort_type = 7;
+        order.random_seed = 42;
+        let first = resolve_ordered_on(&conn, "test", album(), Some(&order))
+            .unwrap()
+            .file_ids;
+        assert_eq!(
+            first,
+            resolve_ordered_on(&conn, "test", album(), Some(&order))
+                .unwrap()
+                .file_ids
+        );
+        order.random_seed = 1_073_741_824;
+        assert_ne!(
+            first,
+            resolve_ordered_on(&conn, "test", album(), Some(&order))
+                .unwrap()
+                .file_ids
+        );
+        order.sort_type = 999;
+        assert!(resolve_ordered_on(&conn, "test", album(), Some(&order)).is_err());
     }
 }

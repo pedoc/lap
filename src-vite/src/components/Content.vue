@@ -861,6 +861,7 @@ import { smartQueryParams, smartResultSignature, hasTimeSmartRules, hasSemanticR
 import { setMediaHidden } from '@/common/api';
 import { mediaTypeRules } from '@/common/mediaLifecycle';
 import { useFileMenuItems } from '@/common/fileMenu';
+import { setDlnaViewOrder } from '@/common/dlna';
 import { faceSelectionIds } from '@/common/faceUi';
 import { indexFaces } from '@/common/api';
 import Welcome from '@/components/Welcome.vue';
@@ -3547,6 +3548,12 @@ const currentQueryParams = ref({
   tagGroupId: 0,
   personId: 0,
 });
+watch(() => [libConfig._libraryId, libConfig.album.id, currentQueryParams.value, effectiveGroupBy.value] as const,
+  ([libraryId, albumId, params, groupBy]) => {
+    if (config.main.sidebarIndex === SIDEBAR.ALBUM && libConfig.activePane !== 'collection') {
+      setDlnaViewOrder(libraryId, Number(albumId), { ...params, groupBy });
+    }
+  }, { immediate: true });
 const currentQuerySource = ref<'query' | 'smart' | 'collection' | 'search'>('query');
 const objectBoxClassKey = computed(() =>
   tempViewMode.value === 'none' && currentQuerySource.value === 'query' &&

@@ -70,6 +70,9 @@ mod t_window_exit;
 /// The main function is the entry point for the Tauri application.
 #[tokio::main]
 async fn main() {
+    if t_dlna::discovery_worker().await {
+        return;
+    }
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("Unhandled panic: {}", panic_info);
     }));
@@ -354,6 +357,9 @@ async fn main() {
             t_media_lifecycle::get_private_media_preview,
             t_private_media::read_private_media,
             t_dlna::dlna_discover,
+            t_dlna::dlna_begin_discovery,
+            t_dlna::dlna_network_interfaces,
+            t_dlna::dlna_cancel_discovery,
             t_dlna::dlna_connect,
             t_dlna::dlna_cast,
             t_dlna::dlna_control,

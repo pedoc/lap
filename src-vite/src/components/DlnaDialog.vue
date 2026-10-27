@@ -14,10 +14,32 @@
         <label v-if="dlna.albumId" class="flex items-center gap-2 cursor-pointer"><input type="radio" name="dlna-scope" class="radio radio-sm radio-primary" :checked="dlna.scopeKind === 'album'" @change="setDlnaScope('album')" /><span class="text-sm">{{ t('dlna.scope_album') }}<span v-if="dlna.albumName" class="opacity-65"> · {{ dlna.albumName }}</span></span></label>
         <p v-if="dlna.scopeKind === 'album'" class="text-xs opacity-60">{{ t('dlna.album_hint') }}</p>
       </fieldset>
+      <fieldset v-if="dlna.scopeKind === 'album' || dlna.selectedIds.length > 1" class="rounded-box border border-base-content/15 p-3 space-y-2" :disabled="dlna.busy || !!dlna.sessionId">
+        <legend class="px-1 text-xs opacity-65">{{ t(dlna.mode === 'browse' ? 'dlna.directory_order' : 'dlna.playback_order') }}</legend>
+        <div class="flex flex-wrap gap-2">
+          <select class="select select-sm flex-1 min-w-40" :value="dlna.orderBy" :aria-label="t('dlna.playback_order')" @change="changeOrder">
+            <option v-if="dlna.scopeKind === 'selection'" value="selection">{{ t('dlna.order_selection') }}</option>
+            <option v-for="value in ['view','taken','filename','title','added','random']" :key="value" :value="value">{{ t(`dlna.order_${value}`) }}</option>
+          </select>
+          <select v-if="!['view','selection','random'].includes(dlna.orderBy)" v-model="dlna.orderDescending" class="select select-sm w-28" :aria-label="t('dlna.direction')"><option :value="false">{{ t('dlna.ascending') }}</option><option :value="true">{{ t('dlna.descending') }}</option></select>
+        </div>
+        <p class="text-xs opacity-60">{{ t('dlna.order_hint') }}</p>
+      </fieldset>
+      <div v-if="dlna.mode === 'browse'" class="text-xs opacity-70">{{ t('dlna.publish_network') }}：{{ publishNetwork }}</div>
       <template v-if="dlna.mode === 'cast'">
+      <label class="space-y-1"><span class="block text-xs opacity-70">{{ t('dlna.search_network') }}</span>
+        <select class="select select-sm select-bordered w-full" :value="dlna.networkId" :disabled="dlna.busy || !!dlna.sessionId" @change="changeNetwork">
+          <option value="">{{ t('dlna.all_networks') }}</option>
+          <option v-for="network in dlna.networks" :key="network.id" :value="network.id">{{ network.name }} · {{ network.addresses.join(', ') }}</option>
+        </select>
+      </label>
+      <p v-if="dlna.discovering" class="text-xs opacity-70" role="status">{{ t(dlna.searchTotal ? 'dlna.network_progress' : 'dlna.loading_networks', { current: Math.min(dlna.searchCompleted + 1, dlna.searchTotal), total: dlna.searchTotal, name: dlna.searchingNetwork }) }}</p>
+      <p v-else-if="dlna.searchTotal" class="text-xs opacity-60">{{ t('dlna.network_complete', { count: dlna.searchCompleted, devices: dlna.devices.length }) }}</p>
+      <details v-if="dlna.searchErrors?.length" class="text-xs opacity-70"><summary>{{ t('dlna.network_errors', { count: dlna.searchErrors.length }) }}</summary><p v-for="error in dlna.searchErrors" :key="error" class="mt-1 break-words">{{ error }}</p></details>
       <div class="flex items-center justify-between gap-3">
         <span class="text-sm font-semibold">{{ t('dlna.devices') }}</span>
-        <button type="button" class="btn btn-sm btn-ghost" :disabled="dlna.discovering || dlna.busy || !!dlna.sessionId" @click="discoverDlna">
+        <button v-if="dlna.discovering" type="button" class="btn btn-sm btn-ghost" @click="stopDlnaDiscovery">{{ t('dlna.cancel_search') }}</button>
+        <button v-else type="button" class="btn btn-sm btn-ghost" :disabled="dlna.busy || !!dlna.sessionId" @click="discoverDlna">
           <span v-if="dlna.discovering" class="loading loading-spinner loading-xs" aria-hidden="true" />
           {{ dlna.discovering ? t('dlna.searching') : t('dlna.refresh') }}
         </button>
@@ -25,10 +47,10 @@
       <fieldset class="space-y-2" :disabled="dlna.busy || !!dlna.sessionId" :aria-label="t('dlna.devices')">
         <label v-for="device in dlna.devices" :key="device.id" class="flex items-center gap-3 rounded-box border p-3 cursor-pointer" :class="dlna.deviceId === device.id ? 'border-primary bg-primary/5' : 'border-base-content/15'">
           <input v-model="dlna.deviceId" class="radio radio-primary radio-sm" type="radio" name="dlna-device" :value="device.id" />
-          <span class="min-w-0 flex-1"><span class="block break-words text-sm font-medium">{{ device.name }}</span><span class="text-xs opacity-60">{{ device.address }}</span></span>
+          <span class="min-w-0 flex-1"><span class="block break-words text-sm font-medium">{{ device.name }}</span><span class="text-xs opacity-60">{{ device.address }}<template v-if="device.networks?.length"> · {{ device.networks.join(', ') }}</template></span></span>
         </label>
       </fieldset>
-      <p v-if="!dlna.discovering && !dlna.devices.length" class="rounded-box bg-base-200 p-3 text-sm">{{ t('dlna.empty') }}</p>
+      <p v-if="!dlna.discovering && !dlna.devices.length" class="rounded-box bg-base-200 p-3 text-sm">{{ t(dlna.networks.length ? 'dlna.empty' : 'dlna.no_networks') }}</p>
       <div v-if="dlna.scopeKind === 'album' || dlna.selectedIds.length > 1" class="space-y-2">
         <div class="flex flex-wrap items-center gap-3">
           <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" :checked="dlna.autoPlay" @change="changeAutoPlay" />{{ t('dlna.continuous') }}</label>
@@ -64,16 +86,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
-import { dlna, discoverDlna, castDlna, toggleDlnaPause, closeDlna, shareDlna, setDlnaMode, setDlnaScope, setDlnaAutoPlay, setDlnaInterval } from '@/common/dlna';
+import { dlna, discoverDlna, castDlna, toggleDlnaPause, closeDlna, shareDlna, setDlnaMode, setDlnaScope, setDlnaAutoPlay, setDlnaInterval, setDlnaNetwork, setDlnaOrder, stopDlnaDiscovery } from '@/common/dlna';
 import ModalDialog from '@/components/ModalDialog.vue';
 
 const { t } = useI18n(), ui = useUIStore();
 const root = ref<HTMLElement | null>(null), width = Math.min(560, window.innerWidth - 24);
 let previousFocus: HTMLElement | null = null;
+const publishNetwork = computed(() => {
+  if (dlna.sharedAddress) return dlna.sharedAddress;
+  const network = (dlna.networks || []).find(network => network.isDefault);
+  return network ? `${network.name} · ${network.addresses.join(', ')}` : t('dlna.system_network');
+});
+function changeNetwork(event: Event) { setDlnaNetwork((event.target as HTMLSelectElement).value); }
+function changeOrder(event: Event) { setDlnaOrder((event.target as HTMLSelectElement).value as Parameters<typeof setDlnaOrder>[0]); }
 function changeAutoPlay(event: Event) { setDlnaAutoPlay((event.target as HTMLInputElement).checked); }
 function changeInterval(event: Event) { setDlnaInterval(Number((event.target as HTMLSelectElement).value)); }
 function trapFocus(event: KeyboardEvent) {

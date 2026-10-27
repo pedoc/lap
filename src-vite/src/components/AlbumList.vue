@@ -849,6 +849,7 @@ const getMoreMenuItems = async (album: any) => {
     },
     { label: t('scan_tracking.details'), icon: IconFileInfo, action:()=>{if(libraryId===libConfig._libraryId)return openScanDetails(album);} },
     { label: t('dlna.album_menu'), icon: IconFolder, disabled: !isAccessible, action: () => { if (libraryId === libConfig._libraryId) openDlna(libraryId, [], { id: Number(album.id), name: album.name }); } },
+    { label: t('dlna.album_share_menu'), icon: IconFolder, disabled: !isAccessible, action: () => { if (libraryId === libConfig._libraryId) openDlna(libraryId, [], { id: Number(album.id), name: album.name }, { mode: 'browse' }); } },
     {
       label: `${localeMsg.value.import_organize.import}…`,
       icon: IconDownload,

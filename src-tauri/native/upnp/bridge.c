@@ -20,11 +20,11 @@ static int client_callback(Upnp_EventType type, const void *event, void *cookie)
     }
     return 0;
 }
-int lap_upnp_init(lap_discovery_cb callback, const char *interface_name, int *handle) {
+int lap_upnp_init(lap_discovery_cb callback, const char *interface_name, unsigned short port, int *handle) {
 #ifdef _WIN32
     if (!pthread_win32_process_attach_np()) return -1;
 #endif
-    int result = UpnpInit2(interface_name, 0);
+    int result = UpnpInit2(interface_name, port);
     if (result != UPNP_E_SUCCESS) return result;
     UpnpSetMaxContentLength(512 * 1024);
     discovered = callback;

@@ -16,6 +16,7 @@ unsafe extern "C" {
     fn lap_upnp_init(
         callback: unsafe extern "C" fn(*const c_char, *const u8),
         interface_name: *const c_char,
+        port: u16,
         handle: *mut c_int,
     ) -> c_int;
     fn lap_upnp_address() -> *const c_char;
@@ -56,6 +57,14 @@ static SEARCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 // libupnp is process-wide. Retain its control point until process exit so a
 // cancelled async operation can never race UpnpFinish or a freed callback cookie.
 static CLIENT: OnceCell<c_int> = OnceCell::new();
+static INTERFACE: OnceCell<String> = OnceCell::new();
+
+pub(super) fn use_interface(id: String) -> Result<(), String> {
+    if CLIENT.get().is_some() {
+        return Err("UPnP 已在其他网络初始化".into());
+    }
+    INTERFACE.set(id).map_err(|_| "UPnP 网络已确定".into())
+}
 
 fn check(code: c_int) -> Result<(), String> {
     if code == 0 {
@@ -72,14 +81,29 @@ fn client() -> Result<c_int, String> {
         .get_or_try_init(|| {
             // SDK auto-selection can pick a VMware/host-only adapter. Use the
             // operating system's default interface and let the SDK bind SSDP to it.
-            let interface = netdev::get_default_interface()
-                .map_err(|error| format!("无法确定 DLNA 使用的网络接口：{error}"))?;
+            let interface = if let Some(id) = INTERFACE.get() {
+                netdev::get_interfaces()
+                    .into_iter()
+                    .find(|interface| &interface.name == id)
+                    .ok_or_else(|| "所选网卡已不可用".to_owned())?
+            } else {
+                netdev::get_default_interface()
+                    .map_err(|error| format!("无法确定 DLNA 使用的网络接口：{error}"))?
+            };
             if interface.ipv4.is_empty() {
                 return Err("默认网络接口没有 IPv4 地址，无法搜索局域网电视".into());
             }
             let interface_name = string(&interface.name)?;
+            // Discovery helpers coexist with the application's media server.
+            // Reserve an unused port instead of sharing the SDK's default port.
+            let port = std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
+                .and_then(|listener| listener.local_addr())
+                .map_err(|error| error.to_string())?
+                .port();
             let mut handle = 0;
-            check(unsafe { lap_upnp_init(discovered, interface_name.as_ptr(), &mut handle) })?;
+            check(unsafe {
+                lap_upnp_init(discovered, interface_name.as_ptr(), port, &mut handle)
+            })?;
             Ok(handle)
         })
         .copied()

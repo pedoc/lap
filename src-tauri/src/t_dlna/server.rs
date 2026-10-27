@@ -23,6 +23,7 @@ pub struct Shared {
     count: usize,
     scope_name: String,
     server_name: String,
+    address: String,
 }
 
 struct Server {
@@ -52,9 +53,10 @@ pub async fn start(
     window: tauri::WebviewWindow,
     library_id: String,
     selection: scope::Scope,
+    order: Option<scope::PlaybackOrder>,
 ) -> Result<Shared, String> {
     let scope = Arc::new(
-        tokio::task::spawn_blocking(move || scope::resolve(&library_id, selection))
+        tokio::task::spawn_blocking(move || scope::resolve(&library_id, selection, order))
             .await
             .map_err(|e| e.to_string())??,
     );
@@ -105,6 +107,7 @@ pub async fn start(
         count: server.scope.file_ids.len(),
         scope_name: server.scope.title.clone(),
         server_name: server.name.clone(),
+        address: server.address.to_string(),
     };
     tauri::async_runtime::spawn(run(listener, server, window.app_handle().clone()));
     Ok(result)

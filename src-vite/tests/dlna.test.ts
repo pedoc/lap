@@ -21,11 +21,14 @@ function harness(overrides: Record<string, (args: any) => unknown> = {}) {
   const timers = new Map<number, { callback: () => unknown; delay: number }>(); let timerId = 0;
   const context = {
     reactive,
+    config: { search: { sortType: 0, sortOrder: 1, groupBy: 0 }, settings: { folderSort: 0, calendarSort: 0 } },
     setTimeout: (callback: () => unknown, delay: number) => { timers.set(++timerId, { callback, delay }); return timerId; },
     clearTimeout: (id: number) => timers.delete(id),
     invoke: async (name: string, args?: any) => {
       calls.push({ name, args: args && JSON.parse(JSON.stringify(args)) });
       if (overrides[name]) return overrides[name](args);
+      if (name === 'dlna_begin_discovery') return `search-${calls.filter(call => call.name === 'dlna_begin_discovery').length}`;
+      if (name === 'dlna_network_interfaces') return [{ id: 'wlan', name: 'WLAN', addresses: ['192.168.1.2/24'], isDefault: true }];
       if (name === 'dlna_discover') return [{ id: 'tv-1', name: '客厅电视', address: '192.168.1.10' }];
       if (name === 'dlna_connect') return { sessionId: 'session-1', fileIds: args.scope.kind === 'album' ? [1, 2, 3] : args.scope.fileIds, scopeName: 'Shared media' };
       if (name === 'dlna_share') return { sessionId: 'browse-1', count: 3, scopeName: 'Shared media', serverName: 'Lap · 旅行' };
@@ -33,7 +36,7 @@ function harness(overrides: Record<string, (args: any) => unknown> = {}) {
       if (name === 'dlna_cast') return { title: `Media ${args.fileId}`, kind: args.fileId === 2 ? 'video' : 'image' };
     },
   };
-  const api = runInNewContext(`${body};({dlna, openDlna, closeDlna, castDlna, discoverDlna, toggleDlnaPause, shareDlna, setDlnaMode, setDlnaScope, setDlnaAutoPlay, setDlnaInterval});`, context);
+  const api = runInNewContext(`${body};({dlna, openDlna, closeDlna, castDlna, discoverDlna, toggleDlnaPause, shareDlna, setDlnaMode, setDlnaScope, setDlnaAutoPlay, setDlnaInterval, setDlnaNetwork, setDlnaOrder, setDlnaViewOrder, stopDlnaDiscovery});`, context);
   return { ...api, calls, timers, runTimer: async () => { const next = timers.entries().next().value; assert.ok(next, 'a playback timer is scheduled'); timers.delete(next[0]); await next[1].callback(); } };
 }
 
@@ -66,7 +69,7 @@ test('late discovery cannot replace the devices of a newly opened dialog', async
   const first = deferred();
   let searches = 0;
   const h = harness({ dlna_discover: () => ++searches === 1 ? first.promise : [{ id: 'new-tv', name: 'New', address: '192.168.1.11' }] });
-  h.openDlna('old-library', [1]);
+  h.openDlna('old-library', [1]); await tick();
   h.closeDlna();
   h.openDlna('new-library', [2]);
   await tick();
@@ -138,12 +141,12 @@ async function renderDialog(state: any, language = 'zh-CN') {
   const words = JSON.parse(readFileSync(new URL(`../src/locales/${language}.json`, import.meta.url), 'utf8')).dlna;
   const context = {
     ...Vue, ...Object.fromEntries(Object.entries(Vue).map(([name, value]) => [`_${name}`, value])),
-    dlna: reactive({ visible: true, mode: 'cast', scopeKind: 'selection', selectedIds: [1, 2], albumId: 1, albumName: '旅行相册', total: 2, autoPlay: false, intervalSeconds: 5, serverName: '', devices: [], deviceId: '', sessionId: '', index: 0, fileIds: [1, 2], title: '', kind: '', busy: false, discovering: false, error: '', ...state }),
+    dlna: reactive({ visible: true, mode: 'cast', scopeKind: 'selection', selectedIds: [1, 2], albumId: 1, albumName: '旅行相册', total: 2, autoPlay: false, intervalSeconds: 5, serverName: '', devices: [], deviceId: '', sessionId: '', index: 0, fileIds: [1, 2], title: '', kind: '', busy: false, discovering: false, error: '', networks: [{ id: 'wlan', name: 'WLAN', addresses: ['192.168.1.2/24'], isDefault: true }], networkId: '', searchCompleted: 0, searchTotal: 0, searchingNetwork: '', searchErrors: [], orderBy: 'view', orderDescending: true, sharedAddress: '', ...state }),
     window: { innerWidth: 600 }, libConfig: reactive({ _libraryId: 'library-a' }),
     useUIStore: () => ({ pushInputHandler() {}, removeInputHandler() {} }),
     useI18n: () => ({ t: (key: string, values: any = {}) => Object.entries(values).reduce((text: string, [name, value]) => text.replace(`{${name}}`, String(value)), words[key.slice(5)] || key) }),
     ModalDialog: { props: ['title', 'width'], setup: (_: unknown, { slots }: any) => () => Vue.h('section', slots.default?.()) },
-    discoverDlna() {}, castDlna() {}, closeDlna() {}, toggleDlnaPause() {}, shareDlna() {}, setDlnaMode() {}, setDlnaScope() {}, setDlnaAutoPlay() {}, setDlnaInterval() {},
+    discoverDlna() {}, castDlna() {}, closeDlna() {}, toggleDlnaPause() {}, shareDlna() {}, setDlnaMode() {}, setDlnaScope() {}, setDlnaAutoPlay() {}, setDlnaInterval() {}, setDlnaNetwork() {}, setDlnaOrder() {}, stopDlnaDiscovery() {},
   };
   const component = runInNewContext(`${code};Component;`, context);
   return renderToString(Vue.createSSRApp(component));
@@ -254,4 +257,73 @@ test('continuous playback respects pause, interval changes and scope cancellatio
   await h.toggleDlnaPause(); assert.equal(h.dlna.paused, false); assert.equal(h.timers.size, 1);
   h.setDlnaAutoPlay(false); assert.equal(h.timers.size, 0);
   h.closeDlna();
+});
+
+
+test('all interfaces are searched sequentially and network progress retains earlier choices', async () => {
+  const first = deferred();
+  const networks = [{ id: 'wlan', name: 'WLAN', addresses: ['192.168.1.2/24'], isDefault: true }, { id: 'vm', name: 'VMware', addresses: ['192.168.25.1/24'], isDefault: false }];
+  const h = harness({ dlna_network_interfaces: () => networks, dlna_discover: args => args.interfaceId === 'wlan' ? first.promise : [{ id: 'tv-a', name: 'A', address: '192.168.1.10', networks: ['WLAN'] }, { id: 'tv-b', name: 'B', address: '192.168.25.10', networks: ['VMware'] }] });
+  h.openDlna('library-a', [1]); await tick();
+  assert.equal(h.dlna.networkId, ''); assert.equal(h.dlna.searchTotal, 2);
+  assert.equal(h.calls.filter((call: any) => call.name === 'dlna_discover').length, 1);
+  first.resolve([{ id: 'tv-a', name: 'A', address: '192.168.1.10' }]); await tick();
+  assert.deepEqual(h.calls.filter((call: any) => call.name === 'dlna_discover').map((call: any) => call.args.interfaceId), ['wlan', 'vm']);
+  assert.equal(h.dlna.devices.length, 2); assert.equal(h.dlna.deviceId, 'tv-a'); assert.equal(h.dlna.searchCompleted, 2);
+  assert.equal(h.dlna.discovering, false);
+  h.closeDlna();
+});
+
+test('switching interfaces cancels only the old search and ignores its delayed result', async () => {
+  const pending = deferred();
+  const networks = [{ id: 'wlan', name: 'WLAN', addresses: ['192.168.1.2/24'] }, { id: 'vm', name: 'VMware', addresses: ['192.168.25.1/24'] }];
+  const h = harness({ dlna_network_interfaces: () => networks, dlna_discover: args => args.searchId === 'search-1' ? pending.promise : [{ id: 'vm-tv', name: 'VM TV', address: '192.168.25.10' }] });
+  h.openDlna('library-a', [1]); await tick();
+  h.setDlnaNetwork('vm'); await tick();
+  pending.resolve([{ id: 'old-tv', name: 'Old', address: '192.168.1.10' }]); await tick();
+  assert.equal(h.dlna.deviceId, 'vm-tv'); assert.equal(h.dlna.devices.length, 1);
+  assert.ok(h.calls.some((call: any) => call.name === 'dlna_cancel_discovery' && call.args.searchId === 'search-1'));
+  assert.equal(h.calls.filter((call: any) => call.name === 'dlna_discover' && call.args.searchId === 'search-2').length, 1);
+  h.closeDlna();
+});
+
+test('a late interface enumeration cannot launch searches for a closed dialog', async () => {
+  const pending = deferred(); const h = harness({ dlna_network_interfaces: () => pending.promise });
+  h.openDlna('library-a', [1]); await tick(); h.closeDlna();
+  pending.resolve([{ id: 'old', name: 'Old', addresses: [] }]); await tick();
+  assert.equal(h.calls.filter((call: any) => call.name === 'dlna_discover').length, 0);
+  assert.equal(h.dlna.visible, false);
+});
+
+test('whole-album playback snapshots the actual grid ordering and uses the backend queue', async () => {
+  const h = harness({ dlna_connect: () => ({ sessionId: 'ordered', fileIds: [3, 1, 2], scopeName: 'Album' }) });
+  h.setDlnaViewOrder('library-a', 77, { sortType: 2, sortOrder: 1, randomSeed: 99, groupBy: 1, folderSort: 3 });
+  h.openDlna('library-a', [], { id: 77, name: '旅行' }); await tick();
+  h.setDlnaViewOrder('library-a', 77, { sortType: 0, sortOrder: 0 });
+  await h.castDlna();
+  assert.deepEqual(h.calls.find((call: any) => call.name === 'dlna_connect').args.order, { sortType: 2, sortOrder: 1, randomSeed: 99, groupBy: 1, folderSort: 3, calendarSort: 0, categorySort: 0 });
+  assert.equal(h.calls.find((call: any) => call.name === 'dlna_cast').args.fileId, 3);
+  h.setDlnaOrder('filename'); assert.equal(h.dlna.orderBy, 'view');
+  h.closeDlna();
+});
+
+test('passive album sharing starts directly and forwards an explicit directory order', async () => {
+  const h = harness({ dlna_share: () => ({ sessionId: 'passive', count: 3, scopeName: 'Album', serverName: 'Lap · 旅行', address: '192.168.1.2' }) });
+  h.openDlna('library-a', [], { id: 77, name: '旅行' }, { mode: 'browse' }); await tick();
+  assert.equal(h.calls.filter((call: any) => ['dlna_begin_discovery', 'dlna_discover'].includes(call.name)).length, 0);
+  h.setDlnaOrder('filename'); h.dlna.orderDescending = false;
+  await h.shareDlna();
+  const share = h.calls.find((call: any) => call.name === 'dlna_share');
+  assert.equal(share.args.order.sortType, 3); assert.equal(share.args.order.sortOrder, 0); assert.equal(share.args.order.groupBy, 0);
+  assert.equal(h.dlna.sharedAddress, '192.168.1.2');
+  assert.ok(h.calls.some((call: any) => call.name === 'dlna_activate_share'));
+  h.closeDlna();
+});
+
+test('dialog shows network selection, sequential progress and ordering controls', async () => {
+  const html = await renderDialog({ scopeKind: 'album', discovering: true, searchCompleted: 1, searchTotal: 3, searchingNetwork: 'VMware' });
+  assert.match(html, /全部可用网卡/); assert.match(html, /VMware/); assert.match(html, /2\/3/);
+  assert.match(html, /停止搜索/); assert.match(html, /使用当前 Lap 视图排序/); assert.match(html, /随机顺序/);
+  const browse = await renderDialog({ mode: 'browse', scopeKind: 'album' });
+  assert.match(browse, /默认目录顺序/); assert.match(browse, /媒体服务发布网络/); assert.match(browse, /WLAN/);
 });

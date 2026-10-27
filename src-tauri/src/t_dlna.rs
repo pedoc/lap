@@ -1,5 +1,6 @@
 mod http;
 mod native;
+mod network;
 mod protocol;
 mod scope;
 mod server;
@@ -30,6 +31,7 @@ pub struct DlnaDevice {
     id: String,
     name: String,
     address: String,
+    networks: Vec<String>,
 }
 
 struct Discovered {
@@ -42,6 +44,8 @@ struct Discovered {
 struct Discovery {
     request_id: String,
     devices: Vec<Discovered>,
+    cancel: CancellationToken,
+    operation: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Default)]
@@ -111,8 +115,9 @@ pub async fn dlna_share(
     window: tauri::WebviewWindow,
     library_id: String,
     scope: scope::Scope,
+    order: Option<scope::PlaybackOrder>,
 ) -> Result<server::Shared, String> {
-    server::start(window, library_id, scope).await
+    server::start(window, library_id, scope, order).await
 }
 
 #[tauri::command]
@@ -123,70 +128,164 @@ pub async fn dlna_activate_share(
     server::activate(window.label(), &session_id).await
 }
 
+pub async fn discovery_worker() -> bool {
+    network::worker_entry().await
+}
+
 #[tauri::command]
-pub async fn dlna_discover(window: tauri::WebviewWindow) -> Result<Vec<DlnaDevice>, String> {
-    let owner = window.label().to_owned();
+pub async fn dlna_network_interfaces() -> Result<Vec<network::Interface>, String> {
+    tokio::task::spawn_blocking(network::interfaces)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn begin_discovery(owner: &str) -> Result<String, String> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    REGISTRY
-        .lock()
-        .map_err(|_| "投屏服务不可用")?
-        .devices
-        .entry(owner.clone())
-        .or_default()
-        .request_id = request_id.clone();
-    let locations = native::discover()
-        .await?
-        .into_iter()
-        .filter_map(|(location, address)| {
-            protocol::discovery_location(&location, address).map(|url| (url, address))
-        })
-        .collect::<Vec<_>>();
-    let client = protocol::client()?;
-    let mut renderers = stream::iter(locations)
-        .map(|(location, address)| {
-            let client = client.clone();
-            async move {
-                let response = client
-                    .get(location.clone())
-                    .send()
-                    .await
-                    .ok()?
-                    .error_for_status()
-                    .ok()?;
-                let text = protocol::response_text(response).await.ok()?;
-                protocol::parse_renderer(&text, &location, address).ok()
-            }
-        })
-        .buffer_unordered(6)
-        .filter_map(|renderer| async move { renderer })
-        .collect::<Vec<_>>()
-        .await;
-    renderers.sort_by(|a, b| a.name.cmp(&b.name));
-    renderers.dedup_by(|a, b| a.control_url == b.control_url);
-    let discovered = renderers
-        .into_iter()
-        .map(|renderer| Discovered {
-            device: DlnaDevice {
-                id: uuid::Uuid::new_v4().to_string(),
-                name: renderer.name.clone(),
-                address: renderer.address.to_string(),
-            },
-            renderer,
-            found: Instant::now(),
-        })
-        .collect::<Vec<_>>();
-    let devices = discovered.iter().map(|item| item.device.clone()).collect();
     let mut registry = REGISTRY.lock().map_err(|_| "投屏服务不可用")?;
+    if let Some(previous) = registry.devices.get(owner) {
+        previous.cancel.cancel();
+    }
+    registry.devices.insert(
+        owner.to_owned(),
+        Discovery {
+            request_id: request_id.clone(),
+            ..Default::default()
+        },
+    );
+    Ok(request_id)
+}
+
+#[tauri::command]
+pub fn dlna_begin_discovery(window: tauri::WebviewWindow) -> Result<String, String> {
     if window
         .app_handle()
         .get_webview_window(window.label())
-        .is_some()
+        .is_none()
     {
-        update_discovery(&mut registry, &owner, &request_id, discovered);
-    } else {
-        registry.devices.remove(&owner);
+        return Err("搜索窗口已关闭".into());
     }
-    Ok(devices)
+    begin_discovery(window.label())
+}
+
+fn cancel_discovery(owner: &str, search_id: Option<&str>) {
+    if let Ok(registry) = REGISTRY.lock() {
+        if let Some(discovery) = registry
+            .devices
+            .get(owner)
+            .filter(|discovery| search_id.is_none_or(|id| discovery.request_id == id))
+        {
+            discovery.cancel.cancel();
+        }
+    }
+}
+
+#[tauri::command]
+pub fn dlna_cancel_discovery(window: tauri::WebviewWindow, search_id: Option<String>) {
+    cancel_discovery(window.label(), search_id.as_deref());
+}
+
+#[tauri::command]
+pub async fn dlna_discover(
+    window: tauri::WebviewWindow,
+    interface_id: Option<String>,
+    search_id: Option<String>,
+) -> Result<Vec<DlnaDevice>, String> {
+    let owner = window.label().to_owned();
+    let interfaces = network::interfaces()
+        .into_iter()
+        .filter(|interface| interface_id.as_ref().is_none_or(|id| id == &interface.id))
+        .collect::<Vec<_>>();
+    if interfaces.is_empty() {
+        return Err("没有可搜索的 IPv4 网络接口".into());
+    }
+    let request_id = match search_id {
+        Some(id) => id,
+        None => begin_discovery(&owner)?,
+    };
+    let (cancel, operation) = {
+        let registry = REGISTRY.lock().map_err(|_| "投屏服务不可用")?;
+        let discovery = registry
+            .devices
+            .get(&owner)
+            .filter(|discovery| {
+                discovery.request_id == request_id && !discovery.cancel.is_cancelled()
+            })
+            .ok_or("搜索已取消或已被新搜索替代")?;
+        (discovery.cancel.clone(), discovery.operation.clone())
+    };
+    let _operation = tokio::select! { _=cancel.cancelled()=>return Err("搜索已取消".into()), guard=operation.lock()=>guard };
+    let client = protocol::client()?;
+    let mut errors = Vec::new();
+    let mut completed = false;
+    for interface in interfaces {
+        if window.app_handle().get_webview_window(&owner).is_none() {
+            cancel.cancel();
+        }
+        if cancel.is_cancelled() {
+            return Err("搜索已取消".into());
+        }
+        let locations = match network::discover(&interface, &cancel).await {
+            Ok(locations) => {
+                completed = true;
+                locations
+            }
+            Err(error) => {
+                if cancel.is_cancelled() {
+                    return Err(error);
+                }
+                errors.push(format!("{}：{error}", interface.name));
+                continue;
+            }
+        };
+        let renderers = tokio::select! {
+            _=cancel.cancelled()=>return Err("搜索已取消".into()),
+            renderers=stream::iter(locations).map(|(location,address)| {
+                let client = client.clone();
+                async move {
+                    let location = protocol::discovery_location(&location,address)?;
+                    let response = client.get(location.clone()).send().await.ok()?.error_for_status().ok()?;
+                    let text = protocol::response_text(response).await.ok()?;
+                    protocol::parse_renderer(&text,&location,address).ok()
+                }
+            }).buffer_unordered(6).filter_map(|renderer|async move {renderer}).collect::<Vec<_>>()=>renderers,
+        };
+        let discovered = renderers
+            .into_iter()
+            .map(|renderer| Discovered {
+                device: DlnaDevice {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: renderer.name.clone(),
+                    address: renderer.address.to_string(),
+                    networks: vec![interface.name.clone()],
+                },
+                renderer,
+                found: Instant::now(),
+            })
+            .collect();
+        let mut registry = REGISTRY.lock().map_err(|_| "投屏服务不可用")?;
+        if window.app_handle().get_webview_window(&owner).is_some() {
+            update_discovery(&mut registry, &owner, &request_id, discovered);
+        } else {
+            cancel.cancel();
+            registry.devices.remove(&owner);
+        }
+    }
+    if !completed {
+        return Err(errors.join("；"));
+    }
+    let registry = REGISTRY.lock().map_err(|_| "投屏服务不可用")?;
+    Ok(registry
+        .devices
+        .get(&owner)
+        .filter(|discovery| discovery.request_id == request_id)
+        .map(|discovery| {
+            discovery
+                .devices
+                .iter()
+                .map(|item| item.device.clone())
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 fn update_discovery(
@@ -198,9 +297,30 @@ fn update_discovery(
     if let Some(discovery) = registry
         .devices
         .get_mut(owner)
-        .filter(|discovery| discovery.request_id == request_id)
+        .filter(|discovery| discovery.request_id == request_id && !discovery.cancel.is_cancelled())
     {
-        discovery.devices = devices;
+        for item in devices {
+            if let Some(existing) = discovery
+                .devices
+                .iter_mut()
+                .find(|existing| existing.renderer.control_url == item.renderer.control_url)
+            {
+                for name in item.device.networks {
+                    if !existing.device.networks.contains(&name) {
+                        existing.device.networks.push(name);
+                    }
+                }
+                existing.found = item.found;
+            } else {
+                discovery.devices.push(item);
+            }
+        }
+        discovery.devices.sort_by(|a, b| {
+            a.device
+                .name
+                .cmp(&b.device.name)
+                .then_with(|| a.device.address.cmp(&b.device.address))
+        });
     }
 }
 
@@ -210,6 +330,7 @@ pub async fn dlna_connect(
     library_id: String,
     device_id: String,
     scope: scope::Scope,
+    order: Option<scope::PlaybackOrder>,
 ) -> Result<Connected, String> {
     let owner = window.label().to_owned();
     let renderer = REGISTRY
@@ -226,7 +347,7 @@ pub async fn dlna_connect(
         .ok_or("设备已过期，请重新搜索电视")?;
     let library = library_id.clone();
     let scope = Arc::new(
-        tokio::task::spawn_blocking(move || scope::resolve(&library, scope))
+        tokio::task::spawn_blocking(move || scope::resolve(&library, scope, order))
             .await
             .map_err(|e| e.to_string())??,
     );
@@ -528,6 +649,7 @@ pub async fn dlna_disconnect(
 }
 
 pub fn release_owner(owner: &str) {
+    cancel_discovery(owner, None);
     server::release_owner(owner);
     if let Ok(mut registry) = REGISTRY.lock() {
         registry.devices.remove(owner);
@@ -783,6 +905,7 @@ mod tests {
                 id: "new-choice".into(),
                 name: "TV".into(),
                 address: "192.168.1.10".into(),
+                networks: vec!["WLAN".into()],
             },
             renderer: Renderer {
                 name: "TV".into(),
@@ -798,9 +921,19 @@ mod tests {
             Discovery {
                 request_id: "new-search".into(),
                 devices: Vec::new(),
+                ..Default::default()
             },
         );
         update_discovery(&mut registry, "window", "new-search", vec![device()]);
+        let mut duplicate = device();
+        duplicate.device.id = "duplicate-id".into();
+        duplicate.device.networks = vec!["Ethernet".into()];
+        update_discovery(&mut registry, "window", "new-search", vec![duplicate]);
+        assert_eq!(registry.devices["window"].devices.len(), 1);
+        assert_eq!(
+            registry.devices["window"].devices[0].device.networks,
+            vec!["WLAN", "Ethernet"]
+        );
         update_discovery(&mut registry, "window", "old-search", Vec::new());
         assert_eq!(
             registry.devices["window"].devices[0].device.id,

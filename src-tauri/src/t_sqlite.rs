@@ -5244,7 +5244,10 @@ impl AFile {
         Self::query_files(&query, &final_params)
     }
 
-    fn group_key_and_sort_expr(group_by: i64, calendar_sort: i64) -> Option<(String, String)> {
+    pub(crate) fn group_key_and_sort_expr(
+        group_by: i64,
+        calendar_sort: i64,
+    ) -> Option<(String, String)> {
         let date_col = match calendar_sort / 2 {
             1 => "a.created_at",
             2 => "a.modified_at",
@@ -5306,7 +5309,7 @@ impl AFile {
         }
     }
 
-    fn group_order_clause_values(
+    pub(crate) fn group_order_clause_values(
         group_by: i64,
         folder_sort: i64,
         calendar_sort: i64,
@@ -5663,7 +5666,11 @@ impl AFile {
         Ok(ids)
     }
 
-    fn build_order_clause_values(sort_type: i64, sort_order: i64, random_seed: i64) -> String {
+    pub(crate) fn build_order_clause_values(
+        sort_type: i64,
+        sort_order: i64,
+        random_seed: i64,
+    ) -> String {
         let dir = if sort_order == 1 { "DESC" } else { "ASC" };
         match sort_type {
             0 => format!("a.taken_date {}, a.id {}", dir, dir),
