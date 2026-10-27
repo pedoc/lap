@@ -15,3 +15,4 @@ set_db_version.py
 set_version.py
 publish_release.sh
 release-downloads.sh
+.codex/readme-*/
