@@ -50,12 +50,12 @@ test('cast actions launch directly from single and selection menus and reject a 
   const menu = useFileMenuItems(ref({ id: 12, file_type: 1 }), locale, false, key => key, () => { throw Error('Casting is handled by the menu itself'); });
   const cast = action(menu.value, 'cast-media');
   cast.action();
-  assert.deepEqual(castRequests.at(-1), [library, [12]]);
+  assert.deepEqual(castRequests.at(-1), [library, [12], { id: 1, name: '' }]);
   const selected = useFileMenuItems(ref(null), locale, false, key => key, () => {}, {
     selectMode: ref(true), selectionMediaKind: ref('mixed'), selectionCount: ref(2), selectionIds: () => [12, 13], selectionHasUnavailable: ref(false),
   });
   action(selected.value, 'cast-media').action();
-  assert.deepEqual(castRequests.at(-1), [library, [12, 13]]);
+  assert.deepEqual(castRequests.at(-1), [library, [12, 13], { id: 1, name: '' }]);
   const count = castRequests.length;
   libConfig._libraryId = 'other-library';
   cast.action();

@@ -283,6 +283,7 @@
 <script setup lang="ts">
 
 import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
+import { openDlna } from '@/common/dlna';
 import { applyAlbumAccess } from '@/common/albumRecovery';
 import { useToast } from '@/common/toast';
 import { getExternalDropPaths, getDroppedDirectoryNames, hasExternalDropIntent } from '@/common/externalDrop';
@@ -847,6 +848,7 @@ const getMoreMenuItems = async (album: any) => {
       action: async()=>{if(libraryId!==libConfig._libraryId)return;try{await openScanDirectory(album.path);}catch(error){useToast().error(t('scan_tracking.open_failed',{error:String(error)}));}},
     },
     { label: t('scan_tracking.details'), icon: IconFileInfo, action:()=>{if(libraryId===libConfig._libraryId)return openScanDetails(album);} },
+    { label: t('dlna.album_menu'), icon: IconFolder, disabled: !isAccessible, action: () => { if (libraryId === libConfig._libraryId) openDlna(libraryId, [], { id: Number(album.id), name: album.name }); } },
     {
       label: `${localeMsg.value.import_organize.import}…`,
       icon: IconDownload,

@@ -65,7 +65,10 @@ export const useFileMenuItems = (
       if (requiresOriginalAction(actionName) && (options?.selectMode?.value ? options?.selectionHasUnavailable?.value : isOriginalUnavailable(file.value))) return;
       if (actionName === 'cast-media') {
         if (libraryId !== libConfig._libraryId) return;
-        openDlna(libraryId, options?.selectMode?.value ? options.selectionIds?.() || [] : [Number(file.value?.id)]);
+        const selection = options?.selectMode?.value;
+        const contextAlbum = config.main.sidebarIndex === SIDEBAR.ALBUM && libConfig.activePane !== 'collection' ? Number(libConfig.album.id) : 0;
+        const albumId = selection ? contextAlbum : Number(file.value?.album_id) || contextAlbum;
+        openDlna(libraryId, selection ? options?.selectionIds?.() || [] : [Number(file.value?.id)], albumId > 0 ? { id: albumId, name: file.value?.album_name || libConfig.album.name || '' } : undefined);
         return;
       }
       onAction(actionName);

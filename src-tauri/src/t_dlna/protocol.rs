@@ -60,22 +60,22 @@ pub fn discovery_location(packet: &[u8], sender: Ipv4Addr) -> Option<Url> {
 }
 
 #[derive(Default, Debug)]
-struct XmlNode {
+pub(super) struct XmlNode {
     name: String,
     text: String,
     children: Vec<XmlNode>,
 }
 
 impl XmlNode {
-    fn child(&self, name: &str) -> Option<&Self> {
+    pub(super) fn child(&self, name: &str) -> Option<&Self> {
         self.children.iter().find(|node| node.name == name)
     }
 
-    fn value(&self, name: &str) -> &str {
+    pub(super) fn value(&self, name: &str) -> &str {
         self.child(name).map(|node| node.text.trim()).unwrap_or("")
     }
 
-    fn descendant(&self, name: &str) -> Option<&Self> {
+    pub(super) fn descendant(&self, name: &str) -> Option<&Self> {
         if self.name == name {
             return Some(self);
         }
@@ -83,7 +83,7 @@ impl XmlNode {
     }
 }
 
-fn xml(text: &str) -> Result<XmlNode, String> {
+pub(super) fn xml(text: &str) -> Result<XmlNode, String> {
     if text.len() > MAX_XML {
         return Err("电视返回的数据过大".into());
     }
@@ -234,6 +234,15 @@ pub async fn action(
     name: &str,
     arguments: &[(&str, &str)],
 ) -> Result<(), String> {
+    query(client, renderer, name, arguments).await.map(|_| ())
+}
+
+pub(super) async fn query(
+    client: &Client,
+    renderer: &Renderer,
+    name: &str,
+    arguments: &[(&str, &str)],
+) -> Result<XmlNode, String> {
     let response = client
         .post(renderer.control_url.clone())
         .header("Content-Type", "text/xml; charset=\"utf-8\"")
@@ -271,7 +280,7 @@ pub async fn action(
     {
         return Err(format!("电视未返回有效的 {name} 播放服务响应"));
     }
-    Ok(())
+    document.ok_or_else(|| "电视播放服务响应无效".into())
 }
 
 pub fn metadata(title: &str, url: &str, mime: &str, size: u64) -> String {
