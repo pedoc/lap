@@ -184,7 +184,7 @@
 <script setup lang="ts">
 
 import ThumbnailRegenerationDialog from '@/components/ThumbnailRegenerationDialog.vue';
-import { ref, nextTick, computed, inject, provide, onBeforeUnmount } from 'vue';
+import { ref, nextTick, computed, inject, provide, watch, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { watchScanFolders, showScanHistory, openScanDirectory } from '@/common/scanJobs';
 import ScanStatusBadge from './ScanStatusBadge.vue';
