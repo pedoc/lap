@@ -5,7 +5,7 @@ import { config } from '@/common/config';
 export interface DlnaDevice { id: string; name: string; address: string; networks?: string[] }
 export interface DlnaAlbum { id: number; name?: string }
 interface CastResult { title: string; kind: 'image' | 'video' }
-export interface DlnaNetwork { id: string; name: string; addresses: string[]; isDefault: boolean }
+export interface DlnaNetwork { id: string; name: string; addresses: string[]; isDefault: boolean; unavailableReason?: 'disconnected' | 'no_ipv4' | 'no_multicast' | 'no_lan_ipv4' | null }
 interface Published { networks: { id: string; name: string; address: string }[]; errors: string[] }
 export interface DlnaViewOrder { sortType: number; sortOrder: number; randomSeed: number; groupBy: number; folderSort: number; calendarSort: number; categorySort: number }
 type DlnaOrder = 'view' | 'selection' | 'taken' | 'filename' | 'title' | 'added' | 'random';
@@ -37,7 +37,7 @@ export const dlna = reactive({
   orderBy: 'view' as DlnaOrder, orderDescending: true, viewOrder: normalizeOrder(), sharedNetworks: [] as Published['networks'], sharedErrors: [] as string[],
 });
 
-let revision = 0, playback = 0, playingSeen = false, searchRevision = 0;
+let revision = 0, playback = 0, playingSeen = false, searchRevision = 0, networkRevision = 0;
 let activeSearchId = '';
 let timer: ReturnType<typeof setTimeout> | null = null;
 let connecting: Promise<Started> | null = null;
@@ -78,12 +78,19 @@ export function setDlnaMode(mode: 'cast' | 'browse') {
 }
 
 async function loadNetworks(ticket: number, run?: number) {
+  const request = ++networkRevision;
+  const valid = () => current(ticket) && request === networkRevision && (run === undefined || run === searchRevision);
   try {
     const networks = await invoke<DlnaNetwork[]>('dlna_network_interfaces');
-    if (!current(ticket) || (run !== undefined && run !== searchRevision)) return [];
+    if (!valid()) return [];
     dlna.networks = Array.isArray(networks) ? networks : [];
     return dlna.networks;
-  } catch (error) { if (current(ticket) && (run === undefined || run === searchRevision)) dlna.error = String(error); return []; }
+  } catch (error) { if (valid()) dlna.error = String(error); return []; }
+}
+
+export async function refreshDlnaNetworks() {
+  if (!dlna.visible || dlna.busy || dlna.sessionId || dlna.discovering) return;
+  await loadNetworks(revision);
 }
 
 export function stopDlnaDiscovery() {
@@ -93,7 +100,7 @@ export function stopDlnaDiscovery() {
 }
 
 export function setDlnaNetwork(id: string) {
-  if (dlna.busy || dlna.sessionId || (id && !dlna.networks.some(network => network.id === id))) return;
+  if (dlna.busy || dlna.sessionId || (id && !dlna.networks.some(network => network.id === id && !network.unavailableReason))) return;
   void stopDlnaDiscovery(); dlna.networkId = id; dlna.devices = []; dlna.deviceId = '';
   if (dlna.mode === 'cast') void discoverDlna();
 }
@@ -114,7 +121,7 @@ export async function discoverDlna() {
     activeSearchId = searchId;
     const available = await loadNetworks(ticket, run);
     if (!valid()) return;
-    const networks = dlna.networkId ? available.filter(network => network.id === dlna.networkId) : available;
+    const networks = available.filter(network => !network.unavailableReason && (!dlna.networkId || network.id === dlna.networkId));
     dlna.searchTotal = networks.length;
     for (const network of networks) {
       if (!valid()) return;

@@ -229,6 +229,7 @@ mod tests {
             name: "Test".into(),
             addresses: vec!["192.168.1.2/24".into()],
             is_default: false,
+            unavailable_reason: None,
         };
         let result = Publication::start_with_exe(
             "missing-publisher".into(),

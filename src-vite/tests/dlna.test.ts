@@ -37,7 +37,7 @@ function harness(overrides: Record<string, (args: any) => unknown> = {}) {
       if (name === 'dlna_cast') return { title: `Media ${args.fileId}`, kind: args.fileId === 2 ? 'video' : 'image' };
     },
   };
-  const api = runInNewContext(`${body};({dlna, openDlna, closeDlna, castDlna, discoverDlna, toggleDlnaPause, shareDlna, setDlnaMode, setDlnaScope, setDlnaAutoPlay, setDlnaInterval, setDlnaNetwork, setDlnaOrder, setDlnaViewOrder, stopDlnaDiscovery});`, context);
+  const api = runInNewContext(`${body};({dlna, openDlna, closeDlna, castDlna, discoverDlna, toggleDlnaPause, shareDlna, setDlnaMode, setDlnaScope, setDlnaAutoPlay, setDlnaInterval, setDlnaNetwork, setDlnaOrder, setDlnaViewOrder, stopDlnaDiscovery, refreshDlnaNetworks});`, context);
   return { ...api, calls, timers, runTimer: async () => { const next = timers.entries().next().value; assert.ok(next, 'a playback timer is scheduled'); timers.delete(next[0]); await next[1].callback(); } };
 }
 
@@ -147,7 +147,7 @@ async function renderDialog(state: any, language = 'zh-CN') {
     useUIStore: () => ({ pushInputHandler() {}, removeInputHandler() {} }),
     useI18n: () => ({ t: (key: string, values: any = {}) => Object.entries(values).reduce((text: string, [name, value]) => text.replace(`{${name}}`, String(value)), words[key.slice(5)] || key) }),
     ModalDialog: { props: ['title', 'width'], setup: (_: unknown, { slots }: any) => () => Vue.h('section', slots.default?.()) },
-    discoverDlna() {}, castDlna() {}, closeDlna() {}, toggleDlnaPause() {}, shareDlna() {}, setDlnaMode() {}, setDlnaScope() {}, setDlnaAutoPlay() {}, setDlnaInterval() {}, setDlnaNetwork() {}, setDlnaOrder() {}, stopDlnaDiscovery() {},
+    discoverDlna() {}, castDlna() {}, closeDlna() {}, toggleDlnaPause() {}, shareDlna() {}, setDlnaMode() {}, setDlnaScope() {}, setDlnaAutoPlay() {}, setDlnaInterval() {}, setDlnaNetwork() {}, setDlnaOrder() {}, stopDlnaDiscovery() {}, refreshDlnaNetworks() {},
   };
   const component = runInNewContext(`${code};Component;`, context);
   return renderToString(Vue.createSSRApp(component));
@@ -368,5 +368,56 @@ test('terminated publication clears the active share and allows a fresh start', 
   assert.equal(h.dlna.sessionId, ''); assert.equal(h.dlna.serverName, ''); assert.match(h.dlna.error, /publication ended/);
   assert.equal(h.dlna.sharedNetworks.length, 0); assert.equal(h.timers.size, 0);
   assert.ok(h.calls.some((call: any) => call.name === 'dlna_disconnect'));
+  h.closeDlna();
+});
+
+test('unavailable adapters remain visible but all-interface discovery skips them', async () => {
+  const networks = [
+    { id: 'wlan', name: 'WLAN', addresses: ['192.168.1.2/24'] },
+    { id: 'wired', name: '以太网', addresses: ['169.254.76.215/16'], unavailableReason: 'disconnected' },
+    { id: 'ipv6', name: 'IPv6 only', addresses: [], unavailableReason: 'no_ipv4' },
+    { id: 'tunnel', name: 'Tunnel', addresses: ['10.0.0.2/24'], unavailableReason: 'no_multicast' },
+  ];
+  const h = harness({ dlna_network_interfaces: () => networks });
+  h.openDlna('library-a', [1]); await tick();
+  assert.equal(h.dlna.networks.length, 4); assert.equal(h.dlna.searchTotal, 1);
+  assert.deepEqual(h.calls.filter((call: any) => call.name === 'dlna_discover').map((call: any) => call.args.interfaceId), ['wlan']);
+  h.setDlnaNetwork('wired'); assert.equal(h.dlna.networkId, '');
+  const html = await renderDialog({ mode: 'browse', networks });
+  assert.match(html, /value="wired"[^>]*disabled[^>]*>以太网/);
+  assert.match(html, /未连接或已禁用/); assert.match(html, /无 IPv4 地址/); assert.match(html, /不支持组播/);
+  assert.match(html, /刷新网卡/);
+  h.closeDlna();
+});
+
+test('refreshing adapters reveals a reconnected wired interface without advertising or searching', async () => {
+  let connected = false;
+  const h = harness({ dlna_network_interfaces: () => [{ id: 'wired', name: '以太网', addresses: connected ? ['192.168.2.2/24'] : [], unavailableReason: connected ? null : 'disconnected' }] });
+  h.openDlna('library-a', [1], undefined, { mode: 'browse' }); await tick();
+  h.setDlnaNetwork('wired'); assert.equal(h.dlna.networkId, '');
+  connected = true; await h.refreshDlnaNetworks();
+  h.setDlnaNetwork('wired'); assert.equal(h.dlna.networkId, 'wired');
+  assert.equal(h.calls.filter((call: any) => ['dlna_discover', 'dlna_share'].includes(call.name)).length, 0);
+  h.setDlnaMode('cast'); await tick();
+  assert.equal(h.calls.find((call: any) => call.name === 'dlna_discover').args.interfaceId, 'wired');
+  h.closeDlna();
+});
+
+test('a selected adapter becoming unavailable stays selected and prevents starting a share', async () => {
+  const html = await renderDialog({ mode: 'browse', networkId: 'wired', networks: [{ id: 'wired', name: '以太网', addresses: [], unavailableReason: 'disconnected' }] });
+  assert.match(html, /所选网卡当前不可用/);
+  assert.match(html, /disabled[^>]*>开始共享/);
+  assert.match(html, /<select id="dlna-network"[^>]*value="wired"/);
+});
+
+test('a late adapter refresh cannot restore an outdated disconnected status', async () => {
+  const old = deferred(), latest = deferred(); let reads = 0;
+  const h = harness({ dlna_network_interfaces: () => ++reads === 1 ? [] : reads === 2 ? old.promise : latest.promise });
+  h.openDlna('library-a', [1], undefined, { mode: 'browse' }); await tick();
+  const first = h.refreshDlnaNetworks(), second = h.refreshDlnaNetworks();
+  latest.resolve([{ id: 'wired', name: '以太网', addresses: ['192.168.2.2/24'], unavailableReason: null }]); await second;
+  old.resolve([{ id: 'wired', name: '以太网', addresses: [], unavailableReason: 'disconnected' }]); await first;
+  assert.equal(h.dlna.networks[0].unavailableReason, null);
+  h.setDlnaNetwork('wired'); assert.equal(h.dlna.networkId, 'wired');
   h.closeDlna();
 });

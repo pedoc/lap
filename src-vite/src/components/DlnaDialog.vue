@@ -25,12 +25,14 @@
         </div>
         <p class="text-xs opacity-60">{{ t('dlna.order_hint') }}</p>
       </fieldset>
-      <label class="space-y-1"><span class="block text-xs opacity-70">{{ t(dlna.mode === 'browse' ? 'dlna.publish_network' : 'dlna.search_network') }}</span>
-        <select class="select select-sm select-bordered w-full" :value="dlna.networkId" :disabled="dlna.busy || !!dlna.sessionId" @change="changeNetwork">
+      <div class="space-y-1"><div class="flex items-center justify-between gap-2"><label for="dlna-network" class="text-xs opacity-70">{{ t(dlna.mode === 'browse' ? 'dlna.publish_network' : 'dlna.search_network') }}</label><button type="button" class="btn btn-xs btn-ghost" :disabled="dlna.busy || !!dlna.sessionId || dlna.discovering" @click="refreshDlnaNetworks">{{ t('dlna.refresh_networks') }}</button></div>
+        <select id="dlna-network" class="select select-sm select-bordered w-full" :value="dlna.networkId" :disabled="dlna.busy || !!dlna.sessionId" @change="changeNetwork">
           <option value="">{{ t(dlna.mode === 'browse' ? 'dlna.all_publish_networks' : 'dlna.all_networks') }}</option>
-          <option v-for="network in dlna.networks" :key="network.id" :value="network.id">{{ network.name }} · {{ network.addresses.join(', ') }}</option>
+          <option v-for="network in dlna.networks" :key="network.id" :value="network.id" :disabled="!!network.unavailableReason">{{ network.name }}<template v-if="network.addresses.length"> · {{ network.addresses.join(', ') }}</template><template v-if="network.unavailableReason"> · {{ t(`dlna.network_${network.unavailableReason}`) }}</template></option>
         </select>
-      </label>
+        <p class="text-xs opacity-60">{{ t('dlna.network_availability_hint') }}</p>
+        <p v-if="dlna.networkId && !networkAvailable" class="text-xs text-warning">{{ t('dlna.network_unavailable') }}</p>
+      </div>
       <div v-if="dlna.mode === 'browse' && dlna.sharedNetworks.length" class="text-xs opacity-70 break-words">{{ t('dlna.published_networks') }}：{{ publishNetwork }}</div>
       <details v-if="dlna.mode === 'browse' && dlna.sharedErrors.length" class="text-xs opacity-70"><summary>{{ t('dlna.publish_errors', { count: dlna.sharedErrors.length }) }}</summary><p v-for="error in dlna.sharedErrors" :key="error" class="mt-1 break-words">{{ error }}</p></details>
       <template v-if="dlna.mode === 'cast'">
@@ -51,7 +53,7 @@
           <span class="min-w-0 flex-1"><span class="block break-words text-sm font-medium">{{ device.name }}</span><span class="text-xs opacity-60">{{ device.address }}<template v-if="device.networks?.length"> · {{ device.networks.join(', ') }}</template></span></span>
         </label>
       </fieldset>
-      <p v-if="!dlna.discovering && !dlna.devices.length" class="rounded-box bg-base-200 p-3 text-sm">{{ t(dlna.networks.length ? 'dlna.empty' : 'dlna.no_networks') }}</p>
+      <p v-if="!dlna.discovering && !dlna.devices.length" class="rounded-box bg-base-200 p-3 text-sm">{{ t(dlna.networks.some(network => !network.unavailableReason) ? 'dlna.empty' : 'dlna.no_networks') }}</p>
       <div v-if="dlna.scopeKind === 'album' || dlna.selectedIds.length > 1" class="space-y-2">
         <div class="flex flex-wrap items-center gap-3">
           <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" class="checkbox checkbox-sm checkbox-primary" :checked="dlna.autoPlay" @change="changeAutoPlay" />{{ t('dlna.continuous') }}</label>
@@ -78,8 +80,8 @@
         </div>
         <div class="flex gap-2">
           <button type="button" class="btn btn-sm" @click="closeDlna">{{ dlna.sessionId || dlna.busy ? dlna.mode === 'browse' ? t('dlna.stop_share') : t('dlna.stop') : t('dlna.close') }}</button>
-          <button v-if="dlna.mode === 'cast'" type="button" class="btn btn-sm btn-primary" :disabled="dlna.busy || dlna.discovering || !dlna.deviceId" @click="castDlna()">{{ t('dlna.play') }}</button>
-          <button v-else type="button" class="btn btn-sm btn-primary" :disabled="dlna.busy || !!dlna.sessionId" @click="shareDlna">{{ t('dlna.start_share') }}</button>
+          <button v-if="dlna.mode === 'cast'" type="button" class="btn btn-sm btn-primary" :disabled="dlna.busy || dlna.discovering || !dlna.deviceId || !networkAvailable" @click="castDlna()">{{ t('dlna.play') }}</button>
+          <button v-else type="button" class="btn btn-sm btn-primary" :disabled="dlna.busy || !!dlna.sessionId || !networkAvailable" @click="shareDlna">{{ t('dlna.start_share') }}</button>
         </div>
       </div>
     </div>
@@ -91,12 +93,13 @@ import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { libConfig } from '@/common/config';
 import { useUIStore } from '@/stores/uiStore';
-import { dlna, discoverDlna, castDlna, toggleDlnaPause, closeDlna, shareDlna, setDlnaMode, setDlnaScope, setDlnaAutoPlay, setDlnaInterval, setDlnaNetwork, setDlnaOrder, stopDlnaDiscovery } from '@/common/dlna';
+import { dlna, discoverDlna, castDlna, toggleDlnaPause, closeDlna, shareDlna, setDlnaMode, setDlnaScope, setDlnaAutoPlay, setDlnaInterval, setDlnaNetwork, setDlnaOrder, stopDlnaDiscovery, refreshDlnaNetworks } from '@/common/dlna';
 import ModalDialog from '@/components/ModalDialog.vue';
 
 const { t } = useI18n(), ui = useUIStore();
 const root = ref<HTMLElement | null>(null), width = Math.min(560, window.innerWidth - 24);
 let previousFocus: HTMLElement | null = null;
+const networkAvailable = computed(() => dlna.networks.some(network => !network.unavailableReason && (!dlna.networkId || network.id === dlna.networkId)));
 const publishNetwork = computed(() => {
   return dlna.sharedNetworks.map(network => `${network.name} · ${network.address}`).join('；');
 });

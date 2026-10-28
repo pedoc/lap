@@ -144,7 +144,7 @@ pub async fn discovery_worker() -> bool {
 
 #[tauri::command]
 pub async fn dlna_network_interfaces() -> Result<Vec<network::Interface>, String> {
-    tokio::task::spawn_blocking(network::interfaces)
+    tokio::task::spawn_blocking(network::inventory)
         .await
         .map_err(|error| error.to_string())
 }
