@@ -632,30 +632,19 @@ fn run(
             job.status.lock().map_err(|e| e.to_string())?.completed += 1;
             continue;
         }
-        let super::media::Source {
-            path,
-            modified,
-            size,
-            width,
-            height,
-            orientation,
-        } = source;
         let mut process = (|| {
-            if width.saturating_mul(height) > 80_000_000 {
-                return Err("Image exceeds 80 megapixel OCR decoding limit".into());
-            }
-            let before = crate::t_utils::FileInfo::new(&path)?;
-            if before.modified != modified || before.file_size != size {
-                return Err(
-                    "Source file changed since its last scan; rescan this album before OCR".into(),
-                );
-            }
-            let image = crate::t_image::load_oriented_image_blocking(&path, orientation)?;
+            let image = source.load()?;
             check()?;
             with_backend(model, |backend| {
                 super::ocr_orientation::recognize(backend, model, &image, None, &check)
             })
         })();
+        let super::media::Source {
+            path,
+            modified,
+            size,
+            ..
+        } = source;
         match crate::t_utils::FileInfo::new(&path) {
             Ok(after) if after.modified==modified && after.file_size==size => {},
             _ => process=Err("Source changed or became unavailable during OCR; rescan the album and retry this photo".into()),
@@ -1234,17 +1223,20 @@ mod tests {
         );
     }
     #[test]
-    fn cloud_or_pending_originals_are_not_enqueued_as_ocr_failures() {
+    fn local_metadata_backfills_remain_candidates_but_cloud_and_unknown_dimensions_do_not() {
         let c = db();
-        c.execute_batch("UPDATE afiles SET cloud_only=1 WHERE id=1; UPDATE afiles SET metadata_pending=1 WHERE id=2;").unwrap();
+        c.execute_batch("UPDATE afiles SET cloud_only=1 WHERE id=1;
+            UPDATE afiles SET metadata_pending=1 WHERE id=2;
+            INSERT INTO afiles(id,folder_id,file_type,width,height,modified_at,size,metadata_pending)
+            VALUES(3,1,1,NULL,100,10,20,1),(4,1,1,100,0,10,20,1);").unwrap();
         let cancel = AtomicBool::new(false);
-        assert!(
+        assert_eq!(
             target_ids_with_options(&c, "model-a", true, false, None, None, &cancel, false, None)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            vec![2]
         );
         // Availability must not change the existing browse/coverage contract.
-        assert_eq!(coverage_on(&c, "model-a").unwrap().0, 2);
+        assert_eq!(coverage_on(&c, "model-a").unwrap().0, 4);
         c.execute_batch("UPDATE afiles SET cloud_only=0 WHERE id=1;")
             .unwrap();
         assert_eq!(
@@ -1261,6 +1253,50 @@ mod tests {
             )
             .unwrap(),
             vec![1]
+        );
+    }
+    #[test]
+    fn color_metadata_migration_preserves_ocr_resume_and_annotation_semantics() {
+        let c = db();
+        c.execute_batch("INSERT INTO afiles(id,folder_id,file_type,width,height,modified_at,size)
+            VALUES(3,1,1,100,100,10,20),(4,1,1,100,100,10,20);
+            INSERT INTO ocr_annotations(file_id,modified_at,size,base_profile,model_name,source,edits,document,text,revision)
+            VALUES(4,10,20,'model-a','Fixture','{}','[]','{}','Manual text','manual-1');
+            PRAGMA user_version=23;").unwrap();
+        store_result(&c, 1, "model-a", Some(10), 20, "Saved text", Some("{}"), None)
+            .unwrap();
+        store_result(&c, 3, "model-a", Some(10), 20, "", None, Some("decode failed"))
+            .unwrap();
+        let cancel = AtomicBool::new(false);
+        let resume = || {
+            target_ids_on(&c, "model-a", false, false, None, None, &cancel).unwrap()
+        };
+        assert_eq!(resume(), vec![2, 3, 4]);
+
+        crate::t_migration::check_and_migrate(&c).unwrap();
+
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            24
+        );
+        assert_eq!(resume(), vec![2, 3, 4]);
+        assert_eq!(
+            target_ids_on(&c, "model-a", false, true, None, None, &cancel).unwrap(),
+            vec![3]
+        );
+        assert_eq!(
+            target_ids_with_options(&c, "model-a", false, false, None, None, &cancel, true, None)
+                .unwrap(),
+            vec![2]
+        );
+        assert_eq!(coverage_on(&c, "model-a").unwrap(), (4, 2, 1, 2, 0));
+        assert_eq!(
+            c.query_row("SELECT SUM(metadata_pending) FROM afiles", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap(),
+            4
         );
     }
     fn db() -> Connection {

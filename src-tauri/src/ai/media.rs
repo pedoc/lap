@@ -28,7 +28,8 @@ pub fn base() -> String {
 /// Availability is deliberately separate from visibility: cached results and
 /// manual annotations remain browsable for cloud-only originals.
 pub(crate) fn local_originals() -> &'static str {
-    "COALESCE(a.cloud_only,0)=0 AND COALESCE(a.metadata_pending,0)=0"
+    // Optional metadata backfills do not make already indexed local pixels unavailable.
+    "COALESCE(a.cloud_only,0)=0 AND a.width>0 AND a.height>0"
 }
 /// Provider state can change after a job's database snapshot. Defer such a
 /// photo instead of writing a model failure or a false negative observation.
@@ -128,6 +129,27 @@ pub(crate) mod tests {
         let source = source_optional_on(&c, 1).unwrap().unwrap();
         assert_eq!((source.width,source.height),(0,0));
         assert_eq!(source.stamp_key().unwrap().len(),64);
+    }
+
+    #[test]
+    fn local_metadata_backfills_preserve_analysis_and_cached_visibility_boundaries() {
+        let c = db(7);
+        c.execute_batch("UPDATE afiles SET metadata_pending=1;
+            UPDATE afiles SET cloud_only=1 WHERE id=1;
+            UPDATE afiles SET width=NULL WHERE id=2;
+            UPDATE afiles SET height=0 WHERE id=3;
+            UPDATE afiles SET width=0 WHERE id=4;
+            INSERT INTO media_states VALUES(6,1,NULL),(7,0,1);").unwrap();
+        let candidates = c.prepare(&format!("SELECT a.id {} AND {} ORDER BY a.id", base(), local_originals())).unwrap()
+            .query_map([], |row| row.get::<_,i64>(0)).unwrap()
+            .collect::<Result<Vec<_>,_>>().unwrap();
+        assert_eq!(candidates, vec![5]);
+        assert!(source_optional_on(&c, 1).unwrap().is_some(), "cloud metadata and cached observations stay readable");
+        assert_eq!(source_optional_on(&c, 2).unwrap().unwrap().width, 0);
+        assert!(source_optional_on(&c, 6).unwrap().is_none(), "hidden media remain private");
+        assert!(source_optional_on(&c, 7).unwrap().is_none(), "deleted media remain unavailable");
+        assert_eq!(c.query_row("SELECT SUM(metadata_pending) FROM afiles", [], |row| row.get::<_,i64>(0)).unwrap(), 7,
+            "analysis must not clear pending metadata extraction");
     }
 
     pub(crate) fn db(count: i64) -> Connection {

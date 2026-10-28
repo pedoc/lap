@@ -2270,7 +2270,7 @@ pub(crate) enum CloudScanAction {
     InsertStub,
     /// Unchanged online-only file: only mark it as seen.
     MarkSeen,
-    /// Changed online-only file: store the new size and dates, keep the rest.
+    /// Changed online-only file: update stat data, but stop trusting its old image geometry.
     UpdateStat,
 }
 
@@ -2377,6 +2377,33 @@ impl AFile {
             album_visible: true,
             ..Default::default()
         })
+    }
+
+    fn update_cloud_stat_on(
+        conn: &Connection,
+        file: Self,
+        info: &t_utils::FileInfo,
+        last_scan_time: i64,
+    ) -> Result<Self, String> {
+        let file_id = file.id.ok_or("Existing DB record is missing file id")?;
+        // Stat-only cloud updates cannot validate dimensions or orientation. Keep cached
+        // thumbnails and catalog edits, but require a content read before image analysis.
+        conn.execute(
+            "UPDATE afiles SET size=?1,created_at=?2,modified_at=?3,last_scan_time=?4,
+             cloud_only=1,metadata_pending=1,width=NULL,height=NULL,e_orientation=NULL WHERE id=?5",
+            params![info.file_size, info.created, info.modified, last_scan_time, file_id],
+        ).map_err(|e| e.to_string())?;
+        Ok(Self {
+            size: info.file_size, created_at: info.created, modified_at: info.modified,
+            last_scan_time: Some(last_scan_time), cloud_only: true, metadata_pending: true,
+            width: None, height: None, e_orientation: None, ..file
+        })
+    }
+
+    fn pending_source_content_changed(file: &Self, size: i64, modified: Option<i64>) -> bool {
+        file.cloud_only || file.size != size || file.modified_at != modified
+            || file.width.is_none_or(|width| width == 0)
+            || file.height.is_none_or(|height| height == 0)
     }
 
     /// Follow a rename without reading the file (online-only files).
@@ -4036,9 +4063,9 @@ impl AFile {
                 let mut file = Self::update_file_info(file_id, file_path, last_scan_time)?
                     .ok_or("File not found")?;
                 // A schema backfill alone does not invalidate thumbnails or embeddings.
-                let content_changed = existing_file.as_ref().is_some_and(|old| old.cloud_only
-                    || old.size != metadata.len() as i64
-                    || old.modified_at != t_utils::systemtime_to_timestamp(metadata.modified().ok()));
+                let content_changed = existing_file.as_ref().is_some_and(|old|
+                    Self::pending_source_content_changed(old, metadata.len() as i64,
+                        t_utils::systemtime_to_timestamp(metadata.modified().ok())));
                 let thumbnail_changed = content_changed || existing_file.as_ref().is_some_and(|old|
                     old.width != file.width || old.height != file.height || old.e_orientation != file.e_orientation);
                 if thumbnail_changed {
@@ -4048,6 +4075,7 @@ impl AFile {
                 if content_changed {
                     crate::ai::profiles::invalidate_file(file_id)?;
                     file.has_embedding = Some(false);
+                    file.has_faces = Some(0);
                 }
                 open_conn()?.execute(
                     "UPDATE afiles SET embeds = CASE WHEN ?2 THEN NULL ELSE embeds END,
@@ -4076,19 +4104,11 @@ impl AFile {
                 return Ok((Self { cloud_only: true, last_scan_time: Some(last_scan_time), ..file }, 0));
             }
             CloudScanAction::UpdateStat => {
-                let file_id = existing_id.ok_or("Existing DB record is missing file id")?;
                 let info = t_utils::FileInfo::new(file_path)?;
-                open_conn()?.execute(
-                    "UPDATE afiles SET size = ?1, created_at = ?2, modified_at = ?3, last_scan_time = ?4,
-                     cloud_only = 1, metadata_pending = 1 WHERE id = ?5",
-                    params![info.file_size, info.created, info.modified, last_scan_time, file_id],
-                ).map_err(|e| e.to_string())?;
                 let file = existing_file.ok_or("File not found")?;
                 // Status 0: keep the old thumbnail ([M1]); status 2 would invalidate it.
-                return Ok((Self {
-                    size: info.file_size, created_at: info.created, modified_at: info.modified,
-                    last_scan_time: Some(last_scan_time), cloud_only: true, metadata_pending: true, ..file
-                }, 0));
+                return Self::update_cloud_stat_on(&*open_conn()?, file, &info, last_scan_time)
+                    .map(|file| (file, 0));
             }
         }
         if let Some(mut file) = existing_file {
@@ -11884,6 +11904,64 @@ mod cloud_scan_tests {
         assert_eq!(cloud_scan_action(false, None, 10, Some(1)), CloudScanAction::Read);
         assert_eq!(cloud_scan_action(false, Some(&stored(10, 1, false)), 10, Some(1)), CloudScanAction::Read);
         assert_eq!(cloud_scan_action(false, Some(&stored(10, 1, true)), 10, Some(1)), CloudScanAction::ReadPending);
+    }
+
+    #[test]
+    fn changed_cloud_stats_require_fresh_geometry_before_local_ai_admission() {
+        let root = std::env::temp_dir().join(format!("lap-cloud-geometry-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("changed.png");
+        image::RgbImage::new(320, 240).save(&path).unwrap();
+        let original = fs::read(&path).unwrap();
+        let info = t_utils::FileInfo::new(path.to_str().unwrap()).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        initialize_database_schema(&conn).unwrap();
+        conn.execute("INSERT INTO albums(id,name,path,small_image_filter) VALUES(1,'Fixture',?1,640)",
+            [root.to_str().unwrap()]).unwrap();
+        conn.execute("INSERT INTO afolders(id,album_id,name,path) VALUES(1,1,'Fixture',?1)",
+            [root.to_str().unwrap()]).unwrap();
+        conn.execute_batch("INSERT INTO afiles(id,folder_id,name,file_type,size,modified_at,width,height,e_orientation,
+                cloud_only,metadata_pending,title,comments,rating,is_favorite,culling_flag)
+            VALUES(1,1,'changed.png',1,1,1,1200,800,6,1,0,'Keep title','Keep comment',4,1,1);").unwrap();
+        let stored = AFile::fetch_with_conn(&conn, 1, path.to_str().unwrap()).unwrap().unwrap();
+        assert_eq!(cloud_scan_action(true, Some(&stored), info.file_size, info.modified), CloudScanAction::UpdateStat);
+        let updated = AFile::update_cloud_stat_on(&conn, stored, &info, 100).unwrap();
+        assert_eq!((updated.width, updated.height, updated.e_orientation), (None, None, None));
+        let row = AFile::fetch_with_conn(&conn, 1, path.to_str().unwrap()).unwrap().unwrap();
+        assert_eq!((row.width, row.height, row.e_orientation), (None, None, None));
+        assert_eq!((row.size, row.modified_at), (info.file_size, info.modified));
+        assert!(row.cloud_only && row.metadata_pending);
+
+        // Attribute refresh may see a local file before the scanner rereads its content.
+        assert_eq!(AFile::refresh_cloud_state_on(&mut conn, 1, &root).unwrap(), (true, true));
+        let local = AFile::fetch_with_conn(&conn, 1, path.to_str().unwrap()).unwrap().unwrap();
+        assert!(!local.cloud_only);
+        assert!(AFile::pending_source_content_changed(&local, info.file_size, info.modified),
+            "cleared geometry must still invalidate old vectors and model faces after cloud-state refresh");
+        let candidates = || conn.query_row(&format!("SELECT COUNT(*) {} AND {} AND a.id=1",
+            crate::ai::media::base(), crate::ai::media::local_originals()), [], |r| r.get::<_,i64>(0)).unwrap();
+        assert_eq!(candidates(), 0);
+        let browse_count = || conn.query_row(&format!("SELECT COUNT(*) FROM afiles a WHERE a.id=1 AND {}",
+            AFile::album_query_predicate("a")), [], |r| r.get::<_,i64>(0)).unwrap();
+        assert_eq!(browse_count(), 1, "unknown dimensions remain browsable under the existing small-image rule");
+
+        let mut reread = AFile::new(1, path.to_str().unwrap(), 1).unwrap();
+        assert_eq!((reread.width, reread.height, reread.e_orientation), (Some(320), Some(240), Some(1)));
+        reread.rating = row.rating;
+        AFile::update_on(&conn, 1, &reread).unwrap();
+        assert_eq!(browse_count(), 0, "freshly verified small dimensions restore the configured filter");
+        conn.execute("UPDATE albums SET small_image_filter=0 WHERE id=1", []).unwrap();
+        assert_eq!(candidates(), 1, "actual metadata rereading restores image-analysis eligibility");
+        let mut saved = AFile::fetch_with_conn(&conn, 1, path.to_str().unwrap()).unwrap().unwrap();
+        assert!(!saved.cloud_only && !saved.metadata_pending);
+        assert_eq!((saved.title.as_deref(), saved.comments.as_deref(), saved.rating, saved.is_favorite, saved.culling_flag),
+            (Some("Keep title"), Some("Keep comment"), Some(4), Some(true), Some(1)));
+        saved.metadata_pending = true;
+        saved.e_orientation = None;
+        assert!(!AFile::pending_source_content_changed(&saved, info.file_size, info.modified),
+            "a color-only backfill with verified geometry must retain vectors and faces even without EXIF orientation");
+        assert_eq!(fs::read(&path).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn cloud_state_refresh_preserves_pending_work_and_ignores_missing_or_unrelated_files() {

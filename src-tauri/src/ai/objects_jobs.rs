@@ -1109,6 +1109,31 @@ mod tests {
         assert_eq!(restored.batch_size, Some(7));
     }
     #[test]
+    fn metadata_backfills_allow_object_jobs_without_losing_manual_or_cloud_observations() {
+        let c = media::tests::db(4);
+        store::ensure_schema(&c).unwrap();
+        c.execute_batch("UPDATE afiles SET metadata_pending=1;
+            UPDATE afiles SET cloud_only=1 WHERE id=1;
+            UPDATE afiles SET width=NULL WHERE id=2;").unwrap();
+        assert_eq!(targets(&c, "p", false, false, None, None, None).unwrap(), vec![3,4]);
+        c.execute_batch("INSERT INTO object_annotations VALUES
+            (1,10,20,'p','model','{}','{}','{}',1,1,'cloud-edit'),
+            (3,10,20,'p','model','{}','{}','{}',1,1,'local-edit');").unwrap();
+        assert_eq!(targets(&c, "p", false, false, None, None, None).unwrap(), vec![4],
+            "manual observations remain complete and are not queued again");
+        assert_eq!(targets(&c, "p", true, false, None, None, None).unwrap(), vec![3,4]);
+        let detected = c.prepare(&format!("SELECT a.id {} AND {} ORDER BY a.id", media::base(),
+            store::state_condition("'p'", "detected").unwrap())).unwrap()
+            .query_map([], |row| row.get::<_,i64>(0)).unwrap()
+            .collect::<Result<Vec<_>,_>>().unwrap();
+        assert_eq!(detected, vec![1,3], "cached manual results remain visible for cloud originals");
+        assert_eq!(c.query_row("SELECT revision FROM object_annotations WHERE file_id=3", [],
+            |row| row.get::<_,String>(0)).unwrap(), "local-edit");
+        assert_eq!(c.query_row("SELECT SUM(metadata_pending) FROM afiles", [],
+            |row| row.get::<_,i64>(0)).unwrap(), 4);
+    }
+
+    #[test]
     fn explicit_scope_and_retry_modes_never_expand_into_other_images() {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE albums(id INTEGER PRIMARY KEY,path TEXT,file_types INTEGER,small_image_filter INTEGER,excluded_folders TEXT);CREATE TABLE afolders(id INTEGER PRIMARY KEY,album_id INTEGER,path TEXT,is_excluded_from_search INTEGER DEFAULT 0);CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,file_type INTEGER,width INTEGER,height INTEGER,live_photo_video_id INTEGER,modified_at INTEGER,size INTEGER);CREATE TABLE media_states(file_id INTEGER PRIMARY KEY,hidden INTEGER DEFAULT 0,deleted_at INTEGER);INSERT INTO albums VALUES(1,'/photos',7,0,'[]');INSERT INTO afolders VALUES(1,1,'/photos/trip_%',0),(2,1,'/photos/trip_%/child',0),(3,1,'/photos/trip_%2',0);INSERT INTO afiles VALUES(1,1,1,100,100,NULL,10,20),(2,2,1,100,100,NULL,10,20),(3,3,1,100,100,NULL,10,20);").unwrap();
@@ -1117,9 +1142,9 @@ mod tests {
         c.execute_batch("UPDATE afiles SET cloud_only=1 WHERE id=1; UPDATE afiles SET metadata_pending=1 WHERE id=2;").unwrap();
         assert_eq!(
             targets(&c, "p", true, false, None, None, None).unwrap(),
-            vec![3]
+            vec![2, 3]
         );
-        assert!(!has_local_pending(&c, "p", Some(1)).unwrap());
+        assert!(has_local_pending(&c, "p", Some(1)).unwrap());
         assert!(has_local_pending(&c, "p", Some(3)).unwrap());
         assert_eq!(
             c.query_row(
@@ -1131,7 +1156,7 @@ mod tests {
             1,
             "cached observations stay browsable"
         );
-        c.execute_batch("UPDATE afiles SET cloud_only=0,metadata_pending=0;")
+        c.execute_batch("UPDATE afiles SET cloud_only=0;")
             .unwrap();
         assert_eq!(
             targets(&c, "p", false, false, Some(&[2]), None, None).unwrap(),
