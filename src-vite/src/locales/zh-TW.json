@@ -759,6 +759,7 @@
       "folder": "資料夾",
       "select_folder": "選擇資料夾",
       "name": "名稱",
+      "name_hint": "僅修改 Lap 中的相簿顯示名稱，不會重新命名磁碟上的資料夾。",
       "description": "描述",
       "description_placeholder": "輸入相簿描述",
       "images": "相片",

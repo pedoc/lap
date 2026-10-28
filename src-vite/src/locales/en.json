@@ -1073,6 +1073,7 @@
       "folder": "Folder",
       "select_folder": "Select a folder",
       "name": "Name",
+      "name_hint": "Changes only the album's display name in Lap. The folder on disk is not renamed.",
       "description": "Description",
       "description_placeholder": "Enter album description",
       "images": "Photos",

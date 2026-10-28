@@ -1423,16 +1423,18 @@ const expandAlbum = async (album: any, forceRefresh = false) => {
   album.is_expanded = willExpand; 
   
   await refreshAlbumAccess(album);
-  if (album.is_expanded && album.is_accessible === false) {
+  if (!album.is_expanded) return;
+  if (album.is_accessible === false) {
     if (!album.children || forceRefresh) await loadCachedAlbumTree(album);
-    return;
-  }
-  if (album.is_expanded && (!album.children || forceRefresh)) {
+  } else if (!album.children || forceRefresh) {
     const subFolders = await fetchFolder(album.path, false, config.settings.folderSort);
     if(subFolders) {
       album.children = [subFolders];
     }
   }
+  // The album arrow also opens its filesystem-root wrapper.
+  const root = album.children?.find((folder: Folder) => folder.path === album.path);
+  if (root) root.is_expanded = true;
 };
 
 const toggleAlbumExpansion = async (album: Album) => {

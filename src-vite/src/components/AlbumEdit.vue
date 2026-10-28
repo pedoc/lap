@@ -49,7 +49,7 @@
           </div>
 
           <!-- Name -->
-          <div class="h-6 flex items-center text-[11px] text-base-content/30">{{ $t('album.edit.name') }}</div>
+          <div class="h-6 flex items-center gap-1 text-[11px] text-base-content/30"><span>{{ $t('album.edit.name') }}</span><InfoTooltip :label="$t('album.edit.name')" :text="$t('album.edit.name_hint')" /></div>
           <div class="flex min-h-6 items-center">
             <input
               ref="inputNameRef"
