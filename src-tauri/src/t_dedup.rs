@@ -41,6 +41,7 @@ impl Default for DedupScanStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DedupDeleteResult {
     pub deleted_file_ids: Vec<i64>,
+    pub affected_folder_paths: Vec<String>,
     pub deleted_count: usize,
     pub failed_count: usize,
     pub errors: Vec<String>,
@@ -278,6 +279,7 @@ fn get_files_by_sizes(conn: &Connection) -> Result<Vec<AFile>, String> {
                 a.e_make, a.e_model, a.e_date_time, a.e_software, a.e_artist, a.e_copyright, 
                 a.e_description, a.e_lens_make, a.e_lens_model, a.e_exposure_bias, a.e_exposure_time, 
                 a.e_f_number, a.e_focal_length, a.e_iso_speed, a.e_flash, a.e_orientation, 
+                a.icc_profile, a.color_space, a.bit_depth,
                 a.gps_latitude, a.gps_longitude, a.gps_altitude, 
                 a.geo_name, a.geo_admin1, a.geo_admin2, a.geo_cc,
                 f.path || '/' || a.name as file_path,
@@ -341,15 +343,18 @@ fn get_files_by_sizes(conn: &Connection) -> Result<Vec<AFile>, String> {
                 e_iso_speed: row.get(33)?,
                 e_flash: row.get(34)?,
                 e_orientation: row.get(35)?,
-                gps_latitude: row.get(36)?,
-                gps_longitude: row.get(37)?,
-                gps_altitude: row.get(38)?,
-                location: row.get::<_, Option<String>>(44)?.and_then(|json|serde_json::from_str(&json).ok()),
-                geo_name: row.get(39)?,
-                geo_admin1: row.get(40)?,
-                geo_admin2: row.get(41)?,
-                geo_cc: row.get(42)?,
-                file_path: row.get(43)?,
+                icc_profile: row.get(36)?,
+                color_space: row.get(37)?,
+                bit_depth: row.get(38)?,
+                gps_latitude: row.get(39)?,
+                gps_longitude: row.get(40)?,
+                gps_altitude: row.get(41)?,
+                geo_name: row.get(42)?,
+                geo_admin1: row.get(43)?,
+                geo_admin2: row.get(44)?,
+                geo_cc: row.get(45)?,
+                file_path: row.get(46)?,
+                location: row.get::<_, Option<String>>(47)?.and_then(|json|serde_json::from_str(&json).ok()),
                 album_id: None,
                 album_name: None,
                 has_thumbnail: None,
@@ -919,7 +924,22 @@ pub fn delete(request: DedupDeleteRequest) -> Result<DedupDeleteResult, String> 
     tx.commit().map_err(|e| e.to_string())?;
 
     let candidate_ids: HashSet<i64> = files_to_delete.iter().map(|file| file.file_id).collect();
+    let source_folders: Vec<(i64, String)> = files_to_delete
+        .iter()
+        .filter_map(|file| {
+            file.file_path
+                .rsplit_once('/')
+                .map(|(folder, _)| (file.file_id, folder.to_string()))
+        })
+        .collect();
     let delete_result = crate::t_cmds::delete_files_grouped(files_to_delete, request.permanently)?;
+    let deleted_ids: HashSet<i64> = delete_result.deleted_file_ids.iter().copied().collect();
+    let affected_folder_paths = source_folders
+        .into_iter()
+        .filter_map(|(id, path)| deleted_ids.contains(&id).then_some(path))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
     let deleted_count = delete_result
         .deleted_file_ids
         .iter()
@@ -951,6 +971,7 @@ pub fn delete(request: DedupDeleteRequest) -> Result<DedupDeleteResult, String> 
 
     Ok(DedupDeleteResult {
         deleted_file_ids,
+        affected_folder_paths,
         deleted_count,
         failed_count: delete_result.failed_count + failures.len(),
         errors: failures,

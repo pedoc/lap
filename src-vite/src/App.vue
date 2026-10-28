@@ -62,6 +62,16 @@ watch(
   }
 );
 
+watch(
+  () => config.settings.importXmpSidecars,
+  (importXmp) => {
+    void invoke('set_xmp_import_settings', {
+      importXmpSidecars: Boolean(importXmp ?? true),
+    }).catch(console.error);
+  },
+  { immediate: true }
+);
+
 onMounted(async () => {
   // Capture also covers dialogs that stop context-menu events from bubbling.
   window.addEventListener('contextmenu', handleContextMenu, { capture: true });
@@ -137,6 +147,7 @@ const handleKeyDown = (event) => {
   emit('global-keydown', {
     key: event.key,
     code: event.code,
+    repeat: event.repeat,
     altKey: event.altKey,
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,

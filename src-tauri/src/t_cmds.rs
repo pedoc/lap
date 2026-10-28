@@ -279,6 +279,51 @@ pub fn set_last_selected_item_index(index: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn get_thumbnail_cache_location() -> Result<crate::t_cache_storage::CacheLocation, String> {
+    crate::t_cache_storage::location()
+}
+
+#[tauri::command]
+pub async fn get_thumbnail_cache_migration_count() -> Result<u64, crate::t_cache_storage::CacheChangeError> {
+    tauri::async_runtime::spawn_blocking(crate::t_cache_storage::migration_file_count)
+        .await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn change_thumbnail_cache_location(
+    new_dir: Option<String>,
+    operation_id: String,
+    allow_missing_source: Option<bool>,
+    on_progress: tauri::ipc::Channel<crate::t_cache_storage::CacheProgress>,
+    status_state: State<'_, t_face::FaceIndexingStatus>,
+) -> Result<crate::t_cache_storage::CacheChangeResult, crate::t_cache_storage::CacheChangeError> {
+    ensure_db_storage_change_allowed(&status_state)?;
+    let operation = crate::t_cache_storage::MigrationOperation::begin(operation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = cache_migration_library_guard(&operation.cancellation)?;
+        crate::t_cache_storage::change(new_dir, allow_missing_source.unwrap_or(false), &operation.cancellation, |progress| { let _ = on_progress.send(progress); })
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn cache_migration_library_guard(
+    cancellation: &crate::t_cache_storage::MigrationCancellation,
+) -> Result<std::sync::RwLockWriteGuard<'static, ()>, crate::t_cache_storage::CacheChangeError> {
+    loop {
+        cancellation.check()?;
+        match FILE_REFRESH_LIBRARY_LOCK.try_write() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(error) => return Err(error.to_string().into()),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn cancel_thumbnail_cache_migration(operation_id: String) -> Result<bool, String> {
+    crate::t_cache_storage::cancel_migration(&operation_id)
+}
+
+#[tauri::command]
 pub fn get_db_storage_dir() -> Result<String, String> {
     t_storage::get_db_storage_dir()
 }
@@ -802,12 +847,8 @@ pub async fn remove_album(state: State<'_, IndexCancellation>, id: i64) -> Resul
     let library_id = crate::t_config::load_app_config()
         .map(|c| c.current_library_id)
         .unwrap_or_else(|_| "default".to_string());
-    let album_cache_dir = crate::t_config::get_app_cache_dir()
-        .map(|dir| dir.join(library_id).join(id.to_string()))
-        .map_err(|e| format!("Error while resolving album thumbnail cache path: {}", e))?;
-    if album_cache_dir.exists() {
-        std::fs::remove_dir_all(&album_cache_dir)
-            .map_err(|e| format!("Error while removing album thumbnail cache: {}", e))?;
+    if let Err(error) = crate::t_cache_storage::remove_album_cache(&library_id, id) {
+        eprintln!("Album {id} was removed, but its thumbnail cache could not be cleaned: {error}");
     }
 
     Ok(result)
@@ -1446,8 +1487,10 @@ pub async fn get_query_file_ids(params: QueryParams) -> Result<Vec<i64>, String>
 }
 
 #[tauri::command]
-pub fn get_library_visible_counts() -> Result<t_sqlite::LibraryVisibleCounts, String> {
-    AFile::get_library_visible_counts()
+pub async fn get_library_visible_counts(id: Option<String>) -> Result<t_sqlite::LibraryVisibleCounts, String> {
+    tauri::async_runtime::spawn_blocking(move || AFile::get_library_visible_counts(id.as_deref()))
+        .await
+        .map_err(|e| format!("Failed to join library count task: {}", e))?
         .map_err(|e| format!("Error while getting library visible counts: {}", e))
 }
 
@@ -1878,14 +1921,20 @@ pub async fn copy_images(
 
 /// rename a file
 #[tauri::command]
-pub fn rename_file(file_id: i64, file_path: &str, new_name: &str) -> Option<String> {
-    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard().ok()?;
-    let _library_scope = FILE_REFRESH_LIBRARY_LOCK.read().ok()?;
-    crate::t_media_lifecycle::validate_original(file_id, file_path, false).ok()?;
-    let sidecar_rename_plan = build_apple_sidecar_rename_plan(file_id, file_path, new_name).ok()?;
+pub fn rename_file(file_id: i64, file_path: &str, new_name: &str) -> Result<Option<String>, String> {
+    let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+    let _library_scope = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e| e.to_string())?;
+    crate::t_media_lifecycle::validate_original(file_id, file_path, false)?;
+    let sidecar_rename_plan = build_apple_sidecar_rename_plan(file_id, file_path, new_name)?;
     if !preflight_rename_plan(file_path, new_name, &sidecar_rename_plan) {
-        return None;
+        return Ok(None);
     }
+    let primary_target = Path::new(file_path).with_file_name(new_name);
+    let xmp = crate::t_xmp_files::Guard::new(
+        std::iter::once((Path::new(file_path), primary_target.as_path()))
+            .chain(sidecar_rename_plan.iter().map(|p| (p.old_path.as_path(), p.new_path.as_path()))),
+        crate::t_xmp_files::Operation::Move,
+    )?;
     let original_db_names = collect_original_rename_db_names(file_id, &sidecar_rename_plan);
 
     let mut renamed_sidecars: Vec<(PathBuf, PathBuf)> = Vec::new();
@@ -1898,7 +1947,7 @@ pub fn rename_file(file_id: i64, file_path: &str, new_name: &str) -> Option<Stri
                 error
             );
             rollback_renamed_sidecars(renamed_sidecars);
-            return None;
+            return Ok(None);
         }
         renamed_sidecars.push((plan.old_path.clone(), plan.new_path.clone()));
     }
@@ -1927,13 +1976,14 @@ pub fn rename_file(file_id: i64, file_path: &str, new_name: &str) -> Option<Stri
                     renamed_sidecars,
                     &original_db_names,
                 );
-                return None;
+                return Ok(None);
             }
-            Some(new_file_path)
+            xmp.commit();
+            Ok(Some(new_file_path))
         }
         None => {
             rollback_renamed_sidecars(renamed_sidecars);
-            None
+            Ok(None)
         }
     }
 }
@@ -1946,6 +1996,20 @@ pub fn move_file(
     new_folder_id: i64,
     new_folder_path: &str,
     conflict_policy: &str,
+    batch_id: Option<u64>,
+) -> Result<String, String> {
+    crate::t_xmp_files::with_transfer_cache(batch_id, |xmp_cache| {
+        move_file_with_cache(file_id, file_path, new_folder_id, new_folder_path, conflict_policy, xmp_cache)
+    })
+}
+
+fn move_file_with_cache(
+    file_id: i64,
+    file_path: &str,
+    new_folder_id: i64,
+    new_folder_path: &str,
+    conflict_policy: &str,
+    xmp_cache: &mut crate::t_xmp_files::Cache,
 ) -> Result<String, String> {
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
     let _library_scope = FILE_REFRESH_LIBRARY_LOCK
@@ -1961,7 +2025,12 @@ pub fn move_file(
     )?);
     let policy = t_utils::FileConflictPolicy::from_str(conflict_policy);
     let (primary_target, sidecar_plans) =
-        resolve_group_primary_target(Some(file_id), file_path, new_folder_path, policy)?;
+        resolve_group_primary_target(Some(file_id), file_path, new_folder_path, policy, xmp_cache)?;
+    let xmp = crate::t_xmp_files::Guard::with_cache(
+        std::iter::once((Path::new(file_path), primary_target.as_path()))
+            .chain(sidecar_plans.iter().map(|p| (p.old_path.as_path(), p.new_path.as_path()))),
+        crate::t_xmp_files::Operation::Move, xmp_cache,
+    )?;
     let mut replaced_file_ids = Vec::new();
     let mut source_file_ids = HashSet::from([file_id]);
     for plan in &sidecar_plans {
@@ -2043,7 +2112,17 @@ pub fn move_file(
         }
         transfer.finalize()?;
     }
+    xmp.commit_with_cache(xmp_cache);
     transfer.finalize()
+}
+
+#[tauri::command]
+pub fn begin_file_transfer_batch() -> Result<u64, String> {
+    crate::t_xmp_files::begin_transfer_batch()
+}
+#[tauri::command]
+pub fn end_file_transfer_batch(batch_id: u64) {
+    crate::t_xmp_files::end_transfer_batch(batch_id);
 }
 
 /// move a file outside the library and remove its database record
@@ -2053,6 +2132,19 @@ pub fn move_file_outside_library(
     file_path: &str,
     new_folder_path: &str,
     conflict_policy: &str,
+    batch_id: Option<u64>,
+) -> Result<String, String> {
+    crate::t_xmp_files::with_transfer_cache(batch_id, |xmp_cache| {
+        move_file_outside_library_with_cache(file_id, file_path, new_folder_path, conflict_policy, xmp_cache)
+    })
+}
+
+fn move_file_outside_library_with_cache(
+    file_id: i64,
+    file_path: &str,
+    new_folder_path: &str,
+    conflict_policy: &str,
+    xmp_cache: &mut crate::t_xmp_files::Cache,
 ) -> Result<String, String> {
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
     let _library_scope = FILE_REFRESH_LIBRARY_LOCK
@@ -2061,7 +2153,12 @@ pub fn move_file_outside_library(
     crate::t_media_lifecycle::validate_original(file_id, file_path, false)?;
     let policy = t_utils::FileConflictPolicy::from_str(conflict_policy);
     let (primary_target, sidecar_plans) =
-        resolve_group_primary_target(Some(file_id), file_path, new_folder_path, policy)?;
+        resolve_group_primary_target(Some(file_id), file_path, new_folder_path, policy, xmp_cache)?;
+    let xmp = crate::t_xmp_files::Guard::with_cache(
+        std::iter::once((Path::new(file_path), primary_target.as_path()))
+            .chain(sidecar_plans.iter().map(|p| (p.old_path.as_path(), p.new_path.as_path()))),
+        crate::t_xmp_files::Operation::Move, xmp_cache,
+    )?;
     let mut component_transfers = Vec::new();
     for plan in &sidecar_plans {
         let source_path = plan.old_path.to_string_lossy().into_owned();
@@ -2113,6 +2210,7 @@ pub fn move_file_outside_library(
     for (_, _, transfer) in component_transfers {
         transfer.finalize()?;
     }
+    xmp.commit_with_cache(xmp_cache);
     transfer.finalize()
 }
 
@@ -2122,6 +2220,18 @@ pub fn copy_file(
     file_path: &str,
     new_folder_path: &str,
     conflict_policy: &str,
+    batch_id: Option<u64>,
+) -> Result<String, String> {
+    crate::t_xmp_files::with_transfer_cache(batch_id, |xmp_cache| {
+        copy_file_with_cache(file_path, new_folder_path, conflict_policy, xmp_cache)
+    })
+}
+
+fn copy_file_with_cache(
+    file_path: &str,
+    new_folder_path: &str,
+    conflict_policy: &str,
+    xmp_cache: &mut crate::t_xmp_files::Cache,
 ) -> Result<String, String> {
     let _library_scope = FILE_REFRESH_LIBRARY_LOCK
         .try_read()
@@ -2129,7 +2239,12 @@ pub fn copy_file(
     let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
     let policy = t_utils::FileConflictPolicy::from_str(conflict_policy);
     let (primary_target, sidecar_plans) =
-        resolve_group_primary_target(None, file_path, new_folder_path, policy)?;
+        resolve_group_primary_target(None, file_path, new_folder_path, policy, xmp_cache)?;
+    let xmp = crate::t_xmp_files::Guard::with_cache(
+        std::iter::once((Path::new(file_path), primary_target.as_path()))
+            .chain(sidecar_plans.iter().map(|p| (p.old_path.as_path(), p.new_path.as_path()))),
+        crate::t_xmp_files::Operation::Copy, xmp_cache,
+    )?;
     let mut sidecar_transfers = Vec::new();
     for plan in &sidecar_plans {
         let source_path = plan.old_path.to_string_lossy().into_owned();
@@ -2161,6 +2276,7 @@ pub fn copy_file(
     for transfer in sidecar_transfers {
         transfer.finalize()?;
     }
+    xmp.commit_with_cache(xmp_cache);
     Ok(copied_file_path)
 }
 
@@ -2187,8 +2303,18 @@ pub async fn import_file(
                 let _ = std::fs::remove_file(&new_path);
                 format!("Unsupported file type after copy: {}", new_path)
             })?;
+            let xmp = match crate::t_xmp_files::Guard::new(
+                [(Path::new(&file_path), Path::new(&new_path))], crate::t_xmp_files::Operation::Copy,
+            ) {
+                Ok(guard) => guard,
+                Err(error) => { let _ = fs::remove_file(&new_path); return Err(error); }
+            };
             let now = chrono::Utc::now().timestamp_millis();
-            let (file, _) = AFile::add_to_db(folder_id, &new_path, file_type, now)?;
+            let (file, _) = match AFile::add_to_db(folder_id, &new_path, file_type, now) {
+                Ok(file) => file,
+                Err(error) => { let _ = fs::remove_file(&new_path); return Err(error); }
+            };
+            xmp.commit();
             Ok(Some(file))
         })
     })
@@ -2714,6 +2840,11 @@ fn delete_file_group(
         delete_errors.push(format!("Failed to delete Apple sidecar: {}", error));
     }
 
+    if let Err(error) = crate::t_xmp_files::delete_orphans(
+        std::iter::once(Path::new(file_path))
+            .chain(component_files.iter().filter_map(|file| file.file_path.as_deref().map(Path::new))), permanently,
+    ) { delete_errors.push(error); }
+
     AFile::batch_delete(&deleted_file_ids)
         .map_err(|e| format!("Error while deleting removed files from DB: {}", e))?;
 
@@ -2880,6 +3011,11 @@ pub(crate) fn delete_files_grouped(
             failed_count += 1;
         }
     }
+
+    if let Err(error) = crate::t_xmp_files::delete_orphans(
+        delete_groups.iter().flat_map(|group| std::iter::once(Path::new(&group.primary_path))
+            .chain(group.components.iter().map(|(_, path)| Path::new(path)))), permanently,
+    ) { failed_count += 1; eprintln!("Failed to delete XMP sidecars: {error}"); }
 
     AFile::batch_delete(&deleted_file_ids)
         .map_err(|e| format!("Error while deleting files from DB: {}", e))?;
@@ -3139,6 +3275,56 @@ pub fn get_file_info(file_id: i64) -> Result<Option<AFile>, String> {
     AFile::get_file_info(file_id).map_err(|e| format!("Error while getting file info: {}", e))
 }
 
+/// Detail inspection never writes catalog organization metadata or downloads cloud files.
+#[tauri::command]
+pub async fn get_file_metadata_details(
+    file_id: i64,
+    section: String,
+    request_id: String,
+    force: Option<bool>,
+    refresh_key: Option<String>,
+) -> Result<crate::t_metadata::Details, String> {
+    let cancelled = crate::t_metadata::begin_detail_request(&request_id)?;
+    let _request = crate::t_metadata::DetailRequestGuard(request_id);
+    if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("Metadata request cancelled".into());
+    }
+    let file = AFile::get_file_info(file_id)?.ok_or("File not found")?;
+    let path = file.file_path.ok_or("File has no path")?;
+    let library_id = t_config::current_library_id()?;
+    static READS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    let _permit = READS
+        .get_or_init(|| tokio::sync::Semaphore::new(2))
+        .acquire()
+        .await
+        .map_err(|e| e.to_string())?;
+    if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("Metadata request cancelled".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("Metadata request cancelled".into());
+        }
+        with_current_library(&library_id, || {
+            crate::t_media_lifecycle::validate_original(file_id, &path, false)?;
+            crate::t_metadata::read_details(
+            std::path::Path::new(&path),
+            force.unwrap_or(false),
+            &section,
+            refresh_key.as_deref(),
+            Some(&cancelled),
+            )
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn cancel_file_metadata_requests(request_ids: Vec<String>) -> Result<(), String> {
+    crate::t_metadata::cancel_detail_requests(&request_ids)
+}
+
 /// Extract the embedded MP4 from an Android Motion Photo into the cache and
 /// return its path so the frontend can play it through the normal video
 /// pipeline (`prepare_video`). Cached by file size + mtime so an edited file
@@ -3287,17 +3473,28 @@ pub struct FileRefreshResult {
 fn refresh_file(file_id: i64) -> Result<Option<FileRefreshResult>, String> {
     let old = AFile::get_file_info(file_id)?.ok_or("File not found")?;
     let path = old.file_path.as_deref().ok_or("File path missing")?;
-    // Changed timestamps do not imply consent to download a cloud original.
-    if t_utils::is_cloud_only_path(path) {
-        return Ok(Some(FileRefreshResult { file: old, size_delta: 0, skipped: true, ..Default::default() }));
-    }
     crate::t_media_lifecycle::validate_original(file_id, path, false)?;
-    let updated = AFile::update_file_info(file_id, path, chrono::Utc::now().timestamp_millis())?;
+    // Cloud metadata may be refreshed from a sidecar without reading the original.
+    if t_utils::is_cloud_only_path(path) {
+        let checked_at = chrono::Utc::now().timestamp_millis();
+        let import_error = if crate::t_xmp::is_xmp_import_enabled() {
+            crate::t_xmp::import_xmp_for_file_with_mode(file_id, path, crate::t_xmp::XmpImportMode::RefreshNonDestructive)
+                .err().map(|error| format!("XMP import failed: {error}"))
+        } else { None };
+        // Keep the original's pending state. Report sidecar errors, but advance
+        // the check time so an unchanged broken sidecar is not offered forever.
+        AFile::update_column(file_id, "last_scan_time", &checked_at)?;
+        let file = AFile::get_file_info(file_id)?.unwrap_or(old);
+        return Ok(Some(FileRefreshResult { file, size_delta: 0, skipped: true, error: import_error, ..Default::default() }));
+    }
+    let (updated, import_error) = AFile::update_file_info_with_xmp_error(
+        file_id, path, chrono::Utc::now().timestamp_millis(),
+    )?;
     if updated.is_none() {
         return Err("Metadata could not be indexed; original retained and pending state preserved".into());
     }
     if let Some(ref file) = updated {
-        let content_changed = old.metadata_pending || old.modified_at != file.modified_at || old.size != file.size;
+        let content_changed = old.cloud_only || old.modified_at != file.modified_at || old.size != file.size;
         if content_changed || old.width != file.width || old.height != file.height
             || old.e_orientation != file.e_orientation {
             AThumb::delete(file_id)?;
@@ -3307,24 +3504,60 @@ fn refresh_file(file_id: i64) -> Result<Option<FileRefreshResult>, String> {
         }
     }
     AFile::update_column(file_id, "cloud_only", &false)?;
-    AFile::update_column(file_id, "metadata_pending", &false)?;
+    if import_error.is_none() { AFile::update_column(file_id, "metadata_pending", &false)?; }
     Ok(AFile::get_file_info(file_id)?.map(|file| FileRefreshResult {
         size_delta: file.size - old.size,
         file,
         skipped: false,
+        error: import_error,
         ..Default::default()
     }))
 }
 
-/// Refresh a selected local file without accepting a stale frontend file path.
 #[tauri::command]
-pub async fn refresh_selected_file_info(library_id: String, file_id: i64) -> Result<Option<FileRefreshResult>, String> {
+pub fn begin_file_refresh_batch(library_id: String) -> Result<u64, String> {
+    let _guard = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e| e.to_string())?;
+    if t_config::current_library_id()? != library_id { return Err("Library changed".into()); }
+    crate::t_xmp::begin_refresh_batch(library_id)
+}
+
+#[tauri::command]
+pub fn end_file_refresh_batch(batch_id: u64) {
+    crate::t_xmp::end_refresh_batch(batch_id);
+}
+
+#[tauri::command]
+pub async fn check_selected_file_info(library_id: String, file_id: i64, batch_id: u64) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e| e.to_string())?;
+        if t_config::current_library_id()? != library_id { return Err("Library changed".into()); }
+        let _index = crate::t_xmp::refresh_index_scope(Some(batch_id), &library_id)?;
+        AFile::needs_file_info_refresh(file_id)
+    }).await.map_err(|e| format!("File check task failed: {e}"))?
+}
+
+/// Force a selected file refresh without accepting a stale frontend file path.
+#[tauri::command]
+pub async fn refresh_selected_file_info(library_id: String, file_id: i64, batch_id: Option<u64>, rebuild_previews: Option<bool>) -> Result<Option<FileRefreshResult>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = FILE_REFRESH_LIBRARY_LOCK.read().map_err(|e| e.to_string())?;
         if t_config::current_library_id()? != library_id {
             return Err("Library changed".to_string());
         }
-        refresh_file(file_id)
+        let _index = crate::t_xmp::refresh_index_scope(batch_id, &library_id)?;
+        let mut result = refresh_file(file_id)?;
+        if rebuild_previews.unwrap_or(false)
+            && let Some(ref mut result) = result
+            && !result.skipped {
+            match AThumb::delete(file_id) {
+                Ok(_) => result.file.has_thumbnail = Some(false),
+                Err(error) => result.error = Some(match result.error.take() {
+                    Some(previous) => format!("{previous}; Preview rebuild failed: {error}"),
+                    None => format!("Preview rebuild failed: {error}"),
+                }),
+            }
+        }
+        Ok(result)
     }).await.map_err(|e| format!("File refresh task failed: {e}"))?
 }
 
@@ -3475,6 +3708,46 @@ pub fn batch_update_file_metadata(params: BatchFileMetadataUpdate) -> Result<usi
         params.comment.as_deref(),
     )
     .map_err(|e| format!("Error while updating file metadata: {}", e))
+}
+
+// xmp
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XmpImportSettings {
+    pub import_xmp_sidecars: bool,
+}
+
+#[tauri::command]
+pub fn get_xmp_import_settings() -> XmpImportSettings {
+    XmpImportSettings {
+        import_xmp_sidecars: crate::t_xmp::is_xmp_import_enabled(),
+    }
+}
+
+#[tauri::command]
+pub fn set_xmp_import_settings(import_xmp_sidecars: bool) {
+    crate::t_xmp::set_xmp_import_enabled(import_xmp_sidecars);
+}
+
+#[tauri::command]
+pub async fn save_xmp_metadata(
+    library_id: String,
+    file_ids: Vec<i64>,
+) -> Result<crate::t_xmp::BatchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _media_mutation = crate::t_media_lifecycle::try_mutation_guard()?;
+        let _guard = FILE_REFRESH_LIBRARY_LOCK
+            .read()
+            .map_err(|e| e.to_string())?;
+        if t_config::current_library_id()? != library_id {
+            return Err("Library changed".into());
+        }
+        let conn = crate::t_sqlite::open_conn()?;
+        Ok(crate::t_xmp::save_batch(&conn, &file_ids))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 // tag

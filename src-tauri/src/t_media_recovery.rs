@@ -216,6 +216,7 @@ fn matches(conn: &Connection, file: &CatalogFile, group: &str) -> Result<bool, S
         root: String::new(),
         primary_id: file.id,
         members: vec![crate::t_media_lifecycle::Member {
+            retain_original: false,
             source_inode: None,
             file_id: Some(file.id),
             original_name: file.name.clone(),

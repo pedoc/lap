@@ -30,6 +30,7 @@ mod t_heif;
 mod t_home;
 mod t_http;
 mod t_image;
+mod t_metadata;
 mod t_jpeg;
 mod t_jxl;
 mod t_lens;
@@ -62,10 +63,13 @@ mod t_media_views;
 mod t_scan;
 mod t_thumbnail_rebuild;
 mod t_storage;
+mod t_cache_storage;
 mod t_startup;
 mod t_utils;
 mod t_video;
 mod t_window_exit;
+mod t_xmp;
+mod t_xmp_files;
 
 /// The main function is the entry point for the Tauri application.
 #[tokio::main]
@@ -284,6 +288,10 @@ async fn main() {
             t_cmds::get_ffmpeg_backed_image_extensions,
             t_cmds::check_gstreamer_available,
             t_cmds::set_last_selected_item_index,
+            t_cmds::get_thumbnail_cache_location,
+            t_cmds::get_thumbnail_cache_migration_count,
+            t_cmds::change_thumbnail_cache_location,
+            t_cmds::cancel_thumbnail_cache_migration,
             t_cmds::get_db_storage_dir,
             t_cmds::is_using_custom_db_storage,
             t_cmds::change_db_storage_dir,
@@ -481,7 +489,14 @@ async fn main() {
             t_cmds::regenerate_thumbnails,
             t_cmds::cancel_thumbnail_regeneration,
             t_cmds::get_file_info,
+            t_cmds::get_file_metadata_details,
+            t_cmds::cancel_file_metadata_requests,
             t_cmds::update_file_info,
+            t_cmds::check_selected_file_info,
+            t_cmds::begin_file_transfer_batch,
+            t_cmds::end_file_transfer_batch,
+            t_cmds::begin_file_refresh_batch,
+            t_cmds::end_file_refresh_batch,
             t_cmds::refresh_selected_file_info,
             t_cmds::is_cloud_only_file,
             t_cmds::prepare_motion_photo_video,
@@ -500,6 +515,10 @@ async fn main() {
             t_cmds::set_file_rating,
             t_cmds::set_file_culling_flag,
             t_cmds::batch_update_file_metadata,
+            // xmp
+            t_cmds::get_xmp_import_settings,
+            t_cmds::set_xmp_import_settings,
+            t_cmds::save_xmp_metadata,
             // tag
             t_cmds::get_tag_group_name,
             t_cmds::get_tag_groups,
@@ -598,6 +617,7 @@ async fn main() {
             t_cmds::similar_has_scan,
             // video
             t_video::prepare_video,
+            t_video::get_video_stream_url,
             t_video::cancel_video_prepare,
             t_video::clear_video_cache,
             // backup / restore

@@ -284,7 +284,7 @@
   "search": {
     "title": "Cerca",
     "similar_images": "Foto correlate",
-    "image_search_placeholder": "Cerca immagini, nomi file o commenti",
+    "image_search_placeholder": "Cerca immagini, nomi di file o descrizioni",
     "matches": "Corrispondenze",
     "unknown_location": "Luogo sconosciuto",
     "unknown_camera": "Fotocamera sconosciuta",
@@ -738,7 +738,11 @@
       "set_desktop_wallpaper": "Imposta come sfondo del desktop",
       "show_info": "Mostra informazioni",
       "remove_from_collection": "Rimuovi dalla raccolta",
-      "create_montage": "Crea collage"
+      "create_montage": "Crea collage",
+      "save_xmp": "Salva metadati in XMP",
+      "xmp_save_success": "Metadati XMP salvati per {count} file",
+      "xmp_save_failed": "Salvataggio XMP non riuscito per {count} file",
+      "comment": "Descrizione…"
     },
     "calendar": {
       "monthly": "Mensile",
@@ -787,7 +791,7 @@
       "unfavorite": "Rimuovi preferito",
       "tag": "Tag...",
       "collection": "Raccolte...",
-      "comment": "Commenti...",
+      "comment": "Descrizione…",
       "rotate": "Ruota vista"
     },
     "sort": {
@@ -980,8 +984,8 @@
       "error": "Impossibile eliminare il tag."
     },
     "edit_comment": {
-      "title": "Modifica commento",
-      "placeholder": "Inserisci commento",
+      "title": "Modifica descrizione",
+      "placeholder": "Inserisci descrizione",
       "ok": "Salva"
     },
     "select_folder": {
@@ -991,6 +995,13 @@
       "error": "Impossibile selezionare il file."
     },
     "file_refresh": {
+      "rebuild_previews": "Rigenera le anteprime di tutti i file selezionati",
+      "skipped": "Ignorati: {count}",
+      "checking": "Verifica…",
+      "pending": "{count} file da aggiornare",
+      "up_to_date": "Le informazioni dei file sono aggiornate.",
+      "check_failed": "Impossibile verificare alcuni file.",
+      "update": "Aggiorna",
       "status": "Stato aggiornamento",
       "running": "Aggiornamento…",
       "cancelling": "Annullamento…",
@@ -1177,8 +1188,40 @@
     "gps_altitude": "Altitudine",
     "geo_location": "Luogo",
     "tags": "Tag",
-    "comment": "Commento",
-    "capture_settings": "Impostazioni di scatto"
+    "comment": "Descrizione",
+    "capture_settings": "Esposizione",
+    "organization": "Organizzazione",
+    "file": "File",
+    "capture": "Scatto",
+    "source_metadata": "Metadati del file originale",
+    "source_description": "Descrizione originale",
+    "coordinates": "Coordinate",
+    "detail_fields": {
+      "title": "Titolo originale",
+      "creator": "Autore",
+      "copyright": "Copyright",
+      "description": "Descrizione originale",
+      "credit": "Credito",
+      "source": "Fonte",
+      "usageTerms": "Condizioni d’uso",
+      "rightsUrl": "URL copyright",
+      "software": "Software",
+      "flash": "Flash",
+      "whiteBalance": "Bilanciamento del bianco",
+      "exposureMode": "Modalità esposizione",
+      "exposureProgram": "Programma esposizione",
+      "meteringMode": "Misurazione",
+      "focalLength35mm": "Equivalente 35 mm",
+      "timeZone": "Fuso orario dello scatto",
+      "direction": "Direzione di scatto",
+      "directionRef": "Riferimento nord",
+      "iccProfile": "Profilo ICC",
+      "colorSpace": "Spazio colore",
+      "bitDepth": "Profondità di bit"
+    },
+    "metadata_details_retry": "Impossibile leggere i metadati. Fai clic per riprovare.",
+    "true_north": "Nord geografico",
+    "magnetic_north": "Nord magnetico"
   },
   "map": {
     "show_map": "Mostra mappa",
@@ -1343,6 +1386,12 @@
       "source_brightened": "Schiarita",
       "preview_mode": "Modalità anteprima RAW"
     },
+    "metadata": {
+      "title": "Metadati",
+      "section_import": "Importa metadati",
+      "import": "Da EXIF, IPTC e XMP",
+      "import_hint": "Importa preferiti, valutazioni, contrassegni di selezione, tag e descrizioni durante scansioni e aggiornamenti, mantenendo le modifiche locali."
+    },
     "browse": {
       "section_album": "Cartella album",
       "show_subfolder_files": "Mostra file dalle sottocartelle",
@@ -1400,7 +1449,7 @@
         "Luogo",
         "Fotocamera",
         "Obiettivo",
-        "Impostazioni di scatto"
+        "Esposizione"
       ],
       "show_thumbnail_badges": "Mostra badge sulle miniature",
       "thumbnail_badge_options": [
@@ -1534,7 +1583,7 @@
         "last_image": "Ultima",
         "page_up": "Pagina su",
         "page_down": "Pagina giù",
-        "quick_preview": "Apri anteprima rapida",
+        "quick_preview": "Apri / chiudi anteprima rapida",
         "close_viewer": "Chiudi visualizzatore",
         "search_similar": "Trova foto correlate",
         "show_info": "Mostra informazioni",
@@ -1542,7 +1591,6 @@
         "zoom_out": "Riduci",
         "zoom_fit": "Alterna dimensioni reali / adatta alla finestra",
         "cycle_background": "Cambia sfondo",
-        "toggle_slideshow": "Avvia / pausa presentazione",
         "open_new_window": "Visualizza in una nuova finestra",
         "open_external_app": "Apri in app esterna",
         "edit_image": "Modifica",
@@ -1561,20 +1609,25 @@
         "delete_permanently": "Elimina definitivamente",
         "refresh_file_info": "Aggiorna informazioni file",
         "print": "Stampa",
-        "toggle_favorite": "Attiva/disattiva preferito",
-        "set_clear_rating": "Imposta / azzera valutazione",
-        "mark_pick": "Segna come scelta",
-        "mark_rejected": "Segna come scartata",
-        "mark_unreviewed": "Segna come non revisionata",
+        "toggle_favorite": "Aggiungi / Rimuovi dai preferiti",
+        "toggle_favorite_and_next": "Aggiungi / Rimuovi dai preferiti → Successivo",
+        "set_clear_rating": "Valutazione",
+        "set_clear_rating_and_next": "Valutazione → Successivo",
+        "mark_pick": "Selezione · Scelte",
+        "mark_pick_and_next": "Selezione · Scelte → Successivo",
+        "mark_rejected": "Selezione · Scartate",
+        "mark_rejected_and_next": "Selezione · Scartate → Successivo",
+        "mark_unreviewed": "Selezione · Non revisionate",
+        "mark_unreviewed_and_next": "Selezione · Non revisionate → Successivo",
         "clear_rating": "Azzera valutazione",
         "rate_one": "Valuta 1 stella",
         "rate_two": "Valuta 2 stelle",
         "rate_three": "Valuta 3 stelle",
         "rate_four": "Valuta 4 stelle",
         "rate_five": "Valuta 5 stelle",
-        "edit_tags": "Modifica tag",
-        "edit_collections": "Modifica raccolte",
-        "edit_comment": "Modifica commento",
+        "edit_tags": "Tag",
+        "edit_collections": "Raccolte",
+        "edit_comment": "Descrizione",
         "rotate": "Ruota vista (orario)",
         "rotate_counterclockwise": "Ruota vista (antiorario)",
         "thumbnail_increase": "Aumenta dimensione miniatura",
@@ -1583,37 +1636,61 @@
     },
     "advanced": {
       "title": "Avanzate",
-      "section_thumbnail_cache": "Cache delle miniature",
-      "thumbnail_quality": "Qualità delle miniature",
-      "thumbnail_quality_hint": "Imposta la risoluzione delle miniature generate. Valori più alti sono più nitidi ma richiedono più tempo e più spazio su disco",
-      "section_map": "Mappa",
-      "map_provider": "Fornitore della mappa",
-      "map_provider_hint": "Scegli il servizio di mappe per la vista Mappa",
-      "map_provider_options": [
-        "Globale (predefinito)",
-        "Cina (Tianditu)"
-      ],
-      "tianditu_token": "Token API Tianditu",
-      "tianditu_token_hint": "Necessario per i tile della mappa Tianditu",
-      "tianditu_token_placeholder": "Incolla il tuo token",
-      "tianditu_token_status_saved": "Salvato",
-      "tianditu_token_status_empty": "Non configurato",
-      "thumbnail_quality_options": [
-        "Bassa (256 px)",
-        "Standard (512 px)",
-        "Alta (1024 px)"
-      ],
-      "section_external_apps": "App esterne",
-      "manage_external_apps": "Gestisci app esterne",
-      "external_image_editor": "Apri foto in",
-      "external_video_app": "Apri video in",
-      "external_app_not_selected": "Nessuna app selezionata",
-      "choose_app": "Scegli",
-      "clear_app": "Cancella",
-      "default_app": "Predefinita",
-      "set_default_app": "Imposta predefinita",
+      "external_app": {
+        "section_external_apps": "App esterne",
+        "manage_external_apps": "Gestisci app esterne",
+        "external_image_editor": "Apri foto in",
+        "external_video_app": "Apri video in",
+        "external_app_not_selected": "Nessuna app selezionata",
+        "choose_app": "Scegli",
+        "clear_app": "Cancella",
+        "default_app": "Predefinita",
+        "set_default_app": "Imposta predefinita"
+      },
       "section_diagnostics": "Diagnostica",
-      "debug_mode": "Modalità debug"
+      "debug_mode": "Modalità debug",
+      "map": {
+        "section_map": "Mappa",
+        "map_provider": "Fornitore della mappa",
+        "map_provider_hint": "Scegli il servizio di mappe per la vista Mappa",
+        "map_provider_options": [
+          "Globale (predefinito)",
+          "Cina (Tianditu)"
+        ],
+        "tianditu_token": "Token API Tianditu",
+        "tianditu_token_hint": "Necessario per i tile della mappa Tianditu",
+        "tianditu_token_placeholder": "Incolla il tuo token",
+        "tianditu_token_status_saved": "Salvato",
+        "tianditu_token_status_empty": "Non configurato"
+      },
+      "thumbnail_cache": {
+        "rolling_back": "Ripristino…",
+        "cancelled": "Annullato. La cache originale è stata mantenuta.",
+        "new_location": "Nuova posizione: {path}",
+        "migrating": "Migrazione delle miniature…",
+        "migration_hint": "Verranno spostate le miniature di tutte le librerie. La nuova posizione sarà usata solo al termine della migrazione. Annullando si mantiene la posizione attuale.",
+        "migration_progress": "Avanzamento della migrazione",
+        "ready": "Pronto per la migrazione",
+        "start": "Avvia",
+        "cancelling": "Annullamento…",
+        "rebuild_message": "La cache precedente non è disponibile. Continuare senza spostarne i file? Le miniature verranno rigenerate nella nuova posizione quando necessario. I dati delle librerie, le foto originali e i file sull’unità precedente non verranno modificati.",
+        "rebuild_confirm": "Continua e rigenera",
+        "section_thumbnail_cache": "Cache delle miniature",
+        "thumbnail_quality": "Modifica la risoluzione delle miniature",
+        "thumbnail_quality_hint": "Valori più alti sono più nitidi ma richiedono più tempo e più spazio su disco",
+        "thumbnail_quality_options": [
+          "Bassa (256 px)",
+          "Standard (512 px)",
+          "Alta (1024 px)"
+        ],
+        "unavailable": "Posizione della cache non disponibile. Ricollega l’unità prima di usare o spostare la cache.",
+        "current_location": "Cambia posizione della cache",
+        "counting": "Conteggio dei file della cache…",
+        "finishing": "Completamento dello spostamento…",
+        "success": "Posizione della cache delle miniature modificata",
+        "cleanup_warning": "La cache è stata spostata, ma alcuni vecchi file non sono stati eliminati:",
+        "busy": "Attendi il completamento dello spostamento della cache delle miniature."
+      }
     },
     "database": {
       "title": "Archiviazione",

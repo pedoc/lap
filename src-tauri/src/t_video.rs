@@ -64,6 +64,13 @@ fn platform_video_url(file_path: &str, _source_path: &str, _library: &str) -> Re
     }
 }
 
+/// Resolve the original video's platform transport without compatibility processing.
+#[tauri::command]
+pub fn get_video_stream_url(file_path: String) -> Result<String, String> {
+    let library = crate::t_config::current_library_id()?;
+    platform_video_url(&file_path, &file_path, &library)
+}
+
 /// Manages active FFmpeg/FFprobe processes, allowing per-player cancellation.
 pub struct VideoManager {
     pub active_processes: Mutex<HashMap<String, (u64, tokio::process::Child)>>,

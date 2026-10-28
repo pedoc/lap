@@ -400,6 +400,9 @@
           </div>
         </div>
 
+        <!-- Metadata Tab -->
+        <SettingsMetadata v-else-if="config.settings.tabIndex === SETTINGS_TAB.METADATA" />
+
         <!-- Search Tab -->
         <div v-else-if="config.settings.tabIndex === SETTINGS_TAB.IMAGE_SEARCH">
           <AiModelSettings ref="aiModelsRef" />
@@ -411,12 +414,44 @@
           <!-- thumbnail cache -->
           <div class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
             <div class="flex items-center gap-2 text-base-content/30">
-              <span class="font-bold uppercase text-[10px] tracking-widest">{{ $t('settings.advanced.section_thumbnail_cache') }}</span>
+              <span class="font-bold uppercase text-[10px] tracking-widest">{{ $t('settings.advanced.thumbnail_cache.section_thumbnail_cache') }}</span>
             </div>
+
+            <!-- cache location -->
             <div class="flex items-center justify-between gap-4 px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
               <div class="min-w-0 flex flex-col gap-0.5 text-sm leading-5">
-                <div>{{ $t('settings.advanced.thumbnail_quality') }}</div>
-                <div class="text-xs text-base-content/30">{{ $t('settings.advanced.thumbnail_quality_hint') }}</div>
+                <div>{{ $t('settings.advanced.thumbnail_cache.current_location') }}</div>
+                <div class="text-xs text-base-content/30 truncate" :title="thumbnailCacheDir">
+                  {{ hasCustomThumbnailCache ? thumbnailCacheDir : $t('settings.database.system_default') }}
+                </div>
+                <div v-if="!thumbnailCacheAvailable" class="text-xs text-warning" role="status">
+                  {{ $t('settings.advanced.thumbnail_cache.unavailable') }}
+                </div>
+              </div>
+              <div class="shrink-0 flex items-center gap-2">
+                <button
+                  class="btn btn-sm btn-ghost rounded-box bg-base-100 border border-base-content/30 text-base-content/70 hover:text-base-content"
+                  :disabled="isChangingThumbnailCache || isChangingDbStorage"
+                  @click="chooseThumbnailCacheDir"
+                >
+                  {{ isChangingThumbnailCache ? $t('tooltip.loading') : $t('settings.database.change_location') }}
+                </button>
+                <TButton
+                  v-if="hasCustomThumbnailCache"
+                  :icon="IconRestore"
+                  :buttonSize="'small'"
+                  :disabled="isChangingThumbnailCache || isChangingDbStorage"
+                  :tooltip="$t('settings.database.restore_default_location')"
+                  @click="prepareThumbnailMigration(null)"
+                />
+              </div>
+            </div>
+
+            <!-- cache quality -->
+            <div class="flex items-center justify-between gap-4 px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200">
+              <div class="min-w-0 flex flex-col gap-0.5 text-sm leading-5">
+                <div>{{ $t('settings.advanced.thumbnail_cache.thumbnail_quality') }}</div>
+                <div class="text-xs text-base-content/30">{{ $t('settings.advanced.thumbnail_cache.thumbnail_quality_hint') }}</div>
               </div>
               <select class="select select-bordered select-sm min-w-40 shrink-0" :value="config.settings.thumbnailSize" @change="onThumbnailSizeChange">
                 <option v-for="option in thumbnailQualityOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
@@ -442,7 +477,7 @@
               <div class="shrink-0 flex items-center gap-2">
                 <button
                   class="btn btn-sm btn-ghost rounded-box bg-base-100 border border-base-content/30 text-base-content/70 hover:text-base-content"
-                  :disabled="isChangingDbStorage"
+                  :disabled="isChangingDbStorage || isChangingThumbnailCache"
                   @click="selectDbStorageDir"
                 >
                   {{ isChangingDbStorage ? $t('tooltip.loading') : $t('settings.database.change_location') }}
@@ -451,7 +486,7 @@
                   v-if="hasCustomDbStorage"
                   :icon="IconRestore"
                   :buttonSize="'small'"
-                  :disabled="isChangingDbStorage"
+                  :disabled="isChangingDbStorage || isChangingThumbnailCache"
                   :tooltip="$t('settings.database.restore_default_location')"
                   @click="restoreDefaultDbStorageDir"
                 />
@@ -510,20 +545,22 @@
               <span class="font-bold uppercase text-[10px] tracking-widest">{{ section.title }}</span>
             </div>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-4 gap-y-1">
-              <div
-                v-for="item in section.items"
-                :key="item.actionId"
-                class="min-h-9 flex items-center justify-between gap-4 px-1 rounded-box hover:bg-base-100/10 transition-colors duration-200"
-              >
-                <div class="min-w-0 text-sm leading-5 truncate">{{ item.label }}</div>
-                <div class="shrink-0 flex items-center gap-1">
-                  <span
-                    v-for="(key, keyIndex) in item.keys"
-                    :key="`${item.actionId}-${keyIndex}-${key}`"
-                    class="min-w-7 h-7 px-2 inline-flex items-center justify-center rounded-box border border-base-content/10 bg-base-100/40 text-xs font-semibold text-base-content/30 shadow-sm"
-                  >
-                    {{ key }}
-                  </span>
+              <div v-for="item in section.items" :key="item.actionId">
+                <div
+                  v-for="(row, rowIndex) in item.rows"
+                  :key="rowIndex"
+                  class="min-h-9 flex items-center justify-between gap-4 px-1 py-1 rounded-box hover:bg-base-100/10 transition-colors duration-200"
+                >
+                  <div class="min-w-0 text-sm leading-5">{{ row.label }}</div>
+                  <div class="shrink-0 flex items-center gap-1">
+                    <span
+                      v-for="(key, keyIndex) in row.keys"
+                      :key="keyIndex"
+                      class="min-w-7 h-7 px-2 inline-flex items-center justify-center rounded-box border border-base-content/10 bg-base-100/40 text-xs font-semibold text-base-content/30 shadow-sm"
+                    >
+                      {{ key }}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -536,6 +573,33 @@
 
       </div>
     </div>
+
+    <ModalDialog
+      v-if="showThumbnailMigrationDialog"
+      :title="$t('settings.advanced.thumbnail_cache.current_location')"
+      :width="480"
+      @cancel="cancelThumbnailMigration"
+    >
+      <div class="space-y-3">
+        <p class="text-xs text-base-content/60">{{ $t('settings.advanced.thumbnail_cache.migration_hint') }}</p>
+        <div class="text-xs text-base-content/75 break-all">{{ $t('settings.advanced.thumbnail_cache.new_location', { path: pendingThumbnailCacheDir === null ? $t('settings.database.system_default') : `${pendingThumbnailCacheDir}/lap-thumbnail-cache` }) }}</div>
+        <section class="rounded-box p-2 space-y-2 bg-base-300/30 border border-base-content/5 shadow-sm">
+          <div class="font-bold uppercase text-[10px] tracking-widest text-base-content/30">{{ $t('settings.advanced.thumbnail_cache.migration_progress') }}</div>
+          <div class="space-y-2 px-1 text-xs" role="status" aria-live="polite">
+            <div class="flex items-center justify-between gap-2 text-base-content/75">
+              <span>{{ thumbnailMigrationStatusText }}</span>
+              <span v-if="thumbnailMigrationPreview === 'ready' && thumbnailCacheProgress.phase !== 'rolling_back'" class="tabular-nums shrink-0">{{ formatMigrationCount(thumbnailCacheProgress.completed) }} / {{ formatMigrationCount(thumbnailCacheProgress.total) }}</span>
+            </div>
+            <progress class="progress progress-primary w-full" :value="thumbnailCacheProgress.completed" :max="Math.max(thumbnailCacheProgress.total, 1)" :aria-label="$t('settings.advanced.thumbnail_cache.migration_progress')"></progress>
+            <p v-if="thumbnailMigrationError" class="text-error/70 break-words" role="alert">{{ thumbnailMigrationError }}</p>
+          </div>
+        </section>
+      </div>
+      <div class="mt-4 flex justify-end gap-4">
+        <button class="t-button-default" :disabled="thumbnailMigrationCancelling" @click="cancelThumbnailMigration">{{ $t(thumbnailMigrationCancelled ? 'msgbox.close' : 'msgbox.cancel') }}</button>
+        <button class="t-button-primary" :disabled="isChangingThumbnailCache || thumbnailMigrationPreview === 'counting' || thumbnailMigrationPreview === 'error'" @click="moveThumbnailCache(pendingThumbnailCacheDir)">{{ $t('settings.advanced.thumbnail_cache.start') }}</button>
+      </div>
+    </ModalDialog>
 
     <MessageBox
       v-if="showChangeDbStorageDialog"
@@ -585,6 +649,10 @@ import { config, libConfig } from '@/common/config';
 import { normalizeThumbnailSize } from '@/common/thumbnailProfiles';
 import { THUMBNAIL_BADGE, MAP_MARKER_SIZES, SETTINGS_TAB, SETTINGS_BASE_WIDTH, SETTINGS_BASE_HEIGHT } from '@/common/constants';
 import {
+  getThumbnailCacheLocation,
+  getThumbnailCacheMigrationCount,
+  changeThumbnailCacheLocation,
+  cancelThumbnailCacheMigration,
   getDbStorageDir,
   changeDbStorageDir,
   resetDbStorageDir,
@@ -609,7 +677,9 @@ import AiModelSettings from '@/components/AiModelSettings.vue';
 import MapServicesSettings from '@/components/MapServicesSettings.vue';
 import TitleBar from '@/components/TitleBar.vue';
 import SettingsAbout from '@/components/SettingsAbout.vue';
+import SettingsMetadata from '@/components/SettingsMetadata.vue';
 import MessageBox from '@/components/MessageBox.vue';
+import ModalDialog from '@/components/ModalDialog.vue';
 import BackupDialog from '@/components/BackupDialog.vue';
 import RestoreDialog from '@/components/RestoreDialog.vue';
 import TButton from '@/components/TButton.vue';
@@ -643,6 +713,7 @@ const settingsTabs = [
   { id: SETTINGS_TAB.GRID, label: 'settings.grid.title' },
   { id: SETTINGS_TAB.IMAGE_VIEW, label: 'settings.image_view.title' },
   { id: SETTINGS_TAB.RAW, label: 'settings.raw.title' },
+  { id: SETTINGS_TAB.METADATA, label: 'settings.metadata.title' },
   { id: SETTINGS_TAB.IMAGE_SEARCH, label: 'settings.ai_models.title' },
   { id: SETTINGS_TAB.ADVANCED, label: 'settings.advanced.title' },
   { id: SETTINGS_TAB.SHORTCUTS, label: 'settings.shortcuts.title' },
@@ -677,11 +748,52 @@ async function openSection(tabIndex?: number, aiTask?: string) {
   return aiTask ? await aiModelsRef.value?.changeTask(aiTask) ?? false : true;
 }
 function requestClose() {
+  if (isChangingThumbnailCache.value) {
+    toast.error(t('settings.advanced.thumbnail_cache.busy'));
+    return;
+  }
   if (props.embedded) componentEmit('close');
   else void appWindow.close();
 }
+const thumbnailCacheDir = ref('');
+const thumbnailCacheAvailable = ref(true);
+const hasCustomThumbnailCache = ref(false);
+const isChangingThumbnailCache = ref(false);
+const showThumbnailMigrationDialog = ref(false);
+const pendingThumbnailCacheDir = ref<string | null>(null);
+const thumbnailMigrationCancelling = ref(false);
+const thumbnailMigrationCancelled = ref(false);
+const thumbnailMigrationError = ref('');
+const thumbnailMigrationPreview = ref<'counting' | 'ready' | 'unavailable' | 'error'>('counting');
+let thumbnailMigrationPreviewRequest = 0;
+let thumbnailMigrationOperationId = '';
+const thumbnailCacheProgress = ref({ phase: 'counting', completed: 0, total: 0 });
+const migrationCountFormatter = computed(() => new Intl.NumberFormat(locale.value));
+const formatMigrationCount = (count: number) => migrationCountFormatter.value.format(count);
+const thumbnailMigrationStatusText = computed(() => {
+  if (thumbnailMigrationCancelled.value) return t('settings.advanced.thumbnail_cache.cancelled');
+  if (thumbnailCacheProgress.value.phase === 'rolling_back') return t('settings.advanced.thumbnail_cache.rolling_back');
+  if (thumbnailMigrationCancelling.value) return t('settings.advanced.thumbnail_cache.cancelling');
+  if (isChangingThumbnailCache.value) {
+    const phase = thumbnailCacheProgress.value.phase;
+    return t(`settings.advanced.thumbnail_cache.${phase === 'copying' ? 'migrating' : phase === 'finishing' ? 'finishing' : 'counting'}`);
+  }
+  if (thumbnailMigrationPreview.value === 'counting') return t('settings.advanced.thumbnail_cache.counting');
+  if (thumbnailMigrationPreview.value === 'unavailable') return t('settings.advanced.thumbnail_cache.unavailable');
+  if (thumbnailMigrationPreview.value === 'error') return '';
+  return t('settings.advanced.thumbnail_cache.ready');
+});
 const dbStorageDir = ref('');
 const isChangingDbStorage = ref(false);
+let unregisterStorageGuard = () => {};
+function registerStorageGuard() {
+  unregisterStorageGuard = pendingChanges.register('settings-storage-migration', {
+    scope: 'settings', dirty: () => false,
+    busy: () => isChangingThumbnailCache.value || isChangingDbStorage.value,
+    revision: () => thumbnailMigrationOperationId,
+    confirm: () => false,
+  });
+}
 const hasCustomDbStorage = ref(false);
 const showChangeDbStorageDialog = ref(false);
 const showResetDbStorageDialog = ref(false);
@@ -784,7 +896,7 @@ const wheelOptions = computed(() => {
 });
 
 const thumbnailQualityOptions = computed(() => {
-  const labels = localeMsg.value.settings.advanced.thumbnail_quality_options || [
+  const labels = localeMsg.value.settings.advanced.thumbnail_cache.thumbnail_quality_options || [
     'Low(256px)',
     'Standard(512px)',
     'High(1024px)',
@@ -912,6 +1024,7 @@ const filmStripViewPreviewPositionOptions = computed(() => {
 type ShortcutDisplayItem = {
   actionId: ShortcutActionId;
   labelKey: string;
+  advanceLabelKey?: string;
   keys?: string[];
   backgroundValue?: number;
 };
@@ -954,13 +1067,6 @@ const shortcutDisplaySections: Array<{ key: string; items: ShortcutDisplayItem[]
       { actionId: 'view.zoomOut', labelKey: 'zoom_out' },
       { actionId: 'view.zoomFit', labelKey: 'zoom_fit' },
       { actionId: 'view.cycleBackground', labelKey: 'cycle_background' },
-      { actionId: 'view.backgroundTheme', labelKey: 'cycle_background', backgroundValue: 0 },
-      { actionId: 'view.backgroundBlack', labelKey: 'cycle_background', backgroundValue: 1 },
-      { actionId: 'view.backgroundDarkGray', labelKey: 'cycle_background', backgroundValue: 2 },
-      { actionId: 'view.backgroundMediumGray', labelKey: 'cycle_background', backgroundValue: 3 },
-      { actionId: 'view.backgroundLightGray', labelKey: 'cycle_background', backgroundValue: 4 },
-      { actionId: 'view.backgroundWhite', labelKey: 'cycle_background', backgroundValue: 5 },
-      { actionId: 'slideshow.toggle', labelKey: 'toggle_slideshow' },
     ],
   },
   {
@@ -987,11 +1093,11 @@ const shortcutDisplaySections: Array<{ key: string; items: ShortcutDisplayItem[]
   {
     key: 'metadata',
     items: [
-      { actionId: 'meta.favorite', labelKey: 'toggle_favorite' },
-      { actionId: 'meta.rating.clear', labelKey: 'set_clear_rating', keys: ['0 ~ 5'] },
-      { actionId: 'meta.culling.pick', labelKey: 'mark_pick' },
-      { actionId: 'meta.culling.reject', labelKey: 'mark_rejected' },
-      { actionId: 'meta.culling.unreviewed', labelKey: 'mark_unreviewed' },
+      { actionId: 'meta.favorite', labelKey: 'toggle_favorite', advanceLabelKey: 'toggle_favorite_and_next' },
+      { actionId: 'meta.rating.clear', labelKey: 'set_clear_rating', advanceLabelKey: 'set_clear_rating_and_next', keys: ['0 ~ 5'] },
+      { actionId: 'meta.culling.pick', labelKey: 'mark_pick', advanceLabelKey: 'mark_pick_and_next' },
+      { actionId: 'meta.culling.reject', labelKey: 'mark_rejected', advanceLabelKey: 'mark_rejected_and_next' },
+      { actionId: 'meta.culling.unreviewed', labelKey: 'mark_unreviewed', advanceLabelKey: 'mark_unreviewed_and_next' },
       { actionId: 'meta.tag', labelKey: 'edit_tags' },
       { actionId: 'meta.collection', labelKey: 'edit_collections' },
       { actionId: 'meta.comment', labelKey: 'edit_comment' },
@@ -1008,14 +1114,21 @@ const shortcutSections = computed(() => {
     key: section.key,
     title: shortcutMessages.sections[section.key],
     items: section.items
-      .map((item) => ({
-        actionId: item.actionId,
-        label: item.backgroundValue === undefined
+      .map((item) => {
+        const keys = item.keys ?? getDisplayShortcutKeys(item.actionId);
+        const label = item.backgroundValue === undefined
           ? shortcutMessages.actions[getShortcutActionLabelKey(item)]
-          : `${localeMsg.value.settings.image_view.view_background}: ${localeMsg.value.settings.image_view.view_background_options[item.backgroundValue]}`,
-        keys: item.keys ?? getDisplayShortcutKeys(item.actionId),
-      }))
-      .filter((item) => item.keys.length > 0),
+          : `${localeMsg.value.settings.image_view.view_background}: ${localeMsg.value.settings.image_view.view_background_options[item.backgroundValue]}`;
+        const rows = [{ label, keys }];
+        if (item.advanceLabelKey) {
+          rows.push({
+            label: shortcutMessages.actions[item.advanceLabelKey],
+            keys: [shortcutPlatform === 'mac' ? '⇧' : 'Shift', ...keys],
+          });
+        }
+        return { actionId: item.actionId, rows };
+      })
+      .filter((item) => item.rows[0].keys.length > 0),
   }));
 });
 
@@ -1135,6 +1248,7 @@ async function downloadResources(kind: 'models' | 'ffmpeg') {
 }
 
 onMounted(async () => {
+  registerStorageGuard();
   window.addEventListener('keydown', handleKeyDown);
   try {
     const savedProxy = await getNetworkProxy();
@@ -1157,8 +1271,17 @@ onMounted(async () => {
   if (disposed) return;
   dbStorageDir.value = storageDir || '';
   hasCustomDbStorage.value = customStorage;
+  try {
+    const cacheLocation = await getThumbnailCacheLocation() as any;
+    if (disposed) return;
+    thumbnailCacheDir.value = cacheLocation.path;
+    hasCustomThumbnailCache.value = cacheLocation.custom;
+    thumbnailCacheAvailable.value = cacheLocation.available !== false;
+  } catch (error) {
+    if (!disposed) toast.error(String(error));
+  }
 
-  
+  if (disposed) return;
   // Show window after mount
   if (!props.embedded) await appWindow.show();
 
@@ -1167,6 +1290,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   disposed = true;
+  thumbnailMigrationPreviewRequest++;
+  unregisterStorageGuard();
   if (unlistenAppResourcesProgress) {
     unlistenAppResourcesProgress();
     unlistenAppResourcesProgress = null;
@@ -1334,6 +1459,8 @@ function handleKeyDown(event: KeyboardEvent) {
     }
     case 'Escape':
       event.stopPropagation();
+      if (showThumbnailMigrationDialog.value) { void cancelThumbnailMigration(); return; }
+      if (isChangingThumbnailCache.value) return;
       // Close the topmost dialog first
       if (showBackupDialog.value) { showBackupDialog.value = false; return; }
       if (showRestoreDialog.value) { showRestoreDialog.value = false; return; }
@@ -1341,6 +1468,121 @@ function handleKeyDown(event: KeyboardEvent) {
       if (showResetDbStorageDialog.value) { showResetDbStorageDialog.value = false; return; }
       requestClose();
       break;
+  }
+}
+
+async function chooseThumbnailCacheDir() {
+  try {
+    const result = await openDialog({
+      title: t('settings.advanced.thumbnail_cache.current_location'),
+      multiple: false,
+      directory: true,
+    });
+    if (typeof result === 'string') prepareThumbnailMigration(result);
+  } catch (error) {
+    toast.error(String(error));
+  }
+}
+
+async function prepareThumbnailMigration(newDir: string | null) {
+  if (disposed || isChangingThumbnailCache.value || isChangingDbStorage.value) return;
+  const request = ++thumbnailMigrationPreviewRequest;
+  pendingThumbnailCacheDir.value = newDir;
+  thumbnailCacheProgress.value = { phase: 'counting', completed: 0, total: 0 };
+  thumbnailMigrationError.value = '';
+  thumbnailMigrationCancelling.value = false;
+  thumbnailMigrationCancelled.value = false;
+  thumbnailMigrationPreview.value = 'counting';
+  showThumbnailMigrationDialog.value = true;
+  try {
+    const total = await getThumbnailCacheMigrationCount();
+    if (disposed || request !== thumbnailMigrationPreviewRequest || !showThumbnailMigrationDialog.value) return;
+    thumbnailCacheProgress.value = { phase: 'counting', completed: 0, total };
+    thumbnailMigrationPreview.value = 'ready';
+  } catch (error: any) {
+    if (disposed || request !== thumbnailMigrationPreviewRequest || !showThumbnailMigrationDialog.value) return;
+    thumbnailMigrationPreview.value = error?.code === 'SOURCE_UNAVAILABLE' ? 'unavailable' : 'error';
+    if (thumbnailMigrationPreview.value === 'error') thumbnailMigrationError.value = error?.message || String(error);
+  }
+}
+
+async function cancelThumbnailMigration() {
+  if (!isChangingThumbnailCache.value) {
+    showThumbnailMigrationDialog.value = false;
+    return;
+  }
+  if (thumbnailMigrationCancelling.value) return;
+  thumbnailMigrationCancelling.value = true;
+  const operationId = thumbnailMigrationOperationId;
+  try {
+    // A click can arrive before the start command is registered in the backend.
+    // Retry only this operation; a late cancellation must never affect a retry.
+    while (isChangingThumbnailCache.value && thumbnailMigrationOperationId === operationId) {
+      if (await cancelThumbnailCacheMigration(operationId)) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  } catch (error: any) {
+    if (thumbnailMigrationOperationId === operationId) {
+      thumbnailMigrationCancelling.value = false;
+      thumbnailMigrationError.value = error?.message || String(error);
+    }
+  }
+}
+
+async function moveThumbnailCache(newDir: string | null) {
+  if (disposed || isChangingThumbnailCache.value || isChangingDbStorage.value || thumbnailMigrationPreview.value === 'counting' || thumbnailMigrationPreview.value === 'error') return;
+  isChangingThumbnailCache.value = true;
+  thumbnailMigrationOperationId = crypto.randomUUID();
+  thumbnailMigrationCancelling.value = false;
+  thumbnailMigrationCancelled.value = false;
+  thumbnailMigrationError.value = '';
+  thumbnailCacheProgress.value = { phase: 'counting', completed: 0, total: thumbnailCacheProgress.value.total };
+  try {
+    const onProgress = (progress: any) => {
+      // Keep the preview total visible while the backend verifies the current files.
+      thumbnailCacheProgress.value = progress.phase === 'counting'
+        ? { ...progress, total: thumbnailCacheProgress.value.total }
+        : progress;
+      if (progress.phase !== 'counting') thumbnailMigrationPreview.value = 'ready';
+    };
+    const move = (allowMissingSource = false) =>
+      changeThumbnailCacheLocation(newDir, onProgress, allowMissingSource, thumbnailMigrationOperationId);
+    let result: any;
+    try {
+      result = await move();
+    } catch (error: any) {
+      if (error?.code !== 'SOURCE_UNAVAILABLE') throw error;
+      if (thumbnailMigrationCancelling.value) { showThumbnailMigrationDialog.value = false; return; }
+      thumbnailCacheAvailable.value = false;
+      const confirmed = await ask(t('settings.advanced.thumbnail_cache.rebuild_message'), {
+        title: t('settings.advanced.thumbnail_cache.current_location'),
+        kind: 'warning',
+        okLabel: t('settings.advanced.thumbnail_cache.rebuild_confirm'),
+        cancelLabel: t('msgbox.cancel'),
+      });
+      if (!confirmed || thumbnailMigrationCancelling.value) return;
+      result = await move(true);
+    }
+    thumbnailCacheDir.value = result.path;
+    thumbnailCacheAvailable.value = true;
+    hasCustomThumbnailCache.value = result.custom;
+    showThumbnailMigrationDialog.value = false;
+    if (result.cleanupWarnings?.length) {
+      toast.warning(`${t('settings.advanced.thumbnail_cache.cleanup_warning')}\n${result.cleanupWarnings.join('\n')}`, { duration: 10000 });
+    } else {
+      toast.success(t('settings.advanced.thumbnail_cache.success'));
+    }
+  } catch (error: any) {
+    if (error?.code === 'CANCELLED') {
+      thumbnailMigrationCancelled.value = true;
+      thumbnailCacheProgress.value = { ...thumbnailCacheProgress.value, completed: 0 };
+    } else {
+      thumbnailMigrationError.value = error?.message || String(error);
+    }
+  } finally {
+    isChangingThumbnailCache.value = false;
+    thumbnailMigrationCancelling.value = false;
+    thumbnailMigrationOperationId = '';
   }
 }
 

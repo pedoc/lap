@@ -165,6 +165,7 @@
         <FileInfo
           :fileInfo="activeFileInfo"
           :editor-active="showInfoPanel && !!activeFileInfo"
+          :refresh-file="refreshFileInfoFromPanel"
           @close="toggleInfoPanel"
           @toggleFavorite="toggleFavorite(getActiveFilePane())"
           @setRating="setCurrentFileRating($event, getActiveFilePane())"
@@ -259,6 +260,7 @@ import {
   editFileComment,
   getFileCollections,
   getFileInfo,
+  refreshFileInfo,
   getTagsForFile,
   setFileFavorite,
   setFileRating,
@@ -636,13 +638,12 @@ function handleKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  // Disable keyboard events during slideshow except close and toggle slideshow.
+  // Keep only close and background shortcuts available during slideshow.
   if (
     isSlideShow.value &&
     !matchesShortcut('view.close', event, shortcutPlatform) &&
     !matchesShortcut('view.cycleBackground', event, shortcutPlatform) &&
-    getMatchedViewBackground(event) === null &&
-    !matchesShortcut('slideshow.toggle', event, shortcutPlatform)
+    getMatchedViewBackground(event) === null
   ) {
     return;
   }
@@ -650,22 +651,17 @@ function handleKeyDown(event: KeyboardEvent) {
   const ratingShortcut = getMatchedRating(event);
   if (ratingShortcut !== null) {
     event.preventDefault();
-    void setCurrentFileRating(ratingShortcut, getActiveFilePane());
+    if (!event.repeat) void setCurrentFileRating(ratingShortcut, getActiveFilePane(), event.shiftKey);
     return;
   }
 
   const cullingShortcut = getMatchedCulling(event);
   if (cullingShortcut !== null) {
     event.preventDefault();
-    void setCurrentFileCullingFlag(cullingShortcut, getActiveFilePane());
+    if (!event.repeat) void setCurrentFileCullingFlag(cullingShortcut, getActiveFilePane(), event.shiftKey);
     return;
   }
 
-  if (matchesShortcut('slideshow.toggle', event, shortcutPlatform)) {
-    event.preventDefault();
-    clickSlideShow(getActiveFilePane());
-    return;
-  }
 
   if (matchesShortcut('view.cycleBackground', event, shortcutPlatform)) {
     event.preventDefault();
@@ -689,7 +685,7 @@ function handleKeyDown(event: KeyboardEvent) {
 
   if (matchesShortcut('meta.favorite', event, shortcutPlatform)) {
     event.preventDefault();
-    void toggleFavorite(getActiveFilePane());
+    if (!event.repeat) void toggleFavorite(getActiveFilePane(), event.shiftKey);
     return;
   }
 
@@ -1312,7 +1308,26 @@ const toggleSyncViewport = () => {
   }
 };
 
-const toggleFavorite = async (pane: Pane = 'left') => {
+const refreshFileInfoFromPanel = async (file: any) => {
+  const libraryId = libConfig._libraryId;
+  const fileId = Number(file.id);
+  const result = await refreshFileInfo(libraryId, fileId);
+  if (libraryId !== libConfig._libraryId || activeFileInfo.value !== file) return;
+  if (!result?.file) throw new Error('File info refresh failed');
+  applyFileMetaToPanes(fileId, result.file);
+  syncFileMetaToContent(fileId, result.file);
+  if (result.error) toast.warning(result.error);
+  void emit('tags-changed');
+};
+
+function advanceAfterMetadataShortcut(fileId: number, pane: Pane) {
+  if (getFileIdByPane(pane) === fileId && getActiveFilePane() === pane
+      && getFileIndexByPane(pane) < fileCount.value - 1) {
+    clickNext(pane);
+  }
+}
+
+const toggleFavorite = async (pane: Pane = 'left', advance = false) => {
   const target = getFileInfoByPane(pane);
   const currentFileId = getFileIdByPane(pane);
   if (!target || currentFileId <= 0) return;
@@ -1325,14 +1340,15 @@ const toggleFavorite = async (pane: Pane = 'left') => {
     return;
   }
   syncFileMetaToContent(currentFileId, { is_favorite: isFavorite });
+  if (advance) advanceAfterMetadataShortcut(currentFileId, pane);
 };
 
-const setCurrentFileRating = async (rating: number, pane: Pane = 'left') => {
+const setCurrentFileRating = async (rating: number, pane: Pane = 'left', advance = false) => {
   const target = getFileInfoByPane(pane);
   const currentFileId = getFileIdByPane(pane);
   if (!target || currentFileId <= 0) return;
 
-  const previous = target.rating;
+  const previous = Number(target.rating || 0);
   const normalized = Number(target.rating || 0) === rating ? 0 : rating;
   applyFileMetaToPanes(currentFileId, { rating: normalized });
   if (await setFileRating(currentFileId, normalized) === null) {
@@ -1340,9 +1356,10 @@ const setCurrentFileRating = async (rating: number, pane: Pane = 'left') => {
     return;
   }
   syncFileMetaToContent(currentFileId, { rating: normalized });
+  if (advance) advanceAfterMetadataShortcut(currentFileId, pane);
 };
 
-const setCurrentFileCullingFlag = async (cullingFlag: number, pane: Pane = 'left') => {
+const setCurrentFileCullingFlag = async (cullingFlag: number, pane: Pane = 'left', advance = false) => {
   const target = getFileInfoByPane(pane);
   const currentFileId = getFileIdByPane(pane);
   if (!target || currentFileId <= 0) return;
@@ -1357,6 +1374,7 @@ const setCurrentFileCullingFlag = async (cullingFlag: number, pane: Pane = 'left
   }
   syncFileMetaToContent(currentFileId, { culling_flag: normalized });
   void emit('culling-status-updated');
+  if (advance) advanceAfterMetadataShortcut(currentFileId, pane);
 };
 
 const clickRotate = async (pane: Pane = 'left', rotateDelta = 90) => {

@@ -8,6 +8,10 @@ export interface VideoPrepareResult {
 
 export type VideoPrepareMode = 'compatible' | 'process' | null;
 
+export async function getVideoStreamUrl(filePath: string): Promise<string> {
+  return invoke<string>('get_video_stream_url', { filePath });
+}
+
 export function isWebViewVideoPlaybackDisabled(filePath: string): boolean {
   const extension =
     filePath

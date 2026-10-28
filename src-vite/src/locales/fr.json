@@ -284,7 +284,7 @@
   "search": {
     "title": "Recherche",
     "similar_images": "Photos associées",
-    "image_search_placeholder": "Rechercher des images, noms de fichiers ou commentaires",
+    "image_search_placeholder": "Rechercher des images, noms de fichiers ou descriptions",
     "matches": "Résultats",
     "unknown_location": "Lieu inconnu",
     "unknown_camera": "Appareil photo inconnu",
@@ -738,7 +738,11 @@
       "set_desktop_wallpaper": "Définir comme fond d'écran",
       "show_info": "Afficher info",
       "remove_from_collection": "Retirer de la collection",
-      "create_montage": "Créer un collage"
+      "create_montage": "Créer un collage",
+      "save_xmp": "Enregistrer les métadonnées dans XMP",
+      "xmp_save_success": "Métadonnées XMP enregistrées pour {count} fichier(s)",
+      "xmp_save_failed": "Échec de l’enregistrement XMP pour {count} fichier(s)",
+      "comment": "Description…"
     },
     "calendar": {
       "monthly": "Mensuel",
@@ -787,7 +791,7 @@
       "unfavorite": "Retirer favori",
       "tag": "Tags...",
       "collection": "Collections...",
-      "comment": "Commentaires...",
+      "comment": "Description…",
       "rotate": "Pivoter la vue"
     },
     "sort": {
@@ -980,8 +984,8 @@
       "error": "Impossible de supprimer le tag."
     },
     "edit_comment": {
-      "title": "Modifier commentaire",
-      "placeholder": "Commentaire",
+      "title": "Modifier la description",
+      "placeholder": "Saisir une description",
       "ok": "Enregistrer"
     },
     "select_folder": {
@@ -991,6 +995,13 @@
       "error": "Échec sélection fichier."
     },
     "file_refresh": {
+      "rebuild_previews": "Reconstruire les aperçus de tous les fichiers sélectionnés",
+      "skipped": "Ignorés : {count}",
+      "checking": "Vérification…",
+      "pending": "{count} fichiers à mettre à jour",
+      "up_to_date": "Les informations des fichiers sont à jour.",
+      "check_failed": "Certains fichiers n’ont pas pu être vérifiés.",
+      "update": "Mettre à jour",
       "status": "État de l’actualisation",
       "running": "Actualisation…",
       "cancelling": "Annulation…",
@@ -1177,8 +1188,40 @@
     "gps_altitude": "Altitude",
     "geo_location": "Lieu",
     "tags": "Tags",
-    "comment": "Commentaire",
-    "capture_settings": "Paramètres prise"
+    "comment": "Description",
+    "capture_settings": "Exposition",
+    "organization": "Organisation",
+    "file": "Fichier",
+    "capture": "Prise de vue",
+    "source_metadata": "Métadonnées du fichier source",
+    "source_description": "Description originale",
+    "coordinates": "Coordonnées",
+    "detail_fields": {
+      "title": "Titre original",
+      "creator": "Auteur",
+      "copyright": "Copyright",
+      "description": "Description originale",
+      "credit": "Crédit",
+      "source": "Source",
+      "usageTerms": "Conditions d’utilisation",
+      "rightsUrl": "URL du copyright",
+      "software": "Logiciel",
+      "flash": "Flash",
+      "whiteBalance": "Balance des blancs",
+      "exposureMode": "Mode d’exposition",
+      "exposureProgram": "Programme d’exposition",
+      "meteringMode": "Mesure",
+      "focalLength35mm": "Équivalent 35 mm",
+      "timeZone": "Fuseau de prise de vue",
+      "direction": "Direction de prise de vue",
+      "directionRef": "Référence du nord",
+      "iccProfile": "Profil ICC",
+      "colorSpace": "Espace colorimétrique",
+      "bitDepth": "Profondeur de couleur"
+    },
+    "metadata_details_retry": "Lecture des métadonnées impossible. Cliquez pour réessayer.",
+    "true_north": "Nord géographique",
+    "magnetic_north": "Nord magnétique"
   },
   "map": {
     "show_map": "Voir carte",
@@ -1343,6 +1386,12 @@
       "source_brightened": "Éclaircie",
       "preview_mode": "Mode d'aperçu RAW"
     },
+    "metadata": {
+      "title": "Métadonnées",
+      "section_import": "Importer les métadonnées",
+      "import": "Depuis EXIF, IPTC et XMP",
+      "import_hint": "Importer les favoris, notes, marqueurs de sélection, étiquettes et descriptions lors des analyses et actualisations, en conservant les modifications locales."
+    },
     "browse": {
       "section_album": "Dossier d'album",
       "show_subfolder_files": "Afficher les fichiers des sous-dossiers",
@@ -1400,7 +1449,7 @@
         "Lieu",
         "Appareil",
         "Objectif",
-        "Paramètres"
+        "Exposition"
       ],
       "show_thumbnail_badges": "Afficher les badges sur les miniatures",
       "thumbnail_badge_options": [
@@ -1534,7 +1583,7 @@
         "last_image": "Dernière",
         "page_up": "Page précédente",
         "page_down": "Page suivante",
-        "quick_preview": "Ouvrir l’aperçu rapide",
+        "quick_preview": "Ouvrir / fermer l’aperçu rapide",
         "close_viewer": "Fermer la visionneuse",
         "search_similar": "Trouver des photos associées",
         "show_info": "Afficher les informations",
@@ -1542,7 +1591,6 @@
         "zoom_out": "Zoom arrière",
         "zoom_fit": "Taille réelle / Ajuster à la fenêtre",
         "cycle_background": "Changer d’arrière-plan",
-        "toggle_slideshow": "Lire / Mettre en pause le diaporama",
         "open_new_window": "Détacher la fenêtre",
         "open_external_app": "Ouvrir dans une app externe",
         "edit_image": "Modifier",
@@ -1561,20 +1609,25 @@
         "delete_permanently": "Supprimer définitivement",
         "refresh_file_info": "Actualiser les informations du fichier",
         "print": "Imprimer",
-        "toggle_favorite": "Basculer le favori",
-        "set_clear_rating": "Définir / effacer la note",
-        "mark_pick": "Marquer comme sélectionnée",
-        "mark_rejected": "Marquer comme rejetée",
-        "mark_unreviewed": "Marquer comme non examinée",
+        "toggle_favorite": "Ajouter / Retirer des favoris",
+        "toggle_favorite_and_next": "Ajouter / Retirer des favoris → Suivant",
+        "set_clear_rating": "Note",
+        "set_clear_rating_and_next": "Note → Suivant",
+        "mark_pick": "Sélection · Sélectionnées",
+        "mark_pick_and_next": "Sélection · Sélectionnées → Suivant",
+        "mark_rejected": "Sélection · Rejetées",
+        "mark_rejected_and_next": "Sélection · Rejetées → Suivant",
+        "mark_unreviewed": "Sélection · Non examinées",
+        "mark_unreviewed_and_next": "Sélection · Non examinées → Suivant",
         "clear_rating": "Effacer la note",
         "rate_one": "Noter 1 étoile",
         "rate_two": "Noter 2 étoiles",
         "rate_three": "Noter 3 étoiles",
         "rate_four": "Noter 4 étoiles",
         "rate_five": "Noter 5 étoiles",
-        "edit_tags": "Modifier les étiquettes",
-        "edit_collections": "Modifier les collections",
-        "edit_comment": "Modifier le commentaire",
+        "edit_tags": "Étiquettes",
+        "edit_collections": "Collections",
+        "edit_comment": "Description",
         "rotate": "Pivoter la vue dans le sens horaire",
         "rotate_counterclockwise": "Pivoter la vue dans le sens antihoraire",
         "thumbnail_increase": "Agrandir les miniatures",
@@ -1583,37 +1636,61 @@
     },
     "advanced": {
       "title": "Avancé",
-      "section_thumbnail_cache": "Cache des miniatures",
-      "thumbnail_quality": "Qualité des miniatures",
-      "thumbnail_quality_hint": "Définit la résolution des miniatures générées. Des réglages plus élevés offrent un aperçu plus net, mais nécessitent plus de temps de génération et d’espace disque",
-      "section_map": "Carte",
-      "map_provider": "Fournisseur de cartes",
-      "map_provider_hint": "Choisissez le service de cartes pour la vue Carte",
-      "map_provider_options": [
-        "Global (par défaut)",
-        "Chine (Tianditu)"
-      ],
-      "tianditu_token": "Jeton API Tianditu",
-      "tianditu_token_hint": "Requis pour les tuiles Tianditu",
-      "tianditu_token_placeholder": "Collez votre jeton",
-      "tianditu_token_status_saved": "Enregistré",
-      "tianditu_token_status_empty": "Non configuré",
-      "thumbnail_quality_options": [
-        "Faible (256 px)",
-        "Standard (512 px)",
-        "Élevée (1024 px)"
-      ],
-      "section_external_apps": "Applications externes",
-      "manage_external_apps": "Gérer les applications externes",
-      "external_image_editor": "Ouvrir la photo avec",
-      "external_video_app": "Ouvrir la vidéo avec",
-      "external_app_not_selected": "Aucune app selectionnee",
-      "choose_app": "Choisir",
-      "clear_app": "Effacer",
-      "default_app": "Par défaut",
-      "set_default_app": "Définir par défaut",
+      "external_app": {
+        "section_external_apps": "Applications externes",
+        "manage_external_apps": "Gérer les applications externes",
+        "external_image_editor": "Ouvrir la photo avec",
+        "external_video_app": "Ouvrir la vidéo avec",
+        "external_app_not_selected": "Aucune app selectionnee",
+        "choose_app": "Choisir",
+        "clear_app": "Effacer",
+        "default_app": "Par défaut",
+        "set_default_app": "Définir par défaut"
+      },
       "section_diagnostics": "Diagnostics",
-      "debug_mode": "Mode débogage"
+      "debug_mode": "Mode débogage",
+      "map": {
+        "section_map": "Carte",
+        "map_provider": "Fournisseur de cartes",
+        "map_provider_hint": "Choisissez le service de cartes pour la vue Carte",
+        "map_provider_options": [
+          "Global (par défaut)",
+          "Chine (Tianditu)"
+        ],
+        "tianditu_token": "Jeton API Tianditu",
+        "tianditu_token_hint": "Requis pour les tuiles Tianditu",
+        "tianditu_token_placeholder": "Collez votre jeton",
+        "tianditu_token_status_saved": "Enregistré",
+        "tianditu_token_status_empty": "Non configuré"
+      },
+      "thumbnail_cache": {
+        "rolling_back": "Restauration en cours…",
+        "cancelled": "Annulé. Le cache d’origine est conservé.",
+        "new_location": "Nouvel emplacement : {path}",
+        "migrating": "Migration des miniatures…",
+        "migration_hint": "Les miniatures de toutes les bibliothèques seront déplacées. Le nouvel emplacement ne sera utilisé qu’après la réussite de la migration. L’annulation conserve l’emplacement actuel.",
+        "migration_progress": "Progression de la migration",
+        "ready": "Prêt pour la migration",
+        "start": "Démarrer",
+        "cancelling": "Annulation en cours…",
+        "rebuild_message": "L’ancien emplacement du cache est indisponible. Continuer sans déplacer ses fichiers ? Les miniatures seront régénérées au besoin au nouvel emplacement. Les données des bibliothèques, les photos originales et les fichiers de l’ancien disque resteront inchangés.",
+        "rebuild_confirm": "Continuer et régénérer",
+        "section_thumbnail_cache": "Cache des miniatures",
+        "thumbnail_quality": "Modifier la résolution des miniatures",
+        "thumbnail_quality_hint": "Des réglages plus élevés offrent un aperçu plus net, mais nécessitent plus de temps de génération et d’espace disque",
+        "thumbnail_quality_options": [
+          "Faible (256 px)",
+          "Standard (512 px)",
+          "Élevée (1024 px)"
+        ],
+        "unavailable": "Emplacement du cache indisponible. Reconnectez le disque avant d’utiliser ou de déplacer ce cache.",
+        "current_location": "Changer l’emplacement du cache",
+        "counting": "Comptage des fichiers du cache…",
+        "finishing": "Finalisation du déplacement…",
+        "success": "L’emplacement du cache des miniatures a été modifié",
+        "cleanup_warning": "Le cache a été déplacé, mais certains anciens fichiers n’ont pas pu être supprimés :",
+        "busy": "Veuillez attendre la fin du déplacement du cache des miniatures."
+      }
     },
     "database": {
       "title": "Stockage",

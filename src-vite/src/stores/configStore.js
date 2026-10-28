@@ -54,6 +54,8 @@ export const useConfigStore = defineStore('configStore', {
       previewMode: 'thumbnail',  // preview section mode ('thumbnail' | 'histogram')
       previewScale: 1,           // preview thumbnail scale (1, 0.5, 0.25)
       histogramChannels: 15,     // histogram channel mask (L=1, R=2, G=4, B=8; 0=none, 15=all)
+      showOrganization: true,   // show catalog organization
+      showSourceMetadata: false, // show original file metadata
       showBasicInfo: true,       // show basic info
       showMetadata: true,        // show metadata
       showOcr: true,             // show recognized image text
@@ -136,7 +138,7 @@ export const useConfigStore = defineStore('configStore', {
     systemLocale: '',
 
     settings: {
-      tabIndex: 0,               // settings tab index (0: general, 2: grid, 3: viewer, 4: RAW, 5: search, 6: advanced, 7: shortcuts, 8: about; 1 reserved)
+      tabIndex: 0,               // settings tab index; see SETTINGS_TAB
 
       // general settings
       language: 'en',             // default language
@@ -224,6 +226,7 @@ export const useConfigStore = defineStore('configStore', {
         showBoxes: true,
         // Cluster threshold index: 0=Very High, 1=High, 2=Medium, 3=Low
       },
+      importXmpSidecars: true,
     },
   }),
 

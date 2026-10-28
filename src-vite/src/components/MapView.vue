@@ -4,7 +4,7 @@
     @mouseenter="uiStore.setMapActive(true)"
     @mouseleave="uiStore.setMapActive(false)"
   >
-    <div ref="mapEl" class="relative" style="width:100%; height:100%;"></div>
+    <div ref="mapEl" class="relative" style="width:100%; height:100%;" @wheel.capture.stop></div>
     <div class="absolute left-2 bottom-7 z-500 max-w-[calc(100%_-_1rem)] rounded-box bg-base-100/85 px-2 py-1 text-[10px]" role="status">
       <span>{{ mapThemeInfo?.name }}</span>
       <span v-if="sdkLoading" class="ml-1">{{ t('map_services.sdk_loading') }}</span>

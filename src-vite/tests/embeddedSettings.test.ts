@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
-import { parse, compileScript } from '@vue/compiler-sfc';
+import { parse, compileScript, compileTemplate } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import * as constants from '../src/common/constants.ts';
 import { createPendingChangesRegistry } from '../src/common/pendingChanges.ts';
@@ -319,15 +319,35 @@ function settingsHarness(embedded = true) {
     window: { addEventListener: (name: string, callback: any) => listeners.set(name, callback), removeEventListener: (name: string) => listeners.delete(name) },
     networkProxyUrl: Vue.ref(''), proxyEnabled: Vue.ref(false), appResources: Vue.ref(null), appResourcesProgress: Vue.ref(0),
     dbStorageDir: Vue.ref(''), hasCustomDbStorage: Vue.ref(false), unlistenAppResourcesProgress: null,
+    thumbnailCacheDir: Vue.ref(''), thumbnailCacheAvailable: Vue.ref(true), hasCustomThumbnailCache: Vue.ref(false),
+    isChangingThumbnailCache: Vue.ref(false), isChangingDbStorage: Vue.ref(false), showThumbnailMigrationDialog: Vue.ref(false),
+    thumbnailMigrationOperationId: '', thumbnailMigrationPreviewRequest: 0, unregisterStorageGuard() {},
+    toast: { error: (message: string) => events.push(['error', message]) }, t: (key: string) => key,
     getNetworkProxy: async () => '', getAppResourcesStatus: async () => ({}),
     listenAppResourcesDownloadProgress: async () => () => {}, getDbStorageDir: async () => '', isUsingCustomDbStorage: async () => false,
+    getThumbnailCacheLocation: async () => ({ path: 'system-cache', custom: false, available: true }),
   };
-  const api = functions('views/Settings', ['settingsTabs', 'confirmDiscard', 'selectSettingsTab', 'openSection', 'requestClose', 'handleKeyDown', 'normalizeScale', 'applyWindowScale', 'updateSettingsWindowSize', 'changeLanguage'], context);
+  const api = functions('views/Settings', ['settingsTabs', 'confirmDiscard', 'selectSettingsTab', 'openSection', 'requestClose', 'registerStorageGuard', 'handleKeyDown', 'normalizeScale', 'applyWindowScale', 'updateSettingsWindowSize', 'changeLanguage'], context);
   return { context, api, events, windowCalls, font, pendingChanges, listeners,
     mount: () => lifecycle('views/Settings', 'onMounted', context)(),
     unmount: () => lifecycle('views/Settings', 'onUnmounted', context)(),
   };
 }
+
+test('every settings navigation entry retains a valid content pane after metadata and cache integration', () => {
+  const source = readFileSync(new URL('../src/views/Settings.vue', import.meta.url), 'utf8');
+  const { descriptor, errors } = parse(source);
+  assert.deepEqual(errors, []);
+  const compiled = compileTemplate({ source: descriptor.template!.content, filename: 'Settings.vue', id: 'settings-template' });
+  assert.deepEqual(compiled.errors, []);
+  const paneIds = [...descriptor.template!.content.matchAll(/config\.settings\.tabIndex === SETTINGS_TAB\.(\w+)/g)]
+    .map(match => constants.SETTINGS_TAB[match[1] as keyof typeof constants.SETTINGS_TAB]);
+  const h = settingsHarness();
+  assert.deepEqual([...h.api.settingsTabs].map((tab: any) => tab.id).sort(), paneIds.sort());
+  assert.match(source, /<AiModelSettings\b/);
+  assert.match(source, /<MapServicesSettings\b/);
+  assert.match(source, /@change="onThumbnailSizeChange"/);
+});
 
 test('embedded Settings preserves main-window size, visibility and font scale throughout its lifecycle', async () => {
   const h = settingsHarness();
@@ -366,6 +386,40 @@ test('Settings section changes use draft and busy protection, then call the moun
   dirty = false;
   assert.equal(await h.api.openSection(constants.SETTINGS_TAB.NETWORK), true);
   assert.equal(h.context.config.settings.tabIndex, constants.SETTINGS_TAB.NETWORK);
+});
+
+test('cache migration blocks embedded settings, tab changes and desktop close until it finishes', async () => {
+  const h = settingsHarness();
+  await h.mount();
+  assert.equal(h.context.thumbnailCacheDir.value, 'system-cache');
+  h.context.isChangingThumbnailCache.value = true;
+  assert.equal(await h.api.confirmDiscard(), false);
+  assert.equal(await h.pendingChanges.prepare(), null, 'the main-window close protocol must see the active migration');
+  assert.equal(await h.api.selectSettingsTab(constants.SETTINGS_TAB.METADATA), false);
+  h.api.requestClose();
+  assert.equal(h.events.some((event: any[]) => event[0] === 'component'), false);
+  assert.deepEqual(h.events, [['error', 'settings.advanced.thumbnail_cache.busy']]);
+  h.context.isChangingThumbnailCache.value = false;
+  assert.equal(await h.api.selectSettingsTab(constants.SETTINGS_TAB.METADATA), true);
+  h.context.isChangingDbStorage.value = true;
+  assert.equal(await h.pendingChanges.confirm(), false);
+  h.context.isChangingDbStorage.value = false;
+  h.unmount();
+  assert.equal(h.pendingChanges.hasPending(), false);
+});
+
+test('a cache-location response after settings unmount cannot publish state or show its old window', async () => {
+  const h = settingsHarness(false);
+  let resolve!: (value: any) => void;
+  h.context.getThumbnailCacheLocation = () => new Promise(value => { resolve = value; });
+  const mounting = h.mount();
+  while (!resolve) await new Promise(value => setImmediate(value));
+  h.unmount();
+  resolve({ path: 'late-cache', custom: true, available: true });
+  await mounting;
+  assert.equal(h.context.thumbnailCacheDir.value, '');
+  assert.deepEqual(h.windowCalls, []);
+  assert.equal(h.pendingChanges.hasPending(), false);
 });
 
 test('Settings tab and close checks include map drafts without asking unrelated media editors', async () => {

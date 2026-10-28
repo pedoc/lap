@@ -1,6 +1,7 @@
 .worktrees/
 .finesse/
 .vscode/
+.workbuddy/
 .continue/
 .cargo/
 target/

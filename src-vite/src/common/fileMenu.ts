@@ -27,7 +27,7 @@ import {
   IconFlag,
   IconFlagFilled,
   IconFlagOff,
-  IconBookmark,
+  IconStack,
   IconSplitOn,
   IconSplitOn4,
   IconCollage,
@@ -200,6 +200,11 @@ export const useFileMenuItems = (
         action: createAction('refresh-file-info'),
       },
       { label: translate('dlna.title'), icon: markRaw(IconMonitor), disabled: unavailable || selectionCount === 0 || !options?.selectionIds, action: createAction('cast-media') },
+      {
+        label: String(localeMsg.value.menu.file.save_xmp || 'Save Metadata to XMP'),
+        disabled: unavailable || selectionCount === 0,
+        action: createAction('save-xmp'),
+      },
     ];
   };
 
@@ -333,7 +338,7 @@ export const useFileMenuItems = (
       },
       {
         label: localeMsg.value.menu.meta.collection,
-        icon: markRaw(IconBookmark),
+        icon: markRaw(IconStack),
         shortcut: shortcut('meta.collection'),
         action: createAction('add-to-collection'),
       },
@@ -439,6 +444,10 @@ export const useFileMenuItems = (
         label: localeMsg.value.menu.file.refresh_file_info,
         icon: markRaw(IconFileInfo),
         action: createAction('refresh-file-info')
+      },
+      {
+        label: String(localeMsg.value.menu.file.save_xmp || 'Save Metadata to XMP'),
+        action: createAction('save-xmp'),
       },
       {
         id: 'set-as', icon: markRaw(IconPhoto),

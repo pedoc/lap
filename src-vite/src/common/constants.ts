@@ -102,6 +102,7 @@ export const SETTINGS_TAB = {
   SHORTCUTS: 7,
   ABOUT: 8,
   NETWORK: 9,
+  METADATA: 10,
 } as const;
 
 export type SettingsTab = (typeof SETTINGS_TAB)[keyof typeof SETTINGS_TAB];

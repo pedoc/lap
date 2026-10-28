@@ -572,6 +572,7 @@ pub(crate) fn resolve_group_primary_target(
     file_path: &str,
     new_folder_path: &str,
     policy: t_utils::FileConflictPolicy,
+    xmp_cache: &mut crate::t_xmp_files::Cache,
 ) -> Result<(PathBuf, Vec<SidecarTransferPlan>), String> {
     let base_target =
         t_utils::resolve_file_transfer_destination(file_path, new_folder_path, policy)?;
@@ -590,6 +591,11 @@ pub(crate) fn resolve_group_primary_target(
             &targets,
             true,
         )?;
+        let conflicts = xmp_cache.conflicts(
+            std::iter::once((Path::new(file_path), base_target.as_path()))
+                .chain(sidecar_plans.iter().map(|p| (p.old_path.as_path(), p.new_path.as_path()))),
+        )?;
+        if !conflicts.is_empty() { return Err(format!("Destination XMP already exists: {}", conflicts[0].display())); }
         return Ok((base_target, sidecar_plans));
     }
 
@@ -600,7 +606,9 @@ pub(crate) fn resolve_group_primary_target(
             &primary_target,
             &sidecar_sources,
         )?;
-        if !group_target_conflicts(&primary_target, &sidecar_plans) {
+        if !group_target_conflicts(&primary_target, &sidecar_plans)
+            && xmp_cache.conflicts(std::iter::once((Path::new(file_path), primary_target.as_path()))
+                .chain(sidecar_plans.iter().map(|p| (p.old_path.as_path(), p.new_path.as_path()))))?.is_empty() {
             let targets = std::iter::once(primary_target.clone())
                 .chain(sidecar_plans.iter().map(|plan| plan.new_path.clone()))
                 .collect::<Vec<_>>();

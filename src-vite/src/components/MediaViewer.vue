@@ -48,7 +48,6 @@
             :tooltip="!canSlideShow
               ? $t('image_viewer.toolbar.slide_show')
               : (isSlideShow ? $t('image_viewer.toolbar.pause') : $t('image_viewer.toolbar.slide_show'))"
-            :shortcut="shortcut('slideshow.toggle')"
             @click="handleToggleSlideShow"
           />
           <ContextMenu v-if="isSlideShow && canSlideShow"
@@ -423,7 +422,7 @@ import {
   IconFlagOff,
   IconStar,
   IconStarFilled,
-  IconBookmark,
+  IconStack,
   IconTag,
   IconComment,
   IconRotate,
@@ -969,7 +968,7 @@ const quickViewStatusBadges = computed<StatusBadge[]>(() => {
     });
   }
   if (props.file?.has_tags) metaIcons.push({ icon: IconTag });
-  if (props.file?.has_collections) metaIcons.push({ icon: IconBookmark });
+  if (props.file?.has_collections) metaIcons.push({ icon: IconStack });
   if (props.file?.comments?.length > 0) metaIcons.push({ icon: IconComment });
   if (normalizedFileRotate.value > 0) {
     metaIcons.push({

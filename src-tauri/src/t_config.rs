@@ -473,6 +473,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub db_storage_dir: Option<String>,
     #[serde(default)]
+    pub thumbnail_cache_dir: Option<String>,
+    #[serde(default)]
     pub network_proxy_url: Option<String>,
     #[serde(default)]
     pub map_services: Option<crate::t_map::Settings>,
@@ -491,6 +493,7 @@ impl Default for AppConfig {
             debug: false,
             last_selected_item_index: default_last_selected_item_index(),
             db_storage_dir: None,
+            thumbnail_cache_dir: None,
             network_proxy_url: None,
             map_services: None,
             current_library_id: "default".to_string(),
@@ -679,6 +682,13 @@ fn save_app_config_locked(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn set_thumbnail_cache_dir(directory: Option<String>) -> Result<(), String> {
+    update_app_config(|config| {
+        config.thumbnail_cache_dir = directory;
+        Ok(())
+    })
+}
+
 fn parse_first_json_object<T: for<'de> Deserialize<'de>>(content: &str) -> Option<T> {
     let mut stream = serde_json::Deserializer::from_str(content).into_iter::<T>();
     match stream.next() {
@@ -828,6 +838,7 @@ fn recover_app_config_from_library_dbs() -> Result<AppConfig, String> {
         debug: false,
         last_selected_item_index: default_last_selected_item_index(),
         db_storage_dir: None,
+        thumbnail_cache_dir: None,
         network_proxy_url: None,
         map_services: None,
         current_library_id,
@@ -876,7 +887,6 @@ pub fn edit_library(id: &str, new_name: &str) -> Result<(), String> {
 /// Remove a library (also deletes the database file)
 pub fn remove_library(id: &str, replacement_id: Option<&str>) -> Result<(), String> {
     crate::t_media_jobs::assert_library_idle(id)?;
-    let thumb_cache_dir = get_app_cache_dir()?.join(id);
     let db_path = update_app_config(|config| {
         if config.libraries.len() <= 1 {
             return Err("Cannot remove the last library".to_string());
@@ -914,8 +924,8 @@ pub fn remove_library(id: &str, replacement_id: Option<&str>) -> Result<(), Stri
         }
     }
 
-    if thumb_cache_dir.exists() {
-        let _ = fs::remove_dir_all(&thumb_cache_dir);
+    for warning in crate::t_cache_storage::remove_library_cache(id) {
+        eprintln!("Library {id} cache cleanup failed: {warning}");
     }
 
     Ok(())
@@ -983,7 +993,8 @@ pub fn get_library_info(id: &str) -> Result<LibraryInfo, String> {
 }
 
 fn get_thumb_cache_size(library_id: &str) -> i64 {
-    let Ok(cache_root) = get_app_cache_dir().map(|p| p.join(library_id)) else {
+    let Ok(_cache_access) = crate::t_cache_storage::access() else { return 0; };
+    let Ok(cache_root) = crate::t_cache_storage::root().map(|p| p.join(library_id)) else {
         return 0;
     };
     if !cache_root.is_dir() {
@@ -1181,6 +1192,9 @@ mod atomic_update_tests {
     #[test]
     fn concurrent_config_updates_preserve_unrelated_fields_and_failed_updates_do_not_publish() {
         let fixture = Arc::new(Fixture::new());
+        let mut initial = fixture.load().unwrap();
+        initial.thumbnail_cache_dir = Some("local-thumbnails".into());
+        fixture.save(&initial).unwrap();
         let lock = Arc::new(Mutex::new(()));
         let workers: Vec<_> = (0..8)
             .map(|_| {
@@ -1205,7 +1219,9 @@ mod atomic_update_tests {
         for worker in workers {
             worker.join().unwrap();
         }
-        assert_eq!(fixture.load().unwrap().last_selected_item_index, 79);
+        let saved = fixture.load().unwrap();
+        assert_eq!(saved.last_selected_item_index, 79);
+        assert_eq!(saved.thumbnail_cache_dir.as_deref(), Some("local-thumbnails"));
         let before = fs::read(fixture.0.join("config.json")).unwrap();
         let result: Result<(), String> = update_config_with(
             &lock,

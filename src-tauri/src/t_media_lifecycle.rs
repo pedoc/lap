@@ -333,6 +333,8 @@ pub struct Member {
     pub file_id: Option<i64>,
     #[serde(default)]
     pub source_inode: Option<u64>,
+    #[serde(default)]
+    pub retain_original: bool,
     pub original_name: String,
     pub original_path: String,
     pub stored_path: String,
@@ -433,6 +435,9 @@ fn no_replace_move(source: &Path, target: &Path, member: &Member) -> Result<(), 
     crate::t_media_jobs::check()?;
     if target.try_exists().map_err(|e| e.to_string())? {
         verify(target, member)?;
+        if member.retain_original {
+            return Ok(());
+        }
         if !source.try_exists().map_err(|e| e.to_string())? {
             return Ok(());
         }
@@ -443,7 +448,7 @@ fn no_replace_move(source: &Path, target: &Path, member: &Member) -> Result<(), 
         }
     } else {
         verify(source, member)?;
-        if fs::hard_link(source, target).is_err() {
+        if member.retain_original || fs::hard_link(source, target).is_err() {
             let parent = target.parent().ok_or("Recovery parent missing")?;
             if parent.canonicalize().map_err(|e| e.to_string())? != parent {
                 return Err("Recovery parent was redirected".into());
@@ -490,6 +495,9 @@ fn no_replace_move(source: &Path, target: &Path, member: &Member) -> Result<(), 
     }
     verify(target, member)?;
     verify(source, member)?;
+    if member.retain_original {
+        return Ok(());
+    }
     if member.source_inode.is_some() && source_inode(source) != member.source_inode {
         return Err("Original identity changed; safe recovery copy retained".into());
     }
@@ -500,6 +508,7 @@ fn no_replace_move(source: &Path, target: &Path, member: &Member) -> Result<(), 
     crate::t_media_jobs::check()?;
     fs::remove_file(&resolved)
         .map_err(|e| format!("Copy is safe in recovery, but original removal failed: {e}"))?;
+    crate::t_xmp::sidecars_changed(&[source.to_path_buf(), target.to_path_buf()]);
     Ok(())
 }
 // Plan paths only after batch deduplication. Existing recovery records are never renumbered.
@@ -710,7 +719,11 @@ fn prepare_manifest(conn: &Connection, primary: i64, id: &str) -> Result<Manifes
     let root = Path::new(&root).canonicalize().map_err(|e| e.to_string())?;
     let mut members = Vec::new();
     let mut seen = HashSet::new();
-    for file_id in component_ids_on(conn, primary)? {
+    let file_ids = component_ids_on(conn, primary)?;
+    let group_paths = file_ids.iter().map(|id| original_path_on(conn, *id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut xmp_cache = crate::t_xmp_files::Cache::default();
+    for file_id in file_ids {
         let deleted:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM media_states WHERE file_id=?1 AND deleted_at IS NOT NULL)",[file_id],|r|r.get(0)).map_err(|e|e.to_string())?;
         if deleted {
             return Err("Photo is already in Recently Deleted".into());
@@ -730,13 +743,15 @@ fn prepare_manifest(conn: &Connection, primary: i64, id: &str) -> Result<Manifes
         if !original.starts_with(&root) {
             return Err("Photo is outside its registered album".into());
         }
-        let mut targets = vec![(Some(file_id), original.clone())];
+        let mut targets = vec![(Some(file_id), original.clone(), false)];
         targets.extend(
             crate::t_apple_sidecar::apple_aae_sidecar_paths(&original.to_string_lossy())
                 .into_iter()
-                .map(|p| (None, p)),
+                .map(|p| (None, p, false)),
         );
-        for (file_id, path) in targets {
+        targets.extend(xmp_cache.recovery_sidecars(&original, &group_paths)?
+            .into_iter().map(|(path, shared)| (None, path, shared)));
+        for (file_id, path, retain_original) in targets {
             if fs::symlink_metadata(&path)
                 .map_err(|e| e.to_string())?
                 .file_type()
@@ -767,6 +782,7 @@ fn prepare_manifest(conn: &Connection, primary: i64, id: &str) -> Result<Manifes
                 original_name
             ));
             members.push(Member {
+                retain_original,
                 source_inode: identity,
                 file_id,
                 original_name,
@@ -845,7 +861,7 @@ pub fn validate_original(id: i64, path: &str, allow_hidden: bool) -> Result<(), 
         validate_original_on(&conn, id, path, allow_hidden)
     }
 }
-fn validate_original_on(
+pub(crate) fn validate_original_on(
     conn: &Connection,
     id: i64,
     path: &str,
@@ -990,7 +1006,7 @@ pub(crate) fn move_job_on(
                 let mut manifest = prepare_manifest(conn, *file_id, &id)?;
                 manifest
                     .members
-                    .retain(|m| paths.insert(m.original_path.clone()));
+                    .retain(|m| m.retain_original || paths.insert(m.original_path.clone()));
                 assign_storage_paths(&mut manifest, &id);
                 for m in &manifest.members {
                     if let Some(id) = m.file_id {
@@ -1550,6 +1566,7 @@ mod tests {
                 let original = self.root.join(name);
                 let (size, hash) = fingerprint(&original).unwrap();
                 members.push(Member {
+                    retain_original: false,
                     source_inode: None,
                     file_id,
                     original_name: name.into(),
@@ -1611,6 +1628,51 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn xmp_recovery_preserves_full_name_sidecars_when_restoring_with_a_suffix() {
+        let f = Fixture::new();
+        f.conn.execute("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER", []).unwrap();
+        fs::write(f.root.join("photo.jpg.xmp"), b"catalog metadata").unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let manifest = prepare_manifest(&f.conn, 1, &id).unwrap();
+        assert!(manifest.members.iter().any(|member| member.original_name == "photo.jpg.xmp"));
+        f.trash(&id, &manifest);
+        assert!(!f.root.join("photo.jpg.xmp").exists());
+        fs::write(f.root.join("photo.jpg"), b"new user original").unwrap();
+        crate::t_media_restore::restore(&f.conn, &load(&f.conn, &id).unwrap(),
+            &crate::t_media_restore::RestoreOptions {
+                mode: crate::t_media_restore::RestoreMode::Rename,
+                directory: None,
+            }).unwrap();
+        assert_eq!(fs::read(f.root.join("photo (restored 1).jpg.xmp")).unwrap(), b"catalog metadata");
+        assert_eq!(fs::read(f.root.join("photo (restored 1).jpg")).unwrap(), b"original photo");
+        assert_eq!(fs::read(f.root.join("photo.jpg")).unwrap(), b"new user original");
+    }
+
+    #[test]
+    fn xmp_recovery_snapshots_shared_sidecars_without_mutating_other_owners() {
+        let f = Fixture::new();
+        f.conn.execute("ALTER TABLE afiles ADD COLUMN live_photo_video_id INTEGER", []).unwrap();
+        fs::write(f.root.join("photo.raw"), b"unselected RAW").unwrap();
+        fs::write(f.root.join("photo.xmp"), b"shared metadata before deletion").unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let manifest = prepare_manifest(&f.conn, 1, &id).unwrap();
+        let sidecar = manifest.members.iter().find(|member| member.original_name == "photo.xmp").unwrap();
+        assert!(sidecar.retain_original);
+        f.trash(&id, &manifest);
+        assert_eq!(fs::read(f.root.join("photo.xmp")).unwrap(), b"shared metadata before deletion");
+        fs::write(f.root.join("photo.xmp"), b"new metadata for remaining RAW").unwrap();
+        assert_eq!(fs::read(&sidecar.stored_path).unwrap(), b"shared metadata before deletion");
+        crate::t_media_restore::restore(&f.conn, &load(&f.conn, &id).unwrap(),
+            &crate::t_media_restore::RestoreOptions {
+                mode: crate::t_media_restore::RestoreMode::Rename,
+                directory: None,
+            }).unwrap();
+        assert_eq!(fs::read(f.root.join("photo (restored 1).xmp")).unwrap(), b"shared metadata before deletion");
+        assert_eq!(fs::read(f.root.join("photo.xmp")).unwrap(), b"new metadata for remaining RAW");
+        assert_eq!(fs::read(f.root.join("photo.raw")).unwrap(), b"unselected RAW");
+    }
+
     #[test]
     fn media_lifecycle_shared_middle_sidecar_is_renumbered_before_registration() {
         let f = Fixture::new();

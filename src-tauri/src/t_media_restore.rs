@@ -172,6 +172,19 @@ fn renamed(name: &str, suffix: u32) -> Result<String, String> {
         .unwrap_or_default();
     Ok(format!("{stem} (restored {suffix}){extension}"))
 }
+fn member_name(member: &Member, manifest: &Manifest, suffix: u32) -> Result<String, String> {
+    let path = Path::new(&member.original_name);
+    if member.file_id.is_none()
+        && let Some(extension) = path.extension()
+        && (extension.eq_ignore_ascii_case("xmp") || extension.eq_ignore_ascii_case("aae"))
+        && let Some(owner) = manifest.members.iter().find(|owner| owner.file_id.is_some()
+            && path.file_stem().is_some_and(|stem| stem == owner.original_name.as_str()))
+    {
+        return Ok(format!("{}.{}", renamed(&owner.original_name, suffix)?,
+            extension.to_string_lossy()));
+    }
+    renamed(&member.original_name, suffix)
+}
 pub(crate) fn validate_structure(manifest: &Manifest, plan: &RestorePlan) -> Result<(), String> {
     uuid::Uuid::parse_str(&plan.token).map_err(|_| "Invalid restore plan identity")?;
     if plan.targets.len() != manifest.members.len() {
@@ -272,7 +285,7 @@ pub(crate) fn plan(
                 .as_deref()
                 .unwrap_or(original.parent().ok_or("Original folder missing")?);
             let (album_id, root) = album_for(conn, parent)?;
-            let path = parent.join(renamed(&m.original_name, suffix)?);
+            let path = parent.join(member_name(m, &item.manifest, suffix)?);
             if !internal.insert(key(&path)) {
                 return Err("Group members have colliding names in this directory. Restore to original folders instead".into());
             }
@@ -288,7 +301,9 @@ pub(crate) fn plan(
             };
             let already_original = Path::new(&source) == path
                 && matches!(item.status.as_str(), "moving" | "restoring");
-            if (exists(&path)? && !already_original)
+            let shared_original = m.retain_original && path == original
+                && exists(&path)? && lifecycle::verify(&path, m).is_ok();
+            if (exists(&path)? && !already_original && !shared_original)
                 || catalog_conflict(conn, &path, m.file_id)?
                 || planned_path_reserved(conn, &path)?
                 || reserved.contains(&key(&path))
@@ -305,8 +320,8 @@ pub(crate) fn plan(
                 album_id,
                 source,
                 stage_inode: None,
-                staged: already_original,
-                promoted: already_original,
+                staged: already_original || shared_original,
+                promoted: already_original || shared_original,
             });
         }
         if !occupied {
@@ -545,6 +560,7 @@ fn stage(conn: &Connection, item: &mut TrashItem, index: usize) -> Result<(), St
     crate::t_media_jobs::check()?;
     crate::t_media_jobs::stage("promoting");
     promote_no_replace(Path::new(&t.stage), Path::new(&t.path))?;
+    crate::t_xmp::sidecars_changed(&[PathBuf::from(&t.path)]);
     // On filesystems without stable IDs the persisted promoted flag is sufficient for the completed step;
     // an uncheckpointed promotion must be reviewed instead of inferring ownership from identical bytes.
     t.promoted = true;
@@ -818,6 +834,7 @@ mod tests {
                 let stored = store.join(format!("{i}-{name}"));
                 fs::rename(&original, &stored).unwrap();
                 members.push(Member {
+                    retain_original: false,
                     source_inode: None,
                     file_id: *file_id,
                     original_name: name.to_string(),

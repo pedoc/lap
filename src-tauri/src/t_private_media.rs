@@ -342,6 +342,7 @@ mod tests {
                 let (size, hash) = lifecycle::fingerprint(&original).unwrap();
                 std::fs::rename(&original, &stored).unwrap();
                 members.push(Member {
+                    retain_original: false,
                 source_inode: None,
                     file_id: Some(*file_id),
                     original_name: name.to_string(),

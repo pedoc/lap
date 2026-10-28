@@ -284,7 +284,7 @@
   "search": {
     "title": "検索",
     "similar_images": "関連写真",
-    "image_search_placeholder": "画像、ファイル名、またはコメントを検索",
+    "image_search_placeholder": "画像、ファイル名、説明を検索",
     "matches": "一致結果",
     "unknown_location": "不明な場所",
     "unknown_camera": "不明なカメラ",
@@ -738,7 +738,11 @@
       "set_desktop_wallpaper": "デスクトップの壁紙に設定",
       "show_info": "情報を表示",
       "remove_from_collection": "コレクションから削除",
-      "create_montage": "コラージュを作成"
+      "create_montage": "コラージュを作成",
+      "save_xmp": "メタデータを XMP に保存",
+      "xmp_save_success": "{count} 個のファイルの XMP メタデータを保存しました",
+      "xmp_save_failed": "{count} 個のファイルで XMP の保存に失敗しました",
+      "comment": "説明…"
     },
     "calendar": {
       "monthly": "月別",
@@ -787,7 +791,7 @@
       "unfavorite": "お気に入り解除",
       "tag": "タグ...",
       "collection": "コレクション...",
-      "comment": "コメント...",
+      "comment": "説明…",
       "rotate": "表示を回転"
     },
     "sort": {
@@ -980,8 +984,8 @@
       "error": "タグを削除できませんでした。"
     },
     "edit_comment": {
-      "title": "コメントを編集",
-      "placeholder": "コメント",
+      "title": "説明を編集",
+      "placeholder": "説明を入力",
       "ok": "保存"
     },
     "select_folder": {
@@ -991,6 +995,13 @@
       "error": "ファイル選択に失敗しました。"
     },
     "file_refresh": {
+      "rebuild_previews": "選択したすべてのファイルのプレビューを再生成",
+      "skipped": "スキップ: {count}",
+      "checking": "確認中…",
+      "pending": "更新が必要なファイル: {count}",
+      "up_to_date": "ファイル情報は最新です。",
+      "check_failed": "一部のファイルを確認できませんでした。",
+      "update": "更新",
       "status": "更新状況",
       "running": "更新中…",
       "cancelling": "キャンセル中…",
@@ -1177,8 +1188,40 @@
     "gps_altitude": "高度",
     "geo_location": "場所",
     "tags": "タグ",
-    "comment": "コメント",
-    "capture_settings": "撮影設定"
+    "comment": "説明",
+    "capture_settings": "露出",
+    "organization": "整理",
+    "file": "ファイル",
+    "capture": "撮影情報",
+    "source_metadata": "元ファイルのメタデータ",
+    "source_description": "元の説明",
+    "coordinates": "座標",
+    "detail_fields": {
+      "title": "元のタイトル",
+      "creator": "作成者",
+      "copyright": "著作権",
+      "description": "元の説明",
+      "credit": "提供者",
+      "source": "出典",
+      "usageTerms": "利用条件",
+      "rightsUrl": "著作権URL",
+      "software": "ソフトウェア",
+      "flash": "フラッシュ",
+      "whiteBalance": "ホワイトバランス",
+      "exposureMode": "露出モード",
+      "exposureProgram": "露出プログラム",
+      "meteringMode": "測光方式",
+      "focalLength35mm": "35mm換算焦点距離",
+      "timeZone": "撮影タイムゾーン",
+      "direction": "撮影方向",
+      "directionRef": "北の基準",
+      "iccProfile": "ICCプロファイル",
+      "colorSpace": "色空間",
+      "bitDepth": "ビット深度"
+    },
+    "metadata_details_retry": "メタデータを読み込めません。クリックして再試行。",
+    "true_north": "真北",
+    "magnetic_north": "磁北"
   },
   "map": {
     "show_map": "地図を表示",
@@ -1343,6 +1386,12 @@
       "source_brightened": "明るめ",
       "preview_mode": "RAW プレビューモード"
     },
+    "metadata": {
+      "title": "メタデータ",
+      "section_import": "メタデータを取り込む",
+      "import": "EXIF・IPTC・XMP から取り込む",
+      "import_hint": "スキャンと情報更新時にお気に入り、評価、選別フラグ、タグ、説明を取り込み、ローカルの編集は保持します。"
+    },
     "browse": {
       "section_album": "アルバムフォルダ",
       "show_subfolder_files": "サブフォルダー内のファイルを表示",
@@ -1400,7 +1449,7 @@
         "場所",
         "カメラ",
         "レンズ",
-        "設定"
+        "露出"
       ],
       "show_thumbnail_badges": "サムネイルバッジを表示",
       "thumbnail_badge_options": [
@@ -1534,7 +1583,7 @@
         "last_image": "最後",
         "page_up": "前のページ",
         "page_down": "次のページ",
-        "quick_preview": "クイックプレビューを開く",
+        "quick_preview": "クイックプレビューを開く / 閉じる",
         "close_viewer": "ビューアを閉じる",
         "search_similar": "関連写真を検索",
         "show_info": "情報を表示",
@@ -1542,7 +1591,6 @@
         "zoom_out": "縮小",
         "zoom_fit": "実際のサイズ / ウィンドウに合わせる",
         "cycle_background": "背景を切り替える",
-        "toggle_slideshow": "スライドショーの再生 / 一時停止",
         "open_new_window": "新しいウィンドウで表示",
         "open_external_app": "外部アプリで開く",
         "edit_image": "編集",
@@ -1561,20 +1609,25 @@
         "delete_permanently": "完全に削除",
         "refresh_file_info": "ファイル情報を更新",
         "print": "印刷",
-        "toggle_favorite": "お気に入りの切り替え",
-        "set_clear_rating": "評価を設定 / クリア",
-        "mark_pick": "採用にする",
-        "mark_rejected": "除外にする",
-        "mark_unreviewed": "未選別にする",
+        "toggle_favorite": "お気に入りに追加 / 解除",
+        "toggle_favorite_and_next": "お気に入りに追加 / 解除 → 次へ",
+        "set_clear_rating": "評価",
+        "set_clear_rating_and_next": "評価 → 次へ",
+        "mark_pick": "選別 · 採用",
+        "mark_pick_and_next": "選別 · 採用 → 次へ",
+        "mark_rejected": "選別 · 除外",
+        "mark_rejected_and_next": "選別 · 除外 → 次へ",
+        "mark_unreviewed": "選別 · 未選別",
+        "mark_unreviewed_and_next": "選別 · 未選別 → 次へ",
         "clear_rating": "評価をクリア",
         "rate_one": "1つ星評価",
         "rate_two": "2つ星評価",
         "rate_three": "3つ星評価",
         "rate_four": "4つ星評価",
         "rate_five": "5つ星評価",
-        "edit_tags": "タグを編集",
-        "edit_collections": "コレクションを編集",
-        "edit_comment": "コメントを編集",
+        "edit_tags": "タグ",
+        "edit_collections": "コレクション",
+        "edit_comment": "説明",
         "rotate": "表示を時計回りに回転",
         "rotate_counterclockwise": "表示を反時計回りに回転",
         "thumbnail_increase": "サムネイルを拡大",
@@ -1583,37 +1636,61 @@
     },
     "advanced": {
       "title": "詳細",
-      "section_thumbnail_cache": "サムネイルキャッシュ",
-      "thumbnail_quality": "サムネイル品質",
-      "thumbnail_quality_hint": "生成されるサムネイルの解像度を設定します。高い設定ほど鮮明になりますが、生成に時間がかかりディスク容量を多く使用します",
-      "section_map": "地図",
-      "map_provider": "地図サービス",
-      "map_provider_hint": "地図ビューで使用する地図サービスを選択します",
-      "map_provider_options": [
-        "グローバル（デフォルト）",
-        "中国（天地图）"
-      ],
-      "tianditu_token": "天地图 API トークン",
-      "tianditu_token_hint": "天地图のタイルに必要です",
-      "tianditu_token_placeholder": "トークンを貼り付け",
-      "tianditu_token_status_saved": "保存済み",
-      "tianditu_token_status_empty": "未設定",
-      "thumbnail_quality_options": [
-        "低 (256 px)",
-        "標準 (512 px)",
-        "高 (1024 px)"
-      ],
-      "section_external_apps": "外部アプリ",
-      "manage_external_apps": "外部アプリを管理",
-      "external_image_editor": "写真を次で開く",
-      "external_video_app": "動画を開くアプリ",
-      "external_app_not_selected": "アプリが選択されていません",
-      "choose_app": "選択",
-      "clear_app": "クリア",
-      "default_app": "デフォルト",
-      "set_default_app": "デフォルトに設定",
+      "external_app": {
+        "section_external_apps": "外部アプリ",
+        "manage_external_apps": "外部アプリを管理",
+        "external_image_editor": "写真を次で開く",
+        "external_video_app": "動画を開くアプリ",
+        "external_app_not_selected": "アプリが選択されていません",
+        "choose_app": "選択",
+        "clear_app": "クリア",
+        "default_app": "デフォルト",
+        "set_default_app": "デフォルトに設定"
+      },
       "section_diagnostics": "診断",
-      "debug_mode": "デバッグモード"
+      "debug_mode": "デバッグモード",
+      "map": {
+        "section_map": "地図",
+        "map_provider": "地図サービス",
+        "map_provider_hint": "地図ビューで使用する地図サービスを選択します",
+        "map_provider_options": [
+          "グローバル（デフォルト）",
+          "中国（天地图）"
+        ],
+        "tianditu_token": "天地图 API トークン",
+        "tianditu_token_hint": "天地图のタイルに必要です",
+        "tianditu_token_placeholder": "トークンを貼り付け",
+        "tianditu_token_status_saved": "保存済み",
+        "tianditu_token_status_empty": "未設定"
+      },
+      "thumbnail_cache": {
+        "rolling_back": "元に戻しています…",
+        "cancelled": "キャンセルしました。元のキャッシュは保持されています。",
+        "new_location": "新しい保存先：{path}",
+        "migrating": "サムネイルを移行しています…",
+        "migration_hint": "すべてのライブラリのサムネイルを移行します。新しい保存先は移行がすべて成功した後に有効になります。キャンセルすると現在の保存先が維持されます。",
+        "migration_progress": "移行の進行状況",
+        "ready": "移行の準備完了",
+        "start": "開始",
+        "cancelling": "キャンセルしています…",
+        "rebuild_message": "以前のサムネイルキャッシュを利用できません。ファイルを移動せずに続行しますか？必要に応じて新しい場所にサムネイルを再生成します。ライブラリデータ、元の写真、以前のドライブのキャッシュは変更されません。",
+        "rebuild_confirm": "続行して再生成",
+        "section_thumbnail_cache": "サムネイルキャッシュ",
+        "thumbnail_quality": "サムネイルの解像度を変更",
+        "thumbnail_quality_hint": "高い設定ほど鮮明になりますが、生成に時間がかかりディスク容量を多く使用します",
+        "thumbnail_quality_options": [
+          "低 (256 px)",
+          "標準 (512 px)",
+          "高 (1024 px)"
+        ],
+        "unavailable": "キャッシュの保存先が利用できません。使用または移動する前にドライブを再接続してください。",
+        "current_location": "キャッシュの保存先を変更",
+        "counting": "キャッシュファイルを集計中…",
+        "finishing": "キャッシュの移動を完了しています…",
+        "success": "サムネイルキャッシュの保存先を変更しました",
+        "cleanup_warning": "キャッシュを移動しましたが、一部の古いファイルを削除できませんでした：",
+        "busy": "サムネイルキャッシュの移動が完了するまでお待ちください。"
+      }
     },
     "database": {
       "title": "ストレージ",

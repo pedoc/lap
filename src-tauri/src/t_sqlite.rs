@@ -1557,6 +1557,9 @@ pub struct AFile {
     pub e_iso_speed: Option<String>,
     pub e_flash: Option<String>,    // flash
     pub e_orientation: Option<u32>, // orientation
+    pub icc_profile: Option<String>,
+    pub color_space: Option<String>,
+    pub bit_depth: Option<u16>,
 
     // gps info
     pub gps_latitude: Option<f64>,
@@ -1591,7 +1594,7 @@ pub struct AFile {
     #[serde(default)]
     pub cloud_only: bool, // online-only placeholder when last scanned
     #[serde(default)]
-    pub metadata_pending: bool, // indexed without reading the content
+    pub metadata_pending: bool, // content extraction or schema backfill is pending
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2261,7 +2264,7 @@ impl LibraryVisibleCounts {
 pub(crate) enum CloudScanAction {
     /// Local file: the regular scan, which reads the content.
     Read,
-    /// Local file indexed while online-only: read it in full even if unchanged.
+    /// Local file awaiting metadata extraction: read it even if unchanged.
     ReadPending,
     /// Unknown online-only file: record what the directory entry tells us.
     InsertStub,
@@ -2282,7 +2285,16 @@ pub(crate) fn cloud_scan_action(cloud_only: bool, stored: Option<&AFile>, size: 
 }
 
 impl AFile {
-    pub fn get_library_visible_counts() -> Result<LibraryVisibleCounts, String> {
+    pub fn get_library_visible_counts(id: Option<&str>) -> Result<LibraryVisibleCounts, String> {
+        if let Some(id) = id {
+            let _lease = t_storage::DbConnectionLease::acquire()?;
+            let db_path = t_storage::get_library_db_path(id)?;
+            let conn = Connection::open_with_flags(
+                db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            ).map_err(|e| e.to_string())?;
+            return Self::get_library_visible_counts_on(&conn);
+        }
         let conn = open_conn()?;
         Self::get_library_visible_counts_on(&conn)
     }
@@ -2405,6 +2417,9 @@ impl AFile {
         let mut e_iso_speed: Option<String> = None;
         let mut e_flash: Option<String> = None;
         let mut e_orientation: Option<u32> = None;
+        let mut icc_profile = None;
+        let mut color_space = None;
+        let mut bit_depth = None;
         let mut gps_latitude: Option<f64> = None;
         let mut gps_longitude: Option<f64> = None;
         let mut gps_altitude: Option<f64> = None;
@@ -2712,6 +2727,34 @@ impl AFile {
                 .or(file_info.modified);
         }
 
+        // Deep metadata supplements missing fields without replacing values
+        // already supplied by EXIF, video probing, or LibRaw.
+        if matches!(file_type, 1 | 2 | 3) {
+            let deep = crate::t_metadata::read(Path::new(file_path));
+            e_make = e_make.or(deep.make);
+            e_model = e_model.or(deep.model);
+            e_artist = e_artist.or(deep.artist);
+            e_copyright = e_copyright.or(deep.copyright);
+            e_description = e_description.or(deep.description);
+            e_software = e_software.or(deep.software);
+            icc_profile = deep.icc_profile;
+            color_space = deep.color_space;
+            bit_depth = deep.bit_depth;
+            e_lens_make = e_lens_make.or(deep.lens_make);
+            e_lens_model = e_lens_model.or(deep.lens_model);
+            if e_lens_make.is_none() {
+                e_lens_make = e_lens_model.as_deref().and_then(t_lens::infer_lens_make).map(str::to_owned);
+            }
+            e_date_time = e_date_time.or(deep.date);
+            taken_date = Self::capture_date_with_fallback(
+                taken_date, file_info.modified, e_date_time.as_deref());
+            if gps_latitude.is_none() && gps_longitude.is_none() {
+                gps_latitude = deep.latitude;
+                gps_longitude = deep.longitude;
+            }
+            gps_altitude = gps_altitude.or(deep.altitude);
+        }
+
         // Geocoding based on GPS coordinates from any source
         let location = match (gps_latitude, gps_longitude) {
             (Some(lat), Some(lon)) => crate::t_map::metadata_location(lat, lon),
@@ -2792,6 +2835,9 @@ impl AFile {
             e_iso_speed,
             e_flash,
             e_orientation,
+            icc_profile,
+            color_space,
+            bit_depth,
 
             gps_latitude,
             gps_longitude,
@@ -2931,7 +2977,9 @@ impl AFile {
                 .collect::<Vec<_>>(),
             _ => return None,
         };
-        Some(values)
+        // Unknown GPS values may be encoded as 0/0. SQLite stores NaN as NULL,
+        // so normalize before comparing or persisting metadata.
+        values.iter().all(|value| value.is_finite()).then_some(values)
     }
 
     /// Converts DMS (degrees, minutes, seconds) to decimal degrees.
@@ -3093,9 +3141,9 @@ impl AFile {
                 is_favorite, rating, rotate, comments, has_tags,
                 e_make, e_model, e_date_time, e_software, e_artist, e_copyright, e_description, e_lens_make, e_lens_model, e_exposure_bias, e_exposure_time, e_f_number, e_focal_length, e_iso_speed, e_flash, e_orientation,
                 gps_latitude, gps_longitude, gps_altitude, geo_name, geo_admin1, geo_admin2, geo_cc,
-                last_scan_time, content_identifier, media_subtype, motion_photo_offset, cloud_only, metadata_pending
+                last_scan_time, content_identifier, media_subtype, motion_photo_offset, cloud_only, metadata_pending, icc_profile, color_space, bit_depth
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50)
             ON CONFLICT(folder_id, name) DO NOTHING",
             params![
                 self.folder_id,
@@ -3151,6 +3199,9 @@ impl AFile {
                 self.motion_photo_offset,
                 self.cloud_only,
                 self.metadata_pending,
+                self.icc_profile,
+                self.color_space,
+                self.bit_depth,
             ]
         ).map_err(|e| e.to_string())?;
         if result > 0 {
@@ -3180,8 +3231,9 @@ impl AFile {
                 rating = ?13,
                 e_make = ?14, e_model = ?15, e_date_time = ?16, e_software = ?17, e_artist = ?18, e_copyright = ?19, e_description = ?20, e_lens_make = ?21, e_lens_model = ?22, e_exposure_bias = ?23, e_exposure_time = ?24, e_f_number = ?25, e_focal_length = ?26, e_iso_speed = ?27, e_flash = ?28, e_orientation = ?29,
                 gps_latitude = ?30, gps_longitude = ?31, gps_altitude = ?32, geo_name = ?33, geo_admin1 = ?34, geo_admin2 = ?35, geo_cc = ?36,
-                last_scan_time = ?37, content_identifier = ?38, media_subtype = ?39, motion_photo_offset = ?40
-            WHERE id = ?41",
+                last_scan_time = ?37, content_identifier = ?38, media_subtype = ?39, motion_photo_offset = ?40,
+                icc_profile = ?41, color_space = ?42, bit_depth = ?43, metadata_pending = 0
+            WHERE id = ?44",
             params![
                 file.name,
                 file.name_pinyin,
@@ -3227,6 +3279,9 @@ impl AFile {
                 file.content_identifier,
                 file.media_subtype,
                 file.motion_photo_offset,
+                file.icc_profile,
+                file.color_space,
+                file.bit_depth,
                 file_id,
             ]
         ).map_err(|e| e.to_string())?;
@@ -3441,7 +3496,8 @@ impl AFile {
                 {} AS location_json,
                 a.cloud_only,
                 a.metadata_pending,
-                a.view_count,a.last_viewed_at
+                a.view_count,a.last_viewed_at,
+                a.icc_profile, a.color_space, a.bit_depth
             FROM afiles a
             LEFT JOIN afolders b ON a.folder_id = b.id
             LEFT JOIN albums c ON b.album_id = c.id
@@ -3530,6 +3586,9 @@ impl AFile {
             album_visible: row.get("album_visible")?,
             cloud_only: row.get("cloud_only")?,
             metadata_pending: row.get("metadata_pending")?,
+            icc_profile: row.get("icc_profile")?,
+            color_space: row.get("color_space")?,
+            bit_depth: row.get("bit_depth")?,
         })
     }
 
@@ -3958,6 +4017,7 @@ impl AFile {
             return Err("This original path belongs to an interrupted recovery operation; restore it in Recently Deleted first".into());
         }
 
+        let _xmp_scan = crate::t_xmp::sidecar_scan(last_scan_time);
         // Check if the file exists
         let existing_file = Self::fetch(folder_id, file_path)?;
         // Opening an online-only file downloads it: decide from its attributes first.
@@ -3975,16 +4035,26 @@ impl AFile {
                 let file_id = existing_id.ok_or("Existing DB record is missing file id")?;
                 let mut file = Self::update_file_info(file_id, file_path, last_scan_time)?
                     .ok_or("File not found")?;
-                // Whatever was cached while the file was online-only may be stale.
-                let _ = AThumb::delete(file_id);
+                // A schema backfill alone does not invalidate thumbnails or embeddings.
+                let content_changed = existing_file.as_ref().is_some_and(|old| old.cloud_only
+                    || old.size != metadata.len() as i64
+                    || old.modified_at != t_utils::systemtime_to_timestamp(metadata.modified().ok()));
+                let thumbnail_changed = content_changed || existing_file.as_ref().is_some_and(|old|
+                    old.width != file.width || old.height != file.height || old.e_orientation != file.e_orientation);
+                if thumbnail_changed {
+                    let _ = AThumb::delete(file_id);
+                    file.has_thumbnail = Some(false);
+                }
+                if content_changed {
+                    crate::ai::profiles::invalidate_file(file_id)?;
+                    file.has_embedding = Some(false);
+                }
                 open_conn()?.execute(
-                    "UPDATE afiles SET embeds = NULL, cloud_only = 0, metadata_pending = 0 WHERE id = ?1",
-                    params![file_id],
+                    "UPDATE afiles SET embeds = CASE WHEN ?2 THEN NULL ELSE embeds END,
+                     cloud_only = 0, metadata_pending = ?3 WHERE id = ?1",
+                    params![file_id, content_changed, file.metadata_pending],
                 ).map_err(|e| e.to_string())?;
-                file.has_thumbnail = Some(false);
-                file.has_embedding = Some(false);
                 file.cloud_only = false;
-                file.metadata_pending = false;
                 return Ok((file, 2));
             }
             CloudScanAction::InsertStub => {
@@ -4100,9 +4170,15 @@ impl AFile {
                         .is_none_or(|comment| comment.trim().is_empty())
                     {
                         if let Some(comment) = t_ai_png::extract_comment(file_path) {
-                            let _ = Self::update_column(file_id, "comments", &comment);
-                            file.comments = Some(comment);
+                            if let Ok(conn) = open_conn() {
+                                if let Ok(true) = crate::t_xmp::import_scanned_description(file_id, comment, &conn) {
+                                    if let Ok(Some(refreshed)) = Self::get_file_info(file_id) { file = refreshed; }
+                                }
+                            }
                         }
+                    }
+                    if Self::import_scanned_xmp(file_id, file_path, crate::t_xmp::XmpImportMode::RescanNonDestructive)? {
+                        if let Some(refreshed) = Self::get_file_info(file_id)? { file = refreshed; }
                     }
                 }
             }
@@ -4123,6 +4199,15 @@ impl AFile {
         }
 
         let new_file = Self::fetch(folder_id, file_path)?;
+        if let Some(ref file) = new_file {
+            if let Some(file_id) = file.id {
+                if Self::import_scanned_xmp(file_id, file_path, crate::t_xmp::XmpImportMode::InitialScan)? {
+                    if let Some(refreshed) = Self::fetch(folder_id, file_path)? {
+                        return Ok((refreshed, 1));
+                    }
+                }
+            }
+        }
         new_file
             .map(|f| (f, 1))
             .ok_or_else(|| format!("Inserted file missing from DB: {}", file_path))
@@ -4177,12 +4262,62 @@ impl AFile {
         Ok(files)
     }
 
-    /// update a file info
+    fn import_scanned_xmp(file_id: i64, file_path: &str, mode: crate::t_xmp::XmpImportMode) -> Result<bool, String> {
+        if !crate::t_xmp::is_xmp_import_enabled() { return Ok(false); }
+        let conn = open_conn()?;
+        match crate::t_xmp::import_xmp_for_file_with_conn(file_id, file_path, &conn, mode) {
+            Ok(changed) => Ok(changed),
+            Err(error) => {
+                conn.execute("UPDATE afiles SET metadata_pending=1 WHERE id=?1", params![file_id])
+                    .map_err(|e| e.to_string())?;
+                eprintln!("XMP import failed for {file_path}: {error}");
+                // The file is valid and must continue through scanning/import.
+                // Return the updated row so callers also see its retry marker.
+                Ok(true)
+            }
+        }
+    }
+
+    /// Check file timestamps and size without reading metadata or downloading originals.
+    pub fn needs_file_info_refresh(file_id: i64) -> Result<bool, String> {
+        let old = Self::get_file_info(file_id)?.ok_or("File not found")?;
+        let path = old.file_path.as_deref().ok_or("File path missing")?;
+        let info = std::fs::metadata(path).map_err(|e| e.to_string())?;
+        let modified = chrono::DateTime::<chrono::Utc>::from(
+            info.modified().map_err(|e| e.to_string())?,
+        ).timestamp_millis();
+        let scanned = old.last_scan_time.unwrap_or(0);
+        if (!t_utils::is_cloud_only(&info) && old.metadata_pending)
+            || scanned <= 0 || modified > scanned || old.size != info.len() as i64 {
+            return Ok(true);
+        }
+        if crate::t_xmp::is_xmp_import_enabled()
+            && let Some(sidecar) = crate::t_xmp::find_xmp_sidecar(Path::new(path)) {
+            let modified = std::fs::metadata(sidecar)
+                .and_then(|info| info.modified()).map_err(|e| e.to_string())?;
+            return Ok(chrono::DateTime::<chrono::Utc>::from(modified).timestamp_millis() > scanned);
+        }
+        Ok(false)
+    }
+
+    /// Update file info while preserving catalog edits and pairing.
     pub fn update_file_info(
         file_id: i64,
         file_path: &str,
         last_scan_time: i64,
     ) -> Result<Option<Self>, String> {
+        let (file, error) = Self::update_file_info_with_xmp_error(file_id, file_path, last_scan_time)?;
+        if let Some(error) = error { eprintln!("File metadata updated with warning: {error}"); }
+        Ok(file)
+    }
+
+    /// Return successful file metadata even if the subsequent XMP import fails.
+    pub fn update_file_info_with_xmp_error(
+        file_id: i64,
+        file_path: &str,
+        last_scan_time: i64,
+    ) -> Result<(Option<Self>, Option<String>), String> {
+        let _xmp_scan = crate::t_xmp::sidecar_scan(last_scan_time);
         // get old file info
         let old_file_info =
             Self::get_file_info(file_id)?.ok_or_else(|| "File not found".to_string())?;
@@ -4224,7 +4359,31 @@ impl AFile {
         // update the file info
         Self::update(file_id, &new_file_info)?;
 
-        Self::get_file_info(file_id)
+        let mut import_error = None;
+        if crate::t_xmp::is_xmp_import_enabled() {
+            if let Err(error) = crate::t_xmp::import_xmp_for_file_with_mode(
+                file_id,
+                file_path,
+                crate::t_xmp::XmpImportMode::RefreshNonDestructive,
+            ) {
+                // Keep successful metadata, but make the failed import retryable.
+                Self::update_column(file_id, "metadata_pending", &true)?;
+                let content_changed = old_file_info.cloud_only
+                    || old_file_info.size != new_file_info.size
+                    || old_file_info.modified_at != new_file_info.modified_at;
+                if content_changed || old_file_info.width != new_file_info.width
+                    || old_file_info.height != new_file_info.height
+                    || old_file_info.e_orientation != new_file_info.e_orientation {
+                    AThumb::delete(file_id)?;
+                }
+                if content_changed {
+                    Self::update_column(file_id, "embeds", &Option::<Vec<u8>>::None)?;
+                }
+                import_error = Some(format!("XMP import failed: {error}"));
+            }
+        }
+
+        Ok((Self::get_file_info(file_id)?, import_error))
     }
 
     /// Backfill Motion Photo metadata without re-extracting all file metadata.
@@ -7437,7 +7596,7 @@ impl AThumb {
             return Err("Invalid thumbnail cache key".to_string());
         }
 
-        let cache_root = t_config::get_app_cache_dir()?
+        let cache_root = crate::t_cache_storage::root()?
             .join(library_id)
             .join(album_id.to_string());
         Ok(cache_root
@@ -7451,6 +7610,7 @@ impl AThumb {
         thumb_key: &str,
         preferred_extension: &str,
     ) -> Result<Option<Vec<u8>>, String> {
+        let _cache_access = crate::t_cache_storage::access()?;
         let extensions = if preferred_extension == "png" {
             Self::CACHE_EXTENSIONS
         } else {
@@ -7480,6 +7640,7 @@ impl AThumb {
         thumb_key: &str,
         data: &[u8],
     ) -> Result<PathBuf, String> {
+        let _cache_access = crate::t_cache_storage::access()?;
         let extension = if Self::is_png_bytes(data) {
             "png"
         } else if Self::is_complete_jpeg(data) {
@@ -7518,6 +7679,7 @@ impl AThumb {
         album_id: i64,
         thumb_key: &str,
     ) {
+        let Ok(_cache_access) = crate::t_cache_storage::access() else { return; };
         for extension in Self::CACHE_EXTENSIONS {
             if let Ok(path) =
                 Self::get_thumb_cache_path_for_key(library_id, album_id, thumb_key, extension)
@@ -7566,7 +7728,8 @@ impl AThumb {
                 .collect::<Result<HashSet<String>, String>>()?
         };
 
-        let cache_root = t_config::get_app_cache_dir()?.join(&target_library_id);
+        let _cache_access = crate::t_cache_storage::access()?;
+        let cache_root = crate::t_cache_storage::root()?.join(&target_library_id);
         if !cache_root.is_dir() {
             return Ok(ThumbnailCacheCleanupResult {
                 files_removed: 0,
@@ -7620,6 +7783,7 @@ impl AThumb {
         old_album_id: i64,
         new_album_id: i64,
     ) -> Result<(), String> {
+        let _cache_access = crate::t_cache_storage::access()?;
         for extension in Self::CACHE_EXTENSIONS {
             let old_path = Self::get_thumb_cache_path_for_key(
                 library_id,
@@ -10257,6 +10421,9 @@ fn initialize_database_schema(conn: &Connection) -> Result<(), String> {
             e_iso_speed TEXT,
             e_flash TEXT,
             e_orientation INTEGER,
+            icc_profile TEXT,
+            color_space TEXT,
+            bit_depth INTEGER,
             gps_latitude REAL,
             gps_longitude REAL,
             gps_altitude REAL,
@@ -10363,6 +10530,11 @@ fn initialize_database_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_lens_make_model ON afiles(e_lens_make, e_lens_model)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_afiles_artist ON afiles(e_artist COLLATE NOCASE)",
         [],
     )
     .map_err(|e| e.to_string())?;
@@ -10631,6 +10803,7 @@ fn initialize_database_schema(conn: &Connection) -> Result<(), String> {
     crate::ai::ocr::ensure_schema(&conn)?;
     crate::ai::objects_store::ensure_schema(&conn)?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS ai_index_profiles(task TEXT PRIMARY KEY, fingerprint TEXT NOT NULL);").map_err(|e|e.to_string())?;
+    crate::t_xmp::initialize(&conn)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_afiles_content_identifier ON afiles(content_identifier)",
         [],
@@ -11123,7 +11296,7 @@ mod afile_row_mapping_tests {
     #[test]
     fn view_statistics_migration_is_restartable_and_preserves_existing_values() {
         let conn=Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,name TEXT,title TEXT); INSERT INTO afiles VALUES(1,'old.jpg','Keep'); PRAGMA user_version=20;").unwrap();
+        conn.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,name TEXT,title TEXT,file_type INTEGER,metadata_pending INTEGER DEFAULT 0); INSERT INTO afiles(id,name,title) VALUES(1,'old.jpg','Keep'); PRAGMA user_version=20;").unwrap();
         crate::t_migration::check_and_migrate(&conn).unwrap();
         assert_eq!(conn.query_row("SELECT view_count FROM afiles WHERE id=1",[],|r|r.get::<_,i64>(0)).unwrap(),0);
         conn.execute_batch("UPDATE afiles SET view_count=7,last_viewed_at=1000; PRAGMA user_version=20;").unwrap();
@@ -11134,7 +11307,7 @@ mod afile_row_mapping_tests {
     #[test]
     fn media_title_migration_preserves_legacy_rows_and_is_restartable() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,name TEXT); INSERT INTO afiles VALUES(1,'old.jpg'); PRAGMA user_version=19;").unwrap();
+        conn.execute_batch("CREATE TABLE afiles(id INTEGER PRIMARY KEY,name TEXT,file_type INTEGER,metadata_pending INTEGER DEFAULT 0); INSERT INTO afiles(id,name) VALUES(1,'old.jpg'); PRAGMA user_version=19;").unwrap();
         crate::t_migration::check_and_migrate(&conn).unwrap();
         assert_eq!(
             conn.query_row("SELECT title FROM afiles WHERE id=1", [], |r| r
@@ -11156,7 +11329,7 @@ mod afile_row_mapping_tests {
         assert_eq!(
             conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            23
+            i64::from(crate::t_migration::latest_schema_version())
         );
     }
 }
@@ -11669,6 +11842,27 @@ mod smart_folder_name_tests {
 }
 
 #[cfg(test)]
+mod gps_rational_finite_tests {
+    use super::*;
+
+    #[test]
+    fn unsigned_gps_rationals_reject_nan_and_infinity() {
+        for num in [0, 1] {
+            assert_eq!(AFile::gps_rational_values(&Value::Rational(vec![exif::Rational { num, denom: 0 }])), None);
+        }
+        assert_eq!(AFile::gps_rational_values(&Value::Rational(vec![exif::Rational { num: 3, denom: 2 }])), Some(vec![1.5]));
+    }
+
+    #[test]
+    fn signed_gps_rationals_reject_nan_and_infinity() {
+        for num in [0, -1] {
+            assert_eq!(AFile::gps_rational_values(&Value::SRational(vec![exif::SRational { num, denom: 0 }])), None);
+        }
+        assert_eq!(AFile::gps_rational_values(&Value::SRational(vec![exif::SRational { num: -3, denom: 2 }])), Some(vec![-1.5]));
+    }
+}
+
+#[cfg(test)]
 mod cloud_scan_tests {
     use super::*;
 
@@ -11962,8 +12156,7 @@ mod gps_rational_tests {
             exif::SRational { num: 0, denom: 1 },
             exif::SRational { num: 0, denom: 1 },
         ]);
-        let values = AFile::gps_rational_values(&invalid).unwrap();
-        assert_eq!(AFile::dms_to_decimal(&values, "N"), None);
+        assert_eq!(AFile::gps_rational_values(&invalid), None);
         assert_eq!(AFile::dms_to_decimal(&[30.0, 1.0], "N"), None);
         assert_eq!(AFile::gps_rational_values(&exif::Value::Ascii(vec![])), None);
     }

@@ -6,7 +6,7 @@
           {{ $t('toolbar.filter.select_mode') }}
         </span>
       </div>
-      <span class="ml-auto min-w-0 truncate pl-2 text-xs text-base-content/60" :title="selectionSummaryText" aria-live="polite">
+      <span class="ml-auto min-w-0 truncate pl-2 text-xs text-base-content/70" :title="selectionSummaryText" aria-live="polite">
         {{ selectionSummaryText }}
       </span>
       <div class="ml-1 flex shrink-0 items-center gap-1">
@@ -115,7 +115,7 @@
             {{ $t('menu.meta.tag') }}
           </PanelActionButton>
           <PanelActionButton
-            :icon="IconBookmark"
+            :icon="IconStack"
             :disabled="selectedCount === 0"
             @click="$emit('addToCollection')"
           >
@@ -192,7 +192,7 @@
           </PanelActionButton>
           <PanelActionButton
             v-if="querySource === 'collection'"
-            :icon="IconBookmarkOff"
+            :icon="IconStack"
             :disabled="selectedCount === 0"
             @click="$emit('removeFromCollection')"
           >
@@ -219,8 +219,7 @@ import {
   IconTag,
   IconTrash,
   IconRename,
-  IconBookmarkOff,
-  IconBookmark,
+  IconStack,
 } from '@/common/icons';
 import TButton from '@/components/TButton.vue';
 import FavoriteRatingControl from '@/components/FavoriteRatingControl.vue';

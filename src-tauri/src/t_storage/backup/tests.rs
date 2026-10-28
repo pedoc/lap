@@ -188,6 +188,23 @@ fn settings_are_opt_in_staged_until_startup_and_remap_automation_scope() {
 }
 
 #[test]
+fn restored_global_settings_preserve_local_thumbnail_and_database_locations() {
+    let mut current = AppConfig::default();
+    current.db_storage_dir = Some("local-databases".into());
+    current.thumbnail_cache_dir = Some("local-thumbnails".into());
+    let mut archived = AppConfig::default();
+    archived.debug = true;
+    archived.db_storage_dir = Some("archived-databases".into());
+    archived.thumbnail_cache_dir = Some("archived-thumbnails".into());
+
+    merge_global_settings(&mut current, archived);
+
+    assert!(current.debug);
+    assert_eq!(current.db_storage_dir.as_deref(), Some("local-databases"));
+    assert_eq!(current.thumbnail_cache_dir.as_deref(), Some("local-thumbnails"));
+}
+
+#[test]
 fn checksum_failure_leaves_catalogue_databases_and_settings_untouched() {
     let fixture = Fixture::new();
     fixture.backup();

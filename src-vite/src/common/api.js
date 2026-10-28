@@ -1,6 +1,6 @@
 import { startMediaJob } from './mediaJobs';
 import { setAlbumAccessibility } from '@/common/availability';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, Channel } from '@tauri-apps/api/core';
 import { locale } from '@tauri-apps/plugin-os';
 import { listen } from '@tauri-apps/api/event';
 import { config, libConfig } from '@/common/config';
@@ -116,6 +116,24 @@ export async function downloadAppResources(kind) {
 }
 export async function listenAppResourcesDownloadProgress(callback) {
   return await listen('app_resources_download_progress', callback);
+}
+
+export function getThumbnailCacheLocation() {
+  return invoke('get_thumbnail_cache_location');
+}
+
+export function getThumbnailCacheMigrationCount() {
+  return invoke('get_thumbnail_cache_migration_count');
+}
+
+export function changeThumbnailCacheLocation(newDir, onProgress, allowMissingSource = false, operationId) {
+  const channel = new Channel();
+  channel.onmessage = onProgress;
+  return invoke('change_thumbnail_cache_location', { newDir, onProgress: channel, allowMissingSource, operationId });
+}
+
+export function cancelThumbnailCacheMigration(operationId) {
+  return invoke('cancel_thumbnail_cache_migration', { operationId });
 }
 
 // backup / restore
@@ -735,8 +753,8 @@ export async function getQueryCountAndSum(params) {
   return null;
 }
 
-export async function getLibraryVisibleCounts() {
-  try { return await invoke('get_library_visible_counts'); }
+export async function getLibraryVisibleCounts(id) {
+  try { return await invoke('get_library_visible_counts', { id }); }
   catch (error) { console.error('getLibraryVisibleCounts:', error); }
   return null;
 }
@@ -1107,30 +1125,43 @@ export async function copyImages(filePaths) {
 }
 
 // Rename a single file.
-export async function renameFile(fileId, filePath, newName) {
+export function renameFile(fileId, filePath, newName) {
+  return invoke('rename_file', { fileId, filePath, newName });
+}
+
+// One explicit action owns the backend directory index, including early failures.
+export async function withFileTransferBatch(action) {
+  let batchId = null;
   try {
-    const result = await invoke('rename_file', { fileId, filePath, newName });
-    if (result) {
-      return result;
-    }
+    batchId = await invoke('begin_file_transfer_batch');
   } catch (error) {
-    console.log('Failed to rename file:', error);
+    console.error('Failed to begin file transfer batch:', error);
   }
-  return null;
+  try {
+    return await action(batchId);
+  } finally {
+    if (batchId !== null) {
+      try {
+        await invoke('end_file_transfer_batch', { batchId });
+      } catch (error) {
+        console.error('Failed to end file transfer batch:', error);
+      }
+    }
+  }
 }
 
 // move a file
-export async function moveFile(fileId, filePath, newFolderId, newFolderPath, conflictPolicy = 'keep_both') {
-  return await invoke('move_file', { fileId, filePath, newFolderId, newFolderPath, conflictPolicy });
+export async function moveFile(fileId, filePath, newFolderId, newFolderPath, conflictPolicy = 'keep_both', batchId = null) {
+  return await invoke('move_file', { fileId, filePath, newFolderId, newFolderPath, conflictPolicy, batchId });
 }
 
-export async function moveFileOutsideLibrary(fileId, filePath, newFolderPath, conflictPolicy = 'keep_both') {
-  return await invoke('move_file_outside_library', { fileId, filePath, newFolderPath, conflictPolicy });
+export async function moveFileOutsideLibrary(fileId, filePath, newFolderPath, conflictPolicy = 'keep_both', batchId = null) {
+  return await invoke('move_file_outside_library', { fileId, filePath, newFolderPath, conflictPolicy, batchId });
 }
 
 // copy a file
-export async function copyFile(filePath, newFolderPath, conflictPolicy = 'keep_both') {
-  return await invoke('copy_file', { filePath, newFolderPath, conflictPolicy });
+export async function copyFile(filePath, newFolderPath, conflictPolicy = 'keep_both', batchId = null) {
+  return await invoke('copy_file', { filePath, newFolderPath, conflictPolicy, batchId });
 }
 
 // delete a file
@@ -2140,3 +2171,30 @@ export const readPrivateMedia = (libraryId, fileId, mode, groupId, companion = f
   invoke('read_private_media', { libraryId, fileId, mode, groupId, companion, rawOptions, sessionToken });
 
 export const previewDeletedMediaRestore = (libraryId,groupIds,options,sessionToken = null) => invoke('preview_deleted_media_restore',{libraryId,groupIds,options,sessionToken});
+
+// xmp sidecars
+export async function getXmpImportSettings() {
+  try {
+    return await invoke('get_xmp_import_settings');
+  } catch (error) {
+    console.error('Failed to get XMP import settings:', error);
+    return null;
+  }
+}
+
+export async function setXmpImportSettings(importXmpSidecars) {
+  try {
+    await invoke('set_xmp_import_settings', { importXmpSidecars });
+  } catch (error) {
+    console.error('Failed to set XMP import settings:', error);
+  }
+}
+
+export async function saveXmpMetadata(fileIds, libraryId) {
+  try {
+    return await invoke('save_xmp_metadata', { fileIds, libraryId });
+  } catch (error) {
+    console.error('Failed to save XMP metadata:', error);
+    throw error;
+  }
+}
