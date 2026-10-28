@@ -47,6 +47,7 @@ unsafe extern "C" {
         update: unsafe extern "C" fn(*mut c_void) -> u32,
         cookie: *mut c_void,
         device: *mut *mut c_void,
+        document: c_int,
     ) -> c_int;
     fn lap_upnp_notify(device: *mut c_void, udn: *const c_char, update: u32) -> c_int;
     fn lap_upnp_unpublish(device: *mut c_void);
@@ -130,15 +131,21 @@ unsafe extern "C" fn discovered(location: *const c_char, address: *const u8) {
 }
 
 pub async fn discover() -> Result<Vec<(String, Ipv4Addr)>, String> {
+    discover_services(&[
+        "urn:schemas-upnp-org:device:MediaRenderer:1",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+    ])
+    .await
+}
+
+pub(super) async fn discover_services(targets: &[&str]) -> Result<Vec<(String, Ipv4Addr)>, String> {
     let _search = SEARCH.lock().await;
     let handle = tokio::task::spawn_blocking(client)
         .await
         .map_err(|e| e.to_string())??;
     RESULTS.lock().map_err(|_| "设备搜索不可用")?.clear();
-    for target in [
-        c"urn:schemas-upnp-org:device:MediaRenderer:1",
-        c"urn:schemas-upnp-org:service:AVTransport:1",
-    ] {
+    for target in targets {
+        let target = string(target)?;
         check(unsafe { lap_upnp_search(handle, target.as_ptr()) })?;
     }
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -290,6 +297,7 @@ impl Device {
         id: String,
         protocols: &'static str,
         version: Arc<AtomicU32>,
+        document: bool,
     ) -> Result<Self, String> {
         tokio::task::spawn_blocking(move || {
             client()?;
@@ -304,6 +312,7 @@ impl Device {
                     update,
                     (&mut *version as *mut Arc<AtomicU32>).cast(),
                     &mut raw,
+                    i32::from(document),
                 )
             })?;
             Ok(Self {
@@ -372,9 +381,15 @@ mod tests {
                 }
             }
         });
-        let device = Device::publish(location.clone(), id.into(), "", Arc::new(AtomicU32::new(1)))
-            .await
-            .unwrap();
+        let device = Device::publish(
+            location.clone(),
+            id.into(),
+            "",
+            Arc::new(AtomicU32::new(1)),
+            false,
+        )
+        .await
+        .unwrap();
         assert!(
             discover()
                 .await

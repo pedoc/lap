@@ -30,9 +30,10 @@ fn escape(value: &str) -> String {
     quick_xml::escape::escape(value).into_owned()
 }
 
-pub fn description(id: &str, title: &str, event_base: &str) -> String {
+pub fn description(id: &str, title: &str, event_base: &str, media_base: &str) -> String {
+    let media_base = escape(media_base);
     format!(
-        "<?xml version=\"1.0\"?><root xmlns=\"urn:schemas-upnp-org:device-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion><device><deviceType>{MEDIA_SERVER}</deviceType><friendlyName>{}</friendlyName><manufacturer>Lap</manufacturer><modelName>Lap Media Server</modelName><modelNumber>{}</modelNumber><UDN>uuid:{id}</UDN><serviceList><service><serviceType>{CONTENT_DIRECTORY}</serviceType><serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId><SCPDURL>content-directory.xml</SCPDURL><controlURL>control/content-directory</controlURL><eventSubURL>{event_base}/{id}/events/content-directory</eventSubURL></service><service><serviceType>{CONNECTION_MANAGER}</serviceType><serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId><SCPDURL>connection-manager.xml</SCPDURL><controlURL>control/connection-manager</controlURL><eventSubURL>{event_base}/{id}/events/connection-manager</eventSubURL></service></serviceList></device></root>",
+        "<?xml version=\"1.0\"?><root xmlns=\"urn:schemas-upnp-org:device-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion><device><deviceType>{MEDIA_SERVER}</deviceType><friendlyName>{}</friendlyName><manufacturer>Lap</manufacturer><modelName>Lap Media Server</modelName><modelNumber>{}</modelNumber><UDN>uuid:{id}</UDN><serviceList><service><serviceType>{CONTENT_DIRECTORY}</serviceType><serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId><SCPDURL>{media_base}/content-directory.xml</SCPDURL><controlURL>{media_base}/control/content-directory</controlURL><eventSubURL>{event_base}/{id}/events/content-directory</eventSubURL></service><service><serviceType>{CONNECTION_MANAGER}</serviceType><serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId><SCPDURL>{media_base}/connection-manager.xml</SCPDURL><controlURL>{media_base}/control/connection-manager</controlURL><eventSubURL>{event_base}/{id}/events/connection-manager</eventSubURL></service></serviceList></device></root>",
         escape(title),
         env!("CARGO_PKG_VERSION")
     )
@@ -444,9 +445,17 @@ mod tests {
 
     #[test]
     fn media_server_description_advertises_its_library_and_sdk_event_endpoints() {
-        let description = description("test", "Lap & 家庭", "http://192.168.1.2:49152");
+        let description = description(
+            "test",
+            "Lap & 家庭",
+            "http://192.168.1.2:49152",
+            "http://192.168.1.2:12345/test",
+        );
         assert!(description.contains("Lap &amp; 家庭"));
         assert!(description.contains("http://192.168.1.2:49152/test/events/content-directory"));
+        assert!(description.contains(
+            "<controlURL>http://192.168.1.2:12345/test/control/content-directory</controlURL>"
+        ));
         protocol::xml(&description).unwrap();
         protocol::xml(&scpd(true)).unwrap();
         protocol::xml(&scpd(false)).unwrap();

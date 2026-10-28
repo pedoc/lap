@@ -1,10 +1,11 @@
-use super::{Media, Source, http, native, protocol, scope, upnp};
+use super::{Media, Source, http, network, protocol, publication, scope, upnp};
+use futures_util::{StreamExt, future::join_all, stream};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{
     net::{IpAddr, Ipv4Addr},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::{Duration, Instant},
@@ -23,7 +24,19 @@ pub struct Shared {
     count: usize,
     scope_name: String,
     server_name: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct PublishedNetwork {
+    id: String,
+    name: String,
     address: String,
+}
+
+#[derive(Clone, Default, Serialize)]
+pub struct Published {
+    networks: Vec<PublishedNetwork>,
+    errors: Vec<String>,
 }
 
 struct Server {
@@ -39,9 +52,9 @@ struct Server {
     cache: tokio::sync::Mutex<Option<Arc<Media>>>,
     updates: Notify,
     update_id: Arc<AtomicU32>,
-    address: Ipv4Addr,
-    event_base: String,
-    published: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    interfaces: Vec<network::Interface>,
+    endpoints: RwLock<Vec<publication::Endpoint>>,
+    published: tokio::sync::watch::Sender<Option<Result<Published, String>>>,
     catalogue: upnp::Catalogue,
     stream_catalogue: upnp::StreamCatalogue,
     prepare: fn(&str, i64) -> Result<Media, String>,
@@ -54,7 +67,17 @@ pub async fn start(
     library_id: String,
     selection: scope::Scope,
     order: Option<scope::PlaybackOrder>,
+    interface_id: Option<String>,
 ) -> Result<Shared, String> {
+    let interfaces = tokio::task::spawn_blocking(network::interfaces)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|interface| interface_id.as_ref().is_none_or(|id| id == &interface.id))
+        .collect::<Vec<_>>();
+    if interfaces.is_empty() {
+        return Err("没有可发布的局域网 IPv4 网卡".into());
+    }
     let scope = Arc::new(
         tokio::task::spawn_blocking(move || scope::resolve(&library_id, selection, order))
             .await
@@ -67,10 +90,6 @@ pub async fn start(
         .local_addr()
         .map_err(|_| "无法读取媒体目录服务端口")?
         .port();
-    let (address, event_base) =
-        tokio::task::spawn_blocking(|| Ok::<_, String>((native::address()?, native::endpoint()?)))
-            .await
-            .map_err(|e| e.to_string())??;
     let server = Arc::new(Server {
         id: uuid::Uuid::new_v4().to_string(),
         owner: window.label().to_owned(),
@@ -87,8 +106,8 @@ pub async fn start(
         cache: tokio::sync::Mutex::new(None),
         updates: Notify::new(),
         update_id: Arc::new(AtomicU32::new(1)),
-        address,
-        event_base,
+        interfaces,
+        endpoints: RwLock::new(Vec::new()),
         published: tokio::sync::watch::channel(None).0,
         catalogue: scope::page,
         stream_catalogue: scope::stream_page,
@@ -107,13 +126,12 @@ pub async fn start(
         count: server.scope.file_ids.len(),
         scope_name: server.scope.title.clone(),
         server_name: server.name.clone(),
-        address: server.address.to_string(),
     };
     tauri::async_runtime::spawn(run(listener, server, window.app_handle().clone()));
     Ok(result)
 }
 
-pub async fn activate(owner: &str, id: &str) -> Result<(), String> {
+pub async fn activate(owner: &str, id: &str) -> Result<Published, String> {
     let server = ACTIVE
         .lock()
         .map_err(|_| "共享服务不可用")?
@@ -124,7 +142,7 @@ pub async fn activate(owner: &str, id: &str) -> Result<(), String> {
     let mut published = server.published.subscribe();
     server.active.store(true, Ordering::Release);
     server.activated.notify_one();
-    let result = tokio::time::timeout(Duration::from_secs(15), async {
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if let Some(result) = published.borrow_and_update().clone() {
                 return result;
@@ -142,6 +160,19 @@ pub async fn activate(owner: &str, id: &str) -> Result<(), String> {
         server.cancel.cancel();
     }
     result
+}
+
+pub fn status(owner: &str, id: &str) -> Result<Published, String> {
+    let active = ACTIVE.lock().map_err(|_| "共享服务不可用")?;
+    let server = active
+        .as_ref()
+        .filter(|server| server.id == id && server.owner == owner && !server.cancel.is_cancelled())
+        .ok_or("媒体共享已结束，请重新开启")?;
+    server
+        .published
+        .borrow()
+        .clone()
+        .ok_or_else(|| "媒体共享尚未发布".to_owned())?
 }
 
 pub async fn disconnect(owner: &str, id: &str) -> Result<(), String> {
@@ -175,35 +206,98 @@ async fn publish(server: Arc<Server>) {
     if server.cancel.is_cancelled() {
         return;
     }
-    let description = format!(
-        "http://{}:{}/{}/description.xml",
-        server.address, server.port, server.id
-    );
-    let device = native::Device::publish(
-        description,
-        server.id.clone(),
-        upnp::PROTOCOLS,
-        server.update_id.clone(),
-    );
-    let mut device = match tokio::select! { _=server.cancel.cancelled()=>return, result=device=>result }
-    {
-        Ok(device) => {
-            server.published.send_replace(Some(Ok(())));
-            device
-        }
-        Err(error) => {
-            server.published.send_replace(Some(Err(error)));
-            server.cancel.cancel();
-            return;
-        }
-    };
-    loop {
-        tokio::select! {
-            _=server.cancel.cancelled()=>break,
-            _=server.updates.notified()=>{ let _=device.notify(server.update_id.load(Ordering::Acquire)); }
+    let results = stream::iter(server.interfaces.clone())
+        .map(|interface| {
+            let server = server.clone();
+            async move {
+                let name = interface.name.clone();
+                publication::Publication::start(
+                    interface,
+                    &server.id,
+                    &server.name,
+                    server.port,
+                    server.update_id.load(Ordering::Acquire),
+                    &server.cancel,
+                )
+                .await
+                .map_err(|error| format!("{name}：{error}"))
+            }
+        })
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+    let mut publications = Vec::new();
+    let mut report = Published::default();
+    for result in results {
+        match result {
+            Ok(publication) => publications.push(publication),
+            Err(error) => report.errors.push(error),
         }
     }
-    device.close().await;
+    publications.sort_by_key(|publication| {
+        server
+            .interfaces
+            .iter()
+            .position(|interface| interface.id == publication.interface.id)
+    });
+    let mut watchdog = tokio::time::interval(Duration::from_secs(2));
+    loop {
+        report.networks = publications
+            .iter()
+            .map(|publication| PublishedNetwork {
+                id: publication.interface.id.clone(),
+                name: publication.interface.name.clone(),
+                address: publication.endpoint.address.to_string(),
+            })
+            .collect();
+        if let Ok(mut endpoints) = server.endpoints.write() {
+            *endpoints = publications
+                .iter()
+                .map(|publication| publication.endpoint.clone())
+                .collect();
+        }
+        if publications.is_empty() {
+            server
+                .published
+                .send_replace(Some(Err(if report.errors.is_empty() {
+                    "媒体发布进程已退出".into()
+                } else {
+                    report.errors.join("；")
+                })));
+            server.cancel.cancel();
+            break;
+        }
+        server.published.send_replace(Some(Ok(report.clone())));
+        let update = tokio::select! {
+            _=server.cancel.cancelled()=>break,
+            _=server.updates.notified()=>Some(server.update_id.load(Ordering::Acquire)),
+            _=watchdog.tick()=>None,
+        };
+        let results = join_all(publications.iter_mut().map(|publication| async move {
+            if !publication.is_running() {
+                Err("媒体发布进程已退出".into())
+            } else if let Some(update) = update {
+                publication.update(update).await
+            } else {
+                Ok(())
+            }
+        }))
+        .await;
+        let mut stopped = Vec::new();
+        for (index, result) in results.into_iter().enumerate().rev() {
+            if let Err(error) = result {
+                report
+                    .errors
+                    .push(format!("{}：{error}", publications[index].interface.name));
+                stopped.push(publications.remove(index));
+            }
+        }
+        join_all(stopped.iter_mut().map(publication::Publication::close)).await;
+    }
+    join_all(publications.iter_mut().map(publication::Publication::close)).await;
+    if let Ok(mut endpoints) = server.endpoints.write() {
+        endpoints.clear();
+    }
 }
 
 async fn run(listener: TcpListener, server: Arc<Server>, app: tauri::AppHandle) {
@@ -345,11 +439,19 @@ async fn handle(stream: TcpStream, _peer: Ipv4Addr, server: Arc<Server>) -> std:
             let head = request.method == "HEAD";
             if matches!(request.method.as_str(), "GET" | "HEAD") {
                 let document = match path {
-                    "description.xml" => Some(upnp::description(
-                        &server.id,
-                        &server.name,
-                        &server.event_base,
-                    )),
+                    "description.xml" => server.endpoints.read().ok().and_then(|endpoints| {
+                        endpoints
+                            .iter()
+                            .find(|endpoint| IpAddr::V4(endpoint.address) == local.ip())
+                            .map(|endpoint| {
+                                upnp::description(
+                                    &server.id,
+                                    &server.name,
+                                    &endpoint.event_base,
+                                    &format!("http://{local}/{}", server.id),
+                                )
+                            })
+                    }),
                     "content-directory.xml" => Some(upnp::scpd(true)),
                     "connection-manager.xml" => Some(upnp::scpd(false)),
                     _ => None,
@@ -450,6 +552,7 @@ async fn handle(stream: TcpStream, _peer: Ipv4Addr, server: Arc<Server>) -> std:
 
 #[cfg(test)]
 mod tests {
+    use super::super::native;
     use super::super::protocol::XmlElement;
     use super::*;
     use std::path::PathBuf;
@@ -528,8 +631,11 @@ mod tests {
             cache: tokio::sync::Mutex::new(None),
             updates: Notify::new(),
             update_id: Arc::new(AtomicU32::new(1)),
-            address: native::address().unwrap(),
-            event_base: native::endpoint().unwrap(),
+            interfaces: network::interfaces(),
+            endpoints: RwLock::new(vec![publication::Endpoint {
+                address: native::address().unwrap(),
+                event_base: native::endpoint().unwrap(),
+            }]),
             published: tokio::sync::watch::channel(None).0,
             catalogue,
             stream_catalogue,
@@ -539,13 +645,23 @@ mod tests {
     }
 
     async fn start_fixture() -> (String, Arc<Server>, tokio::task::JoinHandle<()>) {
+        start_fixture_with_publication(false).await
+    }
+
+    async fn start_fixture_with_publication(
+        real: bool,
+    ) -> (String, Arc<Server>, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let address = std::net::SocketAddrV4::new(native::address().unwrap(), port);
         let state = fixture(port);
         let server = state.clone();
         let task = tokio::spawn(async move {
-            let publication = tokio::spawn(publish(server.clone()));
+            let publication = if real {
+                tokio::spawn(publish(server.clone()))
+            } else {
+                tokio::spawn(publish_fixture(server.clone()))
+            };
             loop {
                 tokio::select! {
                     _=server.cancel.cancelled()=>break,
@@ -573,6 +689,41 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
+    }
+
+    fn endpoint(server: &Server) -> publication::Endpoint {
+        server.endpoints.read().unwrap()[0].clone()
+    }
+
+    async fn publish_fixture(server: Arc<Server>) {
+        if !server.active.load(Ordering::Acquire) {
+            tokio::select! { _=server.cancel.cancelled()=>return, _=server.activated.notified()=>{} }
+        }
+        let description = format!(
+            "http://{}:{}/{}/description.xml",
+            endpoint(&server).address,
+            server.port,
+            server.id
+        );
+        let mut device = native::Device::publish(
+            description,
+            server.id.clone(),
+            upnp::PROTOCOLS,
+            server.update_id.clone(),
+            false,
+        )
+        .await
+        .unwrap();
+        server
+            .published
+            .send_replace(Some(Ok(Published::default())));
+        loop {
+            tokio::select! {
+                _=server.cancel.cancelled()=>break,
+                _=server.updates.notified()=>{let _=device.notify(server.update_id.load(Ordering::Acquire));}
+            }
+        }
+        device.close().await;
     }
 
     async fn browse(
@@ -626,7 +777,7 @@ mod tests {
             404
         );
         activate_fixture(&server).await;
-        let socket = tokio::net::UdpSocket::bind((server.address, 0))
+        let socket = tokio::net::UdpSocket::bind((endpoint(&server).address, 0))
             .await
             .unwrap();
         let search = format!(
@@ -733,7 +884,8 @@ mod tests {
                     method.clone(),
                     format!(
                         "{}/{}/events/content-directory",
-                        server.event_base, server.id
+                        endpoint(&server).event_base,
+                        server.id
                     )
                 )
                 .header("NT", "upnp:event")
@@ -744,7 +896,7 @@ mod tests {
                 .status(),
             412
         );
-        let other = if server.address != Ipv4Addr::new(10, 255, 255, 254) {
+        let other = if endpoint(&server).address != Ipv4Addr::new(10, 255, 255, 254) {
             "10.255.255.254"
         } else {
             "10.255.255.253"
@@ -755,7 +907,8 @@ mod tests {
                     method.clone(),
                     format!(
                         "{}/{}/events/content-directory",
-                        server.event_base, server.id
+                        endpoint(&server).event_base,
+                        server.id
                     )
                 )
                 .header("NT", "upnp:event")
@@ -766,7 +919,9 @@ mod tests {
                 .status(),
             412
         );
-        let listener = TcpListener::bind((server.address, 0)).await.unwrap();
+        let listener = TcpListener::bind((endpoint(&server).address, 0))
+            .await
+            .unwrap();
         let callback_url = format!("<http://{}/events>", listener.local_addr().unwrap());
         let callback = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -790,7 +945,8 @@ mod tests {
                 method,
                 format!(
                     "{}/{}/events/content-directory",
-                    server.event_base, server.id
+                    endpoint(&server).event_base,
+                    server.id
                 ),
             )
             .header("NT", "upnp:event")
@@ -825,7 +981,8 @@ mod tests {
                     reqwest::Method::from_bytes(b"UNSUBSCRIBE").unwrap(),
                     format!(
                         "{}/{}/events/content-directory",
-                        server.event_base, server.id
+                        endpoint(&server).event_base,
+                        server.id
                     )
                 )
                 .header("SID", sid)
@@ -837,6 +994,271 @@ mod tests {
         );
         server.cancel.cancel();
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn description_and_media_urls_follow_the_connection_interface_and_ignore_host_header() {
+        let (_base, server, task) = start_fixture().await;
+        server
+            .endpoints
+            .write()
+            .unwrap()
+            .push(publication::Endpoint {
+                address: Ipv4Addr::LOCALHOST,
+                event_base: "http://127.0.0.1:49111".into(),
+            });
+        activate_fixture(&server).await;
+        let client = protocol::client().unwrap();
+        for address in [endpoint(&server).address, Ipv4Addr::LOCALHOST] {
+            let base = format!("http://{address}:{}/{}", server.port, server.id);
+            let descriptor = client
+                .get(format!("{base}/description.xml"))
+                .header("Host", "8.8.8.8:1234")
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            assert!(descriptor.contains(&format!(
+                "<controlURL>{base}/control/content-directory</controlURL>"
+            )));
+            let expected = server
+                .endpoints
+                .read()
+                .unwrap()
+                .iter()
+                .find(|endpoint| endpoint.address == address)
+                .unwrap()
+                .event_base
+                .clone();
+            assert!(descriptor.contains(&format!(
+                "<eventSubURL>{expected}/{}/events/content-directory</eventSubURL>",
+                server.id
+            )));
+            assert!(!descriptor.contains("8.8.8.8"));
+            let page = browse(&client, &base, "1", "0", "1", "BrowseDirectChildren").await;
+            let document = protocol::xml(&page).unwrap();
+            let didl = protocol::xml(
+                document
+                    .descendant("BrowseResponse")
+                    .unwrap()
+                    .value("Result"),
+            )
+            .unwrap();
+            let uri = didl.descendant("item").unwrap().value("res");
+            assert!(uri.starts_with(&format!("{base}/media/")));
+            assert_eq!(client.get(uri).send().await.unwrap().status(), 200);
+        }
+        server.cancel.cancel();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a built Lap executable in LAP_DLNA_TEST_WORKER and multicast networking"]
+    async fn all_interfaces_advertise_browse_notify_and_withdraw_using_their_own_addresses() {
+        let exe = std::env::var_os("LAP_DLNA_TEST_WORKER")
+            .expect("set LAP_DLNA_TEST_WORKER to the built Lap executable");
+        let (base, server, task) = start_fixture_with_publication(true).await;
+        activate_fixture(&server).await;
+        let report = server.published.borrow().clone().unwrap().unwrap();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.networks.len(), server.interfaces.len());
+        let client = protocol::client().unwrap();
+        let mut locations = Vec::new();
+        for interface in &server.interfaces {
+            let mut command =
+                network::worker_command(exe.clone().into(), "--lap-dlna-discover", &interface.id);
+            let output = command
+                .arg(upnp::MEDIA_SERVER)
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .await
+                .unwrap();
+            let found =
+                serde_json::from_slice::<Result<Vec<(String, Ipv4Addr)>, String>>(&output.stdout)
+                    .unwrap()
+                    .unwrap();
+            let expected = report
+                .networks
+                .iter()
+                .find(|network| network.id == interface.id)
+                .unwrap();
+            let mut descriptor = None;
+            for (location, _) in found {
+                let xml = client
+                    .get(&location)
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap();
+                if xml.contains(&format!("uuid:{}", server.id)) {
+                    assert_eq!(
+                        reqwest::Url::parse(&location).unwrap().host_str().unwrap(),
+                        expected.address
+                    );
+                    locations.push(location);
+                    descriptor = Some(xml);
+                    break;
+                }
+            }
+            let descriptor = descriptor.unwrap_or_else(|| {
+                panic!("{} could not discover its own publication", interface.name)
+            });
+            let document = protocol::xml(&descriptor).unwrap();
+            let service = document.descendant("service").unwrap();
+            let expected_base =
+                format!("http://{}:{}/{}", expected.address, server.port, server.id);
+            assert_eq!(
+                service.value("controlURL"),
+                format!("{expected_base}/control/content-directory")
+            );
+            assert!(
+                service
+                    .value("eventSubURL")
+                    .starts_with(&format!("http://{}:", expected.address))
+            );
+            let page = browse(
+                &client,
+                &expected_base,
+                "1",
+                "0",
+                "1",
+                "BrowseDirectChildren",
+            )
+            .await;
+            let document_page = protocol::xml(&page).unwrap();
+            let didl = protocol::xml(
+                document_page
+                    .descendant("BrowseResponse")
+                    .unwrap()
+                    .value("Result"),
+            )
+            .unwrap();
+            let uri = didl.descendant("item").unwrap().value("res");
+            assert!(uri.starts_with(&format!("{expected_base}/media/")));
+            let media = client
+                .get(uri)
+                .header("Range", "bytes=5-")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(media.status(), 206);
+            assert_eq!(media.bytes().await.unwrap().as_ref(), b"preview-1");
+            let listener = TcpListener::bind((expected.address.parse::<Ipv4Addr>().unwrap(), 0))
+                .await
+                .unwrap();
+            let callback_url = format!("<http://{}/events>", listener.local_addr().unwrap());
+            let (sender, mut notifications) = tokio::sync::mpsc::unbounded_channel();
+            let callback = tokio::spawn(async move {
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let sender = sender.clone();
+                    tokio::spawn(http::serve(stream, move |request| {
+                        let sender = sender.clone();
+                        async move {
+                            let _ = sender.send(request);
+                            http::reply("200 OK", "text/plain", b"", &[], false)
+                        }
+                    }));
+                }
+            });
+            let response = client
+                .request(
+                    reqwest::Method::from_bytes(b"SUBSCRIBE").unwrap(),
+                    service.value("eventSubURL"),
+                )
+                .header("NT", "upnp:event")
+                .header("CALLBACK", callback_url)
+                .header("TIMEOUT", "Second-30")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            let sid = response
+                .headers()
+                .get("SID")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let initial = tokio::time::timeout(Duration::from_secs(5), notifications.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(initial.header("seq"), Some("0"));
+            let update = server.update_id.fetch_add(1, Ordering::AcqRel) + 1;
+            server.updates.notify_one();
+            let changed = tokio::time::timeout(Duration::from_secs(5), notifications.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(changed.header("seq"), Some("1"));
+            assert!(
+                String::from_utf8(changed.body)
+                    .unwrap()
+                    .contains(&format!("<SystemUpdateID>{update}</SystemUpdateID>"))
+            );
+            assert_eq!(
+                client
+                    .request(
+                        reqwest::Method::from_bytes(b"UNSUBSCRIBE").unwrap(),
+                        service.value("eventSubURL")
+                    )
+                    .header("SID", sid)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                200
+            );
+            callback.abort();
+            println!("MULTI_NETWORK_OK {} {}", interface.name, expected.address);
+        }
+        server.cancel.cancel();
+        task.await.unwrap();
+        assert!(
+            client
+                .get(format!("{base}/media/1.jpg"))
+                .send()
+                .await
+                .is_err()
+        );
+        for location in locations {
+            assert!(client.get(location).send().await.is_err());
+        }
+        for interface in &server.interfaces {
+            let mut command =
+                network::worker_command(exe.clone().into(), "--lap-dlna-discover", &interface.id);
+            let output = command
+                .arg(upnp::MEDIA_SERVER)
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .await
+                .unwrap();
+            let found =
+                serde_json::from_slice::<Result<Vec<(String, Ipv4Addr)>, String>>(&output.stdout)
+                    .unwrap()
+                    .unwrap();
+            for (location, _) in found {
+                if let Ok(response) = client.get(location).send().await {
+                    assert!(
+                        !response
+                            .text()
+                            .await
+                            .unwrap()
+                            .contains(&format!("uuid:{}", server.id))
+                    );
+                }
+            }
+        }
+        println!("MULTI_NETWORK_ALL_PUBLICATIONS_WITHDRAWN");
     }
 
     #[test]

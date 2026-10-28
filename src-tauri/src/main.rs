@@ -366,6 +366,7 @@ async fn main() {
             t_dlna::dlna_disconnect,
             t_dlna::dlna_share,
             t_dlna::dlna_activate_share,
+            t_dlna::dlna_share_status,
             t_dlna::dlna_transport_state,
             t_private_lock::private_lock_status,
             t_private_lock::unlock_private_view,

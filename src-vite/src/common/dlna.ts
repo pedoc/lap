@@ -6,6 +6,7 @@ export interface DlnaDevice { id: string; name: string; address: string; network
 export interface DlnaAlbum { id: number; name?: string }
 interface CastResult { title: string; kind: 'image' | 'video' }
 export interface DlnaNetwork { id: string; name: string; addresses: string[]; isDefault: boolean }
+interface Published { networks: { id: string; name: string; address: string }[]; errors: string[] }
 export interface DlnaViewOrder { sortType: number; sortOrder: number; randomSeed: number; groupBy: number; folderSort: number; calendarSort: number; categorySort: number }
 type DlnaOrder = 'view' | 'selection' | 'taken' | 'filename' | 'title' | 'added' | 'random';
 let viewOrderContext: { libraryId: string; albumId: number; order: DlnaViewOrder } | null = null;
@@ -25,7 +26,7 @@ function playbackOrder() {
   const sortType = { taken: 0, filename: 3, title: 10, added: 8, random: 7 }[dlna.orderBy];
   return { order: normalizeOrder({ sortType, sortOrder: dlna.orderDescending ? 1 : 0, randomSeed: Math.floor(Math.random() * 2147483646) + 1 }) };
 }
-interface Started { sessionId: string; fileIds?: number[]; count?: number; scopeName: string; serverName?: string; address?: string }
+interface Started { sessionId: string; fileIds?: number[]; count?: number; scopeName: string; serverName?: string }
 
 export const dlna = reactive({
   visible: false, libraryId: '', selectedIds: [] as number[], fileIds: [] as number[], albumId: 0, albumName: '',
@@ -33,7 +34,7 @@ export const dlna = reactive({
   deviceId: '', sessionId: '', index: 0, total: 0, scopeName: '', serverName: '', title: '', kind: '', paused: false,
   discovering: false, busy: false, error: '', autoPlay: false, intervalSeconds: 5,
   networks: [] as DlnaNetwork[], networkId: '', searchCompleted: 0, searchTotal: 0, searchingNetwork: '', searchErrors: [] as string[],
-  orderBy: 'view' as DlnaOrder, orderDescending: true, viewOrder: normalizeOrder(), sharedAddress: '',
+  orderBy: 'view' as DlnaOrder, orderDescending: true, viewOrder: normalizeOrder(), sharedNetworks: [] as Published['networks'], sharedErrors: [] as string[],
 });
 
 let revision = 0, playback = 0, playingSeen = false, searchRevision = 0;
@@ -52,7 +53,7 @@ export function closeDlna() {
   const pending = connecting, sessionId = dlna.sessionId;
   // Closing before start returns must also revoke that late session.
   disconnecting = Promise.allSettled([disconnecting, ...(pending ? [pending.then(result => disconnect(result.sessionId))] : []), ...(sessionId ? [disconnect(sessionId)] : [])]);
-  Object.assign(dlna, { visible: false, sessionId: '', busy: false, discovering: false, title: '', kind: '', error: '', fileIds: [], serverName: '', sharedAddress: '', total: 0 });
+  Object.assign(dlna, { visible: false, sessionId: '', busy: false, discovering: false, title: '', kind: '', error: '', fileIds: [], serverName: '', sharedNetworks: [], sharedErrors: [], total: 0 });
 }
 
 export function openDlna(libraryId: string, fileIds: number[], album?: DlnaAlbum, options: { mode?: 'cast' | 'browse' } = {}) {
@@ -166,11 +167,15 @@ export async function shareDlna() {
   try {
     await disconnecting;
     if (!current(ticket)) return;
-    const result = await begin('dlna_share', { libraryId, scope: scope(), ...playbackOrder() }, ticket);
+    const result = await begin('dlna_share', { libraryId, scope: scope(), interfaceId: dlna.networkId || null, ...playbackOrder() }, ticket);
     if (!result || !current(ticket)) return;
     // Reserve first; publish only if this dialog still owns the completed start.
-    await invoke('dlna_activate_share', { sessionId: result.sessionId });
-    if (current(ticket)) { dlna.serverName = result.serverName || 'Lap'; dlna.sharedAddress = result.address || ''; }
+    const published = await invoke<Published>('dlna_activate_share', { sessionId: result.sessionId });
+    if (current(ticket)) {
+      dlna.serverName = result.serverName || 'Lap';
+      Object.assign(dlna, { sharedNetworks: published.networks, sharedErrors: published.errors });
+      scheduleShareStatus(ticket);
+    }
   } catch (error) {
     if (current(ticket)) {
       const id = dlna.sessionId; dlna.sessionId = '';
@@ -178,6 +183,26 @@ export async function shareDlna() {
       dlna.error = String(error);
     }
   } finally { if (ticket === revision) dlna.busy = false; }
+}
+
+function scheduleShareStatus(ticket: number) {
+  const sessionId = dlna.sessionId;
+  const valid = () => current(ticket) && dlna.mode === 'browse' && dlna.sessionId === sessionId;
+  if (!sessionId || !valid()) return;
+  timer = setTimeout(async () => {
+    timer = null;
+    try {
+      const published = await invoke<Published>('dlna_share_status', { sessionId });
+      if (!valid()) return;
+      Object.assign(dlna, { sharedNetworks: published.networks, sharedErrors: published.errors });
+    } catch (error) {
+      if (!valid()) return;
+      Object.assign(dlna, { sessionId: '', serverName: '', sharedNetworks: [], error: String(error) });
+      disconnecting = Promise.allSettled([disconnecting, disconnect(sessionId)]);
+      return;
+    }
+    if (valid()) scheduleShareStatus(ticket);
+  }, 3000);
 }
 
 export async function toggleDlnaPause() {

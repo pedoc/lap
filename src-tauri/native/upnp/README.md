@@ -43,8 +43,8 @@ DLNA 的通用协议实现优先复用开源库，Lap 负责媒体库业务和�
 
 升级子模块后必须重新检查这两处替换、许可证及下面的网络回归，不能只更新版本号。
 
-SDK 控制点在进程内复用，初始化失败允许重试。每次共享单独注册设备，关闭共享时
-注销设备；它没有文件系统根目录，原始媒体只能经带会话票据的 Rust 路由访问。
+SDK 控制点在进程内复用，初始化失败允许重试。每次共享按网卡单独注册设备，关闭共享时
+注销全部设备；它没有文件系统根目录，原始媒体只能经带会话票据的 Rust 路由访问。
 C 桥只转接 SDK 的 opaque handle、回调和内存所有权，不复制 SDK 的结构布局。
 
 首次使用时通过 netdev 选择系统默认网络接口，显式传给 `UpnpInit2`；不能依赖 SDK
@@ -55,8 +55,19 @@ C 桥只转接 SDK 的 opaque handle、回调和内存所有权，不复制 SDK 
 网卡的发现使用一个短时运行的 `Lap --lap-dlna-discover <interface-id>` 搜索进程。
 入口在 Tauri、图库和数据库初始化之前处理；搜索仍由同一个 SDK 完成，不复制
 SSDP 协议实现。父进程依次调用搜索进程、聚合并去重结果，取消或超时会终止子进程。
-搜索进程使用独立的动态 HTTP 端口，避免影响正在运行的媒体服务。电视浏览服务继续
-使用主进程的默认联网接口，界面显示实际发布地址。
+搜索进程使用独立的动态 HTTP 端口，避免影响正在运行的媒体服务。
+
+电视浏览默认在所有可用网卡发布，也可指定一张网卡。每张网卡使用一个
+`Lap --lap-dlna-publish <interface-id>` 进程；通过标准输入接收本次共享名称、媒体
+端口和会话 ID，通过 JSON 行返回真实接口地址与 SDK 事件地址。SDK 使用
+`UpnpRegisterRootDevice2(UPNPREG_BUF_DESC)` 托管设备描述，负责该接口的公告、发现
+响应和 GENA。各接口使用相同 UDN，设备描述中的控制与 SCPD 地址指向父进程的
+共享 HTTP 服务，事件地址则指向本接口的 SDK。媒体 URL 使用 HTTP 连接的本机地址，
+不依赖 Host 请求头或系统默认路由。
+
+父进程监测发布进程并汇总成功网络和失败原因；停止时关闭输入管道，让 SDK 注销
+设备及订阅、发送 byebye，超时后才终止进程。父进程退出也会通过管道 EOF 触发撤销。
+子进程不初始化 Tauri、图库或数据库。网络地址变化后需要重新开启共享。
 
 投放顺序复用 `AFile` 的字段排序、分组排序和随机种子规则。开始时生成有序 ID
 快照，主动播放和未指定排序的 ContentDirectory 浏览使用同一份快照。
@@ -67,6 +78,17 @@ SSDP 协议实现。父进程依次调用搜索进程、聚合并去重结果，
 cargo check --manifest-path src-tauri/Cargo.toml --locked
 cargo test --manifest-path src-tauri/Cargo.toml --locked --bin Lap t_dlna:: -- --test-threads=1
 ```
+
+多网卡进程集成测试需要先构建实际应用，然后显式运行：
+
+```powershell
+cargo build --manifest-path src-tauri/Cargo.toml --locked --bin Lap
+$env:LAP_DLNA_TEST_WORKER = (Resolve-Path src-tauri/target/debug/Lap.exe).Path
+cargo test --manifest-path src-tauri/Cargo.toml --locked --bin Lap all_interfaces_advertise_browse_notify_and_withdraw -- --ignored --nocapture --test-threads=1
+```
+
+该测试仅发布合成的测试目录与预览，逐网卡检查 SDK 发现、接口地址、媒体 Range、
+GENA 初始及更新通知，以及停止后所有地址与公告的撤销。
 
 网络测试会注册临时标准 MediaRenderer / MediaServer，检查发现、撤销、SOAP 控制、
 GENA 通知和回调限制，并验证目录浏览、媒体 Range、完整大目录及停止后的访问失效。

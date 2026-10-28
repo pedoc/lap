@@ -2,6 +2,7 @@ mod http;
 mod native;
 mod network;
 mod protocol;
+mod publication;
 mod scope;
 mod server;
 mod upnp;
@@ -116,20 +117,29 @@ pub async fn dlna_share(
     library_id: String,
     scope: scope::Scope,
     order: Option<scope::PlaybackOrder>,
+    interface_id: Option<String>,
 ) -> Result<server::Shared, String> {
-    server::start(window, library_id, scope, order).await
+    server::start(window, library_id, scope, order, interface_id).await
 }
 
 #[tauri::command]
 pub async fn dlna_activate_share(
     window: tauri::WebviewWindow,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<server::Published, String> {
     server::activate(window.label(), &session_id).await
 }
 
+#[tauri::command]
+pub fn dlna_share_status(
+    window: tauri::WebviewWindow,
+    session_id: String,
+) -> Result<server::Published, String> {
+    server::status(window.label(), &session_id)
+}
+
 pub async fn discovery_worker() -> bool {
-    network::worker_entry().await
+    publication::worker_entry().await || network::worker_entry().await
 }
 
 #[tauri::command]

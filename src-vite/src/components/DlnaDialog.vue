@@ -25,14 +25,15 @@
         </div>
         <p class="text-xs opacity-60">{{ t('dlna.order_hint') }}</p>
       </fieldset>
-      <div v-if="dlna.mode === 'browse'" class="text-xs opacity-70">{{ t('dlna.publish_network') }}：{{ publishNetwork }}</div>
-      <template v-if="dlna.mode === 'cast'">
-      <label class="space-y-1"><span class="block text-xs opacity-70">{{ t('dlna.search_network') }}</span>
+      <label class="space-y-1"><span class="block text-xs opacity-70">{{ t(dlna.mode === 'browse' ? 'dlna.publish_network' : 'dlna.search_network') }}</span>
         <select class="select select-sm select-bordered w-full" :value="dlna.networkId" :disabled="dlna.busy || !!dlna.sessionId" @change="changeNetwork">
-          <option value="">{{ t('dlna.all_networks') }}</option>
+          <option value="">{{ t(dlna.mode === 'browse' ? 'dlna.all_publish_networks' : 'dlna.all_networks') }}</option>
           <option v-for="network in dlna.networks" :key="network.id" :value="network.id">{{ network.name }} · {{ network.addresses.join(', ') }}</option>
         </select>
       </label>
+      <div v-if="dlna.mode === 'browse' && dlna.sharedNetworks.length" class="text-xs opacity-70 break-words">{{ t('dlna.published_networks') }}：{{ publishNetwork }}</div>
+      <details v-if="dlna.mode === 'browse' && dlna.sharedErrors.length" class="text-xs opacity-70"><summary>{{ t('dlna.publish_errors', { count: dlna.sharedErrors.length }) }}</summary><p v-for="error in dlna.sharedErrors" :key="error" class="mt-1 break-words">{{ error }}</p></details>
+      <template v-if="dlna.mode === 'cast'">
       <p v-if="dlna.discovering" class="text-xs opacity-70" role="status">{{ t(dlna.searchTotal ? 'dlna.network_progress' : 'dlna.loading_networks', { current: Math.min(dlna.searchCompleted + 1, dlna.searchTotal), total: dlna.searchTotal, name: dlna.searchingNetwork }) }}</p>
       <p v-else-if="dlna.searchTotal" class="text-xs opacity-60">{{ t('dlna.network_complete', { count: dlna.searchCompleted, devices: dlna.devices.length }) }}</p>
       <details v-if="dlna.searchErrors?.length" class="text-xs opacity-70"><summary>{{ t('dlna.network_errors', { count: dlna.searchErrors.length }) }}</summary><p v-for="error in dlna.searchErrors" :key="error" class="mt-1 break-words">{{ error }}</p></details>
@@ -97,9 +98,7 @@ const { t } = useI18n(), ui = useUIStore();
 const root = ref<HTMLElement | null>(null), width = Math.min(560, window.innerWidth - 24);
 let previousFocus: HTMLElement | null = null;
 const publishNetwork = computed(() => {
-  if (dlna.sharedAddress) return dlna.sharedAddress;
-  const network = (dlna.networks || []).find(network => network.isDefault);
-  return network ? `${network.name} · ${network.addresses.join(', ')}` : t('dlna.system_network');
+  return dlna.sharedNetworks.map(network => `${network.name} · ${network.address}`).join('；');
 });
 function changeNetwork(event: Event) { setDlnaNetwork((event.target as HTMLSelectElement).value); }
 function changeOrder(event: Event) { setDlnaOrder((event.target as HTMLSelectElement).value as Parameters<typeof setDlnaOrder>[0]); }

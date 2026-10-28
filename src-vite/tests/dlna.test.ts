@@ -32,6 +32,7 @@ function harness(overrides: Record<string, (args: any) => unknown> = {}) {
       if (name === 'dlna_discover') return [{ id: 'tv-1', name: '客厅电视', address: '192.168.1.10' }];
       if (name === 'dlna_connect') return { sessionId: 'session-1', fileIds: args.scope.kind === 'album' ? [1, 2, 3] : args.scope.fileIds, scopeName: 'Shared media' };
       if (name === 'dlna_share') return { sessionId: 'browse-1', count: 3, scopeName: 'Shared media', serverName: 'Lap · 旅行' };
+      if (['dlna_activate_share', 'dlna_share_status'].includes(name)) return { networks: [{ id: 'wlan', name: 'WLAN', address: '192.168.1.2' }], errors: [] };
       if (name === 'dlna_transport_state') return 'PLAYING';
       if (name === 'dlna_cast') return { title: `Media ${args.fileId}`, kind: args.fileId === 2 ? 'video' : 'image' };
     },
@@ -141,7 +142,7 @@ async function renderDialog(state: any, language = 'zh-CN') {
   const words = JSON.parse(readFileSync(new URL(`../src/locales/${language}.json`, import.meta.url), 'utf8')).dlna;
   const context = {
     ...Vue, ...Object.fromEntries(Object.entries(Vue).map(([name, value]) => [`_${name}`, value])),
-    dlna: reactive({ visible: true, mode: 'cast', scopeKind: 'selection', selectedIds: [1, 2], albumId: 1, albumName: '旅行相册', total: 2, autoPlay: false, intervalSeconds: 5, serverName: '', devices: [], deviceId: '', sessionId: '', index: 0, fileIds: [1, 2], title: '', kind: '', busy: false, discovering: false, error: '', networks: [{ id: 'wlan', name: 'WLAN', addresses: ['192.168.1.2/24'], isDefault: true }], networkId: '', searchCompleted: 0, searchTotal: 0, searchingNetwork: '', searchErrors: [], orderBy: 'view', orderDescending: true, sharedAddress: '', ...state }),
+    dlna: reactive({ visible: true, mode: 'cast', scopeKind: 'selection', selectedIds: [1, 2], albumId: 1, albumName: '旅行相册', total: 2, autoPlay: false, intervalSeconds: 5, serverName: '', devices: [], deviceId: '', sessionId: '', index: 0, fileIds: [1, 2], title: '', kind: '', busy: false, discovering: false, error: '', networks: [{ id: 'wlan', name: 'WLAN', addresses: ['192.168.1.2/24'], isDefault: true }], networkId: '', searchCompleted: 0, searchTotal: 0, searchingNetwork: '', searchErrors: [], orderBy: 'view', orderDescending: true, sharedNetworks: [], sharedErrors: [], ...state }),
     window: { innerWidth: 600 }, libConfig: reactive({ _libraryId: 'library-a' }),
     useUIStore: () => ({ pushInputHandler() {}, removeInputHandler() {} }),
     useI18n: () => ({ t: (key: string, values: any = {}) => Object.entries(values).reduce((text: string, [name, value]) => text.replace(`{${name}}`, String(value)), words[key.slice(5)] || key) }),
@@ -196,8 +197,9 @@ test('TV browsing publishes only after the current dialog has obtained its scope
   assert.ok(h.calls.some((call: any) => call.name === 'dlna_activate_share' && call.args.sessionId === 'browse-1'));
   assert.equal(h.calls.filter((call: any) => call.name === 'dlna_connect' || call.name === 'dlna_cast').length, 0);
   assert.equal(h.dlna.serverName, 'Lap · 旅行');
-  assert.equal(h.timers.size, 0);
+  assert.equal(h.timers.size, 1);
   h.closeDlna(); await tick();
+  assert.equal(h.timers.size, 0);
   assert.ok(h.calls.some((call: any) => call.name === 'dlna_disconnect' && call.args.sessionId === 'browse-1'));
 });
 
@@ -315,7 +317,7 @@ test('passive album sharing starts directly and forwards an explicit directory o
   await h.shareDlna();
   const share = h.calls.find((call: any) => call.name === 'dlna_share');
   assert.equal(share.args.order.sortType, 3); assert.equal(share.args.order.sortOrder, 0); assert.equal(share.args.order.groupBy, 0);
-  assert.equal(h.dlna.sharedAddress, '192.168.1.2');
+  assert.equal(h.dlna.sharedNetworks[0].address, '192.168.1.2');
   assert.ok(h.calls.some((call: any) => call.name === 'dlna_activate_share'));
   h.closeDlna();
 });
@@ -326,4 +328,45 @@ test('dialog shows network selection, sequential progress and ordering controls'
   assert.match(html, /停止搜索/); assert.match(html, /使用当前 Lap 视图排序/); assert.match(html, /随机顺序/);
   const browse = await renderDialog({ mode: 'browse', scopeKind: 'album' });
   assert.match(browse, /默认目录顺序/); assert.match(browse, /媒体服务发布网络/); assert.match(browse, /WLAN/);
+});
+
+test('passive sharing forwards the chosen interface and shows partial publication failures', async () => {
+  const published = { networks: [{ id: 'wlan', name: 'WLAN', address: '192.168.1.2' }, { id: 'lan', name: 'Ethernet', address: '10.0.0.2' }], errors: ['VPN: unavailable'] };
+  const h = harness({ dlna_activate_share: () => published });
+  h.openDlna('library-a', [1], undefined, { mode: 'browse' }); await tick();
+  h.setDlnaNetwork('wlan'); await h.shareDlna();
+  assert.equal(h.calls.find((call: any) => call.name === 'dlna_share').args.interfaceId, 'wlan');
+  assert.equal(h.calls.filter((call: any) => call.name === 'dlna_discover').length, 0);
+  assert.equal(h.dlna.sharedNetworks.length, 2); assert.equal(h.dlna.sharedErrors[0], 'VPN: unavailable');
+  const html = await renderDialog({ mode: 'browse', sharedNetworks: published.networks, sharedErrors: published.errors });
+  assert.match(html, /10.0.0.2/); assert.match(html, /192.168.1.2/); assert.match(html, /1 个网络发布失败/);
+  h.closeDlna();
+});
+
+test('passive sharing defaults to all interfaces and refreshes actual publication status', async () => {
+  const h = harness({ dlna_share_status: () => ({ networks: [{ id: 'lan', name: 'Ethernet', address: '10.0.0.2' }], errors: ['WLAN: exited'] }) });
+  h.openDlna('library-a', [1], undefined, { mode: 'browse' }); await tick(); await h.shareDlna();
+  assert.equal(h.calls.find((call: any) => call.name === 'dlna_share').args.interfaceId, null);
+  await h.runTimer();
+  assert.equal(h.dlna.sharedNetworks[0].address, '10.0.0.2'); assert.equal(h.dlna.sharedErrors[0], 'WLAN: exited');
+  h.closeDlna(); assert.equal(h.timers.size, 0);
+});
+
+test('a late publication status cannot overwrite a reopened dialog', async () => {
+  const pending = deferred(), h = harness({ dlna_share_status: () => pending.promise });
+  h.openDlna('library-a', [1], undefined, { mode: 'browse' }); await tick(); await h.shareDlna();
+  const refresh = h.runTimer(); await tick();
+  h.closeDlna(); h.openDlna('library-b', [2], undefined, { mode: 'browse' }); await tick();
+  pending.resolve({ networks: [{ id: 'old', name: 'Old', address: '10.0.0.1' }], errors: [] }); await refresh;
+  assert.equal(h.dlna.sharedNetworks.length, 0); assert.equal(h.dlna.sessionId, ''); assert.equal(h.timers.size, 0);
+  h.closeDlna();
+});
+
+test('terminated publication clears the active share and allows a fresh start', async () => {
+  const h = harness({ dlna_share_status: () => { throw new Error('publication ended'); } });
+  h.openDlna('library-a', [1], undefined, { mode: 'browse' }); await tick(); await h.shareDlna(); await h.runTimer();
+  assert.equal(h.dlna.sessionId, ''); assert.equal(h.dlna.serverName, ''); assert.match(h.dlna.error, /publication ended/);
+  assert.equal(h.dlna.sharedNetworks.length, 0); assert.equal(h.timers.size, 0);
+  assert.ok(h.calls.some((call: any) => call.name === 'dlna_disconnect'));
+  h.closeDlna();
 });

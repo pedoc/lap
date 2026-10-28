@@ -64,7 +64,11 @@ pub async fn worker_entry() -> bool {
             return Err("搜索网卡不可用".into());
         }
         native::use_interface(id)?;
-        native::discover().await
+        if args.next().as_deref() == Some(std::ffi::OsStr::new(super::upnp::MEDIA_SERVER)) {
+            native::discover_services(&[super::upnp::MEDIA_SERVER]).await
+        } else {
+            native::discover().await
+        }
     }
     .await;
     // This branch runs before Tauri, database, and library initialization.
@@ -94,16 +98,8 @@ pub(super) async fn discover_with_exe(
     if cancel.is_cancelled() {
         return Err("搜索已取消".into());
     }
-    let mut command = tokio::process::Command::new(exe);
-    command
-        .arg(WORKER)
-        .arg(&interface.id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(target_os = "windows")]
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let mut command = worker_command(exe, WORKER, &interface.id);
+    command.stdin(Stdio::null()).stderr(Stdio::piped());
     let output = tokio::select! {
         _ = cancel.cancelled() => return Err("搜索已取消".into()),
         result = tokio::time::timeout(Duration::from_secs(10), command.output()) =>
@@ -117,6 +113,22 @@ pub(super) async fn discover_with_exe(
     }
     serde_json::from_slice::<Result<Vec<(String, Ipv4Addr)>, String>>(&output.stdout)
         .map_err(|_| "设备搜索响应无效".to_owned())?
+}
+
+pub(super) fn worker_command(
+    exe: std::path::PathBuf,
+    mode: &str,
+    interface: &str,
+) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(exe);
+    command
+        .arg(mode)
+        .arg(interface)
+        .stdout(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    command
 }
 
 #[cfg(test)]

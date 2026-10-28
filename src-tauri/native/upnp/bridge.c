@@ -90,14 +90,16 @@ static int device_callback(Upnp_EventType type, const void *event, void *cookie)
     }
     return 0;
 }
-int lap_upnp_publish(const char *description_url, const char *protocols, lap_update_cb update, void *cookie, void **result) {
+int lap_upnp_publish(const char *description_url, const char *protocols, lap_update_cb update, void *cookie, void **result, int document) {
     lap_device *device = calloc(1, sizeof(*device));
     if (!device) return UPNP_E_OUTOF_MEMORY;
     device->protocols = malloc(strlen(protocols) + 1);
     if (!device->protocols) { free(device); return UPNP_E_OUTOF_MEMORY; }
     memcpy(device->protocols, protocols, strlen(protocols) + 1);
     device->cookie = cookie; device->update = update;
-    int error = UpnpRegisterRootDevice(description_url, device_callback, device, &device->handle);
+    int error = document
+        ? UpnpRegisterRootDevice2(UPNPREG_BUF_DESC, description_url, strlen(description_url), 1, device_callback, device, &device->handle)
+        : UpnpRegisterRootDevice(description_url, device_callback, device, &device->handle);
     if (error == UPNP_E_SUCCESS) {
         UpnpSetMaxSubscriptions(device->handle, 16);
         UpnpSetMaxSubscriptionTimeOut(device->handle, 1800);
