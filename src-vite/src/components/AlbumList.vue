@@ -207,7 +207,7 @@
             enter-to-class="max-h-96"
           >
             <div
-              v-if="(isFolderFiltering ? shouldShowFilteredFolderTree(album.id) : album.is_expanded) && getAlbumQueueIndex(album.id, libConfig.index.albumQueue as any[]) === -1"
+              v-if="(isFolderFiltering ? shouldShowFilteredFolderTree(album.id) : album.is_expanded) && (!isMainPane || hasAlbumSubfolders(album)) && getAlbumQueueIndex(album.id, libConfig.index.albumQueue as any[]) === -1"
               class="ml-6 mr-2 my-1 p-1 rounded-box bg-base-300/30 border border-base-content/5 shadow-sm"
             >
               <AlbumFolder
@@ -215,6 +215,7 @@
                 :children="isFolderFiltering ? getFilteredFolderTree(album.id) : album.children"
                 :albumId="album.id"
                 :rootPath="album.path"
+                :hideRoot="isMainPane"
                 :unavailable="album.is_accessible === false"
                 :allowContextMenu="isMainPane"
                 :showFolderActions="selectionSource === 'destFolder'"
@@ -727,6 +728,8 @@ const getFilteredAlbumResult = (albumId: number) =>
 const getVisibleFolderPaths = (albumId: number) => getFilteredAlbumResult(albumId)?.visibleFolderPaths || [];
 const getMatchedFolderPaths = (albumId: number) => getFilteredAlbumResult(albumId)?.matchedFolderPaths || [];
 const getFilteredFolderTree = (albumId: number) => getFilteredAlbumResult(albumId)?.folderTree || [];
+const hasAlbumSubfolders = (album: Album) =>
+  (isFolderFiltering.value ? getFilteredFolderTree(album.id) : album.children)?.some(root => root.children?.length);
 const shouldShowFilteredFolderTree = (albumId: number) => {
   const result = getFilteredAlbumResult(albumId);
   return isFolderFiltering.value && Boolean(result?.hasMatches);
@@ -1399,11 +1402,6 @@ const clickAlbum = async (album: Album) => {
         const subFolders = await fetchFolder(album.path, false, config.settings.folderSort);
         if (subFolders) {
           album.children = [subFolders];
-          // A leaf album still has a useful root-folder node for folder
-          // actions and context. Show it when the album is selected.
-          if (!subFolders.has_subfolders) {
-            album.is_expanded = true;
-          }
         }
       }
     }, 0);
@@ -1507,8 +1505,9 @@ const handleAlbumListKeyDown = async (key: string) => {
         }
 
         const rootFolder = currentAlbum.children?.[0];
-        if (rootFolder) {
-          await clickFolder(currentAlbum.id, rootFolder);
+        const firstFolder = isMainPane.value ? rootFolder?.children?.[0] : rootFolder;
+        if (firstFolder) {
+          await clickFolder(currentAlbum.id, firstFolder);
           await focusExpandedFolderTree(currentAlbum.id);
         }
       }
@@ -1540,12 +1539,10 @@ const clickFinalSubFolder = async (albumIdVal: number, folderPathVal: string) =>
     return;
   }
 
-  // If navigating to the album root path, select the root folder directly.
-  // expandFinalFolder returns null for the root path (empty relative path),
-  // so we handle it here instead.
+  // The album row owns root selection in the sidebar; pickers still need the root folder.
   if (folderPathVal === album.path) {
-    if (selection.selected.value) {
-      clickAlbum(album);
+    if (isMainPane.value || selection.selected.value) {
+      await clickAlbum(album);
       return;
     }
     await expandAlbum(album, true);

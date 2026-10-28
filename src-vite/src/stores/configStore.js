@@ -162,7 +162,8 @@ export const useConfigStore = defineStore('configStore', {
       locationSort: 0,
       personSort: 0,
       cameraSort: 0,
-      showSubfolderFiles: false,  // show subfolder files (in album folder view)
+      showSubfolderFiles: true,   // show subfolder files (in album folder view)
+      subfolderFilesDefaultInitialized: true,
 
       // RAW display settings
       groupRawJpegPairs: false,   // group matching RAW and JPEG/HEIC files
@@ -471,6 +472,11 @@ export const useConfigStore = defineStore('configStore', {
         const state = JSON.parse(value);
         const settings = state?.settings;
         if (settings) {
+          // Migrate the old direct-only default once, then preserve manual changes.
+          if (!settings.subfolderFilesDefaultInitialized) {
+            settings.showSubfolderFiles = true;
+            settings.subfolderFilesDefaultInitialized = true;
+          }
           settings.sidebarOrder = normalizeSidebarOrder(settings.sidebarOrder);
           settings.mediaChat = normalizeMediaChatSettings(settings.mediaChat);
           // Existing installations already have a language choice; do not replace it.

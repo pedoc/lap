@@ -24,11 +24,11 @@ const templateCode = compiled.code.replace(/^import\s*\{[^}]+\}\s*from\s*['"]vue
 const helpers = Object.fromEntries(Object.entries(Vue).filter(([name]) => /^[$A-Z_a-z][\w$]*$/.test(name)).map(([name, value]) => [`_${name}`, value]));
 const render = new Function(...Object.keys(helpers), `${ts.transpile(templateCode, { target: ts.ScriptTarget.ES2022 })};return render;`)(...Object.values(helpers));
 
-async function renderTree(album, unavailable = false) {
+async function renderTree(album, unavailable = false, extraProps = {}) {
   const component = {
     name: 'AlbumFolder',
     emits: ['rootRenamed', 'folderFavoriteChanged', 'folderPathChanged'],
-    props: ['children', 'albumId', 'rootPath', 'treeRoot', 'unavailable', 'allowContextMenu', 'showFolderActions', 'filterVisiblePaths', 'filterMatchedPaths'],
+    props: ['children', 'albumId', 'rootPath', 'treeRoot', 'hideRoot', 'unavailable', 'allowContextMenu', 'showFolderActions', 'filterVisiblePaths', 'filterMatchedPaths'],
     setup(props) {
       const context = { props, computed: Vue.computed };
       for (const name of ['isFolderFiltering', 'visibleFolderPaths', 'visibleChildren', 'shouldShowFilteredChildren', 'shouldRenderChildren']) context[name] = bind(folder, name, context);
@@ -43,7 +43,7 @@ async function renderTree(album, unavailable = false) {
     },
     render,
   };
-  const app = Vue.createSSRApp(component, { children: album.children, albumId: album.id, rootPath: album.path, treeRoot: true, unavailable, allowContextMenu: false, showFolderActions: false });
+  const app = Vue.createSSRApp(component, { children: album.children, albumId: album.id, rootPath: album.path, treeRoot: true, hideRoot: true, unavailable, allowContextMenu: false, showFolderActions: false, ...extraProps });
   app.config.globalProperties.$t = key => key;
   for (const name of new Set([...templateCode.matchAll(/_resolveComponent\("([^"]+)"/g)].map(match => match[1]))) app.component(name, name === 'AlbumFolder' ? component : () => null);
   return renderToString(app);
@@ -75,6 +75,8 @@ test('one album expansion renders its direct disk subfolders without a second ro
   await h.expand(h.album);
   const html = await renderTree(h.album);
   assert.match(html, /旅行/); assert.match(html, /家庭/); assert.doesNotMatch(html, /2025/);
+  assert.ok(!html.includes(`data-file-drop-path="${h.album.path}"`), 'the album already represents its root folder');
+  assert.doesNotMatch(html, />\s*original-name\s*</);
   assert.deepEqual(h.calls, [{ path: h.album.path, recursive: false, sort: 0 }]);
   assert.equal(h.album.name, '显示别名'); assert.equal(h.album.path, '/photos/original-name');
 });
@@ -96,7 +98,57 @@ test('offline albums expose cached direct subfolders without a filesystem fetch'
   const h = fixture(false); await h.expand(h.album);
   const html = await renderTree(h.album, true);
   assert.match(html, /旅行/); assert.match(html, /家庭/); assert.doesNotMatch(html, /2025/);
+  assert.doesNotMatch(html, />\s*original-name\s*</);
   assert.equal(h.calls.length, 0);
+});
+
+test('destination pickers keep the root folder selectable', async () => {
+  const h = fixture(); await h.expand(h.album);
+  const html = await renderTree(h.album, false, { hideRoot: false });
+  assert.ok(html.includes(`data-file-drop-path="${h.album.path}"`));
+  assert.match(html, />\s*original-name\s*</);
+});
+
+test('filtered trees hide the root while preserving matching descendants', async () => {
+  const h = fixture(false); await h.expand(h.album);
+  const visible = [h.album.path, `${h.album.path}/旅行`, `${h.album.path}/旅行/2025`];
+  const html = await renderTree(h.album, true, { filterVisiblePaths: visible, filterMatchedPaths: [visible[2]] });
+  assert.match(html, /旅行/); assert.match(html, /2025/); assert.doesNotMatch(html, /家庭/);
+  assert.doesNotMatch(html, />\s*original-name\s*</);
+});
+
+test('keyboard navigation visits visible subfolders and returns directly to the album', async () => {
+  const h = fixture(); await h.expand(h.album);
+  const root = h.album.children[0], first = root.children[0], last = root.children[1];
+  const clicks = [], albums = [], focuses = [];
+  const context = {
+    props: { children: h.album.children, rootPath: h.album.path, albumId: h.album.id, hideRoot: true },
+    selection: { folderPath: Vue.ref(last.path), selectAlbum: album => albums.push(album) },
+    visibleChildren: Vue.ref(root.children), shouldHandleTreeNavigation: () => true,
+    document: { querySelector: () => ({ focus: () => focuses.push(true) }) },
+    clickFolder: async (_id, folder) => { clicks.push(folder.path); context.selection.folderPath.value = folder.path; },
+  };
+  for (const name of ['shouldRenderFolder', 'flattenVisibleFolders', 'getParentFolder', 'selectFolder', 'handleTreeKeyDown']) context[name] = bind(folder, name, context);
+  await context.handleTreeKeyDown({ payload: { key: 'Home' } });
+  assert.deepEqual(clicks, [first.path]);
+  await context.handleTreeKeyDown({ payload: { key: 'ArrowLeft' } });
+  assert.equal(albums.length, 1); assert.equal(albums[0].path, h.album.path);
+  assert.equal(root.is_expanded, true, 'leaving the first subfolder must not collapse its hidden root');
+  assert.equal(focuses.length, 1);
+});
+
+test('the album right-arrow enters its first subfolder without selecting the hidden root', async () => {
+  const h = fixture(); await h.expand(h.album);
+  const clicks = [], focuses = [];
+  const navigate = bind(list, 'handleAlbumListKeyDown', {
+    shouldHandleAlbumListNavigation: () => true, albums: Vue.ref([h.album]), isMainPane: Vue.ref(true),
+    selection: { albumId: Vue.ref(h.album.id), selected: Vue.ref(true) }, expandAlbum: h.expand,
+    clickFolder: async (_id, folder) => clicks.push(folder.path),
+    focusExpandedFolderTree: async id => focuses.push(id),
+  });
+  await navigate('ArrowRight');
+  assert.deepEqual(clicks, [h.album.children[0].children[0].path]);
+  assert.deepEqual(focuses, [h.album.id]);
 });
 
 test('editing an album display name preserves its original path and active scan', async () => {

@@ -1,7 +1,7 @@
 <template>
   <ThumbnailRegenerationDialog v-if="thumbnailRebuildRequest" :request="thumbnailRebuildRequest" @cancel="thumbnailRebuildRequest = null" />
   <ul
-    v-if="children && children.length > 0"
+    v-if="visibleChildren.length > 0"
     v-bind="treeRoot ? { tabindex: 0 } : {}"
     ref="treeRootRef"
     :data-folder-tree-root="treeRoot ? 'true' : undefined"
@@ -10,9 +10,9 @@
     @mousedown.capture="focusTreeRoot"
   >
     <li v-for="child in visibleChildren"
-      :key="child.id" 
+      :key="child.path"
       :id="'folder-' + child.id" 
-      :class="{ 'pl-4': child.path !== rootPath }"
+      :class="{ 'pl-4': !treeRoot && child.path !== rootPath }"
     >
       <div v-if="child.id != 0 || selection.folderPath.value == rootPath"
         :data-file-drop-path="unavailable || isFolderUnavailable(child.path) ? undefined : child.path"
@@ -242,6 +242,7 @@ const props = withDefaults(defineProps<{
   allowContextMenu?: boolean; // whether to show context menu
   showFolderActions?: boolean;
   treeRoot?: boolean;       // only root tree listens to keyboard
+  hideRoot?: boolean;
   filterVisiblePaths?: string[];
   filterMatchedPaths?: string[];
   unavailable?: boolean;
@@ -280,9 +281,12 @@ const selectedFolder = computed(() => getFolderByPath(props.children, selection.
 const isFolderFiltering = computed(() => Array.isArray(props.filterVisiblePaths));
 const visibleFolderPaths = computed(() => new Set(props.filterVisiblePaths || []));
 const matchedFolderPaths = computed(() => new Set(props.filterMatchedPaths || []));
-const visibleChildren = computed(() => (props.children || []).filter(folder =>
-  !isFolderFiltering.value || visibleFolderPaths.value.has(folder.path)
-));
+const visibleChildren = computed(() => {
+  const children = props.hideRoot && props.treeRoot
+    ? (props.children || []).flatMap(folder => folder.path === props.rootPath ? folder.children || [] : [folder])
+    : props.children || [];
+  return children.filter(folder => !isFolderFiltering.value || visibleFolderPaths.value.has(folder.path));
+});
 
 watch(()=>[libConfig._libraryId,props.albumId,props.allowContextMenu ? visibleChildren.value.map(folder=>folder.path) : []] as const,([_library,albumId,paths],_old,onCleanup)=>{
   if(paths.length)onCleanup(watchScanFolders(Number(albumId),paths));
@@ -657,7 +661,7 @@ const handleTreeKeyDown = async (event: { payload: { key: string } }) => {
   if (!shouldHandleTreeNavigation(event.payload.key)) return;
 
   const currentPath = selection.folderPath.value;
-  const visibleFolders = flattenVisibleFolders(props.children);
+  const visibleFolders = flattenVisibleFolders(visibleChildren.value);
   const currentIndex = visibleFolders.findIndex((folder) => folder.path === currentPath);
   if (currentIndex === -1) return;
 
@@ -672,20 +676,20 @@ const handleTreeKeyDown = async (event: { payload: { key: string } }) => {
     case 'ArrowLeft':
       if (currentFolder.is_expanded) {
         currentFolder.is_expanded = false;
-      } else if (currentFolder.path === props.rootPath) {
-        if (props.allowContextMenu) {
-          uiStore.setActivePane('left-sidebar');
-        }
-        selection.selectAlbum({
-          id: props.albumId,
-          path: props.rootPath,
-          name: '',
-        } as Album);
-        const albumListRoot = document.querySelector('[data-album-list-root="true"]') as HTMLElement | null;
-        albumListRoot?.focus({ preventScroll: true });
       } else {
         const parentFolder = getParentFolder(props.children, currentFolder.path);
-        if (parentFolder) {
+        if (currentFolder.path === props.rootPath || (props.hideRoot && parentFolder?.path === props.rootPath)) {
+          if (props.allowContextMenu) {
+            uiStore.setActivePane('left-sidebar');
+          }
+          selection.selectAlbum({
+            id: props.albumId,
+            path: props.rootPath,
+            name: '',
+          } as Album);
+          const albumListRoot = document.querySelector('[data-album-list-root="true"]') as HTMLElement | null;
+          albumListRoot?.focus({ preventScroll: true });
+        } else if (parentFolder) {
           parentFolder.is_expanded = false;
           await selectFolder(parentFolder);
         }
