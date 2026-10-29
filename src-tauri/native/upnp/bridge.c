@@ -10,7 +10,7 @@
 
 typedef void (*lap_discovery_cb)(const char *, const unsigned char *);
 static lap_discovery_cb discovered;
-static int client_callback(Upnp_EventType type, const void *event, void *cookie) {
+static int client_callback(Upnp_EventType type, void *event, void *cookie) {
     (void)cookie;
     if (type == UPNP_DISCOVERY_SEARCH_RESULT && event && discovered) {
         const UpnpDiscovery *item = event;
@@ -68,7 +68,7 @@ typedef struct {
     lap_update_cb update;
     char *protocols;
 } lap_device;
-static int device_callback(Upnp_EventType type, const void *event, void *cookie) {
+static int device_callback(Upnp_EventType type, void *event, void *cookie) {
     lap_device *device = cookie;
     if (type == UPNP_EVENT_SUBSCRIPTION_REQUEST && event) {
         const UpnpSubscriptionRequest *request = event;
