@@ -101,7 +101,7 @@
         <p v-if="view && !view.modelInstalled" class="text-xs text-warning">
           {{ t('objects.download_first') }}
         </p>
-        <p v-if="view" class="text-xs">{{ t('objects.coverage', view) }}</p>
+        <p v-if="view" class="text-xs">{{ t('objects.coverage', view) }}<span v-if="coveragePercent !== null"> · {{ t('recognition_status.library_analysis') }} {{ coveragePercent }}%</span></p>
         <template v-if="view?.status.jobId">
           <p class="text-xs break-words opacity-70">
             {{ t('ocr.scope_' + (view.status.scope || 'library'))
@@ -109,11 +109,11 @@
               · {{ view.status.scopeName }}</span
             >
           </p>
-          <progress
+          <TaskProgressBar
             v-if="view.status.running"
-            class="progress progress-primary w-full"
             :value="taskProgress.value"
             :max="taskProgress.max"
+            :aria-label="t('objects.title')"
           />
           <p class="text-xs" aria-live="polite">
             {{
@@ -137,6 +137,7 @@
         </p>
         <div class="flex flex-wrap gap-2">
           <button
+            v-if="view?.pending !== 0"
             class="btn btn-sm btn-primary"
             :disabled="busy || !view?.modelInstalled || view?.status.running"
             @click="run()"
@@ -194,12 +195,15 @@ import { ask } from '@tauri-apps/plugin-dialog';
 import { config, libConfig } from '@/common/config';
 import ObjectTaskHistory from './ObjectTaskHistory.vue';
 import ObjectAutoSettings from './ObjectAutoSettings.vue';
+import TaskProgressBar from './TaskProgressBar.vue';
+import { progressPercent } from '@/common/progress';
 import { OBJECT_STATES, objectClassName, objectTaskPhase, objectTaskProgress, objectExecution } from '@/common/objectUi';
 import { useObjects, openObjectSettings } from '@/common/objects';
 const { t } = useI18n();
 const { view, error, busy, start, stop } = useObjects();
 const execution = computed(() => objectExecution(view.value?.sessions));
 const taskProgress = computed(() => objectTaskProgress(view.value?.status));
+const coveragePercent = computed(() => progressPercent(view.value?.indexed, view.value?.eligible));
 const query = ref(''),
   allClasses = ref(false);
 const name = (label: any) => objectClassName(label, t);

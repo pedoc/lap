@@ -289,8 +289,8 @@ test('the real badge displays current-stage numbers and pending work, then the a
   directoryScan:()=>({}),scanJobs:{error:''},libConfig:{_libraryId:'A'},showScanHistory(){},
   IconUpdate:'spin',IconUpdateDot:'paused',IconExclamation:'warning',IconCheck:'check',IconMinus:'empty',
  });
- assert.equal(api.label.value,'准备预览');assert.match(api.progress.value,/10528\/10621/);assert.match(api.progress.value,/剩余 159 项/);assert.ok(!api.progress.value.includes('10623/10623'));
- current.value.counts.previews_ready=10621;assert.equal(api.label.value,'准备语义搜索');assert.match(api.progress.value,/6876\/7010/);
+ assert.equal(api.label.value,'准备预览');assert.match(api.progress.value,/10528\/10621/);assert.match(api.progress.value,/99%/);assert.match(api.progress.value,/剩余 159 项/);assert.ok(!api.progress.value.includes('10623/10623'));
+ current.value.counts.previews_ready=10621;assert.equal(api.label.value,'准备语义搜索');assert.match(api.progress.value,/6876\/7010/);assert.match(api.progress.value,/98%/);
  current.value.counts.pending=0;assert.equal(api.label.value,'目录核对与收尾');assert.equal(api.progress.value,'');
  current.value={...current.value,status:'warnings',finished_at:3000,phase:'complete',revision:2};
  assert.equal(api.busy.value,false);assert.equal(api.label.value,'已完成，有待处理项');
@@ -313,9 +313,9 @@ test('the footer and top bar keep tracking background work even when the legacy 
   ...Vue,...scan,activeScanningAlbumId:Vue.ref(1),activeScanRunId:activeId,albumScanRun:()=>current.value,libConfig:lib,
   selectedAlbumScanState:Vue.ref('scanning'),statusBarScanMode:mode,localeMsg:{value:dict},t:translate(dict),
  });
- assert.match(api.statusBarScanText.value,/准备预览/);assert.match(api.statusBarScanText.value,/159/);assert.equal(api.showTopProgressBar.value,true);assert.ok(api.topProgressPercent.value<100);
- current.value.counts.previews_ready=10621;assert.match(api.statusBarScanText.value,/准备语义搜索/);
- current.value.counts.pending=0;assert.match(api.statusBarScanText.value,/目录核对与收尾/);assert.equal(api.topProgressPercent.value,99);
+ assert.match(api.statusBarScanText.value,/准备预览/);assert.match(api.statusBarScanText.value,/99%/);assert.match(api.statusBarScanText.value,/159/);assert.equal(api.showTopProgressBar.value,true);assert.ok(api.topProgressPercent.value<100);
+ current.value.counts.previews_ready=10621;assert.match(api.statusBarScanText.value,/准备语义搜索/);assert.match(api.statusBarScanText.value,/98%/);
+ current.value.counts.pending=0;assert.match(api.statusBarScanText.value,/目录核对与收尾/);assert.equal(api.topProgressPercent.value,99);assert.ok(!api.statusBarScanText.value.includes('%'),'Unknown finalization progress must not imply completion');
  mode.value='waiting';assert.ok(!api.statusBarScanText.value.includes('准备语义搜索'));
  current.value.status='warnings';lib.index.albumQueue=[];assert.equal(api.showTopProgressBar.value,false);assert.equal(api.activeScanWork.value,null);
  for(const lang of ['zh-CN','zh-TW','en'])for(const key of ['pending','pending_short','postprocessing_hint'])assert.equal(typeof JSON.parse(read('locales/'+lang+'.json')).scan_tracking[key],'string');

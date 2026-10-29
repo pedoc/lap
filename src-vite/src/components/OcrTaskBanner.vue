@@ -5,7 +5,7 @@
       <button type="button" class="btn btn-xs btn-ghost" :aria-label="t('task_progress.hide')" :title="t('task_progress.hide_hint')" @click="dismissed = jobKey">×</button>
     </div>
     <p class="text-xs opacity-60 truncate" :title="view.status.scopeName">{{ t('ocr.scope_' + (view.status.scope || 'library')) }}<span v-if="view.status.scopeName"> · {{ view.status.scopeName }}</span></p>
-    <progress v-if="view.status.running" class="progress progress-primary w-full" :value="view.status.completed" :max="Math.max(1, view.status.total)"></progress>
+    <TaskProgressBar v-if="view.status.running" :value="view.status.queued || !view.status.total ? undefined : view.status.completed" :max="Math.max(1, view.status.total)" :aria-label="t('ocr.index_title')" />
     <p class="text-xs" aria-live="polite">{{ view.status.running && !view.status.total ? t('ocr.preparing') : t('ocr.progress', view.status) }}</p>
     <p v-if="view.status.cancelled" class="text-xs opacity-60">{{ t(view.status.automatic && !view.automation?.paused ? 'ocr.auto_yielded' : 'ocr.stopped_saved') }}</p>
     <p v-if="error || view.status.error" role="alert" class="text-xs text-error break-words max-h-24 overflow-auto">{{ error || view.status.error }}</p>
@@ -18,6 +18,7 @@ import { useI18n } from 'vue-i18n';
 import { config, libConfig } from '@/common/config';
 import { SIDEBAR } from '@/common/constants';
 import { useOcr } from '@/common/ocr';
+import TaskProgressBar from './TaskProgressBar.vue';
 defineProps<{ stacked?: boolean }>();
 const { t } = useI18n();
 const { view, error, busy, stop } = useOcr();

@@ -8,6 +8,7 @@ import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import * as smart from '../src/common/smartAlbums.ts';
 import { objectTaskProgress } from '../src/common/objectUi.ts';
+import { progressPercent } from '../src/common/progress.ts';
 const read = (name: string) => readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
 const t = (key: string, args: any = {}) => `${key} ${Object.values(args).join(' ')}`;
 function context(task: 'ocr' | 'objects', installed = true) {
@@ -16,7 +17,7 @@ function context(task: 'ocr' | 'objects', installed = true) {
   const error = Vue.ref(''), busy = Vue.ref(false);
   const controller = { view, error, busy, refresh: async () => {}, start: async (options: any) => calls.push(options), stop: async () => calls.push('stop') };
   const ctx: any = {
-    ...Vue, ...smart, objectTaskProgress, useI18n: () => ({ t }), props: { task },
+    ...Vue, ...smart, objectTaskProgress, progressPercent, TaskProgressBar: component('TaskProgressBar', { progressPercent }), useI18n: () => ({ t }), props: { task },
     config: Vue.reactive({ settings: { ai: { ocrProfile: 'o', detectionProfile: 'd' } } }), libConfig: Vue.reactive({ _libraryId: 'A' }),
     useOcr: () => { used.push('ocr'); return controller; }, useObjects: () => { used.push('objects'); return controller; },
     openOcrSettings: () => calls.push('ocr-settings'), openObjectSettings: () => calls.push('object-settings'),

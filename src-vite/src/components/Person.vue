@@ -15,6 +15,7 @@
             : $t('face_index.indexing', { current: indexProgress.current.toLocaleString(), total: indexProgress.total.toLocaleString() }) 
           }}
         </span>
+        <TaskProgressBar class="w-full mt-2" :value="faceTaskProgress.value" :max="faceTaskProgress.max" :aria-label="t(indexProgress.phase === 'clustering' ? 'face_index.clustering' : 'menu.person.index_faces')" />
         <span v-if="indexProgress.phase === 'clustering' && clusterProgressText" class="text-xs text-center mt-1">
           {{ clusterProgressText }}
         </span>
@@ -26,6 +27,8 @@
         </button>
       </div>
     </div>
+
+    <p v-if="faceStats && coveragePercent !== null" class="px-2 py-2 shrink-0 text-xs text-base-content/70">{{ t('recognition_status.library_coverage', { indexed: faceStats.processed, total: faceStats.total, percent: coveragePercent }) }}</p>
 
     <!-- Incomplete Indexing Warning Banner -->
     <div v-if="allPersons.length > 0 && incompleteCount > 0 && !isIndexing" class="flex-none px-2 py-2">
@@ -247,6 +250,8 @@ import PersonMerge from '@/components/PersonMerge.vue';
 import { isFaceRename, applyPersonRename } from '@/common/faceUpdates';
 import { faceDiagnosticState } from '@/common/faceDiagnostics';
 import SortMenuButton from '@/components/SortMenuButton.vue';
+import TaskProgressBar from './TaskProgressBar.vue';
+import { progressPercent } from '@/common/progress';
 
 const props = defineProps({
   titlebar: {
@@ -287,6 +292,15 @@ const clusterProgress = ref({
   total: 0
 });
 const incompleteCount = ref(0);
+const faceStats = ref<any | null>(null);
+let faceStatsRefreshedAt = 0;
+let faceStatsPending: Promise<void> | null = null, faceStatsGeneration = 0;
+let faceStatsDirty = false;
+const coveragePercent = computed(() => progressPercent(faceStats.value?.processed, faceStats.value?.total));
+const faceTaskProgress = computed(() => {
+  const progress = indexProgress.value.phase === 'clustering' ? clusterProgress.value : indexProgress.value;
+  return { value: !indexProgress.value.queued && progress.total > 0 ? progress.current : undefined, max: Math.max(1, progress.total || 0) };
+});
 const personContextMenus = ref<Record<number, any>>({});
 const isLoadingPersons = ref(true);
 const isLoadingMorePersons = ref(false);
@@ -324,14 +338,18 @@ let unlistenCluster: (() => void) | null = null;
 let unlistenPeople: (() => void) | null = null;
 const finishedFaceJobs = new Set<string>();
 let faceStatusSequence = 0;
+function acceptFaceProgress(progress: any) {
+  if (progress.job_id !== indexProgress.value.job_id) clusterProgress.value = { phase: '', current: 0, total: 0 };
+  isIndexing.value = true;
+  indexProgress.value = progress;
+  if (Date.now() - faceStatsRefreshedAt >= 3000) void checkFaceStats();
+}
 async function restoreFaceStatus() {
   const libraryId = libConfig._libraryId, profile = config.settings.ai?.faceProfile, request = ++faceStatusSequence;
   const [running, progress] = await isFaceIndexing();
   if (!isPersonMounted || libraryId !== libConfig._libraryId || profile !== config.settings.ai?.faceProfile || request !== faceStatusSequence) return;
   if (running && progress?.library_id === libraryId && !finishedFaceJobs.has(progress.job_id)) {
-    if (progress.job_id !== indexProgress.value.job_id) clusterProgress.value = { phase: '', current: 0, total: 0 };
-    isIndexing.value = true;
-    indexProgress.value = progress;
+    acceptFaceProgress(progress);
   } else if (!running) isIndexing.value = false;
 }
 const faceToast = useToast();
@@ -462,8 +480,7 @@ onMounted(async () => {
     if (event.payload.job_id && finishedFaceJobs.has(event.payload.job_id)) return;
     if (event.payload.job_id && indexProgress.value.job_id && event.payload.job_id !== indexProgress.value.job_id) { void restoreFaceStatus(); return; }
     faceStatusSequence++;
-    isIndexing.value = true; // Show overlay when receiving progress events
-    indexProgress.value = event.payload;
+    acceptFaceProgress(event.payload);
   });
   if (!isPersonMounted) { stopProgress(); return; }
   unlistenProgress = stopProgress;
@@ -478,7 +495,7 @@ onMounted(async () => {
     clusterProgress.value = { phase: '', current: 0, total: 0 };
     if (event.payload.job_id) void restoreFaceStatus();
     schedulePeopleRefresh(); // Keep row objects, selection and scroll after the final batch.
-    checkFaceStats();
+    checkFaceStats(true);
   });
   if (!isPersonMounted) { stopFinished(); return; }
   unlistenFinished = stopFinished;
@@ -493,11 +510,14 @@ onMounted(async () => {
 
 watch(() => libConfig._libraryId, () => {
   faceStatusSequence++; finishedFaceJobs.clear();
+  faceStats.value = null;
+  faceStatsGeneration++; faceStatsPending = null; faceStatsDirty = false;
   isIndexing.value = false;
   faceProgressHidden.value = false;
   if (isPersonMounted) { void loadPersons(true, true); void checkFaceStats(); }
 });
 watch(() => JSON.stringify([config.settings.ai?.faceModel, config.settings.ai?.faceProfile, config.settings.ai?.faceParameters]), () => {
+  faceStatsGeneration++; faceStatsPending = null; faceStatsDirty = false; faceStats.value = null;
   if (isPersonMounted) {
     void loadPersons(true, true);
     void checkFaceStats();
@@ -759,12 +779,28 @@ async function onResetFacesConfirm() {
   checkFaceStats();
 }
 
-async function checkFaceStats() {
-  const libraryId = libConfig._libraryId;
-  const stats = await getFaceStats();
-  if (stats && isPersonMounted && libraryId === libConfig._libraryId) {
-    incompleteCount.value = stats.unprocessed;
+async function checkFaceStats(refreshAfterPending = false) {
+  if (faceStatsPending) {
+    faceStatsDirty ||= refreshAfterPending;
+    return faceStatsPending;
   }
+  faceStatsDirty = false;
+  faceStatsRefreshedAt = Date.now();
+  const libraryId = libConfig._libraryId, generation = faceStatsGeneration;
+  const work = (async () => {
+    const stats = await getFaceStats();
+    if (stats && isPersonMounted && libraryId === libConfig._libraryId && generation === faceStatsGeneration) {
+      incompleteCount.value = stats.unprocessed;
+      faceStats.value = stats;
+    }
+  })();
+  faceStatsPending = work;
+  void work.finally(() => {
+    if (faceStatsPending !== work) return;
+    faceStatsPending = null;
+    if (isPersonMounted && faceStatsDirty) void checkFaceStats();
+  });
+  return work;
 }
 
 // Only refresh the active view. Inactive panel data is refreshed on re-entry.

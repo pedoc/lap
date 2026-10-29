@@ -27,7 +27,7 @@ const progress=computed(()=>{
   if(work.value.phase==='counting')return t('scan_tracking.found',{count:counts.value.total});
   const pending=counts.value.pending>0 ? t('scan_tracking.pending_short',{count:counts.value.pending}) : '';
   if(state.value==='pausing' || ['finalizing','draining'].includes(work.value.phase))return pending;
-  return [`${work.value.current}/${work.value.total}`,work.value.phase==='discovering'?'':pending].filter(Boolean).join(' · ');
+  return [`${work.value.current}/${work.value.total}`,work.value.percent===null?'':`${work.value.percent}%`,work.value.phase==='discovering'?'':pending].filter(Boolean).join(' · ');
 });
 const icon=computed(()=>busy.value ? IconUpdate : ['failed','warnings','interrupted'].includes(state.value)||labelState.value==='unavailable' ? IconExclamation : ['complete','prepared'].includes(state.value) ? IconCheck : state.value==='paused' ? IconUpdateDot : IconMinus);
 const color=computed(()=>['failed','warnings','interrupted','paused','pausing'].includes(state.value) ? 'text-base-content font-medium' : 'text-base-content/75');

@@ -125,16 +125,21 @@
           </div>
 
           <!-- grid styles cycle -->
-          <TButton
-            :icon="[IconCard, IconTile, IconJustified, IconJustified][config.settings.grid.style]"
-            :iconStyle="{
-              transform: `rotate(${config.settings.grid.style === 3 ? 90 : 0}deg)`,
-            }"
-            :tooltip="localeMsg.settings.grid.style_options[config.settings.grid.style]"
-            :selected="isGridLayoutView"
-            :disabled="tempViewMode === 'map'"
-            @click="cycleGridStyle"
-          />
+          <ContextMenu ref="gridStyleMenuRef" :menuItems="gridStyleMenuItems" :disabled="tempViewMode === 'map'">
+            <template #trigger>
+              <TButton
+                :icon="[IconCard, IconTile, IconJustified, IconJustified][config.settings.grid.style]"
+                :iconStyle="{
+                  transform: `rotate(${config.settings.grid.style === 3 ? 90 : 0}deg)`,
+                }"
+                :tooltip="localeMsg.settings.grid.style_options[config.settings.grid.style]"
+                :selected="isGridLayoutView"
+                :disabled="tempViewMode === 'map'"
+                @click="cycleGridStyle"
+                @contextmenu.prevent.stop="gridStyleMenuRef?.open($event.clientX, $event.clientY)"
+              />
+            </template>
+          </ContextMenu>
 
           <!-- toggle filmstrip -->
           <TButton
@@ -906,6 +911,7 @@ import {
   IconRight,
   IconSeparator,
   IconCard,
+  IconChecked,
   IconTile,
   IconJustified,
   IconFilmstrip,
@@ -5731,7 +5737,7 @@ const statusBarScanText = computed(() => {
 
   if (activeScanWork.value && activeScanReport.value) {
     const work = activeScanWork.value, counts = activeScanReport.value.counts;
-    const progress = ['counting','finalizing','draining'].includes(work.phase) ? '' : `${work.current.toLocaleString()} / ${work.total.toLocaleString()}`;
+    const progress = ['counting','finalizing','draining'].includes(work.phase) ? '' : `${work.current.toLocaleString()} / ${work.total.toLocaleString()}${work.percent === null ? '' : ` · ${work.percent}%`}`;
     return [t('scan_tracking.phase_'+work.phase), progress, counts.pending > 0 ? t('scan_tracking.pending_short',{count:counts.pending}) : ''].filter(Boolean).join(' · ');
   }
 
@@ -6963,7 +6969,24 @@ async function openMapPreviewFile(fileId: number) {
   handleItemDblClicked(index);
 }
 
+const gridStyleMenuRef = ref<InstanceType<typeof ContextMenu> | null>(null);
+const gridStyleMenuItems = computed(() => localeMsg.value.settings.grid.style_options.map((label: string, style: number) => ({
+  label,
+  icon: config.settings.grid.style === style ? markRaw(IconChecked) : null,
+  action: () => selectGridStyle(style),
+})));
+
+function selectGridStyle(style: number) {
+  if (tempViewMode.value === 'map') return;
+  showQuickView.value = false;
+  config.settings.grid.viewMode = 'grid';
+  config.settings.grid.style = style;
+  void tauriEmit('settings-gridStyle-changed', style);
+}
+
 function cycleGridStyle() {
+  if (tempViewMode.value === 'map') return;
+  gridStyleMenuRef.value?.close();
   showQuickView.value = false;
   // When grid layout isn't the active view (map or filmstrip), just switch to
   // grid layout; only cycle the style when grid layout is already active.
@@ -6972,8 +6995,7 @@ function cycleGridStyle() {
     return;
   }
   // Cycle between card, tile, justified, and masonry.
-  config.settings.grid.style = (config.settings.grid.style + 1) % 4;
-  void tauriEmit('settings-gridStyle-changed', config.settings.grid.style);
+  selectGridStyle((config.settings.grid.style + 1) % 4);
 }
 
 // Track pending requests to avoid duplicates

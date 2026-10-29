@@ -25,6 +25,7 @@ import {
 import { SIDEBAR } from '../src/common/constants.ts';
 import * as objectHelpers from '../src/common/objectUi.ts';
 import { diffObjects } from '../src/common/objectDiff.ts';
+import { progressPercent } from '../src/common/progress.ts';
 const read = (name: string) =>
   readFileSync(
     new URL(`../src/components/${name}.vue`, import.meta.url),
@@ -66,6 +67,7 @@ const tick = async () => {
 function context() {
   const ctx: any = {
     ...Vue,
+    progressPercent, TaskProgressBar: component('TaskProgressBar', { progressPercent }),
     ...infoPanelTransition,
     IconRight: () => Vue.h('svg', { 'aria-hidden': 'true' }),
     ...objectHelpers,

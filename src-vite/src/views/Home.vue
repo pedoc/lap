@@ -337,7 +337,7 @@ const { locale, messages, t } = useI18n();
 const localeMsg = computed(() => messages.value[locale.value] as any);
 const faceRecognition = useFaceRecognitionStatus();
 const recognitionIndicators = computed<Record<number, RecognitionIndicator | null>>(() => ({
-  [SIDEBAR.PERSON]: faceRecognitionIndicator({ running: faceRecognition.running.value, progress: faceRecognition.progress.value, cluster: faceRecognition.cluster.value, result: faceRecognition.result.value, error: faceRecognition.error.value }, t),
+  [SIDEBAR.PERSON]: faceRecognitionIndicator({ running: faceRecognition.running.value, progress: faceRecognition.progress.value, cluster: faceRecognition.cluster.value, result: faceRecognition.result.value, error: faceRecognition.error.value, coverage: faceRecognition.coverage.value }, t),
   [SIDEBAR.OCR]: indexedRecognitionIndicator('ocr', ocrView.value, ocrError.value, ocrBusy.value, libConfig._libraryId, t),
   [SIDEBAR.OBJECTS]: indexedRecognitionIndicator('objects', objectView.value, objectError.value, objectBusy.value, libConfig._libraryId, t),
 }));

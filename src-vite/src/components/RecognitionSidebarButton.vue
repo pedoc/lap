@@ -23,7 +23,7 @@
       <div v-if="status" class="w-64 max-w-full space-y-1 text-left leading-5 [overflow-wrap:anywhere]" data-recognition-tooltip>
         <p class="font-medium">{{ label }}</p>
         <p :class="status.tone === 'warning' ? 'text-warning' : 'text-success'">{{ status.title }}</p>
-        <progress v-if="status.progress" class="progress h-1 w-full" :class="status.tone === 'warning' ? 'progress-warning' : 'progress-success'" :value="status.progress.value" :max="Math.max(1, status.progress.max)" :aria-label="status.title"></progress>
+        <TaskProgressBar v-if="status.progress" :tone="status.tone === 'warning' ? 'warning' : 'success'" :value="status.progress.value" :max="status.progress.max" :aria-label="status.title" />
         <p v-for="(line, index) in status.lines" :key="index" class="line-clamp-4 text-base-content/70">{{ line }}</p>
       </div>
       <template v-else>{{ label }}</template>
@@ -35,6 +35,7 @@
 import { computed, type Component } from 'vue';
 import type { RecognitionIndicator } from '@/common/recognitionStatus';
 import TButton from './TButton.vue';
+import TaskProgressBar from './TaskProgressBar.vue';
 
 const props = defineProps<{
   icon: Component;

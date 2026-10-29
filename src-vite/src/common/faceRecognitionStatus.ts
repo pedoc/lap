@@ -7,13 +7,32 @@ import { faceDiagnosticState } from './faceDiagnostics';
 export function useFaceRecognitionStatus() {
   const running = ref(false), progress = ref<any | null>(null), cluster = ref<any | null>(null);
   const result = ref<any | null>(null), error = ref('');
+  const coverage = ref<any | null>(null);
   let disposed = false, ready = false, generation = 0, sequence = 0, awaitingIdle = false;
   let listenerError = '';
   let restoreDiagnostic = true;
   const finishedJobs = new Set<string>();
   let pending: Promise<void> | null = null, timer: ReturnType<typeof setInterval> | undefined;
+  let coveragePending: Promise<void> | null = null;
+  let coverageDirty = true;
   const stops: Array<() => void> = [];
   const matches = (payload: any) => !disposed && !!libConfig._libraryId && payload?.library_id === libConfig._libraryId;
+  function refreshCoverage() {
+    if (disposed || !libConfig._libraryId || coveragePending || !coverageDirty && !running.value) return;
+    coverageDirty = false;
+    const libraryId = libConfig._libraryId, scope = generation;
+    const work = invoke<any>('get_face_stats').then(stats => {
+      if (!disposed && scope === generation && libraryId === libConfig._libraryId) coverage.value = stats;
+    }).catch(() => {
+      if (!disposed && scope === generation && libraryId === libConfig._libraryId) coverage.value = null;
+    });
+    coveragePending = work;
+    void work.finally(() => {
+      if (coveragePending !== work) return;
+      coveragePending = null;
+      if (coverageDirty) refreshCoverage();
+    });
+  }
   function acceptProgress(next: any) {
     if (!running.value || next.job_id && next.job_id !== progress.value?.job_id) {
       result.value = null;
@@ -28,6 +47,7 @@ export function useFaceRecognitionStatus() {
   async function refresh(): Promise<void> {
     if (disposed || !ready || !libConfig._libraryId) return;
     if (pending) return pending;
+    refreshCoverage();
     const libraryId = libConfig._libraryId, scope = generation, request = ++sequence;
     const current = () => !disposed && scope === generation && request === sequence && libraryId === libConfig._libraryId;
     const work = (async () => {
@@ -55,10 +75,10 @@ export function useFaceRecognitionStatus() {
     return work;
   }
   stops.push(watch(() => [libConfig._libraryId, config.settings.ai?.faceProfile, config.settings.ai?.faceModel], (next, previous) => {
-    generation++; sequence++; pending = null; awaitingIdle = false;
+    generation++; sequence++; pending = null; coveragePending = null; coverageDirty = true; awaitingIdle = false;
     finishedJobs.clear();
     restoreDiagnostic = next[0] !== previous?.[0];
-    running.value = false; progress.value = null; cluster.value = null; result.value = null; error.value = listenerError;
+    running.value = false; progress.value = null; cluster.value = null; result.value = null; coverage.value = null; error.value = listenerError;
     void refresh();
   }, { flush: 'sync' }));
   onMounted(async () => {
@@ -74,6 +94,8 @@ export function useFaceRecognitionStatus() {
       },
       face_index_finished: event => {
         if (!matches(event.payload)) return;
+        coverageDirty = true;
+        refreshCoverage();
         if (event.payload.job_id) finishedJobs.add(event.payload.job_id);
         if (event.payload.job_id && progress.value?.job_id && event.payload.job_id !== progress.value.job_id) {
           sequence++; pending = null; void refresh(); return;
@@ -101,9 +123,9 @@ export function useFaceRecognitionStatus() {
     await refresh();
   });
   onBeforeUnmount(() => {
-    disposed = true; generation++; sequence++; pending = null;
+    disposed = true; generation++; sequence++; pending = null; coveragePending = null;
     clearInterval(timer);
     stops.splice(0).forEach(stop => stop());
   });
-  return { running, progress, cluster, result, error };
+  return { running, progress, cluster, result, error, coverage };
 }

@@ -1,4 +1,5 @@
 import { objectTaskPhase, objectTaskProgress } from './objectUi';
+import { progressPercent } from './progress';
 
 export interface RecognitionIndicator {
   tone: 'running' | 'warning';
@@ -22,6 +23,10 @@ function queueLines(status: any, t: Translate, active = !!status?.running) {
     ...(priority ? [t('recognition_status.priority_queue', { count: priority })]
       : active && status?.priority === 'interactive' ? [t('recognition_status.priority_processing')] : []),
   ];
+}
+function coverageLines(indexed: unknown, total: unknown, t: Translate) {
+  const percent = progressPercent(indexed, total);
+  return percent === null ? [] : [t('recognition_status.library_coverage', { indexed, total, percent })];
 }
 
 export function indexedRecognitionIndicator(
@@ -51,6 +56,7 @@ export function indexedRecognitionIndicator(
   const lines = submitting ? [] : [scopeLine(status, t)];
   if (!submitting && (active || counts.total)) lines.push(t(work.key, work.args));
   lines.push(...queueLines(status, t));
+  lines.push(...coverageLines(view?.indexed, view?.eligible, t));
   if (failed > counts.failed) lines.push(t('recognition_status.failed', { count: failed }));
   if (problem) lines.push(problem);
   lines.push(t('recognition_status.open_details'));
@@ -59,7 +65,7 @@ export function indexedRecognitionIndicator(
 }
 
 export function faceRecognitionIndicator(
-  state: { running: boolean; progress: any; cluster: any; result: any; error: string }, t: Translate,
+  state: { running: boolean; progress: any; cluster: any; result: any; error: string; coverage?: any }, t: Translate,
 ): RecognitionIndicator | null {
   const status = state.progress || {}, result = state.result || {};
   const failed = Math.max(count(status.failed), count(result.failed), count(result.diagnostics?.failedImages));
@@ -80,6 +86,7 @@ export function faceRecognitionIndicator(
     progress = { value: !status.queued && total ? current : undefined, max: Math.max(1, total) };
   }
   if (state.running) lines.push(...queueLines(status, t, true));
+  lines.push(...coverageLines(state.coverage?.processed, state.coverage?.total, t));
   const faces = count(state.running ? status.faces_found : result.total_faces);
   if (faces) lines.push(t('face_index.faces_found', { count: faces }));
   if (failed) lines.push(t('recognition_status.failed', { count: failed }));

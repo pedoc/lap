@@ -7,6 +7,7 @@ import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { PERSON_PAGE_SIZE, SIDEBAR } from '../src/common/constants.ts';
 import { objectTaskPhase, objectTaskProgress } from '../src/common/objectUi.ts';
+import { progressPercent } from '../src/common/progress.ts';
 
 function component(name: string, context: any, progressOnly = false) {
   let source = readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
@@ -16,7 +17,8 @@ function component(name: string, context: any, progressOnly = false) {
     const progress = panel.children.find((node: any) => node.type === 1 && node.props.some((prop: any) => prop.name === 'if' && prop.exp?.content.includes('isIndexing')));
     assert.ok(progress, 'Missing actual Person progress template');
     // Keep the complete production script and original progress subtree, without unrelated people UI.
-    source = `<template>${progress.loc.source}</template><script setup lang="ts">${descriptor.scriptSetup!.content}</script>`;
+    const coverage = panel.children.find((node: any) => node.type === 1 && node.props.some((prop: any) => prop.name === 'if' && prop.exp?.content.includes('faceStats')));
+    source = `<template>${progress.loc.source}${coverage?.loc.source || ''}</template><script setup lang="ts">${descriptor.scriptSetup!.content}</script>`;
     ({ descriptor } = parse(source));
   }
   const imports: Record<string, unknown> = {};
@@ -34,6 +36,7 @@ function component(name: string, context: any, progressOnly = false) {
 }
 
 function mountBanner(name: string, context: any, progressOnly = false) {
+  context = { ...context, progressPercent, TaskProgressBar: component('TaskProgressBar', { progressPercent }) };
   const element = (tag: string, text = ''): any => ({ tag, text, children: [], props: {}, parent: null });
   const remove = (node: any) => {
     if (node.parent) node.parent.children.splice(node.parent.children.indexOf(node), 1);
@@ -77,11 +80,11 @@ function mountBanner(name: string, context: any, progressOnly = false) {
 
 const flush = async () => { await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); await Vue.nextTick(); };
 
-function faceProgressHarness(options: { query?: () => Promise<any>; subscribe?: { name: string; ready: Promise<void> } } = {}) {
+function faceProgressHarness(options: { query?: () => Promise<any>; stats?: () => Promise<any>; now?: () => number; subscribe?: { name: string; ready: Promise<void> } } = {}) {
   const listeners: Record<string, (event: any) => any> = {};
   const libConfig = Vue.reactive({ _libraryId: 'library-a', activePane: 'main', person: { id: null, name: null } });
   const initialProgress = { library_id: 'library-a', phase: 'indexing', current: 1, total: 8, faces_found: 2 };
-  let cancellations = 0, subscriptions = 0, disposals = 0;
+  let cancellations = 0, subscriptions = 0, disposals = 0, statsReads = 0;
   const listen = async (name: string, callback: any) => {
     subscriptions++;
     listeners[name] = callback;
@@ -95,7 +98,7 @@ function faceProgressHarness(options: { query?: () => Promise<any>; subscribe?: 
     useI18n: () => ({ t, locale: Vue.ref('en'), messages: Vue.ref({ en: {} }) }),
     useToast: () => ({ error() {} }),
     getPersonsPage: async () => ({ persons: [], total: 0, has_more: false }),
-    getFaceStats: async () => ({ unprocessed: 0 }),
+    getFaceStats: async () => { statsReads++; return options.stats ? options.stats() : { unprocessed: 0 }; },
     isFaceIndexing: options.query || (async () => [true, { ...initialProgress, library_id: libConfig._libraryId }]),
     cancelFaceIndex: async () => { cancellations++; },
     listen,
@@ -103,7 +106,7 @@ function faceProgressHarness(options: { query?: () => Promise<any>; subscribe?: 
     listenFaceIndexFinished: (callback: any) => listen('finished', callback),
     listenClusterProgress: (callback: any) => listen('cluster', callback),
     IconUpdate: () => Vue.h('svg'), IconClose: () => Vue.h('svg'),
-    setTimeout, clearTimeout, console,
+    setTimeout, clearTimeout, console, Date: options.now ? { now: options.now } : Date,
   };
   return {
     libConfig,
@@ -111,6 +114,7 @@ function faceProgressHarness(options: { query?: () => Promise<any>; subscribe?: 
     dispatch: async (name: string, payload: any) => { await listeners[name]?.({ payload }); await flush(); },
     progress: (current: number) => ({ ...initialProgress, library_id: libConfig._libraryId, current }),
     counts: () => ({ cancellations, subscriptions, disposals }),
+    statsReads: () => statsReads,
   };
 }
 
@@ -313,3 +317,37 @@ for (const [name, expectedSubscriptions] of [['progress', 2], ['finished', 3]] a
     assert.deepEqual(state.counts(), { cancellations: 0, subscriptions: expectedSubscriptions, disposals: expectedSubscriptions });
   });
 }
+
+test('Person refreshes library coverage from ordinary no-face progress with the same three-second throttle', async () => {
+  let now = 10000, processed = 1;
+  const state = faceProgressHarness({ now: () => now, stats: async () => ({ processed, total: 10, unprocessed: 10 - processed }) });
+  const h = state.mount();
+  const coverage = () => h.find(node => node.tag === 'p' && node.text.includes('recognition_status.library_coverage'))?.text || '';
+  try {
+    await flush(); assert.equal(state.statsReads(), 1); assert.match(coverage(), /"percent":10/);
+    now = 11000; processed = 3;
+    await state.dispatch('progress', { ...state.progress(3), faces_found: 0 });
+    assert.equal(state.statsReads(), 1);
+    now = 13000; processed = 5;
+    await state.dispatch('progress', { ...state.progress(5), faces_found: 0 });
+    assert.equal(state.statsReads(), 2); assert.match(coverage(), /"percent":50/);
+  } finally { h.unmount(); }
+});
+
+test('slow Person coverage counts do not overlap and task completion refreshes the final total', async () => {
+  let now = 10000, resolve!: (stats: any) => void, reads = 0;
+  const initial = new Promise(stats => { resolve = stats; });
+  const state = faceProgressHarness({ now: () => now, stats: async () => reads++ ? { processed: 10, total: 10, unprocessed: 0 } : initial });
+  const h = state.mount();
+  try {
+    await flush(); now = 14000;
+    await state.dispatch('progress', { ...state.progress(5), faces_found: 0 });
+    assert.equal(state.statsReads(), 1);
+    await state.dispatch('finished', { library_id: state.libConfig._libraryId });
+    assert.equal(state.statsReads(), 1);
+    resolve({ processed: 2, total: 10, unprocessed: 8 }); await flush();
+    assert.equal(state.statsReads(), 2);
+    const coverage = h.find(node => node.tag === 'p' && node.text.includes('recognition_status.library_coverage'));
+    assert.match(coverage.text, /"percent":100/);
+  } finally { h.unmount(); }
+});

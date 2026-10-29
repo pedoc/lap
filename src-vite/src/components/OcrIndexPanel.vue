@@ -2,17 +2,17 @@
   <section class="rounded-box border border-base-content/10 p-3 space-y-2" :aria-label="t('ocr.index_title')">
     <h3 class="text-sm font-semibold">{{ t('ocr.index_title') }}</h3>
     <p class="text-xs opacity-60">{{ t('ocr.local_hint') }}</p>
-    <p v-if="view" class="text-xs">{{ t('ocr.coverage', { indexed: view.indexed, total: view.eligible, failed: view.failed }) }}</p>
+    <p v-if="view" class="text-xs">{{ t('ocr.coverage', { indexed: view.indexed, total: view.eligible, failed: view.failed }) }}<span v-if="coveragePercent !== null"> · {{ t('recognition_status.library_analysis') }} {{ coveragePercent }}%</span></p>
     <p v-if="view && !view.modelInstalled" class="text-xs text-warning">{{ t('ocr.download_first') }}</p>
     <template v-if="view?.status.jobId">
       <p class="text-xs opacity-70 break-all">{{ t('ocr.scope_' + (view.status.scope || 'library')) }}<span v-if="view.status.scopeName"> · {{ view.status.scopeName }}</span></p>
-      <progress v-if="view.status.running" class="progress progress-primary w-full" :value="view.status.queued ? undefined : view.status.completed" :max="Math.max(1, view.status.total)"></progress>
+      <TaskProgressBar v-if="view.status.running" :value="view.status.queued || !view.status.total ? undefined : view.status.completed" :max="Math.max(1, view.status.total)" :aria-label="t('ocr.index_title')" />
       <p class="text-xs" aria-live="polite">{{ view.status.queued ? t('recognition_status.queued') : view.status.running && !view.status.total ? t('ocr.preparing') : t('ocr.progress', view.status) }}</p>
       <p v-if="view.status.cancelled" class="text-xs opacity-60">{{ t(view.status.automatic && !view.automation?.paused ? 'ocr.auto_yielded' : 'ocr.stopped_saved') }}</p>
     </template>
     <div v-if="error || view?.status.error" role="alert" class="text-xs text-error whitespace-pre-wrap break-words">{{ error || view.status.error }}</div>
     <div class="flex flex-wrap gap-2">
-      <button class="btn btn-sm btn-primary" :disabled="busy || !view?.modelInstalled || view?.status.running" @click="run(false)">{{ t('ocr.process_pending') }}</button>
+      <button v-if="view?.pending !== 0" class="btn btn-sm btn-primary" :disabled="busy || !view?.modelInstalled || view?.status.running" @click="run(false)">{{ t('ocr.process_pending') }}</button>
       <button class="btn btn-sm" :disabled="busy || !view?.modelInstalled || !view?.failed || view?.status.running" @click="run(false, true)">{{ t('ocr.retry_failed') }}</button>
       <button v-if="view?.status.running" class="btn btn-sm" :disabled="busy || view.status.stopping" @click="cancel">{{ t(view.status.stopping ? 'ocr.stopping' : 'ocr.stop') }}</button>
     </div>
@@ -31,6 +31,9 @@
 </template>
 <script setup lang="ts">
 import OcrAutoSettings from './OcrAutoSettings.vue';
+import TaskProgressBar from './TaskProgressBar.vue';
+import { computed } from 'vue';
+import { progressPercent } from '@/common/progress';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { useI18n } from 'vue-i18n';
 import { libConfig } from '@/common/config';
@@ -38,6 +41,7 @@ import { useOcr } from '@/common/ocr';
 defineProps<{ compact?: boolean }>();
 const { t } = useI18n();
 const { view, error, busy, start, stop, refresh } = useOcr();
+const coveragePercent = computed(() => progressPercent(view.value?.indexed, view.value?.eligible));
 async function run(force: boolean, retryFailed = false) {
   const libraryId = libConfig._libraryId;
   if (force && !await ask(t('ocr.rebuild_confirm'), { kind: 'warning' })) return;

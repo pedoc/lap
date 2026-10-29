@@ -3,11 +3,11 @@
     <h4 class="font-medium">{{ t('smart_albums.recognition_title', { task: taskName }) }}</h4>
     <p v-if="!view" class="opacity-60">{{ t('objects.loading') }}</p>
     <template v-else>
-      <p>{{ t('smart_albums.recognition_coverage', { indexed: view.indexed, total: view.eligible, pending: view.pending, failed: view.failed }) }}</p>
+      <p>{{ t('smart_albums.recognition_coverage', { indexed: view.indexed, total: view.eligible, pending: view.pending, failed: view.failed }) }}<span v-if="coveragePercent !== null"> · {{ t('recognition_status.library_analysis') }} {{ coveragePercent }}%</span></p>
       <p v-if="view.pending || view.failed" class="text-warning">{{ t('smart_albums.recognition_incomplete') }}</p>
       <p v-if="!view.modelInstalled" class="text-warning">{{ t(task === 'ocr' ? 'ocr.download_first' : 'objects.download_first') }}</p>
       <template v-if="view.status?.running">
-        <progress class="progress progress-primary w-full" :value="task === 'objects' ? progress.value : view.status.total ? view.status.completed : undefined" :max="Math.max(1, view.status.total || 0)" />
+        <TaskProgressBar :value="task === 'objects' ? progress.value : !view.status.queued && view.status.total ? view.status.completed : undefined" :max="Math.max(1, view.status.total || 0)" :aria-label="taskName" />
         <p role="status">{{ task === 'objects' ? t(progress.key, progress.args) : !view.status.total ? t('ocr.preparing') : t('ocr.progress', view.status) }}</p>
       </template>
     </template>
@@ -33,6 +33,8 @@ import { config, libConfig } from '@/common/config';
 import { useOcr, openOcrSettings } from '@/common/ocr';
 import { useObjects, openObjectSettings } from '@/common/objects';
 import { objectTaskProgress } from '@/common/objectUi';
+import { progressPercent } from '@/common/progress';
+import TaskProgressBar from './TaskProgressBar.vue';
 const props = defineProps<{ task: 'ocr' | 'objects' }>();
 const { t } = useI18n();
 // The parent mounts only the capabilities actually used by its rules.
@@ -40,6 +42,7 @@ const { view, error, busy, refresh, start, stop } = props.task === 'ocr' ? useOc
 const actionError = ref('');
 const taskName = computed(() => t(props.task === 'ocr' ? 'ocr.photo_title' : 'objects.title'));
 const progress = computed(() => objectTaskProgress(view.value?.status));
+const coveragePercent = computed(() => progressPercent(view.value?.indexed, view.value?.eligible));
 const profile = () => config.settings.ai?.[props.task === 'ocr' ? 'ocrProfile' : 'detectionProfile'];
 function settings() { return props.task === 'ocr' ? openOcrSettings() : openObjectSettings(); }
 async function run(retryFailed: boolean) {

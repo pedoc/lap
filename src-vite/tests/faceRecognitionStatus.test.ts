@@ -10,7 +10,7 @@ const source = stripTypeScriptTypes(readFileSync(new URL('../src/common/faceReco
 const deferred = () => { let resolve: (value?: any) => void = () => {}, reject: (value?: any) => void = () => {}; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const tick = async () => { await Vue.nextTick(); await new Promise(resolve => setImmediate(resolve)); };
 const progress = (library = 'A', current = 2) => ({ library_id: library, scope: 'library', phase: 'indexing', current, total: 10, faces_found: current });
-function harness(options: { read?: () => any; subscribe?: (name: string, callback: any) => any } = {}) {
+function harness(options: { read?: () => any; stats?: () => any; subscribe?: (name: string, callback: any) => any } = {}) {
   const mounted: Array<() => Promise<void>> = [], unmounted: Array<() => void> = [], calls: any[] = [], events = new Map<string, any>(), timers = new Map<number, () => void>(), removed: string[] = [];
   let timerId = 0;
   const libConfig = Vue.reactive({ _libraryId: 'A' }), config = Vue.reactive({ settings: { ai: { faceProfile: 'profile-a', faceModel: 'model-a' } } });
@@ -19,7 +19,7 @@ function harness(options: { read?: () => any; subscribe?: (name: string, callbac
   const api: any = scope.run(() => runInNewContext(`${source};useFaceRecognitionStatus()`, {
     ...Vue, libConfig, config, faceDiagnosticState,
     onMounted: (callback: any) => mounted.push(callback), onBeforeUnmount: (callback: any) => unmounted.push(callback),
-    invoke: async (...args: any[]) => { calls.push(args); return options.read ? options.read() : [false, null]; },
+    invoke: async (...args: any[]) => { calls.push(args); return args[0] === 'get_face_stats' ? options.stats?.() ?? { processed: 4, total: 20 } : options.read ? options.read() : [false, null]; },
     listen: async (name: string, callback: any) => { events.set(name, callback); return options.subscribe ? options.subscribe(name, callback) : () => { removed.push(name); events.delete(name); }; },
     setInterval: (callback: () => void, interval: number) => { assert.equal(interval, 3000); timers.set(++timerId, callback); return timerId; },
     clearInterval: (id: number) => timers.delete(id),
@@ -47,7 +47,7 @@ test('face status subscribes before restoring an active job, tracks clustering a
     assert.equal(h.api.cluster.value, null, 'late clustering cannot resurrect finished state');
     h.event('face_index_progress', { ...progress('A', 0), failed: 0 });
     assert.equal(h.api.running.value, true); assert.equal(h.api.result.value, null); assert.equal(h.api.error.value, '');
-    assert.ok(h.calls.every(([name]) => name === 'is_face_indexing'));
+    assert.ok(h.calls.every(([name]) => ['is_face_indexing', 'get_face_stats'].includes(name)));
   } finally { h.dispose(); }
 });
 
@@ -157,5 +157,51 @@ test('queued face jobs follow the authoritative active job and old events cannot
     assert.equal(h.api.progress.value.job_id, 'next');
     h.event('face_index_progress', job('manual', 7));
     assert.equal(h.api.progress.value.job_id, 'next');
+  } finally { h.dispose(); }
+});
+
+test('slow face coverage never blocks live status and remains bounded and library scoped', async () => {
+  const oldStats = deferred(), newStats = deferred(), reads = [oldStats, newStats];
+  const h = harness({ read: () => [true, progress(h.libConfig._libraryId)], stats: () => reads.shift()!.promise });
+  try {
+    await h.boot(); assert.equal(h.api.running.value, true); assert.equal(h.api.coverage.value, null);
+    await h.poll(); assert.equal(h.calls.filter(([name]) => name === 'get_face_stats').length, 1);
+    h.libConfig._libraryId = 'B'; await tick();
+    oldStats.resolve({ processed: 999, total: 1000 }); await tick(); assert.equal(h.api.coverage.value, null);
+    newStats.resolve({ processed: 2, total: 10 }); await tick();
+    assert.equal(h.api.coverage.value.processed, 2); assert.equal(h.api.progress.value.library_id, 'B');
+  } finally { h.dispose(); }
+});
+
+test('face coverage failures and responses after unmount do not corrupt task status', async () => {
+  const lateStats = deferred(); let reads = 0;
+  const h = harness({ read: () => [true, progress()], stats: () => reads++ ? lateStats.promise : Promise.reject(new Error('Coverage unavailable')) });
+  await h.boot(); await tick();
+  assert.equal(h.api.running.value, true); assert.equal(h.api.error.value, ''); assert.equal(h.api.coverage.value, null);
+  await h.poll(); h.dispose(); lateStats.resolve({ processed: 10, total: 10 }); await tick();
+  assert.equal(h.api.coverage.value, null);
+});
+
+test('idle face status polls do not repeat full-library coverage counts', async () => {
+  const h = harness();
+  const count = () => h.calls.filter(([name]) => name === 'get_face_stats').length;
+  try {
+    await h.boot(); await tick(); assert.equal(count(), 1);
+    await h.poll(); await h.poll(); assert.equal(count(), 1);
+    h.config.settings.ai.faceProfile = 'new-profile'; await tick(); assert.equal(count(), 2);
+    await h.poll(); assert.equal(count(), 2);
+  } finally { h.dispose(); }
+});
+
+test('finishing a face task requests final coverage after an already pending count and then returns to idle', async () => {
+  const initialStats = deferred(); let reads = 0, active = true;
+  const h = harness({ read: () => [active, active ? progress() : null], stats: () => reads++ ? { processed: 10, total: 10 } : initialStats.promise });
+  try {
+    await h.boot(); assert.equal(reads, 1);
+    active = false; h.event('face_index_finished', { library_id: 'A', failed: 0 });
+    assert.equal(h.api.running.value, false); assert.equal(reads, 1);
+    initialStats.resolve({ processed: 2, total: 10 }); await tick();
+    assert.equal(reads, 2); assert.equal(h.api.coverage.value.processed, 10);
+    await h.poll(); await h.poll(); assert.equal(reads, 2);
   } finally { h.dispose(); }
 });

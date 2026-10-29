@@ -13,12 +13,13 @@ function harness(options: { menuItems?: any; nextTick?: () => Promise<void> } = 
   const listeners = new Map<string, Set<Function>>();
   const timers = new Map<number, Function>();
   let timerId = 0;
+  let exposed: { open: (...args: any[]) => Promise<void>; close: () => void };
   const scope = Vue.effectScope();
   const api = scope.run(() => runInNewContext(`${script}\n;({ open, isDropDown, menu, dropdown, handleItemMouseEnter, scheduleSubmenuClose })`, {
     ...Vue,
     defineProps: () => ({ menuItems: options.menuItems ?? [], disabled: false }),
     defineEmits: () => (...args: any[]) => events.push(args),
-    defineExpose() {},
+    defineExpose(value: typeof exposed) { exposed = value; },
     onBeforeUnmount: (callback: () => void) => unmounts.push(callback),
     nextTick: options.nextTick ?? Vue.nextTick,
     document: {
@@ -36,7 +37,7 @@ function harness(options: { menuItems?: any; nextTick?: () => Promise<void> } = 
   }))!;
   api.menu.value = { getBoundingClientRect: () => ({ width: 160, height: 80 }) };
   return {
-    api, events, timers,
+    api, exposed: exposed!, events, timers,
     listenerCount: () => [...listeners.values()].reduce((sum, entries) => sum + entries.size, 0),
     unmount() {
       for (const callback of unmounts) callback();
@@ -96,4 +97,32 @@ test('unmounting between open and render cannot measure a removed menu', async (
   await assert.doesNotReject(opening);
   assert.deepEqual(h.events, [['open-change', true], ['open-change', false]]);
   assert.equal(h.listenerCount(), 0);
+});
+
+test('the public close method releases an open menu, its document listeners and submenu timers', async () => {
+  const h = harness();
+  await h.exposed.open(20, 30);
+  h.api.handleItemMouseEnter(0, { children: [{}], submenuOpenDelay: 100 }, {});
+  assert.equal(h.listenerCount(), 2);
+  assert.equal(h.timers.size, 1);
+  h.exposed.close();
+  await Vue.nextTick();
+  assert.equal(h.api.isDropDown.value, false);
+  assert.deepEqual(h.events, [['open-change', true], ['open-change', false]]);
+  assert.equal(h.listenerCount(), 0);
+  assert.equal(h.timers.size, 0);
+  h.unmount();
+});
+
+test('the public close method cancels pending lazy menu resolution', async () => {
+  let resolveItems!: (items: any[]) => void;
+  const h = harness({ menuItems: () => new Promise(resolve => { resolveItems = resolve; }) });
+  const opening = h.exposed.open(20, 30);
+  h.exposed.close();
+  resolveItems([]);
+  await opening;
+  assert.equal(h.api.isDropDown.value, false);
+  assert.deepEqual(h.events, []);
+  assert.equal(h.listenerCount(), 0);
+  h.unmount();
 });

@@ -288,6 +288,8 @@
     "task_model_hint": "This task uses the model selected in the chat. Vector indexing continues to use the Embedding models configured in settings."
   },
   "recognition_status": {
+    "library_analysis": "Library analysis",
+    "library_coverage": "Library analyzed {indexed} / {total} photos · {percent}%",
     "requesting": "Processing task request",
     "queued": "Queued",
     "queued_started": "Queued to run after the current task finishes.",

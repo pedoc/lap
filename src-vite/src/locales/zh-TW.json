@@ -99,6 +99,8 @@
     "preview_close": "關閉預覽"
   },
   "recognition_status": {
+    "library_analysis": "圖庫分析進度",
+    "library_coverage": "圖庫已分析 {indexed} / {total} 張 · {percent}%",
     "requesting": "正在處理任務請求",
     "queued": "已排隊",
     "queued_started": "已排隊，將在目前任務完成後處理。",

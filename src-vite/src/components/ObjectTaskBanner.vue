@@ -29,11 +29,11 @@
       {{ t('ocr.scope_' + (view.status.scope || 'library'))
       }}<span v-if="view.status.scopeName"> · {{ view.status.scopeName }}</span>
     </p>
-    <progress
+    <TaskProgressBar
       v-if="view.status.running"
-      class="progress progress-primary w-full"
       :value="taskProgress.value"
       :max="taskProgress.max"
+      :aria-label="t('objects.title')"
     />
     <p class="text-xs" aria-live="polite">
       {{ t(taskProgress.key, taskProgress.args) }}
@@ -65,6 +65,7 @@ import { config, libConfig } from '@/common/config';
 import { SIDEBAR } from '@/common/constants';
 import { objectTaskPhase, objectTaskProgress } from '@/common/objectUi';
 import { useObjects } from '@/common/objects';
+import TaskProgressBar from './TaskProgressBar.vue';
 const { t } = useI18n(),
   { view, error, busy, stop } = useObjects(),
   dismissed = ref('');

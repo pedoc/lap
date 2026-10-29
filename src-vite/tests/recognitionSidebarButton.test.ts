@@ -6,6 +6,7 @@ import { runInNewContext } from 'node:vm';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as Vue from 'vue';
 import { renderToString } from 'vue/server-renderer';
+import { progressPercent } from '../src/common/progress.ts';
 
 const read = (name: string) => readFileSync(new URL(`../src/components/${name}.vue`, import.meta.url), 'utf8');
 const buttonSource = read('TButton');
@@ -101,7 +102,8 @@ test('real sidebar buttons render running/warning dots, structured hover content
   });
   const setup = TButton.setup;
   TButton.setup = (props: any, context: any) => setup(props, { ...context, expose: (state: any) => { state.isHovered.value = true; context.expose(state); } });
-  const SidebarButton = compile(read('RecognitionSidebarButton'), { TButton });
+  const TaskProgressBar = compile(read('TaskProgressBar'), { progressPercent });
+  const SidebarButton = compile(read('RecognitionSidebarButton'), { TButton, TaskProgressBar });
   const icon = { render: () => Vue.h('svg') };
   for (const tone of ['running', 'warning', null]) {
     const context: any = {};

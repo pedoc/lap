@@ -19,7 +19,10 @@
         <p v-if="active && selectedRun.counts.discovered>=selectedRun.counts.total && selectedRun.counts.pending>0" class="text-xs text-base-content">{{ t('scan_tracking.postprocessing_hint',{count:selectedRun.counts.pending}) }}</p>
         <p v-if="active && ['preparing_previews','preparing_search'].includes(work.phase)" class="text-xs">{{ phaseLabel(work.phase) }}: {{ work.current }}/{{ work.total }}</p>
         <progress v-if="selectedRun.retry?.running" class="progress progress-primary w-full" :aria-label="t('scan_tracking.state_retrying')" />
-        <progress v-else-if="percentage!==null" class="progress progress-primary w-full" :value="percentage" max="100" :aria-label="active ? phaseLabel(work.phase) : t('scan_tracking.checked_short')" />
+        <div v-else-if="percentage!==null" class="flex items-center gap-2">
+          <progress class="progress progress-primary flex-1 min-w-0" :value="percentage" max="100" :aria-label="active ? phaseLabel(work.phase) : t('scan_tracking.checked_short')" />
+          <span class="text-xs tabular-nums shrink-0">{{ percentage }}%</span>
+        </div>
         <progress v-else-if="active" class="progress progress-primary w-full" :aria-label="phaseLabel(work.phase)" />
         <p v-if="work.phase==='counting'" class="text-xs text-base-content/50">{{ t('scan_tracking.counting_hint') }}</p>
         <div class="grid grid-cols-3 gap-2 text-xs text-base-content/65">

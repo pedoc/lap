@@ -424,9 +424,12 @@ const handleMainItemClick = (index, item, event) => {
   handleLeafClick(item);
 };
 
-defineExpose({
-  open
-});
+const close = () => {
+  openRequestId++;
+  isDropDown.value = false;
+};
+
+defineExpose({ open, close });
 
 
 </script>

@@ -288,6 +288,8 @@
     "task_model_hint": "本任务使用会话选定的媒体理解模型；向量索引继续使用设置中的 Embedding 模型。"
   },
   "recognition_status": {
+    "library_analysis": "图库分析进度",
+    "library_coverage": "图库已分析 {indexed} / {total} 张 · {percent}%",
     "requesting": "正在处理任务请求",
     "queued": "已排队",
     "queued_started": "已排队，将在当前任务完成后处理。",

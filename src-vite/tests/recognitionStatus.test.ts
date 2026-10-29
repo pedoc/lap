@@ -5,11 +5,12 @@ import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 import { createI18n } from 'vue-i18n';
 import { objectTaskPhase, objectTaskProgress } from '../src/common/objectUi.ts';
+import { progressPercent } from '../src/common/progress.ts';
 
 const source = readFileSync(new URL('../src/common/recognitionStatus.ts', import.meta.url), 'utf8');
 const { indexedRecognitionIndicator, faceRecognitionIndicator } = runInNewContext(
   stripTypeScriptTypes(source).replace(/^import[^\n]+\n/gm, '').replace(/export /g, '') + ';({indexedRecognitionIndicator,faceRecognitionIndicator});',
-  { objectTaskPhase, objectTaskProgress },
+  { objectTaskPhase, objectTaskProgress, progressPercent },
 );
 const zh = JSON.parse(readFileSync(new URL('../src/locales/zh-CN.json', import.meta.url), 'utf8'));
 const i18n = createI18n({ legacy: false, locale: 'zh', messages: { zh } });
@@ -93,4 +94,16 @@ test('Home wires status into sidebar navigation and removes recognition banners 
   const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const finished = main.slice(main.indexOf("listen('face_index_finished'"), main.indexOf('// Set up global properties'));
   assert.match(finished, /recordFaceDiagnostic/); assert.doesNotMatch(finished, /toast\.(error|warning|success|info)/);
+});
+
+test('library analysis coverage remains separate from the current task and excludes failed photos', () => {
+  for (const task of ['ocr', 'objects']) {
+    const state = indicator({ indexed: 8, eligible: 10, failed: 2, status: { running: true, phase: 'indexing', completed: 1, total: 2 } }, '', false, task);
+    assert.equal(state.progress.value, 1); assert.equal(state.progress.max, 2);
+    assert.match(state.lines.join(' '), /图库已分析 8 \/ 10 张 · 80%/);
+  }
+  const state = face({ running: true, progress: { phase: 'indexing', current: 1, total: 2 }, coverage: { processed: 8, total: 10 } });
+  assert.match(state.lines.join(' '), /图库已分析 8 \/ 10 张 · 80%/);
+  const unknown = face({ running: true, progress: { phase: 'indexing', current: 0, total: 0 }, coverage: { processed: 0, total: 0 } });
+  assert.doesNotMatch(unknown.lines.join(' '), /图库已分析/);
 });
