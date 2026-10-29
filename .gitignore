@@ -18,3 +18,4 @@ publish_release.sh
 release-downloads.sh
 .codex/readme-*/
 videos/
+.codex/recognition-ui/
