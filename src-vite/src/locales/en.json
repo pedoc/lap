@@ -3577,5 +3577,22 @@
     "complete": "Download complete; updating model list…",
     "cancelling": "Cancelling download…"
   }
-}
+},
+  "themes": {
+    "add": "New theme",
+    "edit": "Edit theme",
+    "manage": "Manage themes",
+    "menu": "Actions for {name}",
+    "empty": "Add a theme or pin a Smart Album here.",
+    "restore": "Restore default themes",
+    "restore_confirm": "Restore the names and matching rules of the eight default themes and pin them here? Custom themes and other Smart Albums are kept.",
+    "match_by": "Match by",
+    "match_text": "Content description",
+    "match_reference": "Reference photo",
+    "more_conditions": "More conditions",
+    "simple_mode": "Simple editing",
+    "pin": "Pin to themes",
+    "unpin": "Unpin from themes",
+    "initialization_error": "Could not load library or AI settings. Retry to initialize themes."
+  }
 }

@@ -3577,5 +3577,22 @@
     "complete": "下载完成，正在更新模型列表…",
     "cancelling": "正在取消下载…"
   }
-}
+},
+  "themes": {
+    "add": "新建主题",
+    "edit": "编辑主题",
+    "manage": "管理主题",
+    "menu": "{name}的操作",
+    "empty": "新建主题，或将智能相册固定到这里。",
+    "restore": "恢复默认主题",
+    "restore_confirm": "恢复八个默认主题的名称和匹配规则，并固定到主题栏？自建主题和其他智能相册会保留。",
+    "match_by": "匹配方式",
+    "match_text": "内容描述",
+    "match_reference": "参考照片",
+    "more_conditions": "更多条件",
+    "simple_mode": "简化编辑",
+    "pin": "固定到主题栏",
+    "unpin": "从主题栏移除",
+    "initialization_error": "无法读取图库或 AI 设置，请重试初始化主题。"
+  }
 }

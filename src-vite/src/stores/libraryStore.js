@@ -2,10 +2,12 @@
  * Library Store - Per-library configuration
  */
 import { defineStore } from 'pinia';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentLibraryState, saveLibraryState, getAppConfig } from '@/common/api';
 import { CULLING, LIB_ITEM } from '@/common/constants';
 import { setThumbLibraryId } from '@/common/utils';
 import { resetLibraryAccessibility } from '@/common/availability';
+import { migrateLibraryThemes, THEME_DEFAULTS_VERSION } from '@/common/smartThemes';
 
 // The app-level deep watcher calls save() for every store mutation. Keep the
 // last actual payload per library so runtime-only count refreshes do not turn
@@ -40,6 +42,7 @@ export const useLibraryStore = defineStore('libraryStore', {
       ratingsExpanded: true,
       cullingExpanded: true,
       subjectsExpanded: true,
+      themeDefaultsVersion: 0,
       activateTick: 0,
       subjectCounts: {},
       counts: createEmptyLibraryCounts(),
@@ -153,6 +156,7 @@ export const useLibraryStore = defineStore('libraryStore', {
 
   actions: {
     async init() {
+      this._initialized = false;
       try {
         // Get current library ID
         const appConfig = await getAppConfig();
@@ -163,11 +167,19 @@ export const useLibraryStore = defineStore('libraryStore', {
 
         // Load library state from backend
         const backendState = await getCurrentLibraryState();
+        if (!backendState || typeof backendState !== 'object' || Array.isArray(backendState)) {
+          console.error('Could not load library state; reload the library to retry');
+          return;
+        }
         if (backendState) {
           Object.keys(backendState).forEach(key => {
             if (this[key] !== undefined) {
-              // Deep merge for objects (like album, search, etc) to preserve structure
-              Object.assign(this[key], backendState[key]);
+              if (Array.isArray(this[key])) {
+                if (Array.isArray(backendState[key])) this[key] = backendState[key];
+              } else {
+                // Merge panel state to preserve fields absent from older versions.
+                Object.assign(this[key], backendState[key]);
+              }
             }
           });
         }
@@ -181,17 +193,55 @@ export const useLibraryStore = defineStore('libraryStore', {
           ? Number(this.collection.selectedId)
           : null;
 
+        const libraryId = this._libraryId;
+        const library = this.library;
+        const nodes = this.smartAlbums;
+        const hadThemes = Number(library.themeDefaultsVersion) >= THEME_DEFAULTS_VERSION;
+        const themesReady = await this.initializeThemes();
+        if (this._libraryId !== libraryId || (!themesReady && (this.library !== library || this.smartAlbums !== nodes))) return;
+        const migratedThemes = !hadThemes && themesReady;
+
         this._initialized = true;
 
 
         // Always pause on restart — never auto-resume scanning
-        if (this.index.status === 1) {
+        const pausedScan = this.index.status === 1;
+        if (pausedScan) {
           this.index.status = 2;
-          await this.save();
+        }
+        if (pausedScan || migratedThemes) {
+          await this.save({ throwOnError: migratedThemes });
         }
       } catch (error) {
         console.error('Failed to initialize library state:', error);
-        this._initialized = true;
+        this._initialized = false;
+      }
+    },
+
+    async initializeThemes() {
+      if (Number(this.library.themeDefaultsVersion) >= THEME_DEFAULTS_VERSION) return true;
+      const libraryId = this._libraryId;
+      const library = this.library;
+      const nodes = this.smartAlbums;
+      try {
+        // Startup's AI refresh runs independently; read one authoritative snapshot
+        // so migration cannot bind a persisted threshold to a different model.
+        const view = await invoke('get_ai_configuration');
+        if (this._libraryId !== libraryId || this.library !== library || this.smartAlbums !== nodes) return false;
+        const semantic = view?.models?.find(model => model.definition?.id === view.selection?.semantic);
+        if (!semantic) throw new Error('The selected semantic model is unavailable');
+        const threshold = Number(semantic.values?.smart_tag_threshold ?? 0.25);
+        if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('The semantic theme threshold is invalid');
+        const modelProfile = typeof view.semanticProfile === 'string' ? view.semanticProfile.trim() : '';
+        const themes = migrateLibraryThemes(library, nodes, { threshold, modelProfile: modelProfile || undefined });
+        this.library = themes.library;
+        this.smartAlbums = themes.nodes;
+        return true;
+      } catch (error) {
+        if (this._libraryId !== libraryId || this.library !== library || this.smartAlbums !== nodes) return false;
+        // Leave the version unmodified; retrying does not pause unrelated library work.
+        console.error('Could not migrate themes; reload the library to retry:', error);
+        return false;
       }
     },
 
@@ -291,7 +341,8 @@ export const useLibraryStore = defineStore('libraryStore', {
 
           const payload = JSON.stringify(stateToSave);
           if (lastSavedPayloads.get(this._libraryId) === payload) return;
-          await saveLibraryState(this._libraryId, stateToSave);
+          const saved = await saveLibraryState(this._libraryId, stateToSave);
+          if (saved === false) throw new Error('Library state was not saved');
           lastSavedPayloads.set(this._libraryId, payload);
         } catch (error) {
           console.error('Failed to save library state:', error);

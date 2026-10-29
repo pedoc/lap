@@ -74,7 +74,7 @@
             />
             <IconFolderCog v-else class="w-5 h-5 text-base-content/30" />
           </div>
-          <span class="sidebar-item-label">{{ node.name }}</span>
+          <span class="sidebar-item-label">{{ themeDisplayName(node, t) }}</span>
           <span
             v-if="countErrors[node.id]"
             :title="countErrors[node.id]"
@@ -171,7 +171,7 @@
       :message="
         isSmartFolder(deleting)
           ? $t('smart_albums.folder_delete')
-          : $t('album.smart_edit.delete_message', { name: deleting.name })
+          : $t('album.smart_edit.delete_message', { name: themeDisplayName(deleting, t) })
       "
       :okText="$t('album.smart_edit.delete')"
       :cancelText="$t('msgbox.cancel')"
@@ -188,6 +188,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { useI18n } from "vue-i18n";
 import { listen } from "@tauri-apps/api/event";
 import { config, libConfig } from "@/common/config";
+import { themeDisplayName } from '@/common/smartThemes';
 import {
   hasTimeSmartRules,
   hasOcrRules,
@@ -220,11 +221,12 @@ import MessageBox from "./MessageBox.vue";
 const { t } = useI18n();
 const nodes = computed<any[]>(() => libConfig.smartAlbums || []);
 const search = ref("");
-const rows = computed(() => smartTreeRows(nodes.value, search.value));
+const rows = computed(() => smartTreeRows(nodes.value.map(node => ({ ...node, name: themeDisplayName(node, t) })), search.value));
 const menus = ref<Record<string, any>>({});
 const coverUrls = ref<Record<string, string>>({});
 const countErrors = ref<Record<string, string>>({});
 const showEdit = ref(false);
+const editingLibraryId = ref(libConfig._libraryId);
 const editing = ref<any>(null);
 const creationParent = ref<string | null>(null);
 const nameDialog = ref<any>(null);
@@ -259,6 +261,7 @@ function clickNode(n: any) {
   }
 }
 function newAlbum(parentId: string | null) {
+  editingLibraryId.value = libConfig._libraryId;
   creationParent.value = parentId;
   editing.value = null;
   showEdit.value = true;
@@ -272,7 +275,7 @@ function saveName() {
   const d = nameDialog.value;
   libConfig.smartAlbums = d.id
     ? nodes.value.map((n) =>
-        n.id === d.id ? { ...n, name: nodeName.value.trim() } : n,
+        n.id === d.id ? renamedNode(n, nodeName.value.trim()) : n,
       )
     : [
         ...nodes.value,
@@ -287,6 +290,7 @@ function saveName() {
   nameDialog.value = null;
 }
 function saveAlbum(album: any) {
+  if (editingLibraryId.value !== libConfig._libraryId) return;
   const index = nodes.value.findIndex((n) => n.id === album.id);
   if (
     index >= 0 &&
@@ -309,6 +313,15 @@ function saveAlbum(album: any) {
   libConfig.smartAlbum.id = album.id;
   showEdit.value = false;
 }
+function renamedNode(node: any, name: string) {
+  const renamed = { ...node, name };
+  delete renamed.themeNameKey;
+  return renamed;
+}
+function toggleThemePin(node: any) {
+  if (isSmartFolder(node)) return;
+  libConfig.smartAlbums = nodes.value.map((album) => album.id === node.id ? { ...album, themePinned: !album.themePinned } : album);
+}
 function reorder(n: any, direction: number) {
   const siblings = nodes.value.filter(
     (v) => (v.parentId || null) === (n.parentId || null),
@@ -323,6 +336,7 @@ function reorder(n: any, direction: number) {
   libConfig.smartAlbums = copy;
 }
 function menuItems(n: any) {
+  const libraryId = libConfig._libraryId;
   return [
     ...(isSmartFolder(n)
       ? [
@@ -342,9 +356,15 @@ function menuItems(n: any) {
             label: t("album.smart_edit.title_edit"),
             icon: IconEdit,
             action: () => {
-              editing.value = n;
+              editingLibraryId.value = libConfig._libraryId;
+              editing.value = nodes.value.find(node => node.id === n.id) || n;
               showEdit.value = true;
             },
+          },
+          {
+            label: t(n.themePinned ? 'themes.unpin' : 'themes.pin'),
+            icon: IconFolderCog,
+            action: () => { if (libraryId === libConfig._libraryId) toggleThemePin(n); },
           },
         ]),
     {
@@ -352,7 +372,7 @@ function menuItems(n: any) {
       icon: IconEdit,
       action: () => {
         nameDialog.value = n;
-        nodeName.value = n.name;
+        nodeName.value = themeDisplayName(n, t);
       },
     },
     {

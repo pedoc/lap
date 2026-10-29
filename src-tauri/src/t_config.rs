@@ -157,6 +157,12 @@ pub struct CustomSmartAlbumState {
     #[serde(default = "default_smart_album_source")]
     pub source: String,
     #[serde(default)]
+    pub theme_pinned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_template_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_name_key: Option<String>,
+    #[serde(default)]
     pub query: SmartAlbumQueryState,
     #[serde(default)]
     pub sort: SmartAlbumSortState,
@@ -192,6 +198,8 @@ pub struct LibraryPanelState {
     #[serde(default = "default_subjects_expanded", alias = "subjects_expanded")]
     pub subjects_expanded: bool,
     #[serde(default)]
+    pub theme_defaults_version: u32,
+    #[serde(default)]
     pub subject_counts: HashMap<String, i64>,
 }
 
@@ -219,6 +227,7 @@ impl Default for LibraryPanelState {
             ratings_expanded: default_ratings_expanded(),
             culling_expanded: default_culling_expanded(),
             subjects_expanded: default_subjects_expanded(),
+            theme_defaults_version: 0,
             subject_counts: HashMap::new(),
         }
     }
@@ -1333,5 +1342,86 @@ mod ocr_panel_tests {
         let defaults: OcrPanelState = serde_json::from_str("{}").unwrap();
         assert_eq!(defaults.state, "all");
         assert!(defaults.text.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod theme_state_tests {
+    use super::*;
+
+    #[test]
+    fn theme_metadata_survives_the_library_state_ipc_round_trip() {
+        let mut payload = serde_json::to_value(LibraryState::default()).unwrap();
+        payload["library"]["themeDefaultsVersion"] = serde_json::json!(1);
+        payload["library"]["item"] = serde_json::json!("subjects");
+        payload["library"]["smartId"] = serde_json::json!("theme:family");
+        payload["smartAlbums"] = serde_json::json!([{
+            "id": "theme:family", "name": "Family", "kind": "album", "source": "rules",
+            "themePinned": true, "themeTemplateId": "family",
+            "themeNameKey": "subject.items.family", "parentId": "my-folder",
+            "query": {
+                "version": 2, "match": "all", "includeFileIds": [42], "excludeFileIds": [12],
+                "rules": [{"id":"family-rule","field":"semantic","operator":"matches",
+                    "value":{"prompt":"family gathering","threshold":0.43,"modelProfile":"weights-v2"}}]
+            }
+        }]);
+        let state: LibraryState = serde_json::from_value(payload).unwrap();
+        assert_eq!(state.library.theme_defaults_version, 1);
+        assert_eq!(state.library.smart_id.as_deref(), Some("theme:family"));
+        assert!(state.smart_albums[0].theme_pinned);
+        assert_eq!(
+            state.smart_albums[0].theme_template_id.as_deref(),
+            Some("family")
+        );
+        let saved = serde_json::to_value(&state).unwrap();
+        assert_eq!(saved["library"]["themeDefaultsVersion"], 1);
+        assert_eq!(saved["smartAlbums"][0]["themePinned"], true);
+        assert_eq!(saved["smartAlbums"][0]["themeTemplateId"], "family");
+        assert_eq!(
+            saved["smartAlbums"][0]["themeNameKey"],
+            "subject.items.family"
+        );
+        assert_eq!(saved["smartAlbums"][0]["parentId"], "my-folder");
+        assert_eq!(
+            saved["smartAlbums"][0]["query"]["includeFileIds"],
+            serde_json::json!([42])
+        );
+        assert_eq!(
+            saved["smartAlbums"][0]["query"]["rules"][0]["value"]["modelProfile"],
+            "weights-v2"
+        );
+    }
+
+    #[test]
+    fn old_albums_default_to_unpinned_and_empty_saved_themes_remain_migrated() {
+        let mut payload = serde_json::to_value(LibraryState::default()).unwrap();
+        payload["library"] = serde_json::json!({});
+        payload["smartAlbums"] = serde_json::json!([{"id":"custom","name":"Existing"}]);
+        let old: LibraryState = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(old.library.theme_defaults_version, 0);
+        assert!(!old.smart_albums[0].theme_pinned);
+        assert!(old.smart_albums[0].theme_template_id.is_none());
+        assert!(old.smart_albums[0].theme_name_key.is_none());
+        payload["library"]["themeDefaultsVersion"] = serde_json::json!(1);
+        payload["smartAlbums"] = serde_json::json!([]);
+        let saved: LibraryState = serde_json::from_value(payload).unwrap();
+        let reloaded: LibraryState =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(reloaded.library.theme_defaults_version, 1);
+        assert!(reloaded.smart_albums.is_empty());
+    }
+
+    #[test]
+    fn unpinned_and_renamed_theme_keeps_its_template_identity_without_default_name() {
+        let node: CustomSmartAlbumState = serde_json::from_value(serde_json::json!({
+            "id":"theme:family","name":"我的亲友","kind":"album", "themePinned":false,
+            "themeTemplateId":"family"
+        }))
+        .unwrap();
+        let saved = serde_json::to_value(&node).unwrap();
+        assert_eq!(saved["themePinned"], false);
+        assert_eq!(saved["name"], "我的亲友");
+        assert_eq!(saved["themeTemplateId"], "family");
+        assert!(saved.get("themeNameKey").is_none());
     }
 }

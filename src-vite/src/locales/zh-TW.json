@@ -2896,5 +2896,22 @@
     "progress": "已處理 {completed}/{total} · 成功 {succeeded} · 失敗 {failed}",
     "finished": "目前範圍處理完成。失敗項可單獨重試；沒有有效 GPS 的相片未處理。",
     "cancelled": "工作已停止，保留已完成的結果，其餘照片不變。正在執行的網路請求最多需要 15 秒結束。"
+  },
+  "themes": {
+    "add": "新增主題",
+    "edit": "編輯主題",
+    "manage": "管理主題",
+    "menu": "{name}的操作",
+    "empty": "新增主題，或將智慧型相簿固定到這裡。",
+    "restore": "還原預設主題",
+    "restore_confirm": "還原八個預設主題的名稱和比對規則，並固定到主題列？自訂主題和其他智慧型相簿會保留。",
+    "match_by": "比對方式",
+    "match_text": "內容描述",
+    "match_reference": "參考照片",
+    "more_conditions": "更多條件",
+    "simple_mode": "簡易編輯",
+    "pin": "固定到主題列",
+    "unpin": "從主題列移除",
+    "initialization_error": "無法讀取圖庫或 AI 設定，請重試初始化主題。"
   }
 }

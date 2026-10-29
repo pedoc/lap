@@ -1,5 +1,5 @@
 <template>
-  <ModalDialog :title="isFilterMode ? $t('structured_search.title') : isNew ? $t('album.smart_edit.title_add') : $t('album.smart_edit.title_edit')" :width="620" :position-key="isFilterMode ? 'structured-search' : 'smart-album-edit'" @cancel="clickCancel">
+  <ModalDialog :title="isFilterMode ? $t('structured_search.title') : isThemeMode ? $t(isNew ? 'themes.add' : 'themes.edit') : isNew ? $t('album.smart_edit.title_add') : $t('album.smart_edit.title_edit')" :width="620" :position-key="isFilterMode ? 'structured-search' : 'smart-album-edit'" @cancel="clickCancel">
     <SmartAlbumPhotoPicker v-if="referenceRule" @select="(id:number)=>{referenceRule.value.fileId=id;referenceRule=null;}" @cancel="referenceRule=null" />
     <section
       class="min-h-0 max-h-[50vh] overflow-y-auto pr-1"
@@ -11,7 +11,7 @@
       <p v-if="locationOptionsError" role="alert" class="mb-2 text-xs text-error break-all">{{ locationOptionsError }}</p>
       <p v-if="isFilterMode" class="mb-3 text-xs leading-relaxed text-base-content/60">{{ $t('structured_search.scope') }}</p>
       <p v-if="optionsError" role="alert" class="mb-2 text-xs text-error">{{ $t('structured_search.options_error', { error: optionsError }) }} <button type="button" class="link" @click="initializeOptions">{{ $t('structured_search.retry') }}</button></p>
-      <div v-if="!isFilterMode" class="flex gap-2 mb-3">
+      <div v-if="!isFilterMode && (!isThemeMode || themeAdvanced)" class="flex gap-2 mb-3">
         <select v-model="template" class="select select-sm flex-1" @change="applyTemplate"><option value="">{{ $t('smart_albums.template') }}</option><option v-for="item in SMART_TEMPLATES" :key="item" :value="item">{{ $t(`smart_albums.templates.${item}`) }}</option></select>
         <select v-model="parentId" class="select select-sm flex-1" :aria-label="$t('smart_albums.move')"><option :value="null">{{ $t('smart_albums.root') }}</option><option v-for="row in folderOptions" :key="row.node.id" :value="row.node.id">{{ row.path }}</option></select>
       </div>
@@ -20,6 +20,7 @@
         <div class="h-8 flex items-center text-[10px] uppercase tracking-widest font-bold text-base-content/30">{{ $t('album.smart_edit.name') }}</div>
         <input ref="inputNameRef" v-model="name" type="text" maxlength="255" class="w-full input input-sm text-xs font-semibold" :placeholder="$t('album.smart_edit.validation_name')" />
 
+        <template v-if="!isThemeMode || themeAdvanced">
         <div class="h-8 flex items-start pt-2 text-[10px] uppercase tracking-widest font-bold text-base-content/30">{{ $t('album.smart_edit.description') }}</div>
         <textarea
           v-if="showDescription"
@@ -37,8 +38,20 @@
           @click="showDescriptionInput"
         />
         </template>
+        </template>
 
-        <section v-if="!isFilterMode" class="col-span-2 rounded-box border border-base-content/10 bg-base-300/20 p-3 shadow-sm">
+        <section v-if="isThemeMode && !themeAdvanced && simpleThemeRule" class="col-span-2 rounded-box border border-base-content/10 bg-base-300/20 p-3 shadow-sm space-y-2">
+          <label class="block space-y-1">
+            <span class="block text-xs text-base-content/70">{{ $t('themes.match_by') }}</span>
+            <select :value="simpleThemeRule.field" class="select select-sm text-xs w-full" @change="setThemeMatchType(($event.target as HTMLSelectElement).value)">
+              <option value="semantic">{{ $t('themes.match_text') }}</option>
+              <option value="similar_image">{{ $t('themes.match_reference') }}</option>
+            </select>
+          </label>
+          <RuleValueControl :rule="simpleThemeRule" :tag-options="tagOptions" :person-options="personOptions" :album-options="albumOptions" :collection-options="collectionOptions" :camera-options="cameraOptions" :lens-options="lensOptions" :location-options="locationOptions" :file-type-options="fileTypeOptions" :culling-options="cullingOptions" :media-subtype-options="mediaSubtypeOptions" :extension-options="extensionOptions" />
+        </section>
+
+        <section v-if="!isFilterMode && (!isThemeMode || themeAdvanced)" class="col-span-2 rounded-box border border-base-content/10 bg-base-300/20 p-3 shadow-sm">
           <div class="grid grid-cols-3 gap-2">
             <label class="min-w-0 space-y-1">
               <span class="block text-[10px] uppercase tracking-widest font-bold text-base-content/30">{{ $t('album.smart_edit.sort') }}</span>
@@ -61,7 +74,7 @@
           </div>
         </section>
 
-        <section class="col-span-2 rounded-box border border-base-content/10 bg-base-300/20 p-3 shadow-sm">
+        <section v-if="!isThemeMode || themeAdvanced" class="col-span-2 rounded-box border border-base-content/10 bg-base-300/20 p-3 shadow-sm">
           <SmartAlbumRules :group="rootGroup" :depth="0" :total="ruleCount" :make-rule="makeRule">
             <template #rule="{rule}">
               <div class="grid grid-cols-[minmax(0,1fr)_88px] gap-2">
@@ -75,6 +88,7 @@
           <p v-if="hasOcrRules(rules)" class="text-xs mt-2 opacity-60">{{ $t('ocr.smart_hint') }}</p>
           <div class="text-xs mt-2 text-base-content/40">{{ $t('album.smart_edit.rules_count',{count:ruleCount,max:maxRules}) }}</div>
         </section>
+        <button v-if="isThemeMode" type="button" class="col-span-2 btn btn-ghost btn-sm justify-self-start" :disabled="themeAdvanced && !simpleThemeRule" :aria-expanded="themeAdvanced" @click="themeAdvanced = !themeAdvanced">{{ $t(themeAdvanced ? 'themes.simple_mode' : 'themes.more_conditions') }}</button>
       </div>
     </section>
 
@@ -108,6 +122,7 @@ import SmartAlbumPhotoPicker from './SmartAlbumPhotoPicker.vue';
 import SmartAlbumRules from './SmartAlbumRules.vue';
 import SmartAlbumStatus from './SmartAlbumStatus.vue';
 import { SMART_TAG_CATEGORIES } from '@/common/smartTags';
+import { themeDisplayName } from '@/common/smartThemes';
 import { useObjects } from '@/common/objects';
 import { OBJECT_STATES, objectClassName } from '@/common/objectUi';
 import { MAX_SMART_RULES, smartChildren, smartRuleCount, smartTemplateRules, SMART_TEMPLATES, smartTreeRows, isSmartFolder, visitSmartRules, hasSemanticRules, hasOcrRules, hasViewRules, hasObjectRules, hasAiRules } from '@/common/smartAlbums';
@@ -135,6 +150,7 @@ const props = defineProps({
 
 const emit = defineEmits(['ok', 'cancel']);
 const isFilterMode = computed(() => props.mode === 'filter');
+const isThemeMode = computed(() => props.mode === 'theme');
 const { t, locale, messages } = useI18n();
 const { view: objectModelView } = useObjects();
 const objectOptions = computed(() => (objectModelView.value?.classes || []).map((label:any) => ({value:label.key,label:objectClassName(label,t)})));
@@ -278,7 +294,8 @@ watch(
   },
 );
 const isNew = computed(() => !props.smartAlbum?.id);
-const name = ref(props.smartAlbum?.name || '');
+const initialDisplayName = props.smartAlbum ? themeDisplayName(props.smartAlbum, t) : '';
+const name = ref(initialDisplayName);
 const description = ref(props.smartAlbum?.description || '');
 const showDescription = ref(description.value.trim().length > 0);
 const matchMode = ref(props.smartAlbum?.query?.match === 'any' ? 'any' : 'all');
@@ -301,6 +318,13 @@ const locationOptions = ref<any[]>([]);
 const locationOptionsError = ref('');
 const extensionOptions = ref<any[]>([]);
 const rules = ref<any[]>(cloneRules(props.smartAlbum?.query?.rules));
+const simpleThemeRule = computed(() => rules.value.length === 1 && ['semantic', 'similar_image'].includes(rules.value[0].field) && rules.value[0].operator === 'matches' ? rules.value[0] : null);
+const themeAdvanced = ref(isThemeMode.value && !simpleThemeRule.value);
+function setThemeMatchType(field: string) {
+  if (!simpleThemeRule.value || !['semantic', 'similar_image'].includes(field) || simpleThemeRule.value.field === field) return;
+  simpleThemeRule.value.field = field;
+  resetRule(simpleThemeRule.value);
+}
 
 const fileTypeOptions = computed(() => [
   { value: 1, label: localeMsg.value.toolbar.filter?.file_type_options?.[1] || 'Image' },
@@ -427,7 +451,7 @@ function cloneRules(source: any[] | undefined) {
   const cloned = Array.isArray(source)
     ? source.map(rule => normalizeRuleForEdit(rule))
     : [];
-  return cloned.length > 0 ? cloned : [makeRule()];
+  return cloned.length > 0 ? cloned : [makeRule(isThemeMode.value ? 'semantic' : 'date_taken')];
 }
 
 function normalizeRuleForEdit(rule: any) {
@@ -609,7 +633,10 @@ function clickOk() {
   const now = Math.floor(Date.now() / 1000);
   emit('ok', {
     id: props.smartAlbum?.id || crypto.randomUUID?.() || `${Date.now()}`,
-    name: name.value.trim(),
+    name: props.smartAlbum?.themeNameKey && name.value.trim() === initialDisplayName ? props.smartAlbum.name : name.value.trim(),
+    ...(isThemeMode.value || typeof props.smartAlbum?.themePinned === 'boolean' ? { themePinned: isThemeMode.value || props.smartAlbum.themePinned } : {}),
+    ...(props.smartAlbum?.themeTemplateId ? { themeTemplateId: props.smartAlbum.themeTemplateId } : {}),
+    ...(props.smartAlbum?.themeNameKey && name.value.trim() === initialDisplayName ? { themeNameKey: props.smartAlbum.themeNameKey } : {}),
     description: description.value.trim(),
     kind: 'album',
     parentId: parentId.value,
@@ -633,6 +660,8 @@ function clickOk() {
 }
 
 function normalizeRuleValue(rule: any) {
+  // Similarity thresholds use fractional values rather than integer media units.
+  if (['semantic', 'similar_image'].includes(rule.field)) return rule.value;
   if (rule.field.startsWith('object_')) return rule.value;
   if (rule.field === 'file_type') return getFileTypeValue(rule.value);
   if (rule.field === 'extension') return getExtensionValue(rule.value);

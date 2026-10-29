@@ -833,7 +833,7 @@ import {
   thumbnailProfile,
 } from '@/common/thumbnailProfiles';
 import { getShortcutLabel, matchesShortcut, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
-import { getSmartTagById } from '@/common/smartTags';
+import { themeDisplayName } from '@/common/smartThemes';
 import { clearFolderFileCounts, setFolderFileCount, getCountedFolderPaths } from '@/composables/useAlbumSelection';
 import { createEmptyLibraryCounts } from '@/stores/libraryStore';
 import { getAlbumScanState, getAlbumScanIcon, shouldAnimateAlbumScanIcon, scanWorkProgress } from '@/common/scanStatus';
@@ -1681,11 +1681,23 @@ function createViewBackup() {
   };
 }
 
+function isLibraryThemeView() {
+  return config.main.sidebarIndex === SIDEBAR.LIBRARY && libConfig.library.item === LIB_ITEM.SUBJECTS;
+}
+
 function getActiveCustomSmartAlbum() {
-  if (libConfig.smartAlbum.type !== 'custom' || !libConfig.smartAlbum.id) return null;
+  const id = isLibraryThemeView()
+    ? libConfig.library.smartId
+    : libConfig.smartAlbum.type === 'custom' ? libConfig.smartAlbum.id : null;
+  if (!id) return null;
   return (libConfig.smartAlbums || []).find(
-    (item: any) => item.id === libConfig.smartAlbum.id && !isSmartFolder(item)
+    (item: any) => item.id === id && !isSmartFolder(item)
   ) || null;
+}
+
+function smartAlbumContentTitle(album: any) {
+  const name = themeDisplayName(album, t);
+  return isLibraryThemeView() ? `${t('subject.title')} > ${name}` : name;
 }
 
 const isCollectionPane = computed(() => libConfig.activePane === 'collection');
@@ -1707,7 +1719,7 @@ const activeStructuredAlbum = computed(() => isStructuredSearchView.value
   ? structuredSearchAlbum(libConfig._libraryId, t('structured_search.title'), config.search.sortType, config.search.sortOrder, config.search.groupBy)
   : null);
 const activeSmartAlbum = computed(() => activeStructuredAlbum.value || (
-  !isCollectionPane.value && config.main.sidebarIndex === SIDEBAR.SMART_ALBUM
+  !isCollectionPane.value && (config.main.sidebarIndex === SIDEBAR.SMART_ALBUM || isLibraryThemeView())
     ? getActiveCustomSmartAlbum()
     : null),
 );
@@ -1723,7 +1735,7 @@ const effectiveGroupBy = computed(() => {
   if (isRandomSort.value) return GROUP.NONE;
   const smartAlbum = getActiveCustomSmartAlbum();
   return Number(
-    !isCollectionPane.value && config.main.sidebarIndex === SIDEBAR.SMART_ALBUM && smartAlbum
+    !isCollectionPane.value && (config.main.sidebarIndex === SIDEBAR.SMART_ALBUM || isLibraryThemeView()) && smartAlbum
       ? smartAlbum.group?.type ?? config.search.groupBy ?? GROUP.NONE
       : config.search.groupBy ?? GROUP.NONE
   );
@@ -1743,8 +1755,7 @@ const isGroupingControlAvailable = computed(() =>
   !isScanStreamingMode.value &&
   tempViewMode.value === 'none' &&
   (libConfig.activePane === 'collection' || (
-    !isSearchGroupingView.value &&
-    !isSubjectGroupingView.value
+    !isSearchGroupingView.value
   ))
 );
 
@@ -3600,7 +3611,9 @@ watch(()=>config.settings.ai?.semanticProfile,()=>{if(activeSmartAlbum.value && 
 watch(()=>config.settings.ai?.detectionProfile,()=>{if(activeSmartAlbum.value && hasObjectRules(activeSmartAlbum.value.query?.rules || []))queueSmartRefresh();});
 watch(()=>config.settings.ai?.ocrProfile,()=>{if(activeSmartAlbum.value && hasOcrRules(activeSmartAlbum.value.query?.rules || []))queueSmartRefresh();});
 watch(()=>uiStore.countUpdateTick,()=>{if(activeSmartAlbum.value)queueSmartRefresh();});
-watch(()=>activeSmartAlbum.value?.name, name=>{if(name && tempViewMode.value==='none')contentTitle.value=name;});
+watch(() => activeSmartAlbum.value ? smartAlbumContentTitle(activeSmartAlbum.value) : '', name => {
+  if (name && tempViewMode.value === 'none') contentTitle.value = name;
+});
 onMounted(async()=>{
   smartClock=setInterval(()=>{if(activeSmartAlbum.value&&hasTimeSmartRules(activeSmartAlbum.value.query?.rules||[]))queueSmartRefresh();},60000);
   for(const name of ['object-index-updated','object-annotations-changed','ocr-index-updated','ocr-annotations-changed','media-lifecycle-changed','files-deleted','semantic-index-changed','smart-album-index-progress','index_progress','index_finished','face-person-changed','face_index_finished','location-resolution-progress','map-location-changed']) {
@@ -3788,6 +3801,9 @@ function commitRequestedSidebarCount(count: number, request = uiStore.countUpdat
           ...(library.subjectCounts || {}),
           [String(request.smartId)]: Math.max(0, Number(count || 0)),
         };
+        libConfig.smartAlbums = (libConfig.smartAlbums || []).map((album: any) =>
+          album.id === request.smartId ? { ...album, count: Math.max(0, Number(count || 0)) } : album,
+        );
       } else {
         const cachedValues = library.counts || {};
         const defaults = createEmptyLibraryCounts();
@@ -8179,11 +8195,12 @@ async function getSmartFileList(smartAlbum: any, requestId: number) {
 }
 
 async function updateSmartAlbumCover(smartAlbum: any, requestId: number) {
+  const libraryId = libConfig._libraryId;
   const result = await getSmartQueryFiles(currentSmartQueryParams.value, 0, 1);
   if (
     requestId !== currentContentRequestId ||
-    libConfig.smartAlbum.type !== 'custom' ||
-    String(libConfig.smartAlbum.id) !== String(smartAlbum?.id)
+    libraryId !== libConfig._libraryId ||
+    String(getActiveCustomSmartAlbum()?.id) !== String(smartAlbum?.id)
   ) return;
 
   const firstFile = Array.isArray(result) ? result[0] : result?.files?.[0];
@@ -8666,26 +8683,14 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
         break;
       }
       case LIB_ITEM.SUBJECTS: {
-        const smartId = libConfig.library.smartId;
-        if (!smartId) {
+        const album = getActiveCustomSmartAlbum();
+        if (!album) {
           contentTitle.value = localeMsg.value.subject.title;
           showEmptyContent(requestId);
           break;
         }
-        const smartTag = getSmartTagById(smartId);
-        if (!smartTag) {
-          contentTitle.value = localeMsg.value.subject.title;
-          showEmptyContent(requestId);
-          break;
-        }
-        const smartTagLabel = localeMsg.value.subject.items?.[smartTag.id] || smartTag.id;
-        contentTitle.value = `${localeMsg.value.subject.title} > ${smartTagLabel}`;
-        getImageSearchFileList(
-          smartTag.prompt,
-          0,
-          requestId,
-          smartTag.threshold ?? config.smartTagSearchThreshold,
-        );
+        contentTitle.value = smartAlbumContentTitle(album);
+        getSmartFileList(album, requestId);
         break;
       }
       default:
@@ -8802,7 +8807,7 @@ async function updateContent(force = false, preserveMultiSelection = selectMode.
     if (smartAlbumType === 'custom' && smartAlbumId) {
       const smartAlbum = (libConfig.smartAlbums || []).find((item: any) => item.id === smartAlbumId);
       if (smartAlbum) {
-        contentTitle.value = smartAlbum.name || '';
+        contentTitle.value = themeDisplayName(smartAlbum, t);
         getSmartFileList(smartAlbum, requestId);
       } else {
         contentTitle.value = "";
@@ -11341,8 +11346,7 @@ const isSearchLikeView = computed(() => {
 });
 
 const isAiSearchMode = computed(() =>
-  (config.main.sidebarIndex === SIDEBAR.SEARCH && !isStructuredSearchView.value) ||
-  (config.main.sidebarIndex === SIDEBAR.LIBRARY && libConfig.library.item === LIB_ITEM.SUBJECTS)
+  config.main.sidebarIndex === SIDEBAR.SEARCH && !isStructuredSearchView.value
 );
 
 const isFixedAiResultView = computed(() =>
@@ -11369,7 +11373,7 @@ const isGroupControlDisabled = computed(() =>
 );
 
 const isSmartAlbumView = computed(() =>
-  !isCollectionPane.value && config.main.sidebarIndex === SIDEBAR.SMART_ALBUM
+  !isCollectionPane.value && (config.main.sidebarIndex === SIDEBAR.SMART_ALBUM || isLibraryThemeView())
 );
 
 const isSmartAlbumSortOverride = computed(() => {

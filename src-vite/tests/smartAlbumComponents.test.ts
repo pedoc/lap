@@ -9,6 +9,7 @@ import { parse, compileScript } from "@vue/compiler-sfc";
 import * as Vue from "vue";
 import { renderToString } from "vue/server-renderer";
 import * as helpers from "../src/common/smartAlbums.ts";
+import * as themes from '../src/common/smartThemes.ts';
 import * as objectHelpers from "../src/common/objectUi.ts";
 import { SMART_TAG_CATEGORIES } from "../src/common/smartTags.ts";
 const source = readFileSync(
@@ -27,6 +28,7 @@ function context(overrides: any = {}) {
   const libConfig = Vue.reactive({ _libraryId: "lib" });
   return {
     ...helpers,
+    ...themes,
     ...mediaTitles, ...mediaViews,
     ...objectHelpers,
     useObjects: () => ({ view: Vue.ref({classes:[{key:"coco2017-80@1:0",name:"person",supported:true}]}) }),
@@ -107,7 +109,7 @@ function harness(overrides: any = {}) {
     source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1],
   ).replace(/^import[\s\S]*?from\s*[\'"][^\'"]+[\'"];?\r?\n/gm, "");
   const api = runInNewContext(
-    `${script}\n;({rules,name,parentId,template,applyTemplate,previewResults,preview,previewError,previewStale,canSave,clickOk,includeIds,excludeIds,recalibrate,makeRule,getOperatorOptions,isRuleValid,ocrPreviewRevision,viewPreviewRevision});`,
+    `${script}\n;({rules,name,parentId,template,applyTemplate,previewResults,preview,previewError,previewStale,canSave,clickOk,includeIds,excludeIds,recalibrate,makeRule,getOperatorOptions,isRuleValid,ocrPreviewRevision,viewPreviewRevision,isThemeMode,simpleThemeRule,themeAdvanced,setThemeMatchType,queryParams});`,
     ctx,
   );
   return { api, ctx, emits, watches };
@@ -346,7 +348,7 @@ function sidebarHarness(overrides: any = {}) {
     text.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1],
   ).replace(/^import[\s\S]*?from\s*[\'"][^\'"]+[\'"];?\r?\n/gm, "");
   const api = runInNewContext(
-    `${script}\n;({refreshCounts,countErrors,saveAlbum,nodes});`,
+    `${script}\n;({refreshCounts,countErrors,saveAlbum,nodes,toggleThemePin,renamedNode,menuItems,rows,search});`,
     ctx,
   );
   return { api, ctx, album };
@@ -508,4 +510,157 @@ test('view-driven sidebar counts refresh only albums depending on viewing statis
   await h.api.refreshCounts('views');
   assert.equal(queries.length, 1); assert.equal(queries[0].rules[0].field, 'view_count');
   assert.equal(h.ctx.libConfig.smartAlbums[0].count, 12); assert.equal(h.ctx.libConfig.smartAlbums[1].count, 1);
+});
+
+test('new themes use a simple semantic rule and require a fresh preview before saving', async () => {
+  const h = harness({ props: { ...props, mode: 'theme' } });
+  assert.equal(h.api.isThemeMode.value, true);
+  assert.equal(h.api.themeAdvanced.value, false);
+  assert.equal(h.api.simpleThemeRule.value.field, 'semantic');
+  h.api.name.value = 'Snowy hikes';
+  h.api.simpleThemeRule.value.value.prompt = 'people hiking in snowy mountains';
+  assert.equal(h.api.canSave.value, false);
+  await h.api.previewResults();
+  h.api.clickOk();
+  const saved = h.emits.at(-1)[1];
+  assert.equal(saved.themePinned, true);
+  assert.equal(saved.query.rules.length, 1);
+  assert.equal(saved.query.rules[0].value.modelProfile, 'model-a');
+  h.api.simpleThemeRule.value.value.prompt = 'hiking beside a lake';
+  assert.equal(h.api.previewStale.value, true);
+  assert.equal(h.api.canSave.value, false);
+});
+
+test('theme reference matching uses the same preview and validation as smart albums', async () => {
+  const h = harness({ props: { ...props, mode: 'theme' } });
+  h.api.name.value = 'Reference style';
+  h.api.setThemeMatchType('similar_image');
+  assert.equal(h.api.rules.value.length, 1);
+  assert.equal(h.api.simpleThemeRule.value.field, 'similar_image');
+  assert.equal(h.api.canSave.value, false);
+  h.api.simpleThemeRule.value.value.fileId = 42;
+  await h.api.previewResults();
+  h.api.clickOk();
+  assert.equal(h.emits.at(-1)[1].query.rules[0].value.fileId, 42);
+  assert.equal(h.emits.at(-1)[1].themePinned, true);
+  h.api.setThemeMatchType('semantic');
+  assert.equal(h.api.simpleThemeRule.value.value.prompt, '');
+  assert.equal(h.api.simpleThemeRule.value.value.modelProfile, undefined);
+  assert.equal(h.api.canSave.value, false);
+});
+
+test('fractional semantic and reference thresholds survive query serialization, every preview request and saving', async () => {
+  for (const field of ['semantic', 'similar_image']) {
+    for (const threshold of [0.25, 0.73]) {
+      const value = field === 'semantic'
+        ? { prompt: 'a mountain landscape', threshold, modelProfile: 'model-a' }
+        : { fileId: 42, threshold, modelProfile: 'model-a' };
+      const requests: any[] = [];
+      const capture = (params: any) => requests.push(JSON.parse(JSON.stringify(params)));
+      const h = harness({
+        props: { ...props, mode: 'theme', smartAlbum: { id: 'fractional', name: 'Fractional matching', themePinned: true, query: { match: 'all', rules: [{ id: 'matching', field, operator: 'matches', value }] } } },
+        getSmartQueryCountAndSum: async (params: any) => { capture(params); return [1, 100]; },
+        getSmartQueryFiles: async (params: any) => { capture(params); return [{ id: 1, name: 'match' }]; },
+        getSmartAlbumStatus: async (params: any) => { capture(params); return { profile: 'model-a', indexed: 1, total: 1, pending: 0, job: {} }; },
+      });
+      assert.equal(h.api.queryParams().rules[0].value.threshold, threshold, `${field} query threshold`);
+      await h.api.previewResults();
+      assert.equal(requests.length, 3);
+      for (const params of requests) {
+        assert.equal(params.rules[0].value.threshold, threshold, `${field} preview threshold`);
+        assert.equal(params.rules[0].value.modelProfile, 'model-a');
+        if (field === 'similar_image') assert.equal(params.rules[0].value.fileId, 42);
+      }
+      h.api.clickOk();
+      const saved = h.emits.at(-1)[1].query.rules[0].value;
+      assert.equal(saved.threshold, threshold, `${field} saved threshold`);
+      assert.equal(saved.modelProfile, 'model-a');
+      if (field === 'similar_image') assert.equal(saved.fileId, 42);
+      else assert.equal(saved.prompt, value.prompt);
+    }
+  }
+});
+
+test('editing default themes retains localization until the name is customized', async () => {
+  const album = themes.createThemeFromTemplate('family');
+  const h = harness({
+    props: { ...props, mode: 'theme', smartAlbum: album },
+    useI18n: () => ({ t: (key: string) => key === 'subject.items.family' ? '家庭' : key, locale: Vue.ref('en'), messages: Vue.ref({ en: dictionary }) }),
+  });
+  assert.equal(h.api.name.value, '家庭');
+  await h.api.previewResults();
+  h.api.clickOk();
+  const saved = h.emits.at(-1)[1];
+  assert.equal(saved.name, 'Family');
+  assert.equal(saved.themeNameKey, 'subject.items.family');
+  assert.equal(saved.themeTemplateId, 'family');
+  h.api.name.value = 'My family';
+  h.api.clickOk();
+  assert.equal(h.emits.at(-1)[1].name, 'My family');
+  assert.equal(h.emits.at(-1)[1].themeNameKey, undefined);
+});
+
+test('complex themes keep every condition and manual adjustment in advanced editing', async () => {
+  const album = themes.createThemeFromTemplate('landscape');
+  album.query.rules.push({ id: 'year', field: 'date_taken', operator: 'is', value: 'this_year' });
+  album.query.includeFileIds = [12];
+  album.query.excludeFileIds = [13];
+  const h = harness({ props: { ...props, mode: 'theme', smartAlbum: album } });
+  assert.equal(h.api.themeAdvanced.value, true);
+  assert.equal(h.api.simpleThemeRule.value, null);
+  await h.api.previewResults();
+  h.api.clickOk();
+  const saved = h.emits.at(-1)[1];
+  assert.equal(saved.query.rules.length, 2);
+  assert.equal(saved.query.rules[1].value, 'this_year');
+  assert.deepEqual(Array.from(saved.query.includeFileIds), [12]);
+  assert.deepEqual(Array.from(saved.query.excludeFileIds), [13]);
+  assert.equal(saved.themePinned, true);
+});
+
+test('regular smart album edits preserve pin metadata and late saves cannot cross libraries', async () => {
+  const album = themes.createThemeFromTemplate('pets');
+  const h = harness({ props: { ...props, smartAlbum: album } });
+  await h.api.previewResults();
+  h.api.clickOk();
+  assert.equal(h.emits.at(-1)[1].themePinned, true);
+  assert.equal(h.emits.at(-1)[1].themeTemplateId, 'pets');
+  const sidebar = sidebarHarness();
+  sidebar.ctx.libConfig._libraryId = 'another-library';
+  sidebar.api.saveAlbum({ ...sidebar.album, name: 'Stale edited album' });
+  assert.equal(sidebar.ctx.libConfig.smartAlbums[0].name, 'Album');
+});
+
+test('pin and unpin change only the shortcut and localized themes remain searchable', () => {
+  const h = sidebarHarness({ useI18n: () => ({ t: (key: string) => key === 'subject.items.family' ? '家庭' : key, locale: Vue.ref('en'), messages: Vue.ref({ en: dictionary }) }) });
+  const query = JSON.stringify(h.album.query);
+  h.api.toggleThemePin(h.album);
+  assert.equal(h.ctx.libConfig.smartAlbums[0].themePinned, true);
+  assert.equal(h.ctx.libConfig.smartAlbums[0].count, 12);
+  assert.equal(JSON.stringify(h.ctx.libConfig.smartAlbums[0].query), query);
+  h.api.toggleThemePin(h.ctx.libConfig.smartAlbums[0]);
+  assert.equal(h.ctx.libConfig.smartAlbums[0].themePinned, false);
+  h.ctx.libConfig.smartAlbums = [themes.createThemeFromTemplate('family')];
+  h.api.search.value = '家庭';
+  assert.equal(h.api.rows.value[0].node.id, 'theme:family');
+  const renamed = h.api.renamedNode(h.ctx.libConfig.smartAlbums[0], 'Relatives');
+  assert.equal(renamed.themeNameKey, undefined);
+  assert.equal(renamed.themePinned, true);
+});
+
+test('actual theme editor renders simple controls and keeps complex conditions expanded', async () => {
+  const group = renderComponent(readFileSync(new URL('../src/components/SmartAlbumRules.vue', import.meta.url), 'utf8'), {}, 'SmartAlbumRules.vue');
+  const stub = { render() { return Vue.h('span'); } };
+  const editor = renderComponent(source, { SmartAlbumRules: group, SmartAlbumStatus: stub, ModalDialog: { template: '<section><slot /></section>' }, TButton: stub, IconEdit: stub }, 'SmartAlbumEdit.vue');
+  let html = await ssr(editor, { ...props, mode: 'theme' });
+  assert.match(html, /themes.match_by/);
+  assert.match(html, /themes.match_reference/);
+  assert.match(html, /themes.more_conditions/);
+  assert.doesNotMatch(html, /album.smart_edit.sort/);
+  const album = themes.createThemeFromTemplate('family');
+  album.query.rules.push({ id: 'star', field: 'rating', operator: 'gte', value: 3 });
+  html = await ssr(editor, { ...props, mode: 'theme', smartAlbum: album });
+  assert.match(html, /album.smart_edit.sort/);
+  assert.match(html, /rules_count/);
+  assert.match(html, /aria-expanded="true"/);
 });
