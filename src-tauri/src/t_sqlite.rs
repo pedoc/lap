@@ -2910,8 +2910,9 @@ impl AFile {
         let modified = t_utils::systemtime_to_timestamp(
             std::fs::metadata(file_path).map_err(|e| e.to_string())?.modified().ok());
         let taken = if file_type == 2 {
-            t_video::get_video_metadata(file_path)?.e_date_time
-                .as_deref().and_then(t_utils::meta_date_to_timestamp).or(modified)
+            let date = t_video::get_video_metadata(file_path)?.e_date_time
+                .or_else(|| crate::t_metadata::read(Path::new(file_path)).date);
+            date.as_deref().and_then(t_utils::meta_date_to_timestamp).or(modified)
         } else if file_type == 1 || file_type == 3 {
             use std::io::Read;
             let header = std::fs::File::open(file_path).ok().and_then(|mut file| {
@@ -2939,6 +2940,9 @@ impl AFile {
                     date = Self::scrape_ascii_from_tag(bytes, tiff_base, 0x9003)
                         .or_else(|| Self::scrape_ascii_from_tag(bytes, tiff_base, 0x0132));
                 }
+            }
+            if date.is_none() && taken == modified {
+                date = crate::t_metadata::read(Path::new(file_path)).date;
             }
             Self::capture_date_with_fallback(taken, modified, date.as_deref())
         } else { modified };
@@ -12237,5 +12241,113 @@ mod gps_rational_tests {
         assert_eq!(AFile::gps_rational_values(&invalid), None);
         assert_eq!(AFile::dms_to_decimal(&[30.0, 1.0], "N"), None);
         assert_eq!(AFile::gps_rational_values(&exif::Value::Ascii(vec![])), None);
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod organized_import_date_tests {
+    use super::*;
+
+    fn jpeg_with_capture_dates(exif_date: Option<&str>) -> Vec<u8> {
+        let mut pixels = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut pixels)
+            .encode_image(&image::RgbImage::new(16, 16)).unwrap();
+        let mut jpeg = pixels[..2].to_vec();
+        let mut segment = |payload: &[u8]| {
+            jpeg.extend([0xff, 0xe1]);
+            jpeg.extend(((payload.len() + 2) as u16).to_be_bytes());
+            jpeg.extend(payload);
+        };
+        if let Some(date) = exif_date {
+            let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+            tiff.extend(1u16.to_le_bytes());
+            for value in [0x8769u16, 4] { tiff.extend(value.to_le_bytes()); }
+            for value in [1u32, 26, 0] { tiff.extend(value.to_le_bytes()); }
+            tiff.extend(1u16.to_le_bytes());
+            for value in [0x9003u16, 2] { tiff.extend(value.to_le_bytes()); }
+            for value in [20u32, 44, 0] { tiff.extend(value.to_le_bytes()); }
+            assert_eq!(date.len(), 19);
+            tiff.extend(date.as_bytes());
+            tiff.push(0);
+            let mut payload = b"Exif\0\0".to_vec();
+            payload.extend(tiff);
+            segment(&payload);
+        }
+        let mut payload = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+        payload.extend(br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:DateTimeOriginal="2012:02:03 04:05:06"/></rdf:RDF></x:xmpmeta>"#);
+        segment(&payload);
+        jpeg.extend(&pixels[2..]);
+        jpeg
+    }
+
+    #[test]
+    fn organized_import_uses_the_indexed_capture_date_and_preserves_source_priority() {
+        const CHILD: &str = "LAP_ORGANIZED_DATE_TEST_CHILD";
+        if let Ok(nonce) = std::env::var(CHILD) {
+            let root = PathBuf::from(std::env::var_os("LAP_TEST_DATA_DIR").unwrap());
+            assert!(root.is_absolute());
+            assert!(root.file_name().unwrap().to_string_lossy().starts_with("lap-organized-date-"));
+            assert_eq!(fs::read_to_string(root.join("test-marker")).unwrap(), nonce);
+            assert_eq!(t_config::get_app_data_dir().unwrap(), root);
+            t_config::load_app_config().unwrap();
+            create_db().unwrap();
+            crate::t_xmp::set_xmp_import_enabled(false);
+            let source = root.join("source");
+            let album = root.join("album");
+            fs::create_dir(&source).unwrap();
+            fs::create_dir(&album).unwrap();
+            open_conn().unwrap().execute("INSERT INTO albums(id,name,path) VALUES(1,'Fixture',?1)",
+                [album.to_str().unwrap()]).unwrap();
+            let path = source.join("capture.jpg");
+            let bytes = jpeg_with_capture_dates(None);
+            fs::write(&path, &bytes).unwrap();
+            fs::File::options().write(true).open(&path).unwrap().set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_609_459_200))).unwrap();
+            let path_str = path.to_str().unwrap();
+            let expected = t_utils::meta_date_to_timestamp("2012:02:03 04:05:06").unwrap();
+            // The old preflight reader has neither EXIF nor TIFF binary tags to use.
+            assert!(t_image::read_exif_from_bytes_permissive(&bytes).is_none());
+            assert!(AFile::find_tiff_base(&bytes).is_none());
+            assert_ne!(t_utils::FileInfo::new(path_str).unwrap().modified, Some(expected));
+            assert_eq!(AFile::capture_timestamp_with_raw_info(path_str, 1, None).unwrap(), expected);
+            let imported = t_utils::import_and_organize(1, source.to_str().unwrap(),
+                album.to_str().unwrap(), "day", HashSet::new(), |_| {}, || false).unwrap();
+            assert_eq!((imported.imported, imported.skipped, imported.failed), (1, 0, 0));
+            let destination = album.join("2012").join("2012-02-03").join("capture.jpg");
+            assert_eq!(fs::read(&destination).unwrap(), bytes);
+            assert_eq!(fs::read(&path).unwrap(), bytes, "organizing must preserve original media");
+            let saved: (i64, String) = open_conn().unwrap().query_row(
+                "SELECT a.taken_date,b.path FROM afiles a JOIN afolders b ON b.id=a.folder_id WHERE a.name='capture.jpg'", [],
+                |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            assert_eq!(saved.0, expected);
+            assert_eq!(fs::canonicalize(&saved.1).unwrap(), fs::canonicalize(destination.parent().unwrap()).unwrap());
+
+            let legacy = root.join("legacy.jpg");
+            fs::write(&legacy, jpeg_with_capture_dates(Some("2005:01:02 03:04:05"))).unwrap();
+            let expected_exif = t_utils::meta_date_to_timestamp("2005:01:02 03:04:05").unwrap();
+            assert_eq!(AFile::capture_timestamp_with_raw_info(legacy.to_str().unwrap(), 1, None).unwrap(), expected_exif);
+            assert_eq!(AFile::new(1, legacy.to_str().unwrap(), 1).unwrap().taken_date, Some(expected_exif));
+
+            // A supplied LibRaw timestamp remains authoritative over the embedded fallback.
+            let raw = t_libraw::RawInfo { dimensions: Some((16, 16)), meta: t_libraw::RawMeta {
+                timestamp: Some(946_684_800), make: None, model: None, software: None, artist: None,
+                description: None, iso_speed: None, shutter: None, aperture: None, focal_len: None,
+                flash_used: None, lens_make: None, lens_model: None,
+            }};
+            assert_eq!(AFile::capture_timestamp_with_raw_info(path_str, 3, Some(&raw)).unwrap(), 946_684_800);
+            assert_eq!(AFile::new_with_raw_info(1, path_str, 3, Some(raw)).unwrap().taken_date, Some(946_684_800));
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("lap-organized-date-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let nonce = uuid::Uuid::new_v4().to_string();
+        fs::write(root.join("test-marker"), &nonce).unwrap();
+        let result = process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "t_sqlite::organized_import_date_tests::organized_import_uses_the_indexed_capture_date_and_preserves_source_priority", "--nocapture"])
+            .env("LAP_TEST_DATA_DIR", &root).env(CHILD, nonce).output();
+        fs::remove_dir_all(&root).unwrap();
+        let result = result.unwrap();
+        assert!(result.status.success(), "child test failed:\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
     }
 }

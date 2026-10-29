@@ -1249,7 +1249,7 @@ async function finishSelectedFileRefresh(results: Array<{ file: any; size_delta:
   const selection = fileRefreshSelection.value;
   if (!selection || selection.libraryId !== libConfig._libraryId || results.length === 0) return;
   fileInfoRevision.value++;
-  void tauriEmit('tags-changed');
+  void tauriEmit('tags-changed', { source: 'metadata-refresh', libraryId: selection.libraryId });
   for (const { file, skipped } of results) {
     if (!skipped) clearCachedThumbnailDataUrl(file.id, config.settings.thumbnailSize);
   }
@@ -6288,6 +6288,9 @@ onMounted( async() => {
           }
         }
         break;
+      case 'file-info-refreshed':
+        await applyViewerFileRefresh((event.payload as any).libraryId, (event.payload as any).result);
+        break;
       default:
         break;
     }
@@ -10193,6 +10196,20 @@ function flushMetadataRefresh() {
 }
 watch([metadataRefreshDeferred, scanHasPendingEdits, () => libConfig._libraryId, fileList], flushMetadataRefresh);
 
+async function applyViewerFileRefresh(libraryId: string, result: { file: any; skipped: boolean }) {
+  if (libraryId !== libConfig._libraryId || !result?.file) return;
+  const file = fileList.value.find(item => isRealFileItem(item) && Number(item.id) === Number(result.file.id));
+  const requiresQuery = metadataRefreshRequiresQuery(file, result.file, getGroupingQueryParams());
+  if (file) Object.assign(file, result.file);
+  if (!result.skipped) {
+    clearCachedThumbnailDataUrl(result.file.id, config.settings.thumbnailSize);
+    if (file) file.rawThumbnailStale = true;
+  }
+  fileInfoRevision.value++;
+  if (requiresQuery) await refreshContentAfterFileInfoChange();
+  else if (file && !result.skipped) await getFileListThumb([file], { bustCache: true, viewportBound: false });
+}
+
 // Refresh panel data without reloading whichever image is selected after the await.
 const refreshFileInfoFromPanel = async (file: any) => {
   const libraryId = libConfig._libraryId;
@@ -10209,7 +10226,7 @@ const refreshFileInfoFromPanel = async (file: any) => {
   }
   if (result.error) toast.warning(result.error);
   fileInfoRevision.value++;
-  void tauriEmit('tags-changed');
+  void tauriEmit('tags-changed', { source: 'metadata-refresh', libraryId });
   if (requiresQuery) {
     await refreshContentAfterFileInfoChange();
   } else if (!result.skipped) {
@@ -10233,7 +10250,7 @@ const updateFile = async (file: any, isRefresh = false) => {
     if (updatedFile) {
       const requiresQuery = isRefresh && metadataRefreshRequiresQuery(file, updatedFile, getGroupingQueryParams());
       Object.assign(file, updatedFile);
-      if (isRefresh) { fileInfoRevision.value++; void tauriEmit('tags-changed'); }
+      if (isRefresh) { fileInfoRevision.value++; void tauriEmit('tags-changed', { source: 'metadata-refresh', libraryId }); }
       if (!refreshed?.skipped) {
         await updateThumbForFile(file);
         if (isRefresh && (libraryId !== libConfig._libraryId || requestId !== currentContentRequestId)) return;

@@ -1315,19 +1315,21 @@ const refreshFileInfoFromPanel = async (file: any) => {
   if (libraryId !== libConfig._libraryId || activeFileInfo.value !== file) return;
   if (!result?.file) throw new Error('File info refresh failed');
   applyFileMetaToPanes(fileId, result.file);
-  syncFileMetaToContent(fileId, result.file);
+  void emit('message-from-image-viewer', { message: 'file-info-refreshed', libraryId, result });
   if (result.error) toast.warning(result.error);
-  void emit('tags-changed');
+  void emit('tags-changed', { source: 'metadata-refresh', libraryId });
 };
 
-function advanceAfterMetadataShortcut(fileId: number, pane: Pane) {
-  if (getFileIdByPane(pane) === fileId && getActiveFilePane() === pane
+function advanceAfterMetadataShortcut(fileId: number, pane: Pane, libraryId: string, transition: number) {
+  if (libraryId === libConfig._libraryId && transition === titleTransition
+      && getFileIdByPane(pane) === fileId && getActiveFilePane() === pane
       && getFileIndexByPane(pane) < fileCount.value - 1) {
     clickNext(pane);
   }
 }
 
 const toggleFavorite = async (pane: Pane = 'left', advance = false) => {
+  const libraryId = libConfig._libraryId, transition = titleTransition;
   const target = getFileInfoByPane(pane);
   const currentFileId = getFileIdByPane(pane);
   if (!target || currentFileId <= 0) return;
@@ -1340,10 +1342,11 @@ const toggleFavorite = async (pane: Pane = 'left', advance = false) => {
     return;
   }
   syncFileMetaToContent(currentFileId, { is_favorite: isFavorite });
-  if (advance) advanceAfterMetadataShortcut(currentFileId, pane);
+  if (advance) advanceAfterMetadataShortcut(currentFileId, pane, libraryId, transition);
 };
 
 const setCurrentFileRating = async (rating: number, pane: Pane = 'left', advance = false) => {
+  const libraryId = libConfig._libraryId, transition = titleTransition;
   const target = getFileInfoByPane(pane);
   const currentFileId = getFileIdByPane(pane);
   if (!target || currentFileId <= 0) return;
@@ -1356,10 +1359,11 @@ const setCurrentFileRating = async (rating: number, pane: Pane = 'left', advance
     return;
   }
   syncFileMetaToContent(currentFileId, { rating: normalized });
-  if (advance) advanceAfterMetadataShortcut(currentFileId, pane);
+  if (advance) advanceAfterMetadataShortcut(currentFileId, pane, libraryId, transition);
 };
 
 const setCurrentFileCullingFlag = async (cullingFlag: number, pane: Pane = 'left', advance = false) => {
+  const libraryId = libConfig._libraryId, transition = titleTransition;
   const target = getFileInfoByPane(pane);
   const currentFileId = getFileIdByPane(pane);
   if (!target || currentFileId <= 0) return;
@@ -1374,7 +1378,7 @@ const setCurrentFileCullingFlag = async (cullingFlag: number, pane: Pane = 'left
   }
   syncFileMetaToContent(currentFileId, { culling_flag: normalized });
   void emit('culling-status-updated');
-  if (advance) advanceAfterMetadataShortcut(currentFileId, pane);
+  if (advance) advanceAfterMetadataShortcut(currentFileId, pane, libraryId, transition);
 };
 
 const clickRotate = async (pane: Pane = 'left', rotateDelta = 90) => {

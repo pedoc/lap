@@ -745,10 +745,12 @@ async function load() {
 }
 onMounted(async () => {
   document.addEventListener("pointerdown", handleReorderOutside, true);
-  const stop = await listen("tags-changed", async () => {
+  const stop = await listen("tags-changed", async (event: any) => {
+    if (event.payload?.libraryId && event.payload.libraryId !== libConfig._libraryId) return;
     await load();
     if (
       !disposed &&
+      event.payload?.source !== 'metadata-refresh' &&
       config.main.sidebarIndex === SIDEBAR.TAG &&
       libConfig.activePane === "main"
     )

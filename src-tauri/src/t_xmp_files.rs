@@ -112,6 +112,27 @@ struct Directory {
     owners: HashMap<OsString, Vec<PathBuf>>,
 }
 impl Directory {
+    fn insert(&mut self, path: PathBuf) {
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
+        {
+            if let Some(base) = path.file_stem() {
+                self.sidecars.entry(base.into()).or_default().push(path);
+            }
+        } else if !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("aae"))
+        {
+            // Unknown formats can also own a sidecar. Prefer retaining metadata.
+            for base in [path.file_name(), path.file_stem()].into_iter().flatten() {
+                let owners = self.owners.entry(base.into()).or_default();
+                if !owners.contains(&path) {
+                    owners.push(path.clone());
+                }
+            }
+        }
+    }
     fn read(parent: &Path) -> Result<Self, String> {
         #[cfg(test)]
         DIRECTORY_READS.with(|reads| reads.set(reads.get() + 1));
@@ -138,30 +159,43 @@ impl Directory {
             if kind.is_dir() {
                 continue;
             }
-            if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
-            {
-                if let Some(base) = path.file_stem() {
-                    index.sidecars.entry(base.into()).or_default().push(path);
-                }
-            } else if !path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("aae"))
-            {
-                // Unknown formats can also own a sidecar. Prefer retaining metadata.
-                for base in [path.file_name(), path.file_stem()].into_iter().flatten() {
-                    let owners = index.owners.entry(base.into()).or_default();
-                    if !owners.contains(&path) {
-                        owners.push(path.clone());
-                    }
-                }
-            }
+            index.insert(path);
         }
         for paths in index.sidecars.values_mut() {
             paths.sort();
         }
         Ok(index)
+    }
+    #[cfg(windows)]
+    fn refresh_media(&mut self, media: &Path) -> Result<(), String> {
+        let bases: HashSet<OsString> = [media.file_name(), media.file_stem()]
+            .into_iter()
+            .flatten()
+            .map(OsString::from)
+            .collect();
+        let mut current = Self::default();
+        let mut seen = HashSet::new();
+        for base in &bases {
+            for path in related_entries(parent(media), base)? {
+                if seen.insert(path.clone())
+                    && !fs::symlink_metadata(&path).map_err(|e| e.to_string())?.is_dir()
+                {
+                    current.insert(path);
+                }
+            }
+        }
+        for base in bases {
+            self.sidecars.remove(&base);
+            if let Some(mut paths) = current.sidecars.remove(&base) {
+                paths.sort();
+                self.sidecars.insert(base.clone(), paths);
+            }
+            self.owners.remove(&base);
+            if let Some(owners) = current.owners.remove(&base) {
+                self.owners.insert(base, owners);
+            }
+        }
+        Ok(())
     }
     fn associated(&self, media: &Path) -> Vec<PathBuf> {
         let mut paths = Vec::new();
@@ -176,6 +210,61 @@ impl Directory {
         }
         paths
     }
+}
+
+// Windows directory timestamps can stay unchanged after an entry is added.
+// Query only this photo's names/stems, keeping unrelated entries in the batch cache.
+#[cfg(windows)]
+fn related_entries(folder: &Path, base: &std::ffi::OsStr) -> Result<Vec<PathBuf>, String> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    type Handle = *mut std::ffi::c_void;
+    #[repr(C)]
+    struct FindData {
+        attributes: u32,
+        times: [u32; 6],
+        sizes_and_reserved: [u32; 4],
+        name: [u16; 260],
+        alternate_name: [u16; 14],
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn FindFirstFileW(pattern: *const u16, data: *mut FindData) -> Handle;
+        fn FindNextFileW(handle: Handle, data: *mut FindData) -> i32;
+        fn FindClose(handle: Handle) -> i32;
+    }
+    struct Search(Handle);
+    impl Drop for Search {
+        fn drop(&mut self) {
+            unsafe { FindClose(self.0) };
+        }
+    }
+    // canonicalize supplies extended-length paths, including UNC paths, without losing UTF-16 names.
+    let search_folder = folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf());
+    let mut wildcard = base.to_os_string();
+    wildcard.push(".*");
+    let mut entries = Vec::new();
+    for name in [base, wildcard.as_os_str()] {
+        let pattern: Vec<u16> = search_folder.join(name).as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut data: FindData = unsafe { std::mem::zeroed() };
+        let handle = unsafe { FindFirstFileW(pattern.as_ptr(), &mut data) };
+        if handle == (-1isize) as Handle {
+            let error = io::Error::last_os_error();
+            if matches!(error.raw_os_error(), Some(2 | 3)) { continue; }
+            return Err(format!("Cannot inspect XMP directory '{}': {error}", folder.display()));
+        }
+        let search = Search(handle);
+        loop {
+            let end = data.name.iter().position(|c| *c == 0).unwrap_or(data.name.len());
+            let name = OsString::from_wide(&data.name[..end]);
+            if name != "." && name != ".." { entries.push(folder.join(name)); }
+            if unsafe { FindNextFileW(search.0, &mut data) } == 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(18) { break; }
+                return Err(format!("Cannot inspect XMP directory '{}': {error}", folder.display()));
+            }
+        }
+    }
+    Ok(entries)
 }
 
 /// Reused only for the lifetime of an explicit operation or transfer batch.
@@ -196,11 +285,18 @@ impl Cache {
         }
         Ok(())
     }
+    fn ensure_media(&mut self, media: &Path) -> Result<(), String> {
+        let folder = parent(media);
+        self.ensure_directory(folder)?;
+        #[cfg(windows)]
+        self.directories.get_mut(folder).ok_or("XMP directory index missing")?.refresh_media(media)?;
+        Ok(())
+    }
     /// Match the per-file copy policy: an independent full-name XMP excludes
     /// a stem still shared with another original, which stays at the source.
     pub(crate) fn import_sidecars(&mut self, media: &Path) -> Result<Vec<PathBuf>, String> {
         let folder = parent(media);
-        self.ensure_directory(folder)?;
+        self.ensure_media(media)?;
         let directory = &self.directories[folder];
         let own_full = media
             .file_name()
@@ -349,8 +445,8 @@ fn plan<'a>(
         .map(|(a, b)| (a.to_path_buf(), b.to_path_buf()))
         .collect();
     for (old, new) in &mappings {
-        for folder in [parent(old), parent(new)] {
-            cache.ensure_directory(folder)?;
+        for media in [old, new] {
+            cache.ensure_media(media)?;
         }
     }
     let directories = &mut cache.directories;
@@ -1121,6 +1217,95 @@ mod tests {
         end_transfer_batch(batch);
         assert_eq!(f.read("target/a.xmp"), b"new metadata");
         assert!(!f.path("source/a.xmp").exists());
+    }
+
+    #[cfg(windows)]
+    fn with_unchanged_directory_time(folder: &Path, action: impl FnOnce()) {
+        use std::os::windows::fs::OpenOptionsExt;
+        let before = directory_stamp(folder).unwrap();
+        action();
+        let directory = fs::OpenOptions::new()
+            .write(true)
+            .access_mode(0x100) // FILE_WRITE_ATTRIBUTES
+            .share_mode(7)
+            .custom_flags(0x02000000) // FILE_FLAG_BACKUP_SEMANTICS
+            .open(folder)
+            .unwrap();
+        directory.set_times(fs::FileTimes::new().set_modified(before.modified.unwrap())).unwrap();
+        assert!(directory_stamp(folder).as_ref() == Some(&before));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transfer_batch_rechecks_sidecars_when_directory_timestamps_do_not_change() {
+        let f = Fixture::new();
+        let old = f.write("source/a.jpg", b"image");
+        fs::create_dir(f.path("target")).unwrap();
+        let new = f.path("target/a.jpg");
+        let mut cache = Cache::default();
+        assert!(cache.conflicts([(&*old, &*new)]).unwrap().is_empty());
+        let orphan = f.path("target/a.xmp");
+        with_unchanged_directory_time(&f.path("target"), || {
+            fs::write(&orphan, b"unrelated metadata").unwrap();
+        });
+        assert_eq!(cache.conflicts([(&*old, &*new)]).unwrap(), vec![orphan.clone()]);
+        assert!(Guard::with_cache([(&*old, &*new)], Operation::Move, &mut cache).is_err());
+        assert_eq!(fs::read(&old).unwrap(), b"image");
+        with_unchanged_directory_time(&f.path("target"), || fs::remove_file(&orphan).unwrap());
+        with_unchanged_directory_time(&f.path("source"), || {
+            f.write("source/a.xmp", b"new metadata");
+        });
+        let guard = Guard::with_cache([(&*old, &*new)], Operation::Move, &mut cache).unwrap();
+        fs::rename(&old, &new).unwrap();
+        guard.commit_with_cache(&mut cache);
+        assert_eq!(fs::read(&new).unwrap(), b"image");
+        assert_eq!(f.read("target/a.xmp"), b"new metadata");
+        assert!(!f.path("source/a.xmp").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transfer_batch_rechecks_shared_owners_without_rebuilding_the_directory() {
+        let f = Fixture::new();
+        let old = f.write("source/a.jpg", b"JPEG");
+        f.write("source/a.xmp", b"shared metadata");
+        fs::create_dir(f.path("target")).unwrap();
+        let new = f.path("target/a.jpg");
+        let mut cache = Cache::default();
+        assert!(cache.conflicts([(&*old, &*new)]).unwrap().is_empty());
+        DIRECTORY_READS.with(|reads| reads.set(0));
+        with_unchanged_directory_time(&f.path("source"), || {
+            f.write("source/a.nef", b"unselected RAW");
+            for index in 0..50 { f.write(&format!("source/unrelated-{index}.jpg"), b"other photo"); }
+        });
+        let guard = Guard::with_cache([(&*old, &*new)], Operation::Move, &mut cache).unwrap();
+        fs::rename(&old, &new).unwrap();
+        guard.commit_with_cache(&mut cache);
+        assert_eq!(f.read("source/a.nef"), b"unselected RAW");
+        assert_eq!(f.read("source/a.xmp"), b"shared metadata");
+        assert_eq!(f.read("target/a.jpg.xmp"), b"shared metadata");
+        assert_eq!(DIRECTORY_READS.with(|reads| reads.get()), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn import_and_recovery_recheck_unicode_long_path_sidecars_and_owners() {
+        let f = Fixture::new();
+        let relative = format!("{}/{}/照片😀.JPG", "source".repeat(25), "nested".repeat(25));
+        let old = f.write(&relative, b"photo");
+        assert!(old.as_os_str().len() > 260);
+        let folder = parent(&old);
+        let sidecar = folder.join("照片😀.JPG.XmP");
+        let mut cache = Cache::default();
+        assert!(cache.import_sidecars(&old).unwrap().is_empty());
+        with_unchanged_directory_time(folder, || {
+            fs::write(&sidecar, b"local metadata").unwrap();
+        });
+        assert_eq!(cache.import_sidecars(&old).unwrap(), vec![sidecar.clone()]);
+        with_unchanged_directory_time(folder, || {
+            fs::write(folder.join("照片😀.JPG.bak"), b"another owner").unwrap();
+        });
+        assert_eq!(cache.recovery_sidecars(&old, &[old.clone()]).unwrap(), vec![(sidecar, true)]);
     }
 
     #[cfg(unix)]

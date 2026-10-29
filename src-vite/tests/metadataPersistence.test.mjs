@@ -6,6 +6,7 @@ import ts from 'typescript';
 const content = await readFile(new URL('../src/components/Content.vue', import.meta.url), 'utf8');
 const viewer = await readFile(new URL('../src/views/ImageViewer.vue', import.meta.url), 'utf8');
 function productionFunction(source, name, bindings) {
+  bindings = { libConfig: { _libraryId: 'A' }, titleTransition: 0, ...bindings };
   const start = source.indexOf(`const ${name} = async `);
   assert.ok(start >= 0);
   const end = source.indexOf('\n};', start) + 3;
@@ -78,7 +79,7 @@ test('Shift rating retains repeat-to-clear and only advances after a successful 
       else await action(4, 'right', true);
       assert.deepEqual(writes, [[7, 0]]);
       assert.equal(file.rating, saved ? 0 : 4);
-      assert.deepEqual(advances, saved ? [[7, scope === 'content' ? 10 : 'right']] : []);
+      assert.deepEqual(advances, saved ? [scope === 'content' ? [7, 10] : [7, 'right', 'A', 0]] : []);
     }
   }
 });
@@ -109,14 +110,15 @@ test('metadata shortcuts never advance a replaced content query or a different a
 
   let activePane = 'left', fileId = 7, index = 1;
   const advanceViewer = advanceFunction(viewer, {
+    libConfig: { _libraryId: 'A' }, titleTransition: 0,
     getFileIdByPane: () => fileId, getActiveFilePane: () => activePane,
     getFileIndexByPane: () => index, fileCount: { value: 3 }, clickNext: pane => viewerMoves.push(pane),
   });
-  advanceViewer(7, 'right');
-  activePane = 'right'; fileId = 8; advanceViewer(7, 'right');
-  fileId = 7; index = 2; advanceViewer(7, 'right');
+  advanceViewer(7, 'right', 'A', 0);
+  activePane = 'right'; fileId = 8; advanceViewer(7, 'right', 'A', 0);
+  fileId = 7; index = 2; advanceViewer(7, 'right', 'A', 0);
   assert.deepEqual(viewerMoves, []);
-  index = 1; advanceViewer(7, 'right');
+  index = 1; advanceViewer(7, 'right', 'A', 0);
   assert.deepEqual(viewerMoves, ['right']);
 });
 
@@ -140,6 +142,9 @@ test('standalone info refresh updates matching panes and discards responses afte
     });
     await refresh(file);
     assert.deepEqual(changes, change === 'none' ? [[7, updated]] : []);
-    assert.deepEqual(events, change === 'none' ? [[7, updated], ['tags-changed']] : []);
+    assert.deepEqual(events, change === 'none' ? [
+      ['message-from-image-viewer', { message: 'file-info-refreshed', libraryId: 'A', result: { file: updated } }],
+      ['tags-changed', { source: 'metadata-refresh', libraryId: 'A' }],
+    ] : []);
   }
 });
