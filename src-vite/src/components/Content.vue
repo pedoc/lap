@@ -1231,6 +1231,7 @@ function removeDeletedFilesFromImageViewerSession(fileIds: number[]) {
 }
 
 const fileRefreshSelection = ref<{ ids: number[]; libraryId: string; requestId: number; groupSizes: Map<string, number> } | null>(null);
+const metadataRefreshDeferred = ref<{ libraryId: string; requestId: number } | null>(null);
 function fileMutationReady() {
   if (!pendingChanges.hasPending()) return true;
   toast.warning(t('workflow_close.finish_edits_first'));
@@ -1247,30 +1248,32 @@ function startSelectedFileRefresh() {
 async function finishSelectedFileRefresh(results: Array<{ file: any; size_delta: number; skipped: boolean }>) {
   const selection = fileRefreshSelection.value;
   if (!selection || selection.libraryId !== libConfig._libraryId || results.length === 0) return;
-  // A cloud-only original can stay unread while its local XMP was imported.
-  // Apply those metadata values without regenerating/downloading thumbnails.
-  if (selection.requestId === currentContentRequestId) {
-    const skipped = new Map(results.filter(result => result.skipped).map(result => [Number(result.file.id), result.file]));
-    for (const file of fileList.value) {
-      const updated = skipped.get(Number(file?.id));
-      if (updated) Object.assign(file, updated);
-    }
-  }
   fileInfoRevision.value++;
   void tauriEmit('tags-changed');
-  results = results.filter(result => !result.skipped);
-  if (!results.length) return;
-  for (const { file } of results) clearCachedThumbnailDataUrl(file.id, config.settings.thumbnailSize);
+  for (const { file, skipped } of results) {
+    if (!skipped) clearCachedThumbnailDataUrl(file.id, config.settings.thumbnailSize);
+  }
   if (selection.requestId !== currentContentRequestId) return;
   const scrollTop = gridViewRef.value?.getScrollTop();
   const loadedFiles = new Map(fileList.value.filter(isRealFileItem).map(file => [Number(file.id), file]));
-  if (results.some(({ file }) => metadataRefreshRequiresQuery(loadedFiles.get(Number(file.id)), file))) {
+  for (const { file, skipped } of results) {
+    const loaded = loadedFiles.get(Number(file.id));
+    if (!skipped && loaded) loaded.rawThumbnailStale = true;
+  }
+  if (results.some(({ file }) => metadataRefreshRequiresQuery(loadedFiles.get(Number(file.id)), file, getGroupingQueryParams()))) {
     // A changed date, location, media type or source stamp can change grouping
     // and filtered membership. Re-query while retaining the selection/viewport.
-    pendingRestoreScrollTop.value = scrollTop ?? null;
-    await updateContent(true, true);
+    await refreshContentAfterFileInfoChange();
     return;
   }
+  // A cloud-only original can stay unread while its local XMP was imported.
+  // Compare query metadata first, then patch without regenerating thumbnails.
+  for (const { file: updated, skipped } of results) {
+    const file = loadedFiles.get(Number(updated.id));
+    if (skipped && file) Object.assign(file, updated);
+  }
+  results = results.filter(result => !result.skipped);
+  if (!results.length) return;
   const refreshedFiles: any[] = [];
   const groupDeltas = new Map<string, number>();
   for (const { file: updated, size_delta } of results) {
@@ -1667,6 +1670,7 @@ function createViewBackup() {
     currentSmartQueryParams: currentSmartQueryParams.value ? { ...currentSmartQueryParams.value } : null,
     currentCollectionId: currentCollectionId.value,
     currentSearchFileIds: [...currentSearchFileIds.value],
+    currentMapSearchExactMembers,
     scrollTop: gridViewRef.value ? gridViewRef.value.getScrollTop() : 0,
   };
 }
@@ -3601,6 +3605,7 @@ onMounted(async()=>{
 onBeforeUnmount(()=>{smartEventsDisposed=true;clearTimeout(smartRefreshTimer);clearInterval(smartClock);smartEventStops.forEach(stop=>stop());});
 const currentCollectionId = ref<number | null>(null);
 const currentSearchFileIds = ref<number[]>([]);
+let currentMapSearchExactMembers = false;
 const mapQueryParams = computed(() => (
   currentQuerySource.value === 'smart' && currentSmartQueryParams.value
     ? currentSmartQueryParams.value
@@ -7930,6 +7935,7 @@ async function getFileList(
 }
 
 async function getMapSearchClusterFileList(fileIds: number[], gpsParams: Record<string, any>, requestId: number, exactMembers = false) {
+  currentMapSearchExactMembers = exactMembers;
   currentQuerySource.value = 'search';
   currentSmartQueryParams.value = null;
   currentCollectionId.value = null;
@@ -9092,6 +9098,7 @@ function exitTempViewMode() {
   currentSmartQueryParams.value = state.currentSmartQueryParams || null;
   currentCollectionId.value = state.currentCollectionId || null;
   currentSearchFileIds.value = [...(state.currentSearchFileIds || [])];
+  currentMapSearchExactMembers = Boolean(state.currentMapSearchExactMembers);
   // Increment request ID to cancel any previous thumbnail generation (from temp view)
   invalidateThumbnailRequests();
   if (tempViewMode.value === 'map' && isRealFileItem(fileList.value[selectedItemIndex.value])) {
@@ -10141,50 +10148,117 @@ async function refreshGroupedRowsAfterDelete(fileIds: number[]) {
   await initializeGroupedFileList(currentContentRequestId);
 }
 
+async function refreshContentAfterFileInfoChange() {
+  if (scanHasPendingEdits()) {
+    metadataRefreshDeferred.value = { libraryId: libConfig._libraryId, requestId: currentContentRequestId };
+    return;
+  }
+  metadataRefreshDeferred.value = null;
+  rememberFocusedFileForPresentationRefresh();
+  pendingRestoreScrollTop.value = gridViewRef.value?.getScrollTop() ?? null;
+  if (tempViewMode.value === 'none') {
+    await updateContent(true, true);
+    return;
+  }
+
+  // Replay a temporary view's query without discarding its navigation backup.
+  captureSelectionForFileListRefresh();
+  contentReady.value = false;
+  invalidateThumbnailRequests();
+  const requestId = ++currentContentRequestId;
+  if (tempViewMode.value === 'similar') {
+    const { searchText, fileId, threshold } = currentImageSearchParams.value;
+    await getImageSearchFileList(searchText, fileId, requestId, threshold);
+  } else if (currentQuerySource.value === 'search') {
+    await getMapSearchClusterFileList([...currentSearchFileIds.value], { ...currentQueryParams.value }, requestId, currentMapSearchExactMembers);
+  } else {
+    const sourceContext = currentQuerySource.value === 'smart'
+      ? { source: 'smart' as const, smartParams: { ...currentSmartQueryParams.value } }
+      : currentQuerySource.value === 'collection'
+        ? { source: 'collection' as const, collectionId: currentCollectionId.value }
+        : null;
+    await getFileList({ ...currentQueryParams.value }, requestId, sourceContext, currentQueryParams.value.randomSeed);
+  }
+  if (requestId === currentContentRequestId) restoreScrollAfterRefresh();
+}
+
+function flushMetadataRefresh() {
+  const scope = metadataRefreshDeferred.value;
+  if (!scope) return;
+  if (scope.libraryId !== libConfig._libraryId || scope.requestId !== currentContentRequestId) {
+    metadataRefreshDeferred.value = null;
+    return;
+  }
+  if (!scanHasPendingEdits()) void refreshContentAfterFileInfoChange();
+}
+watch([metadataRefreshDeferred, scanHasPendingEdits, () => libConfig._libraryId, fileList], flushMetadataRefresh);
+
 // Refresh panel data without reloading whichever image is selected after the await.
 const refreshFileInfoFromPanel = async (file: any) => {
   const libraryId = libConfig._libraryId;
   const fileId = Number(file.id);
+  const requestId = currentContentRequestId;
   const result = await refreshFileInfo(libraryId, fileId);
-  if (libraryId !== libConfig._libraryId || Number(file.id) !== fileId) return;
+  if (libraryId !== libConfig._libraryId || requestId !== currentContentRequestId || Number(file.id) !== fileId) return;
   if (!result?.file) throw new Error('File info refresh failed');
+  const requiresQuery = metadataRefreshRequiresQuery(file, result.file, getGroupingQueryParams());
   Object.assign(file, result.file);
+  if (!result.skipped) {
+    clearCachedThumbnailDataUrl(file.id, config.settings.thumbnailSize);
+    file.rawThumbnailStale = true;
+  }
   if (result.error) toast.warning(result.error);
   fileInfoRevision.value++;
   void tauriEmit('tags-changed');
+  if (requiresQuery) {
+    await refreshContentAfterFileInfoChange();
+  } else if (!result.skipped) {
+    await getFileListThumb([file], { bustCache: true, viewportBound: false });
+  }
 };
 
 // update the file info from the file; isRefresh = "Refresh file info" menu action
 const updateFile = async (file: any, isRefresh = false) => {
+  const libraryId = libConfig._libraryId;
+  const fileId = Number(file.id);
+  const requestId = currentContentRequestId;
   if (!await requireOriginalFiles([file])) return;
+  if (isRefresh && (libraryId !== libConfig._libraryId || requestId !== currentContentRequestId)) return;
   try {
     // The refresh command leaves an unchanged cloud-only file unread, so skip
     // the forced thumbnail and image reload that would download it.
-    const refreshed = isRefresh ? await refreshFileInfo(libConfig._libraryId, file.id) : null;
-    if (refreshed?.skipped) {
-      if (refreshed.file) Object.assign(file, refreshed.file);
-      fileInfoRevision.value++;
-      void tauriEmit('tags-changed');
-      if (refreshed?.error) toast.warning(refreshed.error);
-      else toast.success(localeMsg.value.tooltip.update_image.success);
-      return;
-    }
+    const refreshed = isRefresh ? await refreshFileInfo(libraryId, fileId) : null;
+    if (isRefresh && (libraryId !== libConfig._libraryId || requestId !== currentContentRequestId || Number(file.id) !== fileId)) return;
     const updatedFile = isRefresh ? refreshed?.file : await updateFileInfo(file.id, file.file_path);
     if (updatedFile) {
+      const requiresQuery = isRefresh && metadataRefreshRequiresQuery(file, updatedFile, getGroupingQueryParams());
       Object.assign(file, updatedFile);
       if (isRefresh) { fileInfoRevision.value++; void tauriEmit('tags-changed'); }
-      await updateThumbForFile(file);
-      await updateSelectedImage(selectedItemIndex.value);
+      if (!refreshed?.skipped) {
+        await updateThumbForFile(file);
+        if (isRefresh && (libraryId !== libConfig._libraryId || requestId !== currentContentRequestId)) return;
+        if (!requiresQuery) {
+          if (isRefresh && (Number(fileList.value[selectedItemIndex.value]?.id) !== fileId || scanHasPendingEdits())) return;
+          await updateSelectedImage(selectedItemIndex.value);
+          if (isRefresh && (libraryId !== libConfig._libraryId || requestId !== currentContentRequestId
+            || Number(fileList.value[selectedItemIndex.value]?.id) !== fileId || scanHasPendingEdits())) return;
 
-      // Force Image.vue to reload the saved image by briefly nullifying file_path
-      // to trigger its filePath watcher (since the path itself hasn't changed, only the version)
-      const savedPath = file.file_path;
-      file.file_path = '';
-      await nextTick();
-      file.file_path = savedPath;
+          // Force Image.vue to reload the saved image by briefly nullifying file_path
+          // to trigger its filePath watcher (since the path itself hasn't changed, only the version)
+          const savedPath = file.file_path;
+          file.file_path = '';
+          await nextTick();
+          file.file_path = savedPath;
+          if (isRefresh && (libraryId !== libConfig._libraryId || requestId !== currentContentRequestId
+            || Number(fileList.value[selectedItemIndex.value]?.id) !== fileId || scanHasPendingEdits())) return;
 
-      // Clear CSS filter adjustments after image reload is triggered
-      uiStore.clearActiveAdjustments();
+          // Clear CSS filter adjustments after image reload is triggered
+          uiStore.clearActiveAdjustments();
+        }
+      }
+      if (requiresQuery) {
+        await refreshContentAfterFileInfoChange();
+      }
 
       if (isRefresh) {
         if (refreshed?.error) toast.warning(refreshed.error);
@@ -10221,21 +10295,25 @@ function getNextVideoThumbnailRefreshPercent(file: any) {
 }
 
 const updateThumbForFile = async (file: any) => {
+  const libraryId = libConfig._libraryId;
+  const requestId = currentContentRequestId;
+  const thumbnailSize = config.settings.thumbnailSize;
   file.rawThumbnailStale = true;
-  clearCachedThumbnailDataUrl(file.id, config.settings.thumbnailSize);
+  clearCachedThumbnailDataUrl(file.id, thumbnailSize);
   const thumb = await getFileThumb(
     file.id,
     file.file_path,
     file.file_type,
     file.e_orientation || 0,
-    config.settings.thumbnailSize,
+    thumbnailSize,
     true,
     getNextVideoThumbnailRefreshPercent(file),
     file.album_id || 0,
   );
+  if (libraryId !== libConfig._libraryId || requestId !== currentContentRequestId) return;
   if (thumb) {
     if (thumb.error_code === 0 || thumb.error_code === 2) {
-      file.thumbnail = getThumbnailDataUrl(thumb, thumbnailPlaceholder, true, config.settings.thumbnailSize, file.file_path, Number(file.modified_at || 0), !file.cloud_only);
+      file.thumbnail = getThumbnailDataUrl(thumb, thumbnailPlaceholder, true, thumbnailSize, file.file_path, Number(file.modified_at || 0), !file.cloud_only);
       file.rawThumbnailStale = false;
     } else if (thumb.error_code === 1) {
       file.rawThumbnailStale = false;
@@ -11418,7 +11496,7 @@ function preserveLoadedThumbnails(files: any[]) {
   const thumbnailsById = new Map<number, string>();
   for (const file of fileList.value || []) {
     const fileId = Number(file?.id || 0);
-    if (fileId > 0 && file?.thumbnail) {
+    if (fileId > 0 && file?.thumbnail && !file.rawThumbnailStale) {
       thumbnailsById.set(fileId, file.thumbnail);
     }
   }

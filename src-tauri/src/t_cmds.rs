@@ -3494,7 +3494,7 @@ fn refresh_file(file_id: i64) -> Result<Option<FileRefreshResult>, String> {
         return Err("Metadata could not be indexed; original retained and pending state preserved".into());
     }
     if let Some(ref file) = updated {
-        let content_changed = old.cloud_only || old.modified_at != file.modified_at || old.size != file.size;
+        let content_changed = AFile::pending_source_content_changed(&old, file.size, file.modified_at);
         if content_changed || old.width != file.width || old.height != file.height
             || old.e_orientation != file.e_orientation {
             AThumb::delete(file_id)?;
@@ -4615,6 +4615,97 @@ pub async fn restore_databases(
 #[tauri::command]
 pub fn get_restored_ui_preferences() -> Result<Option<serde_json::Value>, String> {
     t_storage::restored_ui_preferences()
+}
+
+#[cfg(all(test, debug_assertions))]
+mod metadata_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn manual_refresh_invalidates_changed_cloud_content_but_preserves_color_backfill_and_edits() {
+        const CHILD: &str = "LAP_METADATA_REFRESH_TEST_CHILD";
+        if let Ok(nonce) = std::env::var(CHILD) {
+            let root = PathBuf::from(std::env::var_os("LAP_TEST_DATA_DIR").unwrap());
+            assert!(root.is_absolute());
+            assert!(root.file_name().unwrap().to_string_lossy().starts_with("lap-metadata-refresh-"));
+            assert_eq!(fs::read_to_string(root.join("test-marker")).unwrap(), nonce);
+            assert_eq!(t_config::get_app_data_dir().unwrap(), root);
+            t_config::load_app_config().unwrap();
+            t_sqlite::create_db().unwrap();
+            crate::t_xmp::set_xmp_import_enabled(false);
+            {
+                let conn = t_sqlite::open_conn().unwrap();
+                conn.execute("INSERT INTO albums(id,name,path) VALUES(1,'Fixture',?1)",
+                    [root.to_str().unwrap()]).unwrap();
+                conn.execute("INSERT INTO afolders(id,album_id,name,path) VALUES(1,1,'Fixture',?1)",
+                    [root.to_str().unwrap()]).unwrap();
+                crate::ai::face_annotations::ensure_schema(&conn).unwrap();
+                conn.execute("INSERT INTO persons(id,name,manual) VALUES(1,'Keep person',1)", []).unwrap();
+            }
+            for (id, changed_content) in [(1, true), (2, false)] {
+                let name = format!("photo-{id}.png");
+                let path = root.join(&name);
+                image::RgbImage::new(320, 240).save(&path).unwrap();
+                let original = fs::read(&path).unwrap();
+                let info = t_utils::FileInfo::new(path.to_str().unwrap()).unwrap();
+                {
+                    let conn = t_sqlite::open_conn().unwrap();
+                    // A cloud stat update clears geometry; a color-only backfill retains it.
+                    let width = (!changed_content).then_some(320);
+                    let height = (!changed_content).then_some(240);
+                    conn.execute("INSERT INTO afiles(id,folder_id,name,file_type,size,modified_at,width,height,
+                            cloud_only,metadata_pending,title,comments,rating,is_favorite,culling_flag,rotate,embeds,has_faces)
+                        VALUES(?1,1,?2,1,?3,?4,?5,?6,0,1,'Keep title','Keep comment',4,1,1,90,X'01020304',1)",
+                        rusqlite::params![id, name, info.file_size, info.modified, width, height]).unwrap();
+                    conn.execute(r#"INSERT INTO face_annotations(id,file_id,person_id,kind,region,source_modified_at,
+                            source_size,created_at,updated_at)
+                        VALUES(?1,?1,1,'confirmed','{"x":0.1,"y":0.1,"width":0.2,"height":0.2}',?2,?3,1,1)"#,
+                        rusqlite::params![id, info.modified, info.file_size]).unwrap();
+                    conn.execute("INSERT INTO faces(file_id,bbox,embedding,person_id,annotation_id) VALUES
+                        (?1,NULL,X'01020304',NULL,NULL),(?1,NULL,NULL,1,?1)", [id]).unwrap();
+                }
+
+                let result = refresh_file(id).unwrap().unwrap();
+                assert!(!result.skipped && result.error.is_none());
+                assert_eq!(result.size_delta, 0, "stat was already synchronized before refresh");
+                assert_eq!((result.file.width, result.file.height), (Some(320), Some(240)));
+                assert!(!result.file.cloud_only && !result.file.metadata_pending);
+                assert_eq!((result.file.title.as_deref(), result.file.comments.as_deref(), result.file.rating,
+                    result.file.is_favorite, result.file.culling_flag, result.file.rotate),
+                    (Some("Keep title"), Some("Keep comment"), Some(4), Some(true), Some(1), Some(90)));
+                let conn = t_sqlite::open_conn().unwrap();
+                let (embedding, has_faces, faces): (Option<Vec<u8>>, i64, i64) = conn.query_row(
+                    "SELECT embeds,has_faces,(SELECT COUNT(*) FROM faces WHERE file_id=?1) FROM afiles WHERE id=?1",
+                    [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+                if changed_content {
+                    assert_eq!((embedding, has_faces, faces), (None, 0, 0),
+                        "unknown geometry must invalidate old vectors and automatic face results");
+                } else {
+                    assert_eq!((embedding, has_faces, faces), (Some(vec![1, 2, 3, 4]), 1, 2),
+                        "color backfill must preserve recognition even without EXIF orientation");
+                }
+                assert_eq!(conn.query_row(
+                    "SELECT person_id,kind,region FROM face_annotations WHERE file_id=?1", [id],
+                    |row| Ok((row.get::<_,i64>(0)?, row.get::<_,String>(1)?, row.get::<_,String>(2)?))).unwrap(),
+                    (1, "confirmed".into(), "{\"x\":0.1,\"y\":0.1,\"width\":0.2,\"height\":0.2}".into()),
+                    "manual face annotations must survive derived-result invalidation");
+                assert_eq!(fs::read(&path).unwrap(), original);
+            }
+            return;
+        }
+        // Keep all real global config/SQLite calls in a child process with a disposable data root.
+        let root = std::env::temp_dir().join(format!("lap-metadata-refresh-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let nonce = uuid::Uuid::new_v4().to_string();
+        fs::write(root.join("test-marker"), &nonce).unwrap();
+        let result = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "t_cmds::metadata_refresh_tests::manual_refresh_invalidates_changed_cloud_content_but_preserves_color_backfill_and_edits", "--nocapture"])
+            .env("LAP_TEST_DATA_DIR", &root).env(CHILD, nonce).output();
+        fs::remove_dir_all(&root).unwrap();
+        let result = result.unwrap();
+        assert!(result.status.success(), "child test failed:\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    }
 }
 
 #[cfg(test)]

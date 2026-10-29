@@ -104,7 +104,7 @@ pub struct Page {
 
 fn public(bulk: bool) -> String {
     format!(
-        "a.file_type IN (1,2,3) AND COALESCE(a.cloud_only,0)=0 AND COALESCE(a.metadata_pending,0)=0 AND {} AND {} AND {}",
+        "a.file_type IN (1,2,3) AND COALESCE(a.cloud_only,0)=0 AND (COALESCE(a.metadata_pending,0)=0 OR (a.file_type IN (1,3) AND a.width>0 AND a.height>0)) AND {} AND {} AND {}",
         AFile::search_exclusion_condition("b"),
         if bulk {
             AFile::live_photo_companion_exclusion_condition()
@@ -367,7 +367,7 @@ pub(super) mod tests {
     #[test]
     fn whole_album_includes_nested_folders_and_excludes_other_albums_and_private_media() {
         let conn = database(10);
-        conn.execute_batch("INSERT INTO afolders VALUES(2,1,'/photos/nested',0); UPDATE afiles SET folder_id=2 WHERE id=2; INSERT INTO albums VALUES(2,'/other',7,0,'[]','其他相册'); INSERT INTO afolders VALUES(3,2,'/other',0); UPDATE afiles SET folder_id=3 WHERE id=3; INSERT INTO media_states VALUES(4,1,NULL),(5,0,100); UPDATE afiles SET cloud_only=1 WHERE id=6; UPDATE afiles SET metadata_pending=1 WHERE id=7;").unwrap();
+        conn.execute_batch("INSERT INTO afolders VALUES(2,1,'/photos/nested',0); UPDATE afiles SET folder_id=2 WHERE id=2; INSERT INTO albums VALUES(2,'/other',7,0,'[]','其他相册'); INSERT INTO afolders VALUES(3,2,'/other',0); UPDATE afiles SET folder_id=3 WHERE id=3; INSERT INTO media_states VALUES(4,1,NULL),(5,0,100); UPDATE afiles SET cloud_only=1 WHERE id=6; UPDATE afiles SET metadata_pending=1,width=NULL,height=NULL WHERE id=7;").unwrap();
         let request: Scope =
             serde_json::from_value(serde_json::json!({"kind":"album","albumId":1})).unwrap();
         let snapshot = resolve_on(&conn, "test", request).unwrap();
@@ -387,6 +387,97 @@ pub(super) mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn metadata_migration_preserves_local_casting_and_visibility_boundaries() {
+        let conn = database(12);
+        conn.execute_batch(
+            "UPDATE afiles SET file_type=3,name='photo-2.raw' WHERE id=2;
+            UPDATE afiles SET file_type=2,name='photo-'||id||'.mp4' WHERE id IN(3,9,10);
+            UPDATE afiles SET width=NULL,height=NULL WHERE id=3;
+            UPDATE afiles SET width=NULL WHERE id=4;
+            UPDATE afiles SET height=0 WHERE id=5;
+            UPDATE afiles SET cloud_only=1 WHERE id=6;
+            INSERT INTO media_states VALUES(7,1,NULL),(8,0,100);
+            UPDATE afiles SET metadata_pending=1 WHERE id=9;
+            UPDATE afiles SET live_photo_video_id=10 WHERE id=1;
+            INSERT INTO afolders VALUES(2,1,'/photos/search',1),(3,1,'/photos/skip',0);
+            UPDATE afiles SET folder_id=2 WHERE id=11;
+            UPDATE afiles SET folder_id=3 WHERE id=12;
+            UPDATE albums SET excluded_folders='[\"skip\"]' WHERE id=1;
+            PRAGMA user_version=23;",
+        )
+        .unwrap();
+        let selection = || Scope::Selection {
+            file_ids: vec![2, 3, 1, 2],
+        };
+        let snapshot = resolve_on(&conn, "test", selection()).unwrap();
+
+        crate::t_migration::check_and_migrate(&conn).unwrap();
+
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            24
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM afiles WHERE file_type IN(1,3) AND metadata_pending!=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0,
+            "casting must preserve scheduled metadata extraction"
+        );
+        assert_eq!(
+            resolve_on(&conn, "test", selection()).unwrap().file_ids,
+            vec![2, 3, 1]
+        );
+        let page = page_on(&conn, &snapshot, 0, 0, "", None).unwrap();
+        assert_eq!(page.total, 3);
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
+        assert!(page.entries[1].video);
+        assert_eq!((page.entries[1].width, page.entries[1].height), (0, 0));
+        let mut streamed = Vec::new();
+        assert_eq!(
+            stream_page_on(&conn, &snapshot, 0, 0, "", &mut |entry| {
+                streamed.push(entry.id);
+                Ok(())
+            })
+            .unwrap(),
+            (3, 3)
+        );
+        assert_eq!(streamed, vec![2, 3, 1]);
+        assert_eq!(
+            resolve_on(&conn, "test", Scope::Album { album_id: 1 })
+                .unwrap()
+                .file_ids,
+            vec![1, 2, 3]
+        );
+        for id in 1..=12 {
+            assert_eq!(is_public_on(&conn, id).unwrap(), id <= 3, "media {id}");
+        }
+        for id in 4..=12 {
+            assert!(
+                resolve_on(
+                    &conn,
+                    "test",
+                    Scope::Selection {
+                        file_ids: vec![1, id],
+                    },
+                )
+                .is_err(),
+                "unavailable media {id} must not enter a casting scope"
+            );
+        }
     }
 
     #[test]

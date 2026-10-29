@@ -2400,7 +2400,7 @@ impl AFile {
         })
     }
 
-    fn pending_source_content_changed(file: &Self, size: i64, modified: Option<i64>) -> bool {
+    pub(crate) fn pending_source_content_changed(file: &Self, size: i64, modified: Option<i64>) -> bool {
         file.cloud_only || file.size != size || file.modified_at != modified
             || file.width.is_none_or(|width| width == 0)
             || file.height.is_none_or(|height| height == 0)
